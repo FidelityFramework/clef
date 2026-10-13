@@ -104,7 +104,15 @@ type StorageWitnessCases() =
         Assert.Contains("view_first", names)
         Assert.Contains("sentinel_first", names)
         Assert.Contains("layout_user_strings", names)
-        Assert.Contains(names, fun name -> name.StartsWith "numeric_")
+        let sourceClaims = graph.Edges |> List.choose (fun edge ->
+            if edge.Class <> EdgeClass.Obligation || not (List.contains id edge.Sources) then None
+            else
+                let node = graph.Nodes[edge.Target]
+                match node.Kind with
+                | SemanticKind.Obligation info when node.Metadata.ContainsKey "Baker.NumericOwned" -> Some info.Id
+                | _ -> None)
+        Assert.NotEmpty sourceClaims
+        for claim in sourceClaims do Assert.Contains(claim, names)
         match NumericProjection.project revised with
         | Ok _ -> ()
         | Error failures -> failwithf "A claim's consequence invalidated its own source premises: %A" failures

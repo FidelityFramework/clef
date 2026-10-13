@@ -246,14 +246,28 @@ type ProgramLifetimeAuthorityCases() =
             match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
             | Result.Error failures -> failures
             | Result.Ok _ -> failwith "Numeric witnessing admitted a comparison without byte authority"
-        let reason = "NumericPublication: No offered source representation covers the operation and every admitted input carrier."
         let errors = CheckResult.errors result
         Assert.NotEmpty errors
         Assert.All(errors, fun diagnostic -> Assert.Equal("CCS8403", diagnostic.Code))
         Assert.NotEmpty failures
+        let missingRepresentation = "NumericPublication: No offered source representation covers the operation and every admitted input carrier."
+        Assert.Contains(failures, fun failure -> failure.Reason = missingRepresentation)
+        Assert.Contains(failures, fun failure ->
+            match failure.Occurrence |> Option.bind graph.Nodes.TryFind with
+            | Some { Kind = SemanticKind.Obligation { Body = ObligationBody.Pending _ } } -> true
+            | _ -> false)
         for failure in failures do
-            Assert.Equal(reason, failure.Reason)
             let site = failure.Occurrence |> Option.get
+            let reason =
+                match graph.Nodes[site].Kind with
+                | SemanticKind.Obligation info ->
+                    match info.Body with
+                    | ObligationBody.Pending reasons ->
+                        Assert.NotEmpty reasons
+                        "NumericPublication: Pending claim " + info.Id + ": " + String.concat "; " reasons
+                    | _ -> failwith "Missing byte authority acquired a ready numeric claim"
+                | _ -> missingRepresentation
+            Assert.Equal(reason, failure.Reason)
             Assert.Equal<Set<NodeId>>(Set.singleton site, failure.Participants)
             Assert.Equal("program-storage.clef", graph.Nodes[site].Range.File)
             Assert.Equal(13, graph.Nodes[site].Range.Start.Line)

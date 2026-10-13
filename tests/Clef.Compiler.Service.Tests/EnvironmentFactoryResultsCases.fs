@@ -1128,10 +1128,15 @@ let main _ =
         Assert.Same(graph.Nodes[finiteProof], preserved.Nodes[finiteProof])
         Assert.Contains(preserved.Edges, fun edge ->
             edge.Role = EdgeRole.Constrains && edge.Target = finiteProof && List.contains annotation edge.Sources)
-        // A matching numeric answer does not make the prior proof dependencies
-        // current. The passive projection must refuse before its owner renews.
+        // The added numeric participant needs its own claim even when its range
+        // is unchanged. Completeness must refuse before the owner renews proofs.
         match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project preserved with
-        | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed"))
+        | Result.Error failures ->
+            Assert.Equal(None, Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId "numeric-carrier-coverage" preserved.Nodes[annotation])
+            let claim = $"numeric_carrier_{NodeId.value annotation}"
+            Assert.Contains(failures, fun failure ->
+                failure.Occurrence = Some annotation &&
+                failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
         | Result.Ok _ -> failwith "The old numeric proof survived a change of finite support."
         let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize preserved
         let current = project renewed

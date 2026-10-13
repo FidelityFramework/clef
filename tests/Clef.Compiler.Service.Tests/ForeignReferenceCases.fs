@@ -196,8 +196,9 @@ let main _ =
 
         let graph = result.Graph
         let guard = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard) |> Assert.Single
-        let frontier = graph.Nodes[List.last guard.Sources]
         let generated = graph.Nodes[guard.Target]
+        let frontier = graph.Nodes[generated.Parent |> Option.get]
+        Assert.Contains(frontier.Id, guard.Sources)
         let role = "numeric-carrier-coverage"
         let sourceClaim = Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId role frontier |> Option.get
         Assert.True(frontier.Id <> generated.Id)
@@ -211,6 +212,10 @@ let main _ =
         Assert.Contains(sourceClaim, claims)
         Assert.Contains($"numeric_carrier_{NodeId.value generated.Id}", claims)
         Assert.Empty(Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness graph)
+
+        let incarnationOnly =
+            { generated with Metadata = generated.Metadata.Add("Source.DeclarationIncarnation", MetadataValue.String "foreign-test-incarnation") }
+        Assert.Equal(None, Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId role incarnationOnly)
 
         let copied = { generated with Metadata = generated.Metadata.Add("Source.ObligationSite", frontier.Metadata["Source.ObligationSite"]) }
         let corrupt = { graph with Nodes = graph.Nodes.Add(generated.Id, copied) }
