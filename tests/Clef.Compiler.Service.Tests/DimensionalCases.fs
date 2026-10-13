@@ -1081,6 +1081,21 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
             if not (measured.Diagnostics |> List.exists (fun d -> d.Code = "CCS8706" && d.Severity = NativeDiagnosticSeverity.Error)) then
                 failwithf "Measured width-named source type was not diagnosed: %s" name
 
+    "removed integer width conversions retain their located refusal", fun () ->
+        for name in ["int8"; "int16"; "int32"; "int64"; "uint8"; "uint16"; "uint32"; "uint64"; "byte"; "sbyte"] do
+            if Types.tryNumericTyConOfName name |> Option.isSome then
+                failwithf "Physical carrier %s leaked into source type spelling admission" name
+            if Types.tryConversionOfName name |> Option.isSome then
+                failwithf "Physical carrier %s leaked into source conversion admission" name
+            let result = check $"let value = {name} 1\n"
+            let refusals = result.Diagnostics |> List.filter (fun diagnostic ->
+                diagnostic.Code = "CCS8706" && diagnostic.Severity = NativeDiagnosticSeverity.Error)
+            match refusals with
+            | [refusal] when refusal.Range.File = "dimensions.clef" &&
+                             refusal.Range.Start.Line = refusal.Range.End.Line &&
+                             refusal.Range.End.Column > refusal.Range.Start.Column -> ()
+            | _ -> failwithf "Removed conversion %s lost its unique located refusal: %A" name result.Diagnostics
+
     "width-bearing literal suffixes are diagnosed", fun () ->
         for literal in ["1L"; "1u"; "1uy"; "1s"; "1n"; "1.0f"; "1L<m>"; "1.0f<m>"] do
             let result = check $"let value = {literal}\n"

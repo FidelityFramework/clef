@@ -406,6 +406,29 @@ let main _ =
         let graph = EnvironmentFixture.check EnvironmentFixture.ordinary
         let source = EnvironmentFixture.callable graph
         let offset, calls = EnvironmentFixture.binding "offset" graph, EnvironmentFixture.binding "calls" graph
+        match Types.internalStorageType with
+        | NativeType.TApp(carrier, []) ->
+            Assert.Equal(None, carrier.NTUKind)
+            Assert.Equal(TypeLayout.Opaque, carrier.Layout)
+        | marker -> failwithf "Logical storage marker exposed a numeric/container representation: %A" marker
+        let implementation = match source.Kind with SemanticKind.ClosureValue(code, _) -> code | _ -> failwith "Missing closure formation"
+        let relation = graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.EnvironmentFormal && edge.Sources = [source.Id; implementation]) |> Assert.Single
+        Assert.Equal(Some source.Id, Environments.tryEnvironmentOwner graph relation.Target)
+        let admitted = Environments.callEnvironments graph
+        Assert.NotEmpty admitted
+        let refuses (changed: SemanticGraph) =
+            let renewed = Environments.callEnvironments changed
+            for KeyValue(site, _) in admitted do Assert.False(renewed.ContainsKey site)
+        // Value-flow can still identify an actual environment. Invocation
+        // authority separately requires its unique current formal convention.
+        let missing = { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> relation.Target || edge.Role <> EdgeRole.EnvironmentFormal) }
+        refuses missing
+        let duplicate = { graph with Edges = relation :: graph.Edges }
+        refuses duplicate
+        let wrong = { relation with Sources = [calls.Id; implementation] }
+        let unrelated = { missing with Edges = wrong :: missing.Edges }
+        refuses unrelated
         let captures = Environments.captures graph source.Id
         Assert.Contains(captures, fun capture -> capture.SourceNodeId = Some offset.Id && not capture.IsMutable)
         Assert.Contains(captures, fun capture -> capture.SourceNodeId = Some calls.Id && capture.IsMutable)

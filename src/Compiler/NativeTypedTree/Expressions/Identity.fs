@@ -66,10 +66,11 @@ let rec private resolveIdentifierCore
         | None ->
 
         // 2b. Try conversion intrinsics (float, int, etc.)
+        // Rejected spellings need their located diagnostic even when no
+        // obsolete conversion carrier remains in the intrinsic inventory.
+        Types.warnWidthSpellingAt name range env
         match tryResolveConversion name range with
         | Some (info, ty) ->
-            // a width-named conversion target is a spelled site (CS-12 step 5a)
-            Types.warnWidthSpellingAt name range env
             IntrinsicNode (info, ty)
         | None ->
 

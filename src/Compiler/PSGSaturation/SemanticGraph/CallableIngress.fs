@@ -700,7 +700,7 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                                     | _ -> None)
                         | _ -> None
                     | SemanticKind.ContinuationStorage actualOwner when actualOwner = owner && activation root = Some generator
-                                                                 && applySubst storage.Type = Types.mkArrayType Types.uint8Type -> Some(slot, false)
+                                                                 && applySubst storage.Type = Types.internalStorageType -> Some(slot, false)
                     | _ -> None
                 match selected, writerPairs declaredWriters, storageUses with
                 | Some(selected, immutableCapture), Some declared, Some(aliases, actual)

@@ -7,7 +7,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
-let environmentType = Types.mkArrayType Types.uint8Type
+let environmentType = Types.internalStorageType
 
 /// Capture incidence must agree with the actual initializer, slot and mode.
 /// A slot declaration alone is not evidence for the value held by an instance.

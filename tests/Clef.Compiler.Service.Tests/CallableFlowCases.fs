@@ -264,15 +264,15 @@ module private CallableResultOriginFixture =
                 let invocation = builder.Create(SemanticKind.Application(read.Id, [unitValue.Id]), resultType, dummyRange)
                 builder.Create(SemanticKind.IfThenElse(condition.Id, okValue.Id, Some invocation.Id), resultType, dummyRange)
             | other -> failwithf "Unexpected origin fixture mode: %s" other
-        let tag = builder.Create(SemanticKind.DUGetTag(input.Id, resultType), Types.int8Type, dummyRange)
+        let tag = builder.Create(SemanticKind.DUGetTag(input.Id, resultType), Types.intType, dummyRange)
         let expected =
-            builder.Create(SemanticKind.Literal(NativeLiteral.Int(0L, NTUKind.NTUint(NTUWidth.Fixed 8))),
-                           Types.int8Type, dummyRange)
+            builder.Create(SemanticKind.Literal(NativeLiteral.Int(0L, NTUKind.NTUint(NTUWidth.Resolved WidthDimension.Register))),
+                           Types.intType, dummyRange)
         let equality =
             builder.Create(SemanticKind.Intrinsic
                 { Module = IntrinsicModule.Operators; Operation = "op_Equality"
                   Category = IntrinsicCategory.Comparison; FullName = "op_Equality" },
-                NativeType.TFun(Types.int8Type, NativeType.TFun(Types.int8Type, Types.boolType)), dummyRange)
+                NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, Types.boolType)), dummyRange)
         let guard = builder.Create(SemanticKind.Application(equality.Id, [tag.Id; expected.Id]), Types.boolType, dummyRange)
         let payload = builder.Create(SemanticKind.DUEliminate(input.Id, 0, "Ok", callable), callable, dummyRange)
         let choice = builder.Create(SemanticKind.IfThenElse(guard.Id, payload.Id, Some fallback.Id), callable, dummyRange)

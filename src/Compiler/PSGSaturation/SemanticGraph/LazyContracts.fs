@@ -8,7 +8,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
-let environmentType = Types.mkArrayType Types.uint8Type
+let environmentType = Types.internalStorageType
 
 /// Formation is a schema: executing it twice creates two environments. An
 /// alias follows its actual operand, never a cache selected by this schema id.

@@ -31,8 +31,8 @@ let private payloadTypes = function
 let private predicateBody operation input inputType =
     saturation {
         let! tag = duGetTag input inputType
-        let! expected = int8Lit (if operation = "isOk" then 0 else 1)
-        let! result = compareEq tag expected Types.int8Type
+        let! expected = tagLiteral (if operation = "isOk" then 0 else 1)
+        let! result = compareEq tag expected Types.intType
         return! evaluateBefore [input] result Types.boolType
     }
 
@@ -41,8 +41,8 @@ let private predicateBody operation input inputType =
 let private operationBody operation callback input inputType outputType okType errorType =
     saturation {
         let! tag = duGetTag input inputType
-        let! okTag = int8Lit 0
-        let! isOk = compareEq tag okTag Types.int8Type
+        let! okTag = tagLiteral 0
+        let! isOk = compareEq tag okTag Types.intType
         let! okValue = duEliminate input "Ok" 0 okType
         let! errorValue = duEliminate input "Error" 1 errorType
         let outputOk, outputError = payloadTypes outputType |> Option.get
@@ -69,8 +69,8 @@ let private operationBody operation callback input inputType outputType okType e
 let private eliminationBody operation supplied input inputType outputType okType errorType =
     saturation {
         let! tag = duGetTag input inputType
-        let! okTag = int8Lit 0
-        let! isOk = compareEq tag okTag Types.int8Type
+        let! okTag = tagLiteral 0
+        let! isOk = compareEq tag okTag Types.intType
         let! okBranch = saturation {
             let! value = duEliminate input "Ok" 0 okType
             if operation = "iter" then return! app1 supplied value Types.unitType

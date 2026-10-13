@@ -903,7 +903,7 @@ let fieldGet (exprId: NodeId) (fieldName: string) (fieldType: NativeType) : Satu
 let duGetTag (unionId: NodeId) (unionType: NativeType) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.DUGetTag (unionId, unionType)) Types.int8Type [unionId]
+        let node = mkNode state (SemanticKind.DUGetTag (unionId, unionType)) Types.intType [unionId]
         do! emit node
         return node.Id
     }
@@ -942,7 +942,7 @@ let duConstruct (caseName: string) (caseIndex: int) (payload: NodeId option) (ar
 /// Extract the tag (discriminator) from a discriminated union value.
 /// DEPRECATED: Use duGetTag with explicit union type for new code.
 let extractTag (unionId: NodeId) : SaturationParser<NodeId> =
-    fieldGet unionId "Tag" Types.int8Type
+    fieldGet unionId "Tag" Types.intType
 
 /// Extract payload field at a specific index from a discriminated union.
 /// DEPRECATED: Use duEliminate with explicit case info for new code.
@@ -950,11 +950,11 @@ let extractPayloadField (unionId: NodeId) (index: int) (fieldType: NativeType) :
     let fieldName = sprintf "Item%d" (index + 1)  // F# uses 1-based naming
     fieldGet unionId fieldName fieldType
 
-/// Create an i8 literal (used for tag constants)
-let int8Lit (value: int) : SaturationParser<NodeId> =
+/// Create the logical integer case ordinal; layout is settled from its finite range.
+let tagLiteral (value: int) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint (NTUWidth.Fixed 8)))) Types.int8Type []
+        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)))) Types.intType []
         do! emit node
         return node.Id
     }
@@ -979,8 +979,8 @@ let compareEq (leftId: NodeId) (rightId: NodeId) (operandType: NativeType) : Sat
 let compareTagEq (scrutineeId: NodeId) (expectedTag: int) : SaturationParser<NodeId> =
     saturation {
         let! actualTagId = extractTag scrutineeId
-        let! expectedTagId = int8Lit expectedTag
-        let! result = compareEq actualTagId expectedTagId Types.int8Type
+        let! expectedTagId = tagLiteral expectedTag
+        let! result = compareEq actualTagId expectedTagId Types.intType
         return result
     }
 

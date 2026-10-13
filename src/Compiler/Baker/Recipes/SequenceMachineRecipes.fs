@@ -105,8 +105,8 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
             match owner.Type with
             | NativeType.TSeq item -> preturn (NativeType.TSeqEnumerator item)
             | other -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a sequence type for continuation owner %d: found %A" (NodeId.value owner.Id) other))
-        let! storage = C.create (SemanticKind.ContinuationStorage owner.Id) (Types.mkArrayType Types.uint8Type) []
-        let! storageBinding = letBind "__continuation_storage" storage (Types.mkArrayType Types.uint8Type)
+        let! storage = C.create (SemanticKind.ContinuationStorage owner.Id) (Types.internalStorageType) []
+        let! storageBinding = letBind "__continuation_storage" storage (Types.internalStorageType)
         let! initialPc = C.index control.Entry
         let! pc = C.mutableBindingWithin pcRange "__continuation_pc" initialPc Types.nintType
         let! no = boolLit false
@@ -116,7 +116,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
 
         let frameRef slot =
             if persistent.Contains slot then varRef "__continuation_environment" (Some formal.Id) envType
-            else varRef "__continuation_storage" (Some storageBinding) (Types.mkArrayType Types.uint8Type)
+            else varRef "__continuation_storage" (Some storageBinding) (Types.internalStorageType)
         let read id = saturation {
             if persistent.Contains id || scratch.Contains id then
                 let! source = frameRef id

@@ -178,12 +178,12 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
                     match nodes.TryFind operator, nodes.TryFind tag, nodes.TryFind literal with
                     | Some operation, Some tagRead, Some expected
                         when agrees operation && agrees tagRead && agrees expected &&
-                             sameType tagRead.Type Types.int8Type && sameType expected.Type Types.int8Type &&
+                             sameType tagRead.Type Types.intType && sameType expected.Type Types.intType &&
                              sameType operation.Type
-                                 (NativeType.TFun(Types.int8Type, NativeType.TFun(Types.int8Type, Types.boolType))) ->
+                                 (NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, Types.boolType))) ->
                         match operation.Kind, tagRead.Kind, expected.Kind with
                         | SemanticKind.Intrinsic info, SemanticKind.DUGetTag(subject, unionType),
-                          SemanticKind.Literal(NativeLiteral.Int(value, NTUKind.NTUint(NTUWidth.Fixed 8)))
+                          SemanticKind.Literal(NativeLiteral.Int(value, NTUKind.NTUint(NTUWidth.Resolved WidthDimension.Register)))
                             when info.Module = IntrinsicModule.Operators && info.Operation = "op_Equality" &&
                                  info.Category = IntrinsicCategory.Comparison && (value = 0L || value = 1L) ->
                             match nodes.TryFind subject, resultPayloads unionType with

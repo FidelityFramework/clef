@@ -1975,17 +1975,13 @@ module Types =
     // Type constructors for primitive types (NTU kinds)
     // Platform-dependent types use PlatformWord layout (size resolved by CCS at saturation from PlatformContext)
     let intTyCon = mkNTUTypeConRef "int" (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) TypeLayout.PlatformWord
-    // Fixed-width types use Inline layout with known sizes
-    let int8TyCon = mkNTUTypeConRef "int8" (NTUKind.NTUint (NTUWidth.Fixed 8)) (TypeLayout.Inline(1, 1))
-    let int16TyCon = mkNTUTypeConRef "int16" (NTUKind.NTUint (NTUWidth.Fixed 16)) (TypeLayout.Inline(2, 2))
-    let int32TyCon = mkNTUTypeConRef "int32" (NTUKind.NTUint (NTUWidth.Fixed 32)) (TypeLayout.Inline(4, 4))
-    let int64TyCon = mkNTUTypeConRef "int64" (NTUKind.NTUint (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
     // Platform-dependent unsigned
     let uintTyCon = mkNTUTypeConRef "uint" (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register)) TypeLayout.PlatformWord
-    // Fixed-width unsigned
+    // Q3-PROTOCOL: retained only for existing ABI/encoding contracts. Source
+    // spelling and conversion admission below deliberately has no rows for them.
+    let int64TyCon = mkNTUTypeConRef "int64" (NTUKind.NTUint (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
     let uint8TyCon = mkNTUTypeConRef "uint8" (NTUKind.NTUuint (NTUWidth.Fixed 8)) (TypeLayout.Inline(1, 1))
     let uint16TyCon = mkNTUTypeConRef "uint16" (NTUKind.NTUuint (NTUWidth.Fixed 16)) (TypeLayout.Inline(2, 2))
-    let uint32TyCon = mkNTUTypeConRef "uint32" (NTUKind.NTUuint (NTUWidth.Fixed 32)) (TypeLayout.Inline(4, 4))
     let uint64TyCon = mkNTUTypeConRef "uint64" (NTUKind.NTUuint (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
     // Native pointer-sized integers (always platform-dependent)
     let nintTyCon = mkNTUTypeConRef "nativeint" (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)) TypeLayout.PlatformWord
@@ -2006,6 +2002,10 @@ module Types =
     let stringTyCon = mkNTUTypeConRef "string" NTUKind.NTUstring TypeLayout.Opaque
     let decimalTyCon = mkNTUTypeConRef "decimal" NTUKind.NTUdecimal (TypeLayout.Inline(16, 8))
     
+    /// Logical identity for heterogeneous compiler-owned storage. Formation rows
+    /// describe its contents; this marker carries no numeric or physical layout.
+    let internalStorageType = NativeType.TApp(mkTypeConRef "<compiler-storage>" 0 TypeLayout.Opaque, [])
+
     // Array type constructor (arity 1, fat pointer layout)
     // C-04: No helper function - use TApp(arrayTyCon, [elemType]) directly
     let arrayTyCon = mkNTUTypeConRefWithArity "array" NTUKind.NTUarray 1 TypeLayout.FatPointer
@@ -2018,8 +2018,7 @@ module Types =
     /// definitions alone; `tryNumericTyConOfKind` reads it back (a literal's type is its
     /// carrier at `one`), so no second table maps an NTUKind to a type.
     let numericTyCons : TypeConRef list =
-        [ intTyCon; int8TyCon; int16TyCon; int32TyCon; int64TyCon
-          uintTyCon; uint8TyCon; uint16TyCon; uint32TyCon; uint64TyCon
+        [ intTyCon; uintTyCon; int64TyCon; uint8TyCon; uint16TyCon; uint64TyCon
           nintTyCon; unintTyCon; float32TyCon; floatTyCon
           posit8TyCon; posit16TyCon; posit32TyCon; posit64TyCon ]
 
@@ -2051,18 +2050,8 @@ module Types =
     /// the explicit IEEE-64 seal (numeric-selection.md readouts); today it aliases `float`.
     let numericSpellings : (string * TypeConRef * string * SealRepresentation) list =
         [ "int", intTyCon, "toInt", SealRepresentation.OfDimension ("int", WidthDimension.Register)
-          "int8", int8TyCon, "toSByte", SealRepresentation.Named "int8"
-          "sbyte", int8TyCon, "toSByte", SealRepresentation.Named "int8"
-          "int16", int16TyCon, "toInt16", SealRepresentation.Named "int16"
-          "int32", int32TyCon, "toInt32", SealRepresentation.Named "int32"
-          "int64", int64TyCon, "toInt64", SealRepresentation.Named "int64"
           "nativeint", nintTyCon, "toNativeInt", SealRepresentation.OfDimension ("int", WidthDimension.Pointer)
           "uint", uintTyCon, "toUInt", SealRepresentation.OfDimension ("uint", WidthDimension.Register)
-          "uint8", uint8TyCon, "toByte", SealRepresentation.Named "uint8"
-          "byte", uint8TyCon, "toByte", SealRepresentation.Named "uint8"
-          "uint16", uint16TyCon, "toUInt16", SealRepresentation.Named "uint16"
-          "uint32", uint32TyCon, "toUInt32", SealRepresentation.Named "uint32"
-          "uint64", uint64TyCon, "toUInt64", SealRepresentation.Named "uint64"
           "unativeint", unintTyCon, "toUNativeInt", SealRepresentation.OfDimension ("uint", WidthDimension.Pointer)
           "float", floatTyCon, "toFloat", SealRepresentation.Named "float64"
           "double", floatTyCon, "toFloat", SealRepresentation.Named "float64"
@@ -2100,23 +2089,19 @@ module Types =
         | Some k1, Some k2 when real k1 && real k2 -> true
         | _ -> tc1.Name = tc2.Name && tc1.Module = tc2.Module
 
-    /// The width-named spellings the alias period keeps compiling (CS-12 ruling 5), CCS8019 at
-    /// every site that writes one: every spelling of the table but the bare kinds `int`, `uint`
-    /// and `float`, and `double`, which names no width.
+    /// Rejected integer width spellings retain their diagnostic identity after
+    /// their obsolete carrier/conversion rows have been removed.
     let isWidthSpelling (name: string) : bool =
-        name <> "int" && name <> "uint" && name <> "float" && name <> "double"
-        && numericSpellings |> List.exists (fun (spelling, _, _, _) -> spelling = name)
+        List.contains name ["int8"; "sbyte"; "int16"; "int32"; "int64"; "uint8"; "byte"; "uint16"; "uint32"; "uint64"]
+        || (name <> "int" && name <> "uint" && name <> "float" && name <> "double"
+            && numericSpellings |> List.exists (fun (spelling, _, _, _) -> spelling = name))
 
     // Standard type values
     let intType = numType intTyCon
-    let int8Type = numType int8TyCon
-    let int16Type = numType int16TyCon
-    let int32Type = numType int32TyCon
-    let int64Type = numType int64TyCon
     let uintType = numType uintTyCon
+    let int64Type = numType int64TyCon
     let uint8Type = numType uint8TyCon
     let uint16Type = numType uint16TyCon
-    let uint32Type = numType uint32TyCon
     let uint64Type = numType uint64TyCon
     let nintType = numType nintTyCon
     let unintType = numType unintTyCon

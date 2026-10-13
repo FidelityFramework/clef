@@ -17,7 +17,7 @@ let typeOf innerType = NativeType.TApp(Types.optionTyCon, [innerType])
 let caseTest optionNodeId innerType caseIndex =
     saturation {
         let! tag = duGetTag optionNodeId (typeOf innerType)
-        let! expected = int8Lit caseIndex
+        let! expected = tagLiteral caseIndex
         // Native Option has exactly None=0 and Some=1. These local facts
         // belong to construction, including firings after range analysis.
         do! updateUserState (fun state ->
@@ -29,7 +29,7 @@ let caseTest optionNodeId innerType caseIndex =
                         { node with ValueRange = Some (ValueRange.bounded (bigint caseIndex) (bigint caseIndex)) }
                     else node)
             { state with EmittedNodes = nodes })
-        return! compareEq tag expected Types.int8Type
+        return! compareEq tag expected Types.intType
     }
 
 let hasValue optionNodeId innerType = caseTest optionNodeId innerType 1
