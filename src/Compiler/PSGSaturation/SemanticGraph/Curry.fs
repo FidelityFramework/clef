@@ -7,9 +7,9 @@
 /// inner lambdas are marked unreachable and their parameters and the innermost body reparented.
 /// Over the flattened graph, an under-saturated call of a flattened function is a partial
 /// application, the binding that holds it is a partial-application binding, and a call through
-/// that binding that completes the argument list is a saturated call. Runs at the end of
-/// saturation, after the range pass and placement have read the graph in its curried form (the
-/// order Composer's former pass kept); the result is carried as `Codata.Curry`.
+/// that binding that completes the argument list is a saturated call. Source parameter
+/// ownership is normalized before range and placement read complete invocations.
+/// Later rewrites refresh the partial-call tables carried as `Codata.Curry`.
 /// A source function expression or an already-settled closure pair is a value boundary,
 /// not another formal parameter group. Its lambda, captures and result type remain intact.
 module Clef.Compiler.PSGSaturation.SemanticGraph.Curry
@@ -36,60 +36,70 @@ let rec private chain (graph: SemanticGraph) (nodeId: NodeId) : (string * Native
         (parameters @ deeper, innermost, nodeId :: absorbed)
     | _ -> ([], nodeId, [])
 
-/// Flatten every reachable curried chain. Returns the graph and the absorbed lambdas.
-let private flatten (graph: SemanticGraph) : SemanticGraph * Set<NodeId> =
+/// Elaborate each source chain into in-place annotations and declared incidence.
+/// The nanopass fold owns retirement and graph mutation; this reader returns
+/// the exact source identities it replaces and the absorbed lambda identities.
+let elaborate (graph: SemanticGraph) : Enrichment * Set<NodeId> * Set<NodeId> =
     let mutable nodes = graph.Nodes
     let mutable absorbedSet = Set.empty
     let mutable rewritten = Set.empty
     let mutable annotated: Map<NodeId, SemanticNode> = Map.empty
+
     let update (node: SemanticNode) =
         nodes <- Map.add node.Id node nodes
         annotated <- Map.add node.Id node annotated
+
     for kvp in graph.Nodes do
         let node = kvp.Value
+
         if node.IsReachable && not (Set.contains node.Id absorbedSet) then
             match node.Kind with
-            | SemanticKind.Lambda (outerParams, bodyId, captures, enclosing, context) ->
+            | SemanticKind.Lambda(outerParams, bodyId, captures, enclosing, context) ->
                 match SemanticGraph.tryGetNode bodyId graph with
-                | Some ({ Kind = SemanticKind.Lambda _ } as bodyNode) when bodyNode.IsReachable && not (isFunctionValue bodyNode) ->
+                | Some({ Kind = SemanticKind.Lambda _ } as bodyNode) when bodyNode.IsReachable && not (isFunctionValue bodyNode) ->
                     let (innerParams, innermost, absorbed) = chain graph bodyId
                     let allParams = outerParams @ innerParams
+
                     let flattened =
                         { node with
-                            Kind = SemanticKind.Lambda (allParams, innermost, captures, enclosing, context)
-                            Children = (allParams |> List.map (fun (_, _, id) -> id)) @ [ innermost ] }
+                            Kind = SemanticKind.Lambda(allParams, innermost, captures, enclosing, context)
+                            Children = (allParams |> List.map (fun (_, _, id) -> id)) @ [ innermost ]
+                        }
+
                     update flattened
                     rewritten <- Set.add node.Id rewritten
+
                     for absId in absorbed do
                         match Map.tryFind absId nodes with
                         | Some abs ->
                             update { abs with IsReachable = false }
                             absorbedSet <- Set.add absId absorbedSet
                         | None -> ()
+
                     for (_, _, paramId) in innerParams do
                         match Map.tryFind paramId nodes with
                         | Some p -> update { p with Parent = Some node.Id }
                         | None -> ()
+
                     match Map.tryFind innermost nodes with
                     | Some b -> update { b with Parent = Some node.Id }
                     | None -> ()
                 | _ -> ()
             | _ -> ()
-    if rewritten.IsEmpty then graph, absorbedSet else
-    // This rewrite owns its changed lambda incidence. Retire only the prior
-    // declared rows of those lambdas; independent references and proof rows
-    // remain available to their existing owners and freshness checks.
-    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
-    let retired =
-        Set.union rewritten absorbedSet |> Set.toList
-        |> List.collect (fun id -> Incidence.structuralIncidence graph.Nodes[id])
-        |> List.map key |> Set.ofList
-    let prepared = { graph with Edges = graph.Edges |> List.filter (fun edge -> not (retired.Contains(key edge))) }
-    let enrichment =
-        { Enrichment.empty with
-            Annotated = annotated.Values |> Seq.toList
-            NewEdges = rewritten |> Set.toList |> List.collect (fun id -> Incidence.structuralIncidence nodes[id]) }
-    Fold.foldIn enrichment prepared, absorbedSet
+
+    if rewritten.IsEmpty then
+        Enrichment.empty, Set.empty, absorbedSet
+    else
+        let enrichment =
+            { Enrichment.empty with
+                Annotated = annotated.Values |> Seq.toList
+                NewEdges =
+                    rewritten
+                    |> Set.toList
+                    |> List.collect (fun id -> Incidence.structuralIncidence nodes[id])
+            }
+
+        enrichment, Set.union rewritten absorbedSet, absorbedSet
 
 /// The reachable Lambda a function binding holds.
 let private lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : NodeId option =
@@ -150,10 +160,18 @@ let private analyze (graph: SemanticGraph) (absorbed: Set<NodeId>) : CurryInfo =
       PartialAppBindings = partialBindings
       AbsorbedLambdas = absorbed }
 
+/// Recompute current partial-call correspondence after source normalization.
+/// This stage retains absorbed identities and performs no second shape rewrite.
+let refresh (absorbed: Set<NodeId>) (graph: SemanticGraph) : CurryInfo =
+    analyze graph absorbed
+
 /// Flatten the graph's curried chains and record its partial applications.
 let normalize (graph: SemanticGraph) : SemanticGraph * CurryInfo =
-    let (flattened, absorbed) = flatten graph
-    (flattened, analyze flattened absorbed)
+    let enrichment, retiredSources, absorbed = elaborate graph
+    let flattened =
+        if retiredSources.IsEmpty then graph
+        else Fold.foldInCurrentIncidence retiredSources enrichment graph
+    flattened, refresh absorbed flattened
 
 /// A completed partial application keeps its saved and current argument
 /// occurrences in one declared boundary. Validate the held owner facts against

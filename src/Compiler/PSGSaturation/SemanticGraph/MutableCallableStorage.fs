@@ -16,11 +16,21 @@ type Settlement = {
     Residuals: Residual list
 }
 
-/// Complete exact write boundaries are the first finite family. An opaque
-/// write, an unproved borrow, or a different physical boundary remains owning
-/// source work; its known neighbours cannot erase it from the cell's use set.
-let settle (carriers: Map<NodeId, CallableCarrier>) (layouts: Map<NodeId, EnvironmentLayout>)
-           (graph: SemanticGraph) : Settlement =
+type SourceFamily = {
+  Binding: NodeId
+  SourceType: NativeType
+  Initial: NodeId
+  Writes: (NodeId * NodeId * NodeId) list
+  Reads: Set<NodeId>
+  Captures: Set<NodeId>
+  Borrows: Set<NodeId>
+  Participants: Set<NodeId>
+}
+
+/// One current logical cell census, independent of callable ingress and layout.
+/// Retained alternatives preserve formation and shared-cell identity; this
+/// evidence supplies neither activation counts nor a physical calling contract.
+let sourceFamilies (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let mutable residuals = []
     let reject binding participants reason =
@@ -32,41 +42,8 @@ let settle (carriers: Map<NodeId, CallableCarrier>) (layouts: Map<NodeId, Enviro
         | Some { Kind = SemanticKind.VarRef(_, Some declaration) } -> Some declaration
         | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> target (Set.add id seen) inner
         | _ -> None
-    let environmentBytes (carrier: CallableCarrier) =
-        match carrier.Environment with
-        | None -> Some None
-        | Some environment ->
-            layouts.TryFind environment.Owner
-            |> Option.filter (fun layout -> layout.Formal = environment.Formal &&
-                                            layout.Implementation = carrier.Implementation && layout.Bytes > 0)
-            |> Option.map (fun layout -> Some layout.Bytes)
-    // Source component participants must agree before a common boundary is
-    // proposed. Alex still checks the projected physical types at commitment.
-    let rec sameShape seen left right =
-        match left, right with
-        | CallableValueShape.Data left, CallableValueShape.Data right ->
-            match nodes.TryFind left, nodes.TryFind right with
-            | Some left, Some right ->
-                let sameRange =
-                    match Types.tryGetNTUKind (applySubst left.Type) with
-                    | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) -> left.ValueRange = right.ValueRange
-                    | _ -> true
-                applySubst left.Type = applySubst right.Type && sameRange
-            | _ -> false
-        | CallableValueShape.Callable left, CallableValueShape.Callable right ->
-            if Set.contains (left, right) seen then false else
-            match carriers.TryFind left, carriers.TryFind right with
-            | Some left, Some right -> sameBoundary (Set.add (left.Occurrence, right.Occurrence) seen) left right
-            | _ -> false
-        | _ -> false
-    and sameBoundary seen (left: CallableCarrier) (right: CallableCarrier) =
-        applySubst left.SourceType = applySubst right.SourceType &&
-        environmentBytes left = environmentBytes right && (environmentBytes left).IsSome &&
-        left.ParameterShapes.Length = right.ParameterShapes.Length &&
-        List.forall2 (sameShape seen) left.ParameterShapes right.ParameterShapes &&
-        sameShape seen left.ResultShape right.ResultShape
-
-    let storage = nodes |> Map.toList |> List.choose (fun (binding, node) ->
+    let resolution = lazy (CallableOrigins.resolve graph)
+    let families = nodes |> Map.toList |> List.choose (fun (binding, node) ->
         match node.Kind, applySubst node.Type, node.Children with
         | SemanticKind.Binding(_, true, _, _), NativeType.TFun _, [initial] ->
             let writes = nodes.Values |> Seq.choose (fun node ->
@@ -158,22 +135,102 @@ let settle (carriers: Map<NodeId, CallableCarrier>) (layouts: Map<NodeId, Enviro
                         | _ -> Some edge.Target)
             let unsupported = unsupportedUses @ opaqueReferences
             let values = initial :: (writes |> List.map (fun (_, _, value) -> value))
+            let participants = Set.ofList (binding :: values @
+                (writes |> List.collect (fun (site, destination, value) -> [site; destination; value])) @
+                Set.toList directReads @ Set.toList captures @ Set.toList borrows)
+            let invalidIncidence = participants |> Set.toList |> List.filter (fun id ->
+                match nodes.TryFind id with
+                | None -> true
+                | Some current ->
+                    let expected = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence current
+                    let actual = graph.Edges |> List.filter (fun edge ->
+                        edge.Target = id && (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference))
+                    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+                    actual.Length <> (actual |> List.distinctBy key |> List.length) ||
+                    (actual |> List.exists (fun edge -> expected |> List.exists (fun row -> key edge = key row) |> not)))
+            let invalidValues = values |> List.filter (fun value ->
+                nodes.TryFind value |> Option.exists (fun value -> applySubst value.Type = applySubst node.Type) |> not)
+            let unknownValues = values |> List.filter (fun value -> not (resolution.Value.Lambdas.ContainsKey value))
+            if not invalidCapture.IsEmpty then reject binding invalidCapture "A mutable callable capture does not preserve the original shared cell and mutable mode."
+            elif not invalidAccess.IsEmpty then reject binding invalidAccess "A mutable callable access lacks its exact captured-cell provenance."
+            elif not unsupported.IsEmpty then reject binding unsupported "The mutable callable cell has an unaccounted storage or reference use."
+            elif not invalidIncidence.IsEmpty then reject binding invalidIncidence "The mutable callable cell has inconsistent current source incidence."
+            elif not invalidValues.IsEmpty then reject binding invalidValues "Every mutable callable write must preserve the cell's exact source type."
+            elif not unknownValues.IsEmpty then reject binding unknownValues "Every mutable callable write requires its complete exact alternative; opaque or joined writes need further source dispatch settlement."
+            else Some(binding, { Binding = binding; SourceType = node.Type; Initial = initial
+                                 Writes = writes; Reads = directReads; Captures = captures; Borrows = borrows
+                                 Participants = participants })
+        | SemanticKind.Binding(_, true, _, _), NativeType.TFun _, _ ->
+            reject binding node.Children "Mutable callable storage requires one exact initializer."
+        | _ -> None) |> Map.ofList
+    families, List.rev residuals
+
+/// Complete exact write boundaries are the first finite family. An opaque
+/// write, an unproved borrow, or a different physical boundary remains owning
+/// source work; its known neighbours cannot erase it from the cell's use set.
+let settle (sourceType: SemanticNode -> NativeType)
+           (valueShape: SemanticGraph -> SemanticNode -> CallableValueShape)
+           (carriers: Map<NodeId, CallableCarrier>) (layouts: Map<NodeId, EnvironmentLayout>)
+           (graph: SemanticGraph) : Settlement =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let mutable residuals = []
+    let reject binding participants reason =
+        residuals <- { Binding = binding; Participants = participants; Reason = reason } :: residuals
+        None
+    let environmentBytes (carrier: CallableCarrier) =
+        match carrier.Environment with
+        | None -> Some None
+        | Some environment ->
+            layouts.TryFind environment.Owner
+            |> Option.filter (fun layout -> layout.Formal = environment.Formal &&
+                                            layout.Implementation = carrier.Implementation && layout.Bytes > 0)
+            |> Option.map (fun layout -> Some layout.Bytes)
+    // Source component participants must agree before a common boundary is
+    // proposed. Alex still checks the projected physical types at commitment.
+    let rec sameShape seen left right =
+        match left, right with
+        | CallableValueShape.Data left, CallableValueShape.Data right ->
+            match nodes.TryFind left, nodes.TryFind right with
+            | Some left, Some right ->
+                let sameRange =
+                    match Types.tryGetNTUKind (applySubst left.Type) with
+                    | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) -> left.ValueRange = right.ValueRange
+                    | _ -> true
+                applySubst left.Type = applySubst right.Type && sameRange
+            | _ -> false
+        | CallableValueShape.Callable left, CallableValueShape.Callable right ->
+            if Set.contains (left, right) seen then false else
+            match carriers.TryFind left, carriers.TryFind right with
+            | Some left, Some right -> sameBoundary (Set.add (left.Occurrence, right.Occurrence) seen) left right
+            | _ -> false
+        | _ -> false
+    and sameBoundary seen (left: CallableCarrier) (right: CallableCarrier) =
+        applySubst left.SourceType = applySubst right.SourceType &&
+        environmentBytes left = environmentBytes right && (environmentBytes left).IsSome &&
+        left.ParameterShapes.Length = right.ParameterShapes.Length &&
+        List.forall2 (sameShape seen) left.ParameterShapes right.ParameterShapes &&
+        sameShape seen left.ResultShape right.ResultShape
+
+    let families, sourceResiduals = sourceFamilies graph
+    residuals <- List.rev sourceResiduals
+    let storage = families |> Map.toList |> List.choose (fun (binding, family) ->
+            let node = nodes[binding]
+            let initial, writes = family.Initial, family.Writes
+            let directReads, captures, borrows = family.Reads, family.Captures, family.Borrows
+            let values = initial :: (writes |> List.map (fun (_, _, value) -> value))
             let exact = values |> List.map (fun value -> carriers.TryFind value |> Option.filter (fun carrier ->
                 carrier.Occurrence = value && applySubst carrier.SourceType = applySubst node.Type &&
                 (nodes.TryFind value |> Option.exists (fun value ->
-                    applySubst (CallableCarriers.sourceType value) = applySubst carrier.SourceType)) &&
+                    applySubst (sourceType value) = applySubst carrier.SourceType)) &&
                 (nodes.TryFind carrier.Implementation |> Option.exists (fun code ->
                     match code.Kind with
                     | SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure) ->
                         parameters = carrier.Parameters && body = carrier.Result &&
-                        (parameters |> List.map (fun (_, _, id) -> nodes.TryFind id |> Option.map (CallableCarriers.valueShape graph))) =
+                        (parameters |> List.map (fun (_, _, id) -> nodes.TryFind id |> Option.map (valueShape graph))) =
                             (carrier.ParameterShapes |> List.map Some) &&
-                        (nodes.TryFind body |> Option.map (CallableCarriers.valueShape graph)) = Some carrier.ResultShape
+                        (nodes.TryFind body |> Option.map (valueShape graph)) = Some carrier.ResultShape
                     | _ -> false))))
-            if not invalidCapture.IsEmpty then reject binding invalidCapture "A mutable callable capture does not preserve the original shared cell and mutable mode."
-            elif not invalidAccess.IsEmpty then reject binding invalidAccess "A mutable callable access lacks its exact captured-cell provenance."
-            elif not unsupported.IsEmpty then reject binding unsupported "The mutable callable cell has an unaccounted storage or reference use."
-            elif List.exists Option.isNone exact then
+            if List.exists Option.isNone exact then
                 reject binding (List.zip values exact |> List.choose (fun (id, carrier) -> if carrier.IsNone then Some id else None))
                     "Every mutable callable write requires its complete exact alternative; opaque or joined writes need further source dispatch settlement."
             else
@@ -192,10 +249,7 @@ let settle (carriers: Map<NodeId, CallableCarrier>) (layouts: Map<NodeId, Enviro
                           Reads = directReads; Alternatives = alternatives
                           AlternativeCarriers = alternatives |> List.map (fun id -> carriers[id])
                           EnvironmentBytes = environmentBytes first |> Option.get
-                          Captures = captures; Borrows = borrows })
-        | SemanticKind.Binding(_, true, _, _), NativeType.TFun _, _ ->
-            reject binding node.Children "Mutable callable storage requires one exact initializer."
-        | _ -> None) |> Map.ofList
+                          Captures = captures; Borrows = borrows })) |> Map.ofList
 
     let mutable joins =
         storage |> Map.toList |> List.collect (fun (_, cell) ->
@@ -221,15 +275,12 @@ let settle (carriers: Map<NodeId, CallableCarrier>) (layouts: Map<NodeId, Enviro
 
 /// Revalidate the complete participant set when observing retained codata.
 /// Added writes/borrows and changed signatures retract an earlier conclusion.
-let validate (graph: SemanticGraph) (expected: MutableCallableStorage) =
-    let codata = graph.Codata.Value
-    let currentCarriers, _ = CallableCarriers.settle
-                                { Layouts = codata.EnvironmentLayouts; Origins = ClosureEnvironments.origins graph
-                                  Known = ClosureEnvironments.knownCallables graph; Contracts = codata.CallableContracts } graph
-    let actual = settle currentCarriers codata.EnvironmentLayouts graph
+let validate sourceType valueShape (currentCarriers: SemanticGraph -> Map<NodeId, CallableCarrier>)
+             (graph: SemanticGraph) (expected: MutableCallableStorage) =
+    let actual = settle sourceType valueShape (currentCarriers graph) graph.Codata.Value.EnvironmentLayouts graph
     actual.Storage.TryFind expected.Binding = Some expected
 
-let validateJoin (graph: SemanticGraph) (expected: CallableJoin) =
-    let actual = settle graph.Codata.Value.CallableCarriers graph.Codata.Value.EnvironmentLayouts graph
+let validateJoin sourceType valueShape currentCarriers (graph: SemanticGraph) (expected: CallableJoin) =
+    let actual = settle sourceType valueShape (currentCarriers graph) graph.Codata.Value.EnvironmentLayouts graph
     actual.Joins.TryFind expected.Occurrence = Some expected &&
-    (graph.Codata.Value.MutableCallableStorage.TryFind expected.Storage |> Option.exists (validate graph))
+    (graph.Codata.Value.MutableCallableStorage.TryFind expected.Storage |> Option.exists (validate sourceType valueShape currentCarriers graph))

@@ -8,6 +8,18 @@ module MutableStorage = Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallabl
 module MutableCarriers = Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers
 
 module private MutableCallableFixture =
+    let currentCarriers (graph: SemanticGraph) =
+        let codata = graph.Codata.Value
+        MutableCarriers.settle
+            { Layouts = codata.EnvironmentLayouts
+              Origins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins graph
+              Known = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables graph
+              Contracts = codata.CallableContracts } graph |> fst
+
+    let settle = MutableStorage.settle MutableCarriers.sourceType MutableCarriers.valueShape
+    let validate = MutableStorage.validate MutableCarriers.sourceType MutableCarriers.valueShape currentCarriers
+    let validateJoin = MutableStorage.validateJoin MutableCarriers.sourceType MutableCarriers.valueShape currentCarriers
+
     type Fixture = {
         Graph: SemanticGraph
         Carriers: Map<NodeId, CallableCarrier>
@@ -51,7 +63,7 @@ module private MutableCallableFixture =
         let opaque = builder.Create(SemanticKind.PatternBinding "unknown", ty, dummyRange)
         let raw = builder.Build []
         let carriers, _ = MutableCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty } raw
-        let settled = MutableStorage.settle carriers Map.empty raw
+        let settled = settle carriers Map.empty raw
         let codata =
             { raw.Codata.Value with
                 CallableCarriers = carriers
@@ -86,7 +98,7 @@ type MutableCallableStorageCases() =
             Assert.Equal<NodeId list>(cell.Alternatives, join.Alternatives)
         Assert.Equal(f.Later, f.Graph.Codata.Value.CallableJoins[f.Later].Read)
         Assert.False(f.Graph.Codata.Value.CallableJoins.ContainsKey f.Target)
-        Assert.True(MutableStorage.validate f.Graph cell)
+        Assert.True(MutableCallableFixture.validate f.Graph cell)
 
     [<Theory>]
     [<InlineData("opaque-write")>]
@@ -110,20 +122,20 @@ type MutableCallableStorageCases() =
             | _ ->
                 let node = f.Graph.Nodes[f.Opaque]
                 { f.Graph with Nodes = f.Graph.Nodes.Add(node.Id, { node with Kind = SemanticKind.AddressOf(f.Cell, false) }) }
-        let result = MutableStorage.settle f.Carriers Map.empty graph
+        let result = MutableCallableFixture.settle f.Carriers Map.empty graph
         Assert.False(result.Storage.ContainsKey f.Cell)
         Assert.NotEmpty(result.Residuals)
-        Assert.False(MutableStorage.validate graph f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
-        Assert.False(MutableStorage.validateJoin graph f.Graph.Codata.Value.CallableJoins[f.SavedRead])
+        Assert.False(MutableCallableFixture.validate graph f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
+        Assert.False(MutableCallableFixture.validateJoin graph f.Graph.Codata.Value.CallableJoins[f.SavedRead])
 
     [<Fact>]
     member _.``A saved callable is a value snapshot and is never treated as a shared cell alias`` () =
         let f = MutableCallableFixture.create ()
         let target = f.Graph.Nodes[f.Target]
         let graph = { f.Graph with Nodes = f.Graph.Nodes.Add(target.Id, { target with Kind = SemanticKind.VarRef("saved", Some f.Saved) }) }
-        let result = MutableStorage.settle f.Carriers Map.empty graph
+        let result = MutableCallableFixture.settle f.Carriers Map.empty graph
         Assert.Empty(result.Storage[f.Cell].Writes)
-        Assert.False(MutableStorage.validate graph f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
+        Assert.False(MutableCallableFixture.validate graph f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
         Assert.Equal(f.Read, result.Joins[f.SavedRead].Read)
 
     [<Fact>]
@@ -131,12 +143,12 @@ type MutableCallableStorageCases() =
         let f = MutableCallableFixture.create ()
         let edge = { Class = EdgeClass.Reference; Role = EdgeRole.Argument; Sources = [f.Cell]; Target = f.Opaque; Ordinal = 0 }
         let opaque = { f.Graph with Edges = edge :: f.Graph.Edges }
-        Assert.False(MutableStorage.validate opaque f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
+        Assert.False(MutableCallableFixture.validate opaque f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
         let replacement = f.Graph.Nodes[f.Replacement]
         let changed = { replacement with Kind = SemanticKind.VarRef("unknown", Some f.Opaque) }
         let redirected = { f.Graph with Nodes = f.Graph.Nodes.Add(replacement.Id, changed) }
-        Assert.False(MutableStorage.validate redirected f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
-        Assert.False(MutableStorage.validateJoin redirected f.Graph.Codata.Value.CallableJoins[f.SavedRead])
+        Assert.False(MutableCallableFixture.validate redirected f.Graph.Codata.Value.MutableCallableStorage[f.Cell])
+        Assert.False(MutableCallableFixture.validateJoin redirected f.Graph.Codata.Value.CallableJoins[f.SavedRead])
 
     [<Fact>]
     member _.``Captured protocol aliases must terminate at the original cell instead of a borrow cycle`` () =
@@ -156,9 +168,64 @@ type MutableCallableStorageCases() =
             { f.Graph with
                 Nodes = f.Graph.Nodes.Add(owner, ownerNode).Add(environment, environmentNode).Add(borrow, borrowNode)
                 Edges = capture :: f.Graph.Edges }
-        let rooted = MutableStorage.settle f.Carriers Map.empty (makeGraph f.Cell)
+        let rooted = MutableCallableFixture.settle f.Carriers Map.empty (makeGraph f.Cell)
         Assert.True(rooted.Storage.ContainsKey f.Cell)
         Assert.Contains(borrow, rooted.Storage[f.Cell].Borrows)
-        let cyclic = MutableStorage.settle f.Carriers Map.empty (makeGraph borrow)
+        let cyclic = MutableCallableFixture.settle f.Carriers Map.empty (makeGraph borrow)
         Assert.False(cyclic.Storage.ContainsKey f.Cell)
         Assert.Contains(cyclic.Residuals, fun residual -> residual.Binding = f.Cell)
+
+    [<Fact>]
+    member _.``Source family retains exact writes and captured cells without physical codata`` () =
+        let f = MutableCallableFixture.create ()
+        let graph = { f.Graph with Codata = lazy (failwith "Source family forced physical codata") }
+        let families, residuals = MutableStorage.sourceFamilies graph
+        Assert.Empty residuals
+        let family = families[f.Cell]
+        Assert.Equal(f.Initial, family.Initial)
+        Assert.Equal<(NodeId * NodeId * NodeId) list>([f.Write, f.Target, f.Replacement], family.Writes)
+        Assert.Contains(f.Capturing, family.Captures)
+        Assert.Contains(f.Read, family.Reads)
+        Assert.DoesNotContain(f.Target, family.Reads)
+        Assert.All([f.Cell; f.Initial; f.Write; f.Target; f.Replacement; f.Capturing], fun id ->
+            Assert.Contains(id, family.Participants))
+        let physical = MutableCallableFixture.settle f.Carriers Map.empty f.Graph
+        Assert.Equal<NodeId list>(family.Initial :: (family.Writes |> List.map (fun (_, _, value) -> value)),
+                                 physical.Storage[f.Cell].Alternatives)
+
+    [<Theory>]
+    [<InlineData("opaque-write")>]
+    [<InlineData("capture-mode")>]
+    [<InlineData("unknown-use")>]
+    member _.``Source family recomputes the current complete cell census and specific refusal`` defect =
+        let f = MutableCallableFixture.create ()
+        let families, _ = MutableStorage.sourceFamilies f.Graph
+        Assert.True(families.ContainsKey f.Cell)
+        let graph, expected =
+            match defect with
+            | "opaque-write" ->
+                let builder = NodeBuilder()
+                let destination = builder.Create(SemanticKind.VarRef("selected", Some f.Cell), f.Graph.Nodes[f.Cell].Type, dummyRange)
+                builder.Create(SemanticKind.Set(destination.Id, f.Opaque), Types.unitType, dummyRange) |> ignore
+                let nodes = builder.Nodes |> Map.fold (fun nodes id node -> nodes |> Map.add id node) f.Graph.Nodes
+                { f.Graph with Nodes = nodes },
+                "Every mutable callable write requires its complete exact alternative; opaque or joined writes need further source dispatch settlement."
+            | "capture-mode" ->
+                let node = f.Graph.Nodes[f.Capturing]
+                let kind =
+                    match node.Kind with
+                    | SemanticKind.Lambda(parameters, body, captures, enclosing, context) ->
+                        SemanticKind.Lambda(parameters, body, captures |> List.map (fun capture -> { capture with IsMutable = false }), enclosing, context)
+                    | _ -> failwith "Fixture lost its capture"
+                { f.Graph with Nodes = f.Graph.Nodes.Add(node.Id, { node with Kind = kind }) },
+                "A mutable callable capture does not preserve the original shared cell and mutable mode."
+            | _ ->
+                let edge = { Class = EdgeClass.Reference; Role = EdgeRole.Argument; Sources = [f.Cell]; Target = f.Opaque; Ordinal = 0 }
+                { f.Graph with Edges = edge :: f.Graph.Edges },
+                "The mutable callable cell has an unaccounted storage or reference use."
+        let current, residuals = MutableStorage.sourceFamilies graph
+        Assert.False(current.ContainsKey f.Cell)
+        let refusal = residuals |> List.filter (fun refusal -> refusal.Binding = f.Cell) |> Assert.Single
+        Assert.Equal(expected, refusal.Reason)
+        Assert.NotEmpty refusal.Participants
+        Assert.True((MutableStorage.sourceFamilies f.Graph |> fst).ContainsKey f.Cell)

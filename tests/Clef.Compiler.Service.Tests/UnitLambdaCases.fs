@@ -204,3 +204,263 @@ let main _ = work (); if calls = 12 then 0 else 1
         match work.Kind with
         | SemanticKind.Application (_, arguments) -> Assert.Single arguments |> ignore
         | kind -> failwithf "Factory invocation lost its own boundary: %A" kind
+
+    [<Fact>]
+    member _.``Curry refresh retains source absorption and recomputes current arguments without another shape rewrite``() =
+        let builder = NodeBuilder()
+        let curry = Clef.Compiler.PSGSaturation.SemanticGraph.Curry.normalize
+        let refresh = Clef.Compiler.PSGSaturation.SemanticGraph.Curry.refresh
+
+        let parameter =
+            builder.Create(SemanticKind.PatternBinding "flag", Types.boolType, dummyRange)
+
+        let unitParameter =
+            builder.Create(SemanticKind.PatternBinding "unit", Types.unitType, dummyRange)
+
+        let body =
+            builder.Create(SemanticKind.Literal(NativeLiteral.Bool true), Types.boolType, dummyRange)
+
+        let residualType = NativeType.TFun(Types.unitType, Types.boolType)
+
+        let inner =
+            builder.Create(
+                SemanticKind.Lambda([ "unit", Types.unitType, unitParameter.Id ], body.Id, [], None, LambdaContext.RegularClosure),
+                residualType,
+                dummyRange
+            )
+
+        let sourceType = NativeType.TFun(Types.boolType, residualType)
+
+        let outer =
+            builder.Create(
+                SemanticKind.Lambda([ "flag", Types.boolType, parameter.Id ], inner.Id, [], None, LambdaContext.RegularClosure),
+                sourceType,
+                dummyRange
+            )
+
+        let declaration =
+            builder.Create(SemanticKind.Binding("choose", false, false, None), sourceType, dummyRange, children = [ outer.Id ])
+
+        let callee =
+            builder.Create(SemanticKind.VarRef("choose", Some declaration.Id), sourceType, dummyRange)
+
+        let supplied =
+            builder.Create(SemanticKind.Literal(NativeLiteral.Bool true), Types.boolType, dummyRange)
+
+        let replacement =
+            builder.Create(SemanticKind.Literal(NativeLiteral.Bool false), Types.boolType, dummyRange)
+
+        let partial =
+            builder.Create(SemanticKind.Application(callee.Id, [ supplied.Id ]), residualType, dummyRange)
+
+        let saved =
+            builder.Create(SemanticKind.Binding("saved", false, false, None), residualType, dummyRange, children = [ partial.Id ])
+
+        builder.SetParent(partial.Id, saved.Id)
+
+        let savedRead =
+            builder.Create(SemanticKind.VarRef("saved", Some saved.Id), residualType, dummyRange)
+
+        let unitArgument =
+            builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, dummyRange)
+
+        let completed =
+            builder.Create(SemanticKind.Application(savedRead.Id, [ unitArgument.Id ]), Types.boolType, dummyRange)
+
+        let mutableCell =
+            builder.Create(SemanticKind.Binding("selected", true, false, None), sourceType, dummyRange, children = [ outer.Id ])
+
+        let raw = builder.Build []
+        let incidence = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence
+
+        let independent =
+            {
+                Class = EdgeClass.Reference
+                Role = EdgeRole.Argument
+                Sources = [ body.Id ]
+                Target = outer.Id
+                Ordinal = 99
+            }
+
+        let provenance =
+            {
+                Class = EdgeClass.Provenance
+                Role = EdgeRole.FiniteCellRange
+                Sources = [ outer.Id; inner.Id ]
+                Target = body.Id
+                Ordinal = 0
+            }
+
+        let raw =
+            { raw with
+                Edges =
+                    incidence raw.Nodes[outer.Id]
+                    @ incidence raw.Nodes[inner.Id]
+                    @ [ independent; provenance ]
+            }
+
+        let enrichment, retiredSources, absorbed =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Curry.elaborate raw
+
+        let annotated = enrichment.Annotated |> List.map _.Id |> Set.ofList
+        Assert.True(Set.isSubset retiredSources (Set.union annotated absorbed))
+        let source, held = curry raw
+        Assert.Contains(inner.Id, held.AbsorbedLambdas)
+        Assert.False(source.Nodes[inner.Id].IsReachable)
+
+        let sourceFamilies =
+            Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.sourceFamilies
+
+        // Independent incidence survives for its existing owner to judge.
+        // The callable control uses the separately declared mutable cell graph.
+        let cellGraph =
+            { source with Edges = source.Edges |> List.filter (fun edge -> not (obj.ReferenceEquals(edge, independent))) }
+
+        let families, refusals = sourceFamilies cellGraph
+        Assert.True(families.ContainsKey mutableCell.Id, refusals |> List.map _.Reason |> String.concat "; ")
+        Assert.Empty refusals
+
+        let edgeKey (edge: Hyperedge) =
+            edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+
+        let retiredKeys =
+            retiredSources
+            |> Set.toList
+            |> List.collect (fun id -> incidence raw.Nodes[id])
+            |> List.map edgeKey
+            |> Set.ofList
+
+        let preserved =
+            raw.Edges |> List.filter (fun edge -> not (retiredKeys.Contains(edgeKey edge)))
+
+        Assert.All(preserved, fun prior -> Assert.Contains(source.Edges, fun edge -> obj.ReferenceEquals(prior, edge)))
+
+        let expectedKeys =
+            (preserved @ enrichment.NewEdges) |> List.map edgeKey |> Set.ofList
+
+        Assert.Equal(expectedKeys.Count, source.Edges.Length)
+        Assert.Equal<Set<_>>(expectedKeys, source.Edges |> List.map edgeKey |> Set.ofList)
+        Assert.Contains(source.Edges, fun edge -> edgeKey edge = edgeKey independent)
+        Assert.Contains(source.Edges, fun edge -> edgeKey edge = edgeKey provenance)
+
+        let currentDeclared =
+            incidence source.Nodes[outer.Id] |> List.map edgeKey |> Set.ofList
+
+        let actualDeclared =
+            source.Edges
+            |> List.filter (fun edge ->
+                edge.Target = outer.Id
+                && (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+                && edgeKey edge <> edgeKey independent)
+            |> List.map edgeKey
+
+        Assert.Equal(currentDeclared.Count, actualDeclared.Length)
+        Assert.Equal<Set<_>>(currentDeclared, Set.ofList actualDeclared)
+
+        Assert.DoesNotContain(
+            source.Edges,
+            fun edge ->
+                edge.Target = inner.Id
+                && (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+        )
+        // Freshly constructed ownership of the same source parameter group.
+        let expectedOuter =
+            { raw.Nodes[outer.Id] with
+                Kind =
+                    SemanticKind.Lambda(
+                        [
+                            "flag", Types.boolType, parameter.Id
+                            "unit", Types.unitType, unitParameter.Id
+                        ],
+                        body.Id,
+                        [],
+                        None,
+                        LambdaContext.RegularClosure
+                    )
+                Children = [ parameter.Id; unitParameter.Id; body.Id ]
+            }
+
+        Assert.Equal(expectedOuter.Kind, source.Nodes[outer.Id].Kind)
+        Assert.Equal<NodeId list>(expectedOuter.Children, source.Nodes[outer.Id].Children)
+        Assert.Equal(Some outer.Id, source.Nodes[unitParameter.Id].Parent)
+        Assert.Equal(Some outer.Id, source.Nodes[body.Id].Parent)
+        Assert.True(source.Nodes[unitParameter.Id].IsReachable)
+        Assert.True(source.Nodes[body.Id].IsReachable)
+        let fresh = NodeBuilder()
+
+        let freshFlag =
+            fresh.Create(SemanticKind.PatternBinding "flag", Types.boolType, dummyRange)
+
+        let freshUnit =
+            fresh.Create(SemanticKind.PatternBinding "unit", Types.unitType, dummyRange)
+
+        let freshBody =
+            fresh.Create(SemanticKind.Literal(NativeLiteral.Bool true), Types.boolType, dummyRange)
+
+        let freshOuter =
+            fresh.Create(
+                SemanticKind.Lambda(
+                    [ "flag", Types.boolType, freshFlag.Id; "unit", Types.unitType, freshUnit.Id ],
+                    freshBody.Id,
+                    [],
+                    None,
+                    LambdaContext.RegularClosure
+                ),
+                sourceType,
+                dummyRange
+            )
+
+        fresh.SetParent(freshUnit.Id, freshOuter.Id)
+        fresh.SetParent(freshBody.Id, freshOuter.Id)
+        let freshlyConstructed = fresh.Build []
+
+        for currentId, freshId in [ unitParameter.Id, freshUnit.Id; body.Id, freshBody.Id ] do
+            Assert.Equal(freshlyConstructed.Nodes[freshId].Parent = Some freshOuter.Id, source.Nodes[currentId].Parent = Some outer.Id)
+            Assert.Equal(freshlyConstructed.Nodes[freshId].IsReachable, source.Nodes[currentId].IsReachable)
+
+        let stale =
+            { cellGraph with
+                Edges = cellGraph.Edges @ incidence raw.Nodes[outer.Id]
+            }
+
+        let staleFamilies, staleRefusals = sourceFamilies stale
+        Assert.False(staleFamilies.ContainsKey mutableCell.Id)
+
+        Assert.Contains(
+            staleRefusals,
+            fun refusal ->
+                refusal.Binding = mutableCell.Id
+                && refusal.Reason = "The mutable callable cell has inconsistent current source incidence."
+        )
+
+        Assert.Equal<NodeId list>([ supplied.Id; unitArgument.Id ], held.SaturatedCalls[completed.Id].AllArgNodes)
+        let again, newlyAbsorbed = curry source
+        Assert.Same(source, again)
+        Assert.Empty newlyAbsorbed.AbsorbedLambdas
+        let sourceRefresh = refresh held.AbsorbedLambdas source
+        Assert.Equal(held, sourceRefresh)
+        // A later source-preserving rewrite replaces an actual occurrence.
+        // Refresh reads that current correspondence while retaining the original
+        // synthetic lambda identities; it must never flatten a second time.
+        let currentPartial =
+            { source.Nodes[partial.Id] with
+                Kind = SemanticKind.Application(callee.Id, [ replacement.Id ])
+                Children = [ callee.Id; replacement.Id ]
+            }
+
+        let postTransform =
+            { source with
+                Nodes = source.Nodes.Add(partial.Id, currentPartial)
+                Edges = source.Edges @ incidence currentPartial
+            }
+
+        let current = refresh held.AbsorbedLambdas postTransform
+        Assert.Equal(held.AbsorbedLambdas, current.AbsorbedLambdas)
+        Assert.Equal<NodeId list>([ replacement.Id ], current.PartialApplications[partial.Id].SuppliedArgNodes)
+        Assert.Equal<NodeId list>([ replacement.Id; unitArgument.Id ], current.SaturatedCalls[completed.Id].AllArgNodes)
+        Assert.Equal(held.PartialAppBindings, current.PartialAppBindings)
+        let finalGraph, finalNormalization = curry postTransform
+        Assert.Same(postTransform, finalGraph)
+        Assert.Empty finalNormalization.AbsorbedLambdas
+        Assert.Equal<Map<_, _>>(current.PartialApplications, finalNormalization.PartialApplications)
+        Assert.Equal<Map<_, _>>(current.SaturatedCalls, finalNormalization.SaturatedCalls)

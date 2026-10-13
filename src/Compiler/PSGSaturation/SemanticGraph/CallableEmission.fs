@@ -71,7 +71,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                           Contracts = codata.CallableContracts } graph
     errors.AddRange(
         Clef.Compiler.Baker.Ingredients.CallableContracts.validate graph codata.EnvironmentLayouts codata.CallableContracts carriers)
-    let storage = MutableCallableStorage.settle carriers codata.EnvironmentLayouts graph
+    let storage = MutableCallableStorage.settle CallableCarriers.sourceType CallableCarriers.valueShape carriers codata.EnvironmentLayouts graph
     let flows, _ = CallableFlows.settleWithResolution physicalResolution
                         { Carriers = carriers; Joins = storage.Joins; Layouts = codata.EnvironmentLayouts
                           SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph

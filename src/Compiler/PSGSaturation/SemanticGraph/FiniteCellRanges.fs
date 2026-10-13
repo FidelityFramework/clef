@@ -78,11 +78,15 @@ let recognize (graph: SemanticGraph) : Bound list =
     let complete site implementation =
         calls.Calls.TryFind site |> Option.filter (fun call ->
             valid site && call.Complete && not call.Unknown && not call.Targets.IsEmpty &&
+            (call.Targets |> List.exists (fun target -> target.Lambda = implementation)) &&
             call.Targets |> List.forall (fun target ->
-                target.Lambda = implementation && valid target.Lambda && valid target.Body &&
+                valid target.Lambda && valid target.Body &&
                 target.Parameters.Length = target.Arguments.Length &&
                 List.zip target.Parameters target.Arguments |> List.forall (fun ((_, ty, formal), actual) ->
                     same formal actual && applySubst nodes[formal].Type = applySubst ty)))
+    // Zero belongs to the ordinary demand owner's current inactivity proof,
+    // never to an empty observed invocation list or closure retention alone.
+    let inactivity = lazy (OrdinaryDemand.analyze graph).Inactivity
     let closedCache = System.Collections.Generic.Dictionary<NodeId, (NodeId list * Set<NodeId>) option>()
     let closedCalls implementation =
         match closedCache.TryGetValue implementation with
@@ -91,15 +95,53 @@ let recognize (graph: SemanticGraph) : Bound list =
             // The ingress owner supplies the complete incoming-use census.
             // This owner still proves finite execution; closure membership is
             // neither an invocation count nor an excuse to ignore recursion.
-            let result = CallableIngress.tryFamily ingress implementation |> Option.bind (fun family ->
-                let sites =
-                    family.Evidence.Calls |> List.filter (fun call -> call.Implementation = implementation)
-                    |> List.map _.Site |> List.distinct
-                if not (family.Activated.Contains implementation) || sites.IsEmpty ||
-                   (sites |> List.exists (fun site -> complete site implementation |> Option.isNone)) then None
-                else Some(sites, family.Evidence.Participants))
+            let result =
+                CallableIngress.tryFamily ingress implementation
+                |> Option.bind (fun family ->
+                    let sites =
+                        family.Evidence.Calls
+                        |> List.filter (fun call -> call.Implementation = implementation)
+                        |> List.map _.Site
+                        |> List.distinct
+
+                    if sites |> List.exists (fun site -> complete site implementation |> Option.isNone) then
+                        None
+                    elif not (family.Activated.Contains implementation) then
+                        inactivity.Value.TryFind implementation
+                        |> Option.bind (fun proof ->
+                            let currentCalls =
+                                nodes.Values
+                                |> Seq.choose (fun node ->
+                                    match node.Kind with
+                                    | SemanticKind.Application _ when
+                                        CallableIngress.tryExecutionOwner ingress node.Id = Some implementation
+                                        ->
+                                        Some node.Id
+                                    | _ -> None)
+                                |> Set.ofSeq
+
+                            if not (Set.isSubset currentCalls proof.Calls) then
+                                None
+                            else
+                                Some(
+                                    [],
+                                    Set.unionMany
+                                        [
+                                            family.Evidence.Participants
+                                            proof.Family.Evidence.Participants
+                                            proof.Excluded
+                                            proof.Calls
+                                            Set.ofList (proof.Implementation :: proof.Body :: proof.Parameters)
+                                        ]
+                                ))
+                    elif sites.IsEmpty then
+                        None
+                    else
+                        Some(sites, family.Evidence.Participants))
+
             closedCache[implementation] <- result
             result
+
     let startupParticipants = graph.Edges |> List.filter (fun edge ->
         edge.Role = EdgeRole.ProgramInitialization || edge.Role = EdgeRole.ProgramEntryCall || edge.Role = EdgeRole.ProgramInitializer)
                               |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList
@@ -245,9 +287,11 @@ let recognize (graph: SemanticGraph) : Bound list =
                 closedCalls owner |> Option.bind (fun (sites, dependencies) ->
                     sites |> List.fold (fun result site ->
                         let actual = complete site owner |> Option.bind (fun call ->
-                            match call.Targets with
-                            | [target] -> List.zip target.Parameters target.Arguments |> List.tryPick (fun ((_, _, formal), actual) -> if formal = id then Some actual else None)
-                            | _ -> None)
+                            call.Targets |> List.filter (fun target -> target.Lambda = owner)
+                            |> List.collect (fun (target: CallableOrigins.CallTarget) ->
+                                List.zip target.Parameters target.Arguments
+                                |> List.choose (fun ((_, _, formal), actual) -> if formal = id then Some actual else None))
+                            |> List.distinct |> function [actual] -> Some actual | _ -> None)
                         match result, actual |> Option.bind (constant seen expected) with
                         | Some(bound, required), Some(value, more) -> Some(max bound value, Set.union required more)
                         | _ -> None) (Some(0I, Set.add id dependencies))))
@@ -346,6 +390,20 @@ let recognize (graph: SemanticGraph) : Bound list =
                     match state, next with
                     | Some prior, Some required -> Some(Set.union prior required)
                     | _ -> None) (Some activationSources)
+                |> Option.bind (fun ordered ->
+                    // Source captures are formation uses even before their
+                    // environment incidence is realized. A dormant body does
+                    // not authorize forming a view before the cell exists.
+                    nodes.Values |> Seq.fold (fun state formation ->
+                        let captured =
+                            match formation.Kind with
+                            | SemanticKind.Lambda(_, _, captures, _, _) ->
+                                captures |> List.exists (fun capture -> capture.SourceNodeId = Some cell)
+                            | _ -> false
+                        if not captured then state else
+                        match state, after Set.empty formation.Id with
+                        | Some prior, Some required -> Some(Set.union prior required)
+                        | _ -> None) (Some ordered))
             | _ -> None
         | _ -> None
     nodes.Keys |> Seq.toList |> List.choose (fun cell ->

@@ -402,3 +402,21 @@ let foldIn (e: Enrichment) (graph: SemanticGraph) : SemanticGraph =
     |> SemanticGraph.addNodes e.Annotated
     |> SemanticGraph.addNodes (Recipes.projectAnchors e graph)
     |> SemanticGraph.addEdges e.NewEdges
+
+/// Replace only the named owner's prior declared incidence, then fold its
+/// current enrichment. Independent references and proof rows retain identity.
+let foldInCurrentIncidence (retiredSources: Set<NodeId>) (e: Enrichment) (graph: SemanticGraph) =
+    let key (edge: Hyperedge) =
+        edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+
+    let retired =
+        retiredSources
+        |> Set.toList
+        |> List.collect (fun id -> Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence graph.Nodes[id])
+        |> List.map key
+        |> Set.ofList
+
+    { graph with
+        Edges = graph.Edges |> List.filter (fun edge -> not (retired.Contains(key edge)))
+    }
+    |> foldIn e

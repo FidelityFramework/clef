@@ -346,6 +346,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\LazyValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ContinuationCurrentInputs.fs" />
     <Compile Include="Baker\Ingredients\SourceStorageBorrows.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\MutableCallableStorage.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableIngress.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableInstantiations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
@@ -366,7 +367,6 @@
     <Compile Include="Baker\Ingredients\CallableContracts.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
     <Compile Include="Baker\Recipes\CallableContractRecipes.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\MutableCallableStorage.fs" />
     <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ClosureEnvironmentRecipes.fs" />
     <Compile Include="Baker\Recipes\CallableDispatchRecipes.fs" />

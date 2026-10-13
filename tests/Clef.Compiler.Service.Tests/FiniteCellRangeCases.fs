@@ -589,3 +589,112 @@ let main _ =
         Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8011")
         Assert.Empty(FiniteCells.recognize result.Graph)
         Assert.Empty(FiniteCellFixture.obligations result.Graph)
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteCellRanges")>]
+type FiniteMutableCallbackCases() =
+    [<Fact>]
+    member _.``Finite callback alternatives retain snapshot identity and every shared cell writer`` () =
+        let graph = FiniteCellFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable calls = 0
+    let mutable callback = fun (_: bool) -> calls <- calls + 1; true
+    let saved = callback
+    callback <- fun (_: bool) -> calls <- calls + 2; false
+    ignore (saved true)
+    ignore (callback false)
+    calls
+"""
+        let cell = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Binding("calls", true, _, _) -> true | _ -> false) |> Assert.Single
+        let bound = FiniteCells.recognize graph |> List.filter (fun bound -> bound.Cell = cell.Id) |> Assert.Single
+        Assert.Equal(2, bound.Writes.Length)
+        Assert.All(bound.Writes, fun writer -> Assert.True(writer.MaximumActivations > 0I))
+        Assert.True(ValueRange.isObservable (FiniteCells.range bound))
+        Assert.True(ValueRange.isObservable (cell.ValueRange |> Option.get))
+        for writer in bound.Writes do
+            Assert.Contains(writer.Store, bound.Participants)
+            Assert.True(ValueRange.isObservable (graph.Nodes[writer.Value].ValueRange |> Option.get))
+        Assert.True(FiniteCells.evidenceCurrent graph)
+
+    [<Fact>]
+    member _.``A retained dormant callback contributes zero only through current ordinary inactivity`` () =
+        let graph = FiniteCellFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable calls = 0
+    let dormant = fun (_: bool) -> calls <- calls + 100; true
+    let active = fun (_: bool) -> calls <- calls + 1; true
+    ignore dormant
+    ignore (active true)
+    calls
+"""
+        let cell = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Binding("calls", true, _, _) -> true | _ -> false) |> Assert.Single
+        let bound = FiniteCells.recognize graph |> List.filter (fun bound -> bound.Cell = cell.Id) |> Assert.Single
+        let dormant = bound.Writes |> List.filter (fun writer -> writer.Offset = 100I) |> Assert.Single
+        let active = bound.Writes |> List.filter (fun writer -> writer.Offset = 1I) |> Assert.Single
+        Assert.Equal(0I, dormant.MaximumActivations)
+        Assert.Equal(1I, active.MaximumActivations)
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.analyze graph
+        let proof = reading.Inactivity.Values |> Seq.filter (fun proof -> proof.Excluded.Contains dormant.Store) |> Assert.Single
+        Assert.Contains(proof.Implementation, bound.Participants)
+        Assert.True(Set.isSubset proof.Family.Evidence.Participants bound.Participants)
+        let external = { graph with DeclarationRoots = (proof.Implementation, DeclRoot.HardwareModule) :: graph.DeclarationRoots }
+        Assert.DoesNotContain(FiniteCells.recognize external, fun bound -> bound.Cell = cell.Id)
+        Assert.True(FiniteCells.evidenceCurrent graph)
+
+    [<Fact>]
+    member _.``A reachable call in a dormant implementation is accounted by its current excluded call census``() =
+        let graph =
+            FiniteCellFixture.check
+                """
+[<EntryPoint>]
+let main _ =
+    let mutable calls = 0
+    let active = fun (_: bool) -> calls <- calls + 1; true
+    let dormant = fun (_: bool) -> active true
+    ignore dormant
+    ignore (active true)
+    calls
+"""
+
+        let cell =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding("calls", true, _, _) -> true
+                | _ -> false)
+            |> Assert.Single
+
+        let bound =
+            FiniteCells.recognize graph
+            |> List.filter (fun bound -> bound.Cell = cell.Id)
+            |> Assert.Single
+
+        let writer = Assert.Single bound.Writes
+        Assert.Equal(1I, writer.MaximumActivations)
+
+        let inactivity =
+            (Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.analyze graph).Inactivity
+
+        let proof =
+            inactivity.Values
+            |> Seq.filter (fun proof -> not proof.Calls.IsEmpty)
+            |> Assert.Single
+
+        let site = Assert.Single proof.Calls
+        Assert.True(graph.Nodes[site].IsReachable)
+        Assert.Contains(site, proof.Excluded)
+
+        match graph.Nodes[site].Kind with
+        | SemanticKind.Application _ -> ()
+        | kind -> failwithf "The excluded occurrence must retain its call identity: %A" kind
+
+        let ingress =
+            Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.analyze graph
+
+        Assert.Equal(Some proof.Implementation, Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryExecutionOwner ingress site)
+        Assert.Contains(site, bound.Participants)
+        Assert.True(Set.isSubset proof.Calls bound.Participants)
+        Assert.True(FiniteCells.evidenceCurrent graph)

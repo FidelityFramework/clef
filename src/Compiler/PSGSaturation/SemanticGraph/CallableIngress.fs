@@ -137,6 +137,7 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 | _ -> []
             captures |> List.choose (fun capture -> capture.SourceNodeId |> Option.map (fun source -> source, (node, capture))))
         |> Seq.groupBy fst |> Seq.map (fun (source, rows) -> source, rows |> Seq.map snd |> Seq.toList) |> Map.ofSeq
+    let mutableCells = lazy (MutableCallableStorage.sourceFamilies graph |> fst)
     let lazyThunk = LazyValues.closedThunk graph
     let emptyClosed = { Dependencies = Set.empty; Callers = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Calls = []; Valid = true }
     let classify implementation =
@@ -153,8 +154,23 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 let mutable next = rest
                 let forward target = next <- target :: next
                 if graph.DeclarationRoots |> List.exists (fun (root, _) -> root = id) then reject ()
+                let storage binding =
+                    mutableCells.Value.TryFind binding |> Option.filter (fun _ -> activation binding |> Option.isSome)
+                let retain (cell: MutableCallableStorage.SourceFamily) =
+                    proof <- { proof with Participants = Set.union proof.Participants cell.Participants }
                 match nodes.TryFind id with
-                | Some { Kind = SemanticKind.Binding(_, true, _, _) | SemanticKind.Binding(_, _, _, Some _) } -> reject ()
+                | Some { Kind = SemanticKind.Binding(_, _, _, Some _) } -> reject ()
+                | Some { Kind = SemanticKind.Binding(_, true, _, _) } ->
+                    match storage id with
+                    | Some cell ->
+                        retain cell
+                        for read in cell.Reads do forward read
+                        for writer, _, _ in cell.Writes do
+                            match activation writer with
+                            | Some owner when Some owner <> entry -> dependency owner
+                            | Some _ -> ()
+                            | None -> reject ()
+                    | None -> reject ()
                 | Some node when (Clef.Compiler.Baker.Ingredients.Boundaries.premise node).HasExtern -> reject ()
                 | None -> reject ()
                 | _ -> ()
@@ -170,7 +186,10 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                         when declared && List.tryItem edge.Ordinal initializers |> Option.exists (fun (_, value) -> value = id) ->
                         match ClosureEnvironments.capturedInitializers graph owner with
                         | Some values ->
-                            let selected = values |> List.filter (fun (_, value, mutableCell) -> value = id && not mutableCell)
+                            let selected = values |> List.filter (fun (slot, value, mutableCell) ->
+                                value = id && (not mutableCell ||
+                                    (slot = id && storage id |> Option.exists (fun cell ->
+                                        cell.Captures.Contains edge.Target))))
                             if selected.IsEmpty then reject () else
                             match nodes.TryFind owner with
                             | Some { Kind = SemanticKind.ClosureValue(code, _) } ->
@@ -180,6 +199,22 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                         | None -> reject ()
                     | Some node, EdgeClass.Structural, _ when declared ->
                         match node.Kind, edge.Role with
+                        | SemanticKind.Binding(_, true, _, None), _ when node.Children = [id] ->
+                            match storage node.Id with
+                            | Some cell when cell.Initial = id -> retain cell; forward node.Id
+                            | _ -> reject ()
+                        | SemanticKind.Set(destination, value), _ ->
+                            let cell = mutableCells.Value.Values |> Seq.tryFind (fun cell ->
+                                cell.Writes |> List.contains (node.Id, destination, value))
+                            match cell |> Option.bind (fun cell -> storage cell.Binding) with
+                            | Some cell when id = value -> retain cell; forward cell.Binding
+                            | Some cell when id = destination -> retain cell
+                            | _ -> reject ()
+                        | SemanticKind.EnvironmentWrite(_, slot, value), _ ->
+                            match storage slot with
+                            | Some cell when id = value && List.contains (node.Id, node.Id, value) cell.Writes ->
+                                retain cell; forward cell.Binding
+                            | _ -> reject ()
                         | SemanticKind.Binding(_, false, _, None), _ when node.Children = [id] -> forward node.Id
                         | SemanticKind.TypeAnnotation(value, _), _ when value = id -> forward node.Id
                         | SemanticKind.EagerExpr value, _ when value = id && ExplicitDemand.operand graph node.Id = Some id -> forward node.Id
@@ -296,6 +331,8 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 for node, capture in captureUses.TryFind id |> Option.defaultValue [] do
                     match node.Kind with
                     | SemanticKind.Lambda _ when not capture.IsMutable -> dependency node.Id
+                    | SemanticKind.Lambda _ when storage id |> Option.exists (fun cell -> cell.Captures.Contains node.Id) ->
+                        dependency node.Id
                     | _ -> reject ()
                 follow next seen
         follow [implementation] Set.empty

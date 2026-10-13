@@ -209,7 +209,7 @@ let validate (graph: SemanticGraph) (expected: CallableFlow) =
         let carriers, _ = CallableCarriers.settle
                             { Layouts = codata.EnvironmentLayouts; Origins = ClosureEnvironments.origins graph
                               Known = ClosureEnvironments.knownCallables graph; Contracts = codata.CallableContracts } graph
-        let joins = MutableCallableStorage.settle carriers codata.EnvironmentLayouts graph
+        let joins = MutableCallableStorage.settle CallableCarriers.sourceType CallableCarriers.valueShape carriers codata.EnvironmentLayouts graph
         settle { Carriers = carriers; Joins = joins.Joins; Layouts = codata.EnvironmentLayouts
                  SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph |> fst)
     flows.TryFind expected.Occurrence = Some expected

@@ -1091,6 +1091,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // proven overapplications through the same recipe/fold-in machinery before
     // range and placement inspect the calls and their returned function values.
     let finalGraph = Clef.Compiler.Nanopass.CallableApplications.normalize finalGraph
+    // Synthetic parameter groups are one source invocation, not independent
+    // retained closures. Normalize their execution ownership before capture,
+    // demand, range and placement consume that boundary.
+    let finalGraph, sourceCurry = Curry.normalize finalGraph
     // Ordinary local snapshots read at a source-proved first demand. The
     // complete family rewrite precedes capture conversion and range analysis.
     let finalGraph = Clef.Compiler.Nanopass.BindingDemand.normalize finalGraph
@@ -1203,7 +1207,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // meets, the closure environments, the platform call sites and the pins, the
     // declaration roots' lambdas. Composer reads Codata and computes none of it.
     //=========================================================================
-    let finalGraph, curry = Curry.normalize finalGraph
+    let curry = Curry.refresh sourceCurry.AbsorbedLambdas finalGraph
     tracePhase "curry"
     // Local evaluation contracts cite the final body/operand identities after
     // structural normalization. They do not yet establish suspension segments,
@@ -1326,7 +1330,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let callableCarrierDiagnostics = carrierDiagnostics finalGraph callableCarrierResiduals
     tracePhase "callable-carriers"
     let mutableCallables =
-        Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.settle callableCarriers environments.Layouts finalGraph
+        Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.settle
+          Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.sourceType
+          Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.valueShape callableCarriers environments.Layouts finalGraph
     let callableFlows, callableFlowResiduals =
         Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows.settle
             { Carriers = callableCarriers; Joins = mutableCallables.Joins; Layouts = environments.Layouts
