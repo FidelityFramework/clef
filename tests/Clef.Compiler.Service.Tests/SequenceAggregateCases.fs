@@ -48,6 +48,16 @@ let main _ =
         Assert.Single reads |> ignore
         Set.minElement reads, reads, certificates
 
+    let scalarPayload graph =
+        graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.DUConstruct("Some", 1, Some payload, _)
+            | SemanticKind.UnionCase("Some", 1, Some payload) ->
+                match Types.tryGetNTUKind graph.Nodes[payload].Type with
+                | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) -> Some(node.Type, payload)
+                | _ -> None
+            | _ -> None) |> Seq.head
+
     type Value = Number of int64 | Flag of bool | Storage of NodeId | Unit
     // An evaluator of the emitted selected-case copy only. An inactive payload
     // read fails immediately, independently of the pattern implementation.
@@ -75,6 +85,64 @@ let main _ =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceAggregate")>]
 type SequenceAggregateCases() =
+    [<Fact>]
+    member _.``Option payload placement joins every current producer of the exact dimensioned type``() =
+        let source = AggregateFixture.source.Replace("yield Some 9<m>", "yield Some 9<m>; yield Some 300<m>")
+        let graph, _ = AggregateFixture.graph source
+        let ty, _ = AggregateFixture.scalarPayload graph
+        let _, bytes, alignment = AggregateAdmission.scalarOption graph ty |> Option.get
+        Assert.Equal(16, bytes)
+        Assert.Equal(8, alignment)
+        match graph.Layouts.Value[Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty] with
+        | SettledLayout.Union(["None", None; "Some", Some(SettledSlot.Integer(64, _))], Some 8, Some 16, Some 8) -> ()
+        | layout -> failwithf "Every producer must fit the declared shared Option layout: %A" layout
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("unbounded")>]
+    member _.``Option payload placement refuses absent or unbounded current producer evidence`` defect =
+        let graph, _ = AggregateFixture.graph AggregateFixture.source
+        let ty, payload = AggregateFixture.scalarPayload graph
+        let facts = graph.RangeContextFacts |> Option.get
+        let values =
+            match defect with
+            | "missing" -> facts.Values.Remove(RangeContext.Shared, payload)
+            | _ -> facts.Values.Add((RangeContext.Shared, payload), ValueRange.Unbounded)
+        let changed = {graph with RangeContextFacts = Some {facts with Values = values}}
+        let placed = AggregatePlacement.settle (Some AggregateFixture.platform) changed
+        Assert.True(AggregateAdmission.scalarOption placed ty |> Option.isNone)
+
+    [<Fact>]
+    member _.``Changed Option producers withdraw old payload placement until numeric facts are reissued``() =
+        let graph, _ = AggregateFixture.graph AggregateFixture.source
+        let ty, _ = AggregateFixture.scalarPayload graph
+        let nodes =
+            graph.Nodes |> Map.map (fun _ node ->
+                match node.Kind with
+                | SemanticKind.Literal(NativeLiteral.Int(9L, kind)) -> {node with Kind = SemanticKind.Literal(NativeLiteral.Int(300L, kind))}
+                | _ -> node)
+        let changed = {graph with Nodes = nodes}
+        let stale = AggregatePlacement.settle (Some AggregateFixture.platform) changed
+        Assert.True(AggregateAdmission.scalarOption stale ty |> Option.isNone)
+        let current, diagnostics = AggregateRanges.run (Some AggregateFixture.platform) changed
+        Assert.Empty diagnostics
+        let renewed = AggregatePlacement.settle (Some AggregateFixture.platform) current
+        let _, bytes, alignment = AggregateAdmission.scalarOption renewed ty |> Option.get
+        Assert.Equal(16, bytes)
+        Assert.Equal(8, alignment)
+
+    [<Fact>]
+    member _.``Option transport requires the complete typed selected case copy account``() =
+        let graph, _ = AggregateFixture.graph AggregateFixture.source
+        let current, reads, certificates = AggregateFixture.current graph
+        let prepared = AggregateSnapshots.prepare graph reads certificates
+        Assert.Empty prepared.Unresolved
+        let copy = prepared.Graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.AggregateCopy)
+        let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+        let altered = {prepared.Graph with Edges = prepared.Graph.Edges |> List.filter (fun edge -> key edge <> key copy)}
+        let placed = AggregatePlacement.settle (Some AggregateFixture.platform) altered
+        Assert.True(AggregateAdmission.scalarOption placed graph.Nodes[current].Type |> Option.isNone)
+
     [<Fact>]
     member _.``Current owns exact settled Option bytes rather than a descriptor to temporary storage``() =
         let graph, curry = AggregateFixture.graph AggregateFixture.source

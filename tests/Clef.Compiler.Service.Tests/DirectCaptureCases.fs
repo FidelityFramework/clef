@@ -19,6 +19,50 @@ module private DirectCapture =
         | CheckFailure result -> failwithf "Check failed: %A" result.Diagnostics
         | ParseFailure errors -> failwithf "Parse failed: %A" errors
 
+    /// Reuse the exact source-declared platform fixture for capture and guard controls.
+    let platformProgram pointerBits source =
+        let representations =
+            [ "signed-byte", "int", 8, "-128", "127"; "unsigned-byte", "uint", 8, "0", "255"
+              "signed-register", "int", pointerBits, string (-(1I <<< (pointerBits - 1))), string ((1I <<< (pointerBits - 1)) - 1I)
+              "unsigned-register", "uint", pointerBits, "0", string ((1I <<< pointerBits) - 1I) ]
+            |> List.map (fun (name, family, bits, low, high) ->
+                { Name = name; Family = family; Bits = bits; Capability = "native"
+                  MinMagnitude = low; MaxMagnitude = high; Boundary = "wrap" }: NumericRepresentation)
+        let platform: PlatformContext =
+            { PlatformId = "direct-capture-carrier-test"
+              Dimensions = Map.ofList ["Pointer", pointerBits; "Register", pointerBits]
+              Representations = representations |> List.map (fun representation -> representation.Name, representation) |> Map.ofList
+              EndpointReturns = Map.empty
+              PlatformLibraryPath = None; PlatformDescription = Some "CapturePlatform.description"; PlatformArchitecture = None; PlatformOS = None
+              PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "capture-platform.clef")
+              Predicates = Map.empty; FreestandingStartup = None
+              SubstrateKind = None; RuntimeModel = None; AvailableMemorySpaces = []; DefaultMemorySpace = None
+              ClockFrequencyMhz = None; NsPerWeightUnit = None }
+        let representationsText =
+            representations |> List.map (fun representation ->
+                sprintf "{ Name=\"%s\"; Family=\"%s\"; Bits=%d; Capability=\"native\"; MinMagnitude=\"%s\"; MaxMagnitude=\"%s\"; Boundary=\"wrap\" }"
+                    representation.Name representation.Family representation.Bits representation.MinMagnitude representation.MaxMagnitude)
+            |> String.concat "; "
+        let declaration = """module CapturePlatform
+type WidthDeclaration = { Name: string; Bits: int }
+type Representation = { Name: string; Family: string; Bits: int; Capability: string; MinMagnitude: string; MaxMagnitude: string; Boundary: string }
+type TargetCore = { Widths: WidthDeclaration array; Representations: Representation array }
+type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }
+type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
+type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
+let image = { Name="image"; Kind="rodata"; Capacity=4096; Alignment=16; Granularity=16; Growth="fixed"; Access="r"; Base=None }
+let core: TargetCore = { Widths = [| { Name="Pointer"; Bits=""" + string pointerBits + " }; { Name=\"Register\"; Bits=" + string pointerBits + " } |]; Representations = [| " + representationsText + """ |] }
+let description = { Id="direct-capture-carrier-test"; Core=Some core; Spaces=[|image|]; ProgramLifetime=Some { Immutable="image"; Mutable=None } }
+"""
+        let parse path text =
+            match parseStringWithDefaults text path with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithPlatformAndSources
+                         [parse "capture-platform.clef" declaration; parse "direct-capture-platform.clef" source]
+                         (Some platform) (Set.singleton (System.IO.Path.GetFullPath "direct-capture-platform.clef"))
+        result
+
     let binding name (result: CheckResult) =
         result.Graph.Nodes.Values |> Seq.find (fun node ->
             node.IsReachable && match node.Kind with
@@ -461,39 +505,6 @@ let main _ =
     [<InlineData(32)>]
     [<InlineData(64)>]
     member _.``Declared platform admission settles direct and recursive capture carriers``(pointerBits: int) =
-        let representations =
-            [ "signed-byte", "int", 8, "-128", "127"; "unsigned-byte", "uint", 8, "0", "255"
-              "signed-register", "int", pointerBits, string (-(1I <<< (pointerBits - 1))), string ((1I <<< (pointerBits - 1)) - 1I)
-              "unsigned-register", "uint", pointerBits, "0", string ((1I <<< pointerBits) - 1I) ]
-            |> List.map (fun (name, family, bits, low, high) ->
-                { Name = name; Family = family; Bits = bits; Capability = "native"
-                  MinMagnitude = low; MaxMagnitude = high; Boundary = "wrap" }: NumericRepresentation)
-        let platform: PlatformContext =
-            { PlatformId = "direct-capture-carrier-test"
-              Dimensions = Map.ofList ["Pointer", pointerBits; "Register", pointerBits]
-              Representations = representations |> List.map (fun representation -> representation.Name, representation) |> Map.ofList
-              EndpointReturns = Map.empty
-              PlatformLibraryPath = None; PlatformDescription = Some "CapturePlatform.description"; PlatformArchitecture = None; PlatformOS = None
-              PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "capture-platform.clef")
-              Predicates = Map.empty; FreestandingStartup = None
-              SubstrateKind = None; RuntimeModel = None; AvailableMemorySpaces = []; DefaultMemorySpace = None
-              ClockFrequencyMhz = None; NsPerWeightUnit = None }
-        let representationsText =
-            representations |> List.map (fun representation ->
-                sprintf "{ Name=\"%s\"; Family=\"%s\"; Bits=%d; Capability=\"native\"; MinMagnitude=\"%s\"; MaxMagnitude=\"%s\"; Boundary=\"wrap\" }"
-                    representation.Name representation.Family representation.Bits representation.MinMagnitude representation.MaxMagnitude)
-            |> String.concat "; "
-        let declaration = """module CapturePlatform
-type WidthDeclaration = { Name: string; Bits: int }
-type Representation = { Name: string; Family: string; Bits: int; Capability: string; MinMagnitude: string; MaxMagnitude: string; Boundary: string }
-type TargetCore = { Widths: WidthDeclaration array; Representations: Representation array }
-type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }
-type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
-type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
-let image = { Name="image"; Kind="rodata"; Capacity=4096; Alignment=16; Granularity=16; Growth="fixed"; Access="r"; Base=None }
-let core: TargetCore = { Widths = [| { Name="Pointer"; Bits=""" + string pointerBits + " }; { Name=\"Register\"; Bits=" + string pointerBits + " } |]; Representations = [| " + representationsText + """ |] }
-let description = { Id="direct-capture-carrier-test"; Core=Some core; Spaces=[|image|]; ProgramLifetime=Some { Immutable="image"; Mutable=None } }
-"""
         let source = """module DirectCapture
 let repeated offset =
     let add value = offset + value
@@ -507,13 +518,7 @@ let recursive offset =
 let main _ =
     if repeated 7 = 44 && recursive 7 = 28 then 0 else 1
 """
-        let parse path text =
-            match parseStringWithDefaults text path with
-            | ParseSuccess input -> input
-            | ParseError errors -> failwithf "Parse failed: %A" errors
-        let result = checkParsedInputsWithPlatformAndSources
-                         [parse "capture-platform.clef" declaration; parse "direct-capture-platform.clef" source]
-                         (Some platform) (Set.singleton (System.IO.Path.GetFullPath "direct-capture-platform.clef"))
+        let result = DirectCapture.platformProgram pointerBits source
         DimensionalCases.noErrors result
         Assert.True(result.Graph.Platform.IsSome)
         let carriers = result.Graph.Codata.Value.CallableCarriers
@@ -524,6 +529,131 @@ let main _ =
             Assert.Equal(implementation.Id, carriers[binding.Id].Implementation)
             Assert.Equal("int -> int", formatType carriers[binding.Id].SourceType)
             Assert.Equal(2, carriers[binding.Id].Parameters.Length)
+
+    [<Fact>]
+    member _.``Guarded range transfers select both ordinary arms and preserve negative inequality inputs``() =
+        let result = DirectCapture.platformProgram 32 """module GuardBranches
+let choose (count: int) = if count = 0 then 7 else 9
+let negative (value: int) = if value <> 0 then value else 42
+[<EntryPoint>]
+let main _ =
+    let zero = 0
+    let constant = if zero = 0 then 7 else 9
+    let first = choose 0
+    let second = choose 1
+    let below = negative (-2)
+    if constant = 7 && first = 7 && second = 9 && below = -2 then 0 else 1
+"""
+        let facts = match Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.issue result.Graph with Result.Ok facts -> facts | Result.Error reason -> failwith reason
+        Assert.Equal(Some(ValueRange.point 7I), facts.Values.TryFind(RangeContext.Shared, (DirectCapture.binding "constant" result).Id))
+        DimensionalCases.noErrors result
+        let namedCall name =
+            result.Graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Application(callee, [_]) ->
+                    match result.Graph.Nodes[callee].Kind with SemanticKind.VarRef(actual, _) -> actual = name | _ -> false
+                | _ -> false)
+            |> Seq.toList
+        let choices = namedCall "choose"
+        Assert.Equal(2, choices.Length)
+        Assert.Equal<ValueRange option list>([Some(ValueRange.point 7I); Some(ValueRange.point 9I)], choices |> List.sortBy _.Range.Start.Line |> List.map _.ValueRange)
+        let below = namedCall "negative" |> Assert.Single
+        Assert.Equal(Some(ValueRange.point -2I), below.ValueRange)
+        let literals =
+            result.Graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                node.Range.File = "direct-capture-platform.clef" &&
+                (match node.Kind with SemanticKind.Literal(NativeLiteral.Int(value, _)) -> value = 7L || value = 9L | _ -> false))
+            |> Seq.toList
+        Assert.NotEmpty literals
+        for literal in literals do
+            match literal.Kind with
+            | SemanticKind.Literal(NativeLiteral.Int(value, _)) -> Assert.Equal(Some(ValueRange.point (bigint value)), literal.ValueRange)
+            | _ -> failwith "Expected source integer literal"
+
+    [<Fact>]
+    member _.``A call node shared by alternative arms retains both invocation contributions``() =
+        let result = DirectCapture.platformProgram 32 """module SharedGuardCall
+let identity (value: int) = value
+let choose (count: int) = if count = 0 then identity 7 else identity 7
+[<EntryPoint>]
+let main _ = choose 0 + choose 1
+"""
+        let graph = result.Graph
+        let branch =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.IfThenElse(_, yes, Some no) ->
+                    match graph.Nodes[yes].Kind, graph.Nodes[no].Kind with
+                    | SemanticKind.Application _, SemanticKind.Application _ -> true
+                    | _ -> false
+                | _ -> false)
+            |> Assert.Single
+        let guard, shared, other =
+            match branch.Kind with
+            | SemanticKind.IfThenElse(guard, yes, Some no) -> guard, yes, no
+            | _ -> failwith "Expected the call branches"
+        let changed =
+            { graph with
+                Nodes = graph.Nodes.Add(branch.Id,
+                    { branch with Kind = SemanticKind.IfThenElse(guard, shared, Some shared)
+                                  Children = branch.Children |> List.map (fun id -> if id = other then shared else id) })
+                Edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Class = EdgeClass.Structural && edge.Target = branch.Id then
+                        { edge with Sources = edge.Sources |> List.map (fun id -> if id = other then shared else id) }
+                    else edge) }
+            |> Clef.Compiler.Nanopass.OrdinaryDemand.normalize
+        let facts = match Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.issue changed with Result.Ok facts -> facts | Result.Error reason -> failwith reason
+        let invocations = facts.Invocations |> List.filter (fun row -> row.Call = shared)
+        Assert.Equal(2, invocations.Length)
+        for invocation in invocations do
+            Assert.Equal(Some(ValueRange.point 7I), facts.Values.TryFind(invocation.Caller, shared))
+
+    [<Fact>]
+    member _.``An infeasible recursive call retains its source row but supplies no capture read``() =
+        let result = DirectCapture.platformProgram 32 """module GuardedCall
+let recursive (offset: int) =
+    let rec sum count = if count = 0 then offset else offset + sum (count - 1)
+    sum 3
+[<EntryPoint>]
+let main _ = recursive 7
+"""
+        let graph = result.Graph
+        let implementation, parameters, body = DirectCapture.lifted "sum" result
+        let _, _, captured = List.head parameters
+        let facts = match Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.issue graph with Result.Ok facts -> facts | Result.Error reason -> failwith reason
+        let self = facts.Invocations |> List.filter (fun row -> row.Target = implementation.Id && row.Caller = row.Context) |> Assert.Single
+        let actual = self.Arguments |> List.find (fst >> (=) captured) |> snd
+        Assert.Contains(graph.Nodes.Values, fun node -> node.Id = self.Call && match node.Kind with SemanticKind.Application _ -> true | _ -> false)
+        Assert.Equal(Some(ValueRange.point 7I), facts.Values.TryFind(RangeContext.Shared, captured))
+        Assert.Equal(Some(ValueRange.point 7I), facts.Values.TryFind(self.Context, body))
+        Assert.DoesNotContain((self.Caller, actual), facts.Reads[self.Context, captured])
+
+    [<Fact>]
+    member _.``A write revokes a guard before the later call actual is transferred``() =
+        let result = DirectCapture.platformProgram 32 """module GuardRevocation
+let identity (value: int) = value
+[<EntryPoint>]
+let main _ =
+    let mutable observed: int = 0
+    if observed = 0 then
+        observed <- 1
+        identity observed
+    else 0
+"""
+        let call =
+            result.Graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Application(callee, [_]) ->
+                    match result.Graph.Nodes[callee].Kind with SemanticKind.VarRef("identity", _) -> true | _ -> false
+                | _ -> false)
+            |> Assert.Single
+        match call.ValueRange with
+        | Some range -> Assert.True(ValueRange.contains range (ValueRange.point 1I), sprintf "The revoked guard excluded the written actual: %A" range)
+        | None -> failwith "No range for the post-write call"
 
     [<Theory>]
     [<InlineData("missing origin")>]

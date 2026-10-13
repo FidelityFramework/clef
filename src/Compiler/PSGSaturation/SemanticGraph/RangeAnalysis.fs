@@ -198,6 +198,9 @@ type private Program = {
     /// of the `if` itself), which is what makes a refinement representable when a node is shared
     /// between the guard and a branch.
     Refinements: Map<NodeId, Map<NodeId, Refinement list>>
+    /// Necessary guard atoms at each source occurrence, issued by the same
+    /// effect-aware walk as the operand refinements.
+    GuardRefinements: Map<NodeId, (Compared * Refinement) list>
     /// Exact reads reached with a guard through the checked continuation machine.
     ContinuationRefinements: Map<NodeId, Refinement list>
     /// A record type name -> its reachable constructions: the construction node and its (field, value) list.
@@ -836,7 +839,7 @@ let private addEdge (consumer: NodeId) (operand: NodeId) (refs: Refinement list)
 /// after that operand is evaluated, before a later operand or the call body can
 /// write a cell. A value already read therefore remains a valid snapshot.
 let private refineEdges (program: Program) (rootId: NodeId) (excluded: Set<NodeId>) (bounds: (Compared * Refinement) list)
-                        (acc: Map<NodeId, Map<NodeId, Refinement list>>) : Map<NodeId, Map<NodeId, Refinement list>> =
+                        (acc: Map<NodeId, Map<NodeId, Refinement list>> * Map<NodeId, (Compared * Refinement) list>) =
     if List.isEmpty bounds then acc
     else
         let mutableDefs =
@@ -853,9 +856,15 @@ let private refineEdges (program: Program) (rootId: NodeId) (excluded: Set<NodeI
             match Map.tryFind id program.Reachable with
             | None -> assigned, edges
             | Some node ->
-                let record assigned edges operand =
-                    if Set.contains id excluded then edges
-                    else addEdge id operand (boundsOn program (live assigned inLambda) operand) edges
+                let edges =
+                    let own = live assigned inLambda
+                    if Set.contains id excluded || List.isEmpty own then edges
+                    else
+                        let previous = Map.tryFind id (snd edges) |> Option.defaultValue []
+                        fst edges, Map.add id (List.distinct (previous @ own)) (snd edges)
+                let record assigned (reads, guards) operand =
+                    if Set.contains id excluded then reads, guards
+                    else addEdge id operand (boundsOn program (live assigned inLambda) operand) reads, guards
                 let operand (assigned, edges) child =
                     let assigned, edges = walk inLambda (assigned, edges) child
                     assigned, record assigned edges child
@@ -898,7 +907,7 @@ let private refineEdges (program: Program) (rootId: NodeId) (excluded: Set<NodeI
 /// The refinements of the whole program: for every reachable `if`, the guard's bounds on the
 /// then-branch's reads and their complements on the else-branch's, the `if`'s own read of each
 /// branch included; for every `while`, the guard's bounds on the body's reads.
-let private refinementsOf (program: Program) : Map<NodeId, Map<NodeId, Refinement list>> =
+let private refinementsOf (program: Program) =
     program.Ordered
     |> List.fold (fun acc node ->
         match node.Kind with
@@ -911,17 +920,17 @@ let private refinementsOf (program: Program) : Map<NodeId, Map<NodeId, Refinemen
                 let thenSet = subtreeOf program thenId
                 let elseSet = elseId |> Option.map (subtreeOf program) |> Option.defaultValue Set.empty
                 let acc = refineEdges program thenId (Set.union guardSet elseSet) positive acc
-                let acc = addEdge node.Id thenId (boundsOn program positive thenId) acc
+                let acc = addEdge node.Id thenId (boundsOn program positive thenId) (fst acc), snd acc
                 match elseId with
                 | Some e ->
                     let acc = refineEdges program e (Set.union guardSet thenSet) negative acc
-                    addEdge node.Id e (boundsOn program negative e) acc
+                    addEdge node.Id e (boundsOn program negative e) (fst acc), snd acc
                 | None -> acc
         | SemanticKind.WhileLoop (guardId, bodyId) ->
             let positive = atoms program 0 guardId true
             if List.isEmpty positive then acc
             else refineEdges program bodyId (subtreeOf program guardId) positive acc
-        | _ -> acc) Map.empty
+        | _ -> acc) (Map.empty, Map.empty)
 
 /// The range `r` met with the bound `r Relation k`.
 let private refine (r: ValueRange) (relation: Relation) (k: ValueRange) : ValueRange =
@@ -1378,6 +1387,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         RootParameters = Map.empty
         Assignments = Map.empty
         Refinements = Map.empty
+        GuardRefinements = Map.empty
         ContinuationRefinements = Map.empty
         Constructions = Map.empty
         IntegerFields = Map.empty
@@ -1874,8 +1884,10 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         |> List.groupBy fst
         |> List.map (fun (read, rows) -> read, rows |> List.map snd |> List.distinct)
         |> Map.ofList
+    let refinements, guards = refinementsOf program
     { program with
-        Refinements = refinementsOf program
+        Refinements = refinements
+        GuardRefinements = guards
         ContinuationRefinements = continuationRefinements }
 
 //-------------------------------------------------------------------------
@@ -1918,6 +1930,20 @@ let private currentBound (value: Reading) (bound: Bound) : ValueRange =
 /// A range met with every bound of a use edge.
 let private refineBy (value: Reading) (refs: Refinement list) (r: ValueRange) : ValueRange =
     refs |> List.fold (fun acc x -> refine acc x.Relation (currentBound value x.Bound)) r
+
+/// Necessary guard atoms constrain source occurrences independently of which
+/// tested declaration a particular operand reads. Unknown guards add no fact.
+let private feasibleAtoms (value: Reading) (bounds: (Compared * Refinement) list) =
+    bounds |> List.forall (fun (compared, refinement) ->
+        let id = match compared with Compared.Definition id | Compared.Node id -> id
+        refine (value id) refinement.Relation (currentBound value refinement.Bound) <> ValueRange.Empty)
+
+let private guardFeasible program value guard polarity =
+    not (isLiteralBool program guard (not polarity)) &&
+    feasibleAtoms value (atoms program 0 guard polarity)
+
+let private occurrenceFeasible (program: Program) value id =
+    program.GuardRefinements.TryFind id |> Option.defaultValue [] |> feasibleAtoms value
 
 /// What `consumer` reads of `operand`: the operand's range met with the bounds in force on that
 /// use edge (a read inside a guarded branch).
@@ -2319,8 +2345,10 @@ let private transfer (program: Program) (shared: Reading) (value: Reading) (appl
             match List.tryLast ids with
             | Some lastId -> Some (get lastId)
             | None -> Some fallback
-        | SemanticKind.IfThenElse (_, t, e) ->
-            Some (ValueRange.join (get t) (e |> Option.map get |> Option.defaultValue ValueRange.Empty))
+        | SemanticKind.IfThenElse (guard, t, e) ->
+            let yes = if guardFeasible program value guard true then get t else ValueRange.Empty
+            let no = if guardFeasible program value guard false then e |> Option.map get |> Option.defaultValue ValueRange.Empty else ValueRange.Empty
+            Some (ValueRange.join yes no)
         | SemanticKind.Match (_, cases) ->
             Some (cases |> List.fold (fun acc c -> ValueRange.join acc (get c.Body)) ValueRange.Empty)
         | SemanticKind.CaseElimination (_, arms) ->
@@ -2508,11 +2536,15 @@ let private evaluate (program: Program) (contexts: ContextProgram) (state: Conte
             | None -> transfer program shared shared (application context) node
         | RangeContext.Shared -> transfer program shared shared (application context) node
         | _ ->
-            match contexts.Parameters.TryFind (context, node.Id) with
-            | Some inputs ->
-                inputs |> List.fold (fun range (caller, call, actual) ->
-                    ValueRange.join range (read program (reading caller) call actual)) ValueRange.Empty |> Some
-            | None -> transfer program shared (reading context) (application context) node
+            if not (occurrenceFeasible program (reading context) node.Id) then Some ValueRange.Empty
+            else
+                match contexts.Parameters.TryFind (context, node.Id) with
+                | Some inputs ->
+                    inputs |> List.fold (fun range (caller, call, actual) ->
+                        if occurrenceFeasible program (reading caller) call then
+                            ValueRange.join range (read program (reading caller) call actual)
+                        else range) ValueRange.Empty |> Some
+                | None -> transfer program shared (reading context) (application context) node
     computed, reads
 
 //-------------------------------------------------------------------------

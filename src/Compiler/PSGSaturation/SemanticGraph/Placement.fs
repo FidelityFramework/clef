@@ -58,6 +58,7 @@ type private Placer = {
     /// Per tuple type (rendered), per position: the join of the element's range over every
     /// reachable construction of a tuple of that type; a position nothing constructs is Empty.
     TupleRanges: Map<TypeIdentity, ValueRange list>
+    PayloadRanges: Map<TypeIdentity * int, ValueRange * Set<NodeId>>
 }
 
 /// The rendered key of a type (as `ElementRanges` keys an element type).
@@ -209,7 +210,7 @@ let private extentOf (p: Placer) (slot: SettledSlot) : (int * int) option =
 let extentOfSlot (graph: SemanticGraph) (slot: SettledSlot) =
     let pointerBytes = graph.Platform |> Option.bind (fun context -> PlatformContext.pointerSize context |> Result.toOption)
     extentOf { Boundaries = Map.empty; Graph = graph; Context = graph.Platform
-               PointerBytes = pointerBytes; TupleRanges = Map.empty } slot
+               PointerBytes = pointerBytes; TupleRanges = Map.empty; PayloadRanges = Map.empty } slot
 
 /// Physical data for one declared callable component. The complete aggregate
 /// layout remains the containing record/union's responsibility. Offsets and
@@ -379,7 +380,9 @@ let private tupleRange (p: Placer) (key: TypeIdentity) (index: int) : ValueRange
 let private payloadSlot (p: Placer) key caseOrdinal (fields: (string option * NativeType) list) : SettledSlot option =
     match fields with
     | [] -> None
-    | [ (_, ty) ] -> Some (componentSlot p key [CallableAggregatePathStep.UnionPayload(caseOrdinal, 0)] ValueRange.Unbounded ty)
+    | [ (_, ty) ] ->
+        let range = p.PayloadRanges.TryFind(key, caseOrdinal) |> Option.map fst |> Option.defaultValue ValueRange.Unbounded
+        Some (componentSlot p key [CallableAggregatePathStep.UnionPayload(caseOrdinal, 0)] range ty)
     | fields when fields |> List.exists (snd >> CallableTypes.callableKind >> Option.isSome) ->
         Some(SettledSlot.Opaque "A multi-field callable union payload requires its settled component tuple placement (CCS8410).")
     | _ -> Some (SettledSlot.Pointer ViewWords)
@@ -412,6 +415,143 @@ let private place (p: Placer) (a: Aggregate) : SettledLayout =
 // Entry
 //-------------------------------------------------------------------------
 
+/// Layouts are uniform for an exact instantiated aggregate type. Every current
+/// producer contributes; a selected-case copy transports the same domain only
+/// under its complete typed source/destination/branch account.
+let private payloadRanges (graph: SemanticGraph) =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+
+    let facts =
+        graph.RangeContextFacts
+        |> Option.filter (Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent graph)
+
+    let node id = nodes.TryFind id
+    let sameType left right = applySubst left = applySubst right
+
+    let copies =
+        graph.Edges
+        |> List.choose (fun edge ->
+            match edge.Class, edge.Role, edge.Ordinal, edge.Sources with
+            | EdgeClass.Provenance, EdgeRole.AggregateCopy, 0, [ source; destination; selected; value; some; none ] ->
+                match node source, node destination, node selected, node value, node some, node none, node edge.Target with
+                | Some sourceNode, Some destinationNode, Some selectedNode, Some valueNode, Some someNode, Some noneNode, Some branch ->
+                    match applySubst sourceNode.Type, valueNode.Kind, someNode.Kind, noneNode.Kind, branch.Kind with
+                    | NativeType.TApp(tc, [ inner ]),
+                      SemanticKind.DUEliminate(actual, 1, "Some", payloadType),
+                      SemanticKind.DUInitialize(someDestination, "Some", 1, Some payload),
+                      SemanticKind.DUInitialize(noneDestination, "None", 0, None),
+                      SemanticKind.IfThenElse(guard, yes, Some no) when
+                        tc.Name = "option"
+                        && sameType sourceNode.Type destinationNode.Type
+                        && sameType inner payloadType
+                        && sameType inner valueNode.Type
+                        && actual = source
+                        && someDestination = destination
+                        && noneDestination = destination
+                        && payload = value
+                        && guard = selected
+                        && yes = some
+                        && no = none
+                        && valueNode.Children = [ source ]
+                        && someNode.Children = [ destination; value ]
+                        && noneNode.Children = [ destination ]
+                        && branch.Children = [ selected; some; none ]
+                        ->
+                        let guarded =
+                            match selectedNode.Kind with
+                            | SemanticKind.Application(callee, [ tag; one ]) ->
+                                match node callee, node tag, node one with
+                                | Some {
+                                           Kind = SemanticKind.Intrinsic {
+                                                                             Module = IntrinsicModule.Operators
+                                                                             Operation = "op_Equality"
+                                                                         }
+                                       },
+                                  Some {
+                                           Kind = SemanticKind.DUGetTag(actual, actualType)
+                                       },
+                                  Some {
+                                           Kind = SemanticKind.Literal(NativeLiteral.Int(1L, _))
+                                       } when actual = source && sameType actualType sourceNode.Type -> true
+                                | _ -> false
+                            | _ -> false
+
+                        if guarded then
+                            Some(some, none, Set.ofList (edge.Target :: edge.Sources))
+                        else
+                            None
+                    | _ -> None
+                | _ -> None
+            | _ -> None)
+
+    let copyWrites =
+        copies
+        |> List.collect (fun (some, none, support) -> [ some, support; none, support ])
+        |> List.groupBy fst
+        |> List.choose (fun (id, claims) ->
+            match claims with
+            | [ (_, support) ] -> Some(id, support)
+            | _ -> None)
+        |> Map.ofList
+
+    let caseType ty ordinal name =
+        match aggregateOf graph ty with
+        | Some(Aggregate.Option(_, inner)) when ordinal = 1 && name = "Some" -> Some inner
+        | Some(Aggregate.Result(_, ok, _)) when ordinal = 0 && name = "Ok" -> Some ok
+        | Some(Aggregate.Result(_, _, error)) when ordinal = 1 && name = "Error" -> Some error
+        | Some(Aggregate.Union(_, cases)) ->
+            cases
+            |> List.tryItem ordinal
+            |> Option.bind (fun (actual, fields) ->
+                match fields with
+                | [ (_, ty) ] when actual = name -> Some ty
+                | _ -> None)
+        | _ -> None
+
+    nodes.Values
+    |> Seq.choose (fun producer ->
+        match producer.Kind with
+        | SemanticKind.DUConstruct(name, ordinal, payload, _)
+        | SemanticKind.UnionCase(name, ordinal, payload) -> Some(producer, producer.Type, name, ordinal, payload)
+        | SemanticKind.DUInitialize(destination, name, ordinal, payload) ->
+            node destination
+            |> Option.map (fun destination -> producer, destination.Type, name, ordinal, payload)
+        | _ -> None)
+    |> Seq.fold
+        (fun ranges (producer, ty, name, ordinal, payload) ->
+            match caseType ty ordinal name with
+            | None -> ranges
+            | Some expected ->
+                let range, support =
+                    match copyWrites.TryFind producer.Id with
+                    | Some support when facts.IsSome -> ValueRange.Empty, support
+                    | _ ->
+                        let value = payload |> Option.bind node
+
+                        let range =
+                            match facts, value with
+                            | Some facts, Some value when sameType value.Type expected ->
+                                match value.Kind with
+                                | SemanticKind.DUEliminate _ when
+                                    (match producer.Kind with
+                                     | SemanticKind.DUInitialize _ -> true
+                                     | _ -> false)
+                                    ->
+                                    ValueRange.Unbounded
+                                | _ ->
+                                    facts.Values.TryFind(RangeContext.Shared, value.Id)
+                                    |> Option.defaultValue ValueRange.Unbounded
+                            | _ -> ValueRange.Unbounded
+
+                        range, Set.ofList (producer.Id :: Option.toList payload)
+
+                let key = keyOf ty, ordinal
+
+                match Map.tryFind key ranges with
+                | Some(existing, participants) -> Map.add key (ValueRange.join existing range, Set.union participants support) ranges
+                | None -> Map.add key (range, support) ranges)
+        Map.empty
+
 /// Settle the layout of every aggregate type the reachable graph mentions and write the map to
 /// `Layouts`. Runs after `PlatformDeclaration.fill` and `RangeAnalysis.run`, on every substrate.
 let settle (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph =
@@ -440,6 +580,7 @@ let settle (context: PlatformContext option) (graph: SemanticGraph) : SemanticGr
             |> Option.filter (fun ctx -> PlatformContext.substrateKind ctx <> SubstrateKind.FPGA)
             |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption)
         TupleRanges = tupleRanges
+        PayloadRanges = payloadRanges graph
     }
     let aggregates =
         reachable
@@ -592,7 +733,7 @@ let private placeContinuationFields (graph: SemanticGraph)
         Error (ContinuationPlacementError.InvalidPlatform "Pointer width must declare a positive whole number of bytes")
     | Ok bits ->
     let placer = { Boundaries = Map.empty; Graph = graph; Context = Some context
-                   PointerBytes = Some (bits / 8); TupleRanges = Map.empty }
+                   PointerBytes = Some (bits / 8); TupleRanges = Map.empty; PayloadRanges = Map.empty }
     let extent id slot alignmentKind =
         match extentOf placer slot, PlatformContext.resolveAlign context alignmentKind with
         | Some (bytes, _), Ok align when bytes > 0 && align > 0 && (align &&& (align - 1)) = 0 ->
@@ -845,6 +986,7 @@ let closures (context: PlatformContext option) (graph: SemanticGraph) : Map<Node
             Context = context
             PointerBytes = context |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption)
             TupleRanges = Map.empty
+            PayloadRanges = Map.empty
         }
         let lazyThunks = LazyContracts.instances graph |> Map.toSeq |> Seq.map (fun (_, instance) -> instance.Thunk) |> Set.ofSeq
         graph.Nodes
