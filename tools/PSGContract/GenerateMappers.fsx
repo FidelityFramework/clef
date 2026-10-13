@@ -134,7 +134,10 @@ let nativeOnlyRecordFields =
           "FiniteCellRelations", optionOf (listOf (semanticType "FiniteCellSourceRelation"))
           "FiniteCellObligations", listOf (FSharpType.MakeTupleType [| sourceNodeId; semanticType "ObligationInfo" |])
           "RequiresSequenceReview", typeof<bool>
-          "SequenceRangeAuthority", optionOf (semanticType "SequenceRangeAuthority") ]
+          "SequenceRangeAuthority", optionOf (semanticType "SequenceRangeAuthority")
+          "RangeContextFacts", optionOf (semanticType "RangeContextFacts")
+          "RequiresCaptureReview", typeof<bool>
+          "CaptureRelations", listOf (FSharpType.MakeTupleType [| semanticType "EdgeClass"; typeof<bool>; typeof<int>; listOf sourceNodeId; sourceNodeId |]) ]
     ]
 
 for sourceName in nativeOnlyRecordFields.Keys do

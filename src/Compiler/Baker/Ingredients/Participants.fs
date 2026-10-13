@@ -27,8 +27,13 @@ let ofInputs (formal: NodeId) (inputs: FormalDemand.Inputs) : Participant list =
             [ occurrence call ParticipantRole.OmittedCall omitted.Input.Ordinal call
               occurrence omitted.Input.Actual ParticipantRole.OmittedCallActual omitted.Input.Ordinal call ]
             @ (omitted.Omissions |> List.collect (fun omission ->
-                [ occurrence omission.Site ParticipantRole.OmissionSite omission.Ordinal call
-                  occurrence omission.Actual ParticipantRole.OmittedActual omission.Ordinal omission.Site ])))
+                match omission.Origin with
+                | OrdinaryOmissionOrigin.CallArgument ordinal ->
+                    [ occurrence omission.Site ParticipantRole.OmissionSite ordinal call
+                      occurrence omission.Actual ParticipantRole.OmittedActual ordinal omission.Site ]
+                | OrdinaryOmissionOrigin.BindingInitializer ->
+                    [ occurrence omission.Site ParticipantRole.OmissionBinding 0 call
+                      occurrence omission.Actual ParticipantRole.OmittedInitializer 0 omission.Site ])))
     let ingress =
         match demanded @ omitted with
         | [] -> []

@@ -975,6 +975,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.LazyEffectRange -> Fidelity.PSG.EdgeRole.LazyEffectRange
     | S.EdgeRole.OrdinaryUnusedFormal -> Fidelity.PSG.EdgeRole.OrdinaryUnusedFormal
     | S.EdgeRole.OrdinaryUnusedActual -> Fidelity.PSG.EdgeRole.OrdinaryUnusedActual
+    | S.EdgeRole.OrdinaryUnusedBindingInitializer -> Fidelity.PSG.EdgeRole.OrdinaryUnusedBindingInitializer
     | S.EdgeRole.OrdinaryInactiveImplementation -> Fidelity.PSG.EdgeRole.OrdinaryInactiveImplementation
     | S.EdgeRole.OrdinaryBindingDemand(a0) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemand(mapBindingDemandEvidence a0)
     | S.EdgeRole.OrdinaryBindingDemandPending(a0, a1) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandPending(a0, mapBindingDemandEvidence a1)
@@ -2006,9 +2007,14 @@ and mapOrdinaryInactivityProjection (value: S.OrdinaryInactivityProjection) : Fi
 and mapOrdinaryOmission (value: S.OrdinaryOmission) : Fidelity.PSG.OrdinaryOmission =
     ({
         Site = nodeId value.Site
-        Ordinal = value.Ordinal
+        Origin = mapOrdinaryOmissionOrigin value.Origin
         Actual = nodeId value.Actual
     } : Fidelity.PSG.OrdinaryOmission)
+
+and mapOrdinaryOmissionOrigin (value: S.OrdinaryOmissionOrigin) : Fidelity.PSG.OrdinaryOmissionOrigin =
+    match value with
+    | S.OrdinaryOmissionOrigin.CallArgument(a0) -> Fidelity.PSG.OrdinaryOmissionOrigin.CallArgument(a0)
+    | S.OrdinaryOmissionOrigin.BindingInitializer -> Fidelity.PSG.OrdinaryOmissionOrigin.BindingInitializer
 
 and mapPartialApplication (value: S.PartialApplication) : Fidelity.PSG.PartialApplication =
     ({
@@ -2097,6 +2103,8 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.OmittedCallActual -> Fidelity.PSG.ParticipantRole.OmittedCallActual
     | S.ParticipantRole.OmissionSite -> Fidelity.PSG.ParticipantRole.OmissionSite
     | S.ParticipantRole.OmittedActual -> Fidelity.PSG.ParticipantRole.OmittedActual
+    | S.ParticipantRole.OmissionBinding -> Fidelity.PSG.ParticipantRole.OmissionBinding
+    | S.ParticipantRole.OmittedInitializer -> Fidelity.PSG.ParticipantRole.OmittedInitializer
     | S.ParticipantRole.Callee -> Fidelity.PSG.ParticipantRole.Callee
     | S.ParticipantRole.CalleeBody -> Fidelity.PSG.ParticipantRole.CalleeBody
     | S.ParticipantRole.CalleeArgument -> Fidelity.PSG.ParticipantRole.CalleeArgument

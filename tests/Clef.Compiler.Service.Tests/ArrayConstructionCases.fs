@@ -19,6 +19,31 @@ module private ArrayConstructionFixture =
 
 type ArrayConstructionCases() =
     [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Nested eager work follows activation of its containing initializer`` activated =
+        let initializer = "    let unused: int array =\n        let values: int array = eager (Array.zeroCreate 3)\n        values\n"
+        if activated then
+            let result = MemoryAccessFixture.check (initializer + "    unused.[0]\n")
+            Assert.Contains(result.Diagnostics, fun diagnostic ->
+                diagnostic.Code = "CCS8403" && diagnostic.Message.Contains "A dynamic array requires exactly one declared writable stack space.")
+        else
+            let graph, facts = MemoryAccessFixture.admitted (initializer + "    0\n")
+            Assert.DoesNotContain(facts.Operations.Values, fun operation -> match operation with MemoryWitnessOperation.ArrayAllocation _ -> true | _ -> false)
+            Assert.Empty facts.ArrayCopies
+            let binding = graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("unused", _, _, _) -> true | _ -> false) |> Assert.Single
+            let row = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer && edge.Target = binding.Id) |> Assert.Single
+            let deferred = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferredOnly graph
+            Assert.Contains(row.Sources[0], deferred)
+            let eagerBinding = graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("values", _, _, _) -> true | _ -> false) |> Assert.Single
+            let eagerInitializer = eagerBinding.Children |> Assert.Single
+            Assert.Contains(eagerBinding.Id, deferred)
+            Assert.Contains(eagerInitializer, deferred)
+            match Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand.direct graph eagerInitializer with
+            | Ok(Some _) -> ()
+            | _ -> failwith "The inactive containing initializer lost its nested explicit eager marker"
+
+    [<Theory>]
     [<InlineData("zeroCreate")>]
     [<InlineData("sub")>]
     member _.``Proven empty construction retains zero extent without phantom copy or initialization loops`` operation =
@@ -40,9 +65,90 @@ type ArrayConstructionCases() =
 
     [<Fact>]
     member _.``Unforced unused construction retains lazy default without demanding writable storage`` () =
-        let _, facts = MemoryAccessFixture.admitted "    let unused: int array = Array.zeroCreate 3\n    0\n"
+        let graph, facts = MemoryAccessFixture.admitted "    let unused: int array = Array.zeroCreate 3\n    0\n"
         Assert.DoesNotContain(facts.Operations.Values,fun operation -> match operation with MemoryWitnessOperation.ArrayAllocation _ -> true | _ -> false)
         Assert.Empty facts.ArrayCopies
+        let row = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer) |> Assert.Single
+        let binding = graph.Nodes[row.Target]
+        let initializer = binding.Children |> Assert.Single
+        Assert.True(binding.IsReachable && graph.Nodes[initializer].IsReachable)
+        match graph.Nodes[initializer].Kind with SemanticKind.TypeAnnotation _ -> () | _ -> failwith "Source annotation was lost"
+        let omitted = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferrals graph
+        Assert.Contains({ Site = binding.Id; Origin = OrdinaryOmissionOrigin.BindingInitializer; Actual = initializer }, omitted[initializer])
+        let omittedSites = omitted.Keys |> Set.ofSeq
+        let domain = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None) |> Assert.Single
+        Assert.DoesNotContain(domain.Required, omittedSites.Contains)
+        Assert.DoesNotContain(domain.Values, fun carrier -> omittedSites.Contains carrier.Site)
+        Assert.DoesNotContain(domain.Unresolved.Keys, omittedSites.Contains)
+        Assert.DoesNotContain(graph.Edges, fun edge -> match edge.Role with EdgeRole.NumericProof _ -> omittedSites.Contains edge.Target | _ -> false)
+        // A demanded sequence keeps its own coverage. Its preserved source
+        // shape may mention an omitted binding without owing that binding a claim.
+        Assert.Contains(row.Sources[1], domain.Required)
+        Assert.Contains(graph.Edges, fun edge -> match edge.Role with EdgeRole.NumericProof _ -> edge.Target = row.Sources[1] | _ -> false)
+
+    [<Theory>]
+    [<InlineData("    let values: int array = eager (Array.zeroCreate 3)\n    0\n")>]
+    [<InlineData("    let values: int array = Array.zeroCreate 3\n    values.[0]\n")>]
+    [<InlineData("    let values: int array = Array.zeroCreate 3\n    let alias = values\n    alias.[0]\n")>]
+    member _.``Initializer demand still requires declared writable storage`` body =
+        let result = MemoryAccessFixture.check body
+        Assert.Contains(result.Diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8403" && diagnostic.Message.Contains "A dynamic array requires exactly one declared writable stack space.")
+        let binding = result.Graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Binding("values", _, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.DoesNotContain(result.Graph.Edges, fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer && edge.Target = binding.Id)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Initializer omission needs exactly its current demand row`` duplicate =
+        let graph, _ = MemoryAccessFixture.admitted "    let unused: int array = Array.zeroCreate 3\n    0\n"
+        let row = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer) |> Assert.Single
+        let edges = if duplicate then row :: graph.Edges else graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.OrdinaryUnusedBindingInitializer)
+        let changed = { graph with Edges = edges }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Occurrence = Some row.Target && failure.Reason.Contains "OrdinaryDemand")
+        | Ok _ -> failwith "An absent or duplicate initializer premise authorized omission"
+
+    [<Fact>]
+    member _.``A new binding use withdraws the initializer omission premise`` () =
+        let graph, _ = MemoryAccessFixture.admitted "    let unused: int array = Array.zeroCreate 3\n    0\n"
+        let row = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer) |> Assert.Single
+        let useEdge = { Class = EdgeClass.Reference; Role = EdgeRole.Member; Target = row.Sources[1]; Sources = [row.Target]; Ordinal = 0 }
+        let changed = { graph with Edges = useEdge :: graph.Edges }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Occurrence = Some row.Target && failure.Reason.Contains "OrdinaryDemand")
+        | Ok _ -> failwith "A withdrawn initializer premise remained current"
+        let renewed = Clef.Compiler.Nanopass.OrdinaryDemand.foldIn (Clef.Compiler.Nanopass.OrdinaryDemand.elaborate changed) changed
+        Assert.DoesNotContain(renewed.Edges, fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer && edge.Target = row.Target)
+        Assert.DoesNotContain(row.Sources[0], Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferredOnly renewed)
+
+    [<Fact>]
+    member _.``Library export retention withdraws a local initializer omission`` () =
+        let graph, _ = MemoryAccessFixture.admitted "    let unused: int array = Array.zeroCreate 3\n    0\n"
+        let row = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer) |> Assert.Single
+        Assert.Equal(Some(MetadataValue.Bool true), graph.Nodes[row.Target].Metadata.TryFind "SourceBinding.Local")
+        let changed = { graph with DeclarationRoots = (row.Target, DeclRoot.LibraryExport) :: graph.DeclarationRoots }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Occurrence = Some row.Target && failure.Reason.Contains "OrdinaryDemand")
+        | Ok _ -> failwith "Local source metadata overrode export retention"
+        let renewed = Clef.Compiler.Nanopass.OrdinaryDemand.foldIn (Clef.Compiler.Nanopass.OrdinaryDemand.elaborate changed) changed
+        Assert.DoesNotContain(renewed.Edges, fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer && edge.Target = row.Target)
+        let deferred = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferredOnly renewed
+        Assert.DoesNotContain(row.Target, deferred)
+        Assert.DoesNotContain(row.Sources[0], deferred)
+
+    [<Fact>]
+    member _.``An initializer shared by an active resource premise remains demanded`` () =
+        let graph, _ = MemoryAccessFixture.admitted "    let unused: int array = Array.zeroCreate 3\n    0\n"
+        let row = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer) |> Assert.Single
+        let initializer = row.Sources[0]
+        let resourceUse = { Class = EdgeClass.Reference; Role = EdgeRole.Resides; Target = row.Sources[1]; Sources = [initializer]; Ordinal = 0 }
+        let changed = { graph with Edges = resourceUse :: graph.Edges }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+        | Error failures -> failwithf "The unchanged binding omission premise was refused: %A" failures
+        | Ok reading -> Assert.True(reading.Initializers.ContainsKey row.Target)
+        Assert.DoesNotContain(initializer, Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferredOnly changed)
 
     [<Fact>]
     member _.``Zero initialization is source storage followed by an explicit guarded loop`` () =

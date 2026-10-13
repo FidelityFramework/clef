@@ -691,7 +691,7 @@ type IntrinsicWriteCases() =
             Assert.Equal(Some [input.Actual], match graph.Nodes[input.Call].Kind with SemanticKind.Application(_, actuals) -> Some actuals | _ -> None))
         let omitted = Assert.Single inputs.Omitted
         let omission = Assert.Single omitted.Omissions
-        Assert.Equal<(NodeId * int * NodeId) list>(IntrinsicWriteFixture.omissionsContaining graph c, [omission.Site, omission.Ordinal, omission.Actual])
+        Assert.Equal<(NodeId * int * NodeId) list>(IntrinsicWriteFixture.omissionsContaining graph c, [omission.Site, (match omission.Origin with OrdinaryOmissionOrigin.CallArgument ordinal -> ordinal | _ -> failwith "Expected a call omission"), omission.Actual])
         Assert.Equal(c, omitted.Input.Actual)
 
     [<Fact>]
@@ -754,7 +754,7 @@ type IntrinsicWriteCases() =
         Assert.Equal(LiteralStorage.Materialized(entries |> List.findIndex (fun entry -> List.contains kept entry.NodeIds)), graph.LiteralStorage[kept])
         let omissions =
             IntrinsicWriteFixture.omissionsContaining graph never
-            |> List.map (fun (site, ordinal, actual) -> ({ Site = site; Ordinal = ordinal; Actual = actual }: OrdinaryOmission)) |> Set.ofList
+            |> List.map (fun (site, ordinal, actual) -> ({ Site = site; Origin = OrdinaryOmissionOrigin.CallArgument ordinal; Actual = actual }: OrdinaryOmission)) |> Set.ofList
         Assert.NotEmpty omissions
         Assert.Equal<Set<OrdinaryOmission>>(omissions, Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferrals graph |> Map.find never)
         match graph.LiteralStorage[never] with
@@ -907,14 +907,27 @@ let main _ =
                                        participants |> List.filter (fun participant -> participant.Role = ParticipantRole.OmittedActual && participant.Node = actual))
 
     [<Fact>]
+    member _.``Initializer omissions preserve their nonpositional origin in participants`` () =
+        let call : Clef.Compiler.Baker.Ingredients.FormalDemand.Input = { Call = NodeId 10; Ordinal = 0; Actual = NodeId 11 }
+        let evidence origin =
+            let inputs : Clef.Compiler.Baker.Ingredients.FormalDemand.Inputs =
+                { Demanded = []; Omitted = [ { Input = call; Omissions = [ { Site = NodeId 20; Origin = origin; Actual = NodeId 21 } ] } ]; Participants = Set.empty; UsedLazyForces = Set.empty }
+            Clef.Compiler.Baker.Ingredients.Participants.ofInputs (NodeId 2) inputs
+        let initializer = evidence OrdinaryOmissionOrigin.BindingInitializer
+        Assert.Contains(IntrinsicWriteFixture.occurrence (NodeId 20) ParticipantRole.OmissionBinding 0 (NodeId 10), initializer)
+        Assert.Contains(IntrinsicWriteFixture.occurrence (NodeId 21) ParticipantRole.OmittedInitializer 0 (NodeId 20), initializer)
+        Assert.DoesNotContain(initializer, fun participant -> participant.Role = ParticipantRole.OmissionSite || participant.Role = ParticipantRole.OmittedActual)
+        Assert.NotEqual<Participant list>(initializer, evidence (OrdinaryOmissionOrigin.CallArgument 0))
+
+    [<Fact>]
     member _.``Crossing the actuals of two omissions of one omitted call changes the participants`` () =
         let call : Clef.Compiler.Baker.Ingredients.FormalDemand.Input = { Call = NodeId 10; Ordinal = 0; Actual = NodeId 11 }
         let evidence (omissions: OrdinaryOmission list) =
             let inputs : Clef.Compiler.Baker.Ingredients.FormalDemand.Inputs =
                 { Demanded = []; Omitted = [ { Input = call; Omissions = omissions } ]; Participants = Set.empty; UsedLazyForces = Set.empty }
             Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1) (Clef.Compiler.Baker.Ingredients.Participants.ofInputs (NodeId 2) inputs)
-        let stated : OrdinaryOmission list = [ { Site = NodeId 20; Ordinal = 0; Actual = NodeId 21 }; { Site = NodeId 30; Ordinal = 0; Actual = NodeId 31 } ]
-        let crossed : OrdinaryOmission list = [ { Site = NodeId 20; Ordinal = 0; Actual = NodeId 31 }; { Site = NodeId 30; Ordinal = 0; Actual = NodeId 21 } ]
+        let stated : OrdinaryOmission list = [ { Site = NodeId 20; Origin = OrdinaryOmissionOrigin.CallArgument 0; Actual = NodeId 21 }; { Site = NodeId 30; Origin = OrdinaryOmissionOrigin.CallArgument 0; Actual = NodeId 31 } ]
+        let crossed : OrdinaryOmission list = [ { Site = NodeId 20; Origin = OrdinaryOmissionOrigin.CallArgument 0; Actual = NodeId 31 }; { Site = NodeId 30; Origin = OrdinaryOmissionOrigin.CallArgument 0; Actual = NodeId 21 } ]
         Assert.NotEqual<Participant list>(evidence stated, evidence crossed)
         Assert.Equal<(NodeId * NodeId * int * NodeId list) list>(
             [ NodeId 10, NodeId 20, 0, [NodeId 21]; NodeId 10, NodeId 30, 0, [NodeId 31] ], IntrinsicWriteFixture.omissionTuples (NodeId 10) (evidence stated))
@@ -1287,12 +1300,12 @@ type PremiseEstablishmentCases() =
         let graph = result.Graph
         let literal = IntrinsicWriteFixture.literal graph "never demanded"
         let expected = PremiseEstablishmentFixture.omissions graph literal |> Assert.Single
-        Assert.Equal(1, expected.Ordinal)
+        Assert.Equal(OrdinaryOmissionOrigin.CallArgument 1, expected.Origin)
         Assert.True(match graph.Nodes[expected.Site].Kind with SemanticKind.Application _ -> true | _ -> false)
         Assert.Equal<LiteralStorage>(LiteralStorage.NotMaterialized(StoragePremise.Established [expected]), graph.LiteralStorage[literal])
         let history = PremiseEstablishmentFixture.storageHistories graph |> List.filter (fun history -> history.Literal = literal) |> Assert.Single
         let early = Assert.Single history.Early
-        Assert.Equal(0, early.Ordinal)
+        Assert.Equal(OrdinaryOmissionOrigin.CallArgument 0, early.Origin)
         Assert.Equal(expected.Actual, early.Actual)
         Assert.NotEqual(expected.Site, early.Site)
         Assert.True(match graph.Nodes[early.Site].Kind with SemanticKind.Sequential values -> List.contains expected.Site values | _ -> false)
@@ -1318,7 +1331,7 @@ type PremiseEstablishmentCases() =
         let premise =
             match defect with
             | "other omission" -> PremiseEstablishmentFixture.omissions graph (IntrinsicWriteFixture.literal graph "also omitted")
-            | "ordinal" -> [{ expected with Ordinal = 0 }]
+            | "ordinal" -> [{ expected with Origin = OrdinaryOmissionOrigin.CallArgument 0 }]
             | "actual" -> [{ expected with Actual = unrelated }]
             | _ -> [expected]
         let target = if defect = "absent literal" then unrelated else literal
@@ -1348,7 +1361,7 @@ type PremiseEstablishmentCases() =
         let graph = PremiseEstablishmentFixture.omitted.Value.Graph
         let literal = IntrinsicWriteFixture.literal graph "never demanded"
         let premise = PremiseEstablishmentFixture.omissions graph literal
-        let bad = premise |> List.map (fun omission -> { omission with Ordinal = omission.Ordinal + 1 })
+        let bad = premise |> List.map (fun omission -> { omission with Origin = (match omission.Origin with OrdinaryOmissionOrigin.CallArgument ordinal -> OrdinaryOmissionOrigin.CallArgument (ordinal + 1) | _ -> failwith "Expected a call omission") })
         let changed = graph |> PremiseEstablishmentFixture.setPremise literal (StoragePremise.Established bad)
         let changed = { changed with Edges = { Class = EdgeClass.Provenance; Role = EdgeRole.LiteralStorageHistory { Literal = literal; Early = premise }; Sources = literal :: (premise |> List.collect (fun omission -> [omission.Site; omission.Actual])); Target = literal; Ordinal = 0 } :: changed.Edges }
         PremiseEstablishmentFixture.guard changed |> PremiseEstablishmentFixture.located graph literal PremiseEstablishmentFixture.premiseText

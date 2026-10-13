@@ -771,6 +771,7 @@ type ParticipantRole =
     | AggregateSelector | AggregateConstructor | AggregateTag | AggregatePayload
     | Site | Source | ExtentSource | RepresentationDeclaration | Path | Formal
     | ReachingCall | ReachingActual | OmittedCall | OmittedCallActual | OmissionSite | OmittedActual
+    | OmissionBinding | OmittedInitializer
     | Callee | CalleeBody | CalleeArgument | CalleeParameter | Ingress | Origin | Construction
     /// The source origin recipe consumed this exact lazy force protocol.
     | LazyStringOrigin
@@ -810,9 +811,14 @@ type ParticipantEvidence =
 /// The early derivation of the string borrow at a site, apart from the current row.
 type BorrowHistory = { Site: NodeId; Early: EarlyDerivation }
 
-/// One resident `OrdinaryUnusedActual` relation whose actual is not entered at
-/// its call: the call site, the ordinal and the omitted actual.
-type OrdinaryOmission = { Site: NodeId; Ordinal: int; Actual: NodeId }
+/// The source boundary whose deferred computation is not entered.
+[<RequireQualifiedAccess>]
+type OrdinaryOmissionOrigin =
+    | CallArgument of ordinal: int
+    | BindingInitializer
+
+/// One resident ordinary-demand relation, preserving its boundary's kind.
+type OrdinaryOmission = { Site: NodeId; Origin: OrdinaryOmissionOrigin; Actual: NodeId }
 
 /// The premise of a string literal whose storage was not materialized: the omission
 /// relations whose omitted actual contains it. A pending premise states the omissions
@@ -1784,6 +1790,7 @@ type EdgeRole =
     /// Exact invocation/formal/actual correspondence for an omitted physical
     /// operand. Direct explicit eager demand remains independently required.
     | OrdinaryUnusedActual
+    | OrdinaryUnusedBindingInitializer
     /// An ordinary implementation's complete current use family proves no
     /// entry activation. This excludes execution, never physical arguments.
     | OrdinaryInactiveImplementation

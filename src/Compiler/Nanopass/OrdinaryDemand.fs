@@ -11,7 +11,7 @@ let elaborate graph = Recipes.elaborate graph
 let foldIn (enrichment: Enrichment) graph =
     let owned edge =
         edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual ||
-        edge.Role = EdgeRole.OrdinaryInactiveImplementation
+        edge.Role = EdgeRole.OrdinaryInactiveImplementation || edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer
     let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
     if (graph.Edges |> List.filter owned |> List.map key) = (enrichment.NewEdges |> List.map key) then graph
     else

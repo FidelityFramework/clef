@@ -34,10 +34,16 @@ type InactiveImplementation = {
     Calls: Set<NodeId>
     Family: CallableIngress.Family
 }
+type UnusedInitializer = {
+    Binding: NodeId
+    Initializer: NodeId
+    Definition: Hyperedge
+}
 type Reading = {
     Formals: Map<NodeId, Formal>
     Calls: Map<NodeId, Call>
     Inactivity: Map<NodeId, InactiveImplementation>
+    Initializers: Map<NodeId, UnusedInitializer>
 }
 /// Execution joins are separate from the physical argument omissions above.
 type InactivityReading = {
@@ -50,7 +56,8 @@ type InactivityReading = {
 let private key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
 let private owned edge =
     edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual ||
-    edge.Role = EdgeRole.OrdinaryInactiveImplementation
+    edge.Role = EdgeRole.OrdinaryInactiveImplementation ||
+    edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer
 
 let analyze (graph: SemanticGraph) : Reading =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
@@ -260,9 +267,25 @@ let analyze (graph: SemanticGraph) : Reading =
                       Parameters = parameters |> List.map (fun (_, _, id) -> id)
                       Excluded = excluded; Calls = calls; Family = family })
             | _ -> None) |> Map.ofSeq
+    let roots = graph.DeclarationRoots |> List.map fst |> Set.ofList
+    let initializers =
+        nodes.Values |> Seq.choose (fun binding ->
+            match binding.Kind, binding.Children, binding.Parent with
+            | SemanticKind.Binding(_, false, false, None), [initializer], Some parent
+                when binding.Metadata.TryFind "SourceBinding.Local" = Some(MetadataValue.Bool true) &&
+                     not (roots.Contains binding.Id) && valid binding.Id && valid initializer && valid parent ->
+                match nodes[parent].Kind, uses.TryFind binding.Id, ExplicitDemand.direct graph initializer with
+                | SemanticKind.Sequential statements, Some [definition], Ok None
+                    when not statements.IsEmpty && List.last statements <> binding.Id &&
+                         definition.Class = EdgeClass.Structural && definition.Target = parent &&
+                         definition.Sources = [binding.Id] ->
+                    Some(binding.Id, { Binding = binding.Id; Initializer = initializer; Definition = definition })
+                | _ -> None
+            | _ -> None) |> Map.ofSeq
     { Formals = formals |> Map.filter (fun _ proof -> admitted.Contains proof.Implementation)
       Calls = calls |> Map.filter (fun _ proof -> admitted.Contains proof.Implementation)
-      Inactivity = inactivity }
+      Inactivity = inactivity
+      Initializers = initializers }
 
 let edges (reading: Reading) =
     [ for proof in reading.Formals.Values do
@@ -280,7 +303,11 @@ let edges (reading: Reading) =
                             @ inactive.Parameters
                             @ Set.toList inactive.Family.Evidence.Participants
                             @ Set.toList inactive.Excluded
-                            @ Set.toList inactive.Calls } ]
+                            @ Set.toList inactive.Calls }
+      for initializer in reading.Initializers.Values do
+          yield { Class = EdgeClass.Demand; Role = EdgeRole.OrdinaryUnusedBindingInitializer
+                  Target = initializer.Binding; Ordinal = initializer.Definition.Ordinal
+                  Sources = [initializer.Initializer; initializer.Definition.Target] } ]
 
 /// Recompute against the immutable graph and require its exact current joint
 /// rows. An old codata/edge projection supplies no independent authority, and
@@ -360,10 +387,17 @@ let deferredActuals graph site =
 /// source/proof incidence and does not claim an emitted operation for a skip.
 /// Each deferred node is keyed to the omissions whose actual contains it.
 let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<OrdinaryOmission>> =
-    let omissions = reading.Calls.Values |> Seq.collect (fun call ->
+    let omitted = reading.Calls.Values |> Seq.collect (fun call ->
         Set.difference call.Omitted call.Eager |> Seq.map (fun ordinal ->
-            ({ Site = call.Site; Ordinal = ordinal; Actual = call.Actuals[ordinal] }: OrdinaryOmission))) |> Set.ofSeq
-    let omitted = omissions |> Set.map (fun omission -> omission.Site, omission.Ordinal, omission.Actual)
+            call.Site, ordinal, call.Actuals[ordinal])) |> Set.ofSeq
+    let calls = omitted |> Set.map (fun (site, ordinal, actual) ->
+        ({ Site = site; Origin = OrdinaryOmissionOrigin.CallArgument ordinal
+           Actual = actual }: OrdinaryOmission))
+    let initializers = reading.Initializers.Values |> Seq.map (fun initializer ->
+        ({ Site = initializer.Binding; Origin = OrdinaryOmissionOrigin.BindingInitializer
+           Actual = initializer.Initializer }: OrdinaryOmission)) |> Set.ofSeq
+    let omissions = Set.union calls initializers
+    let definitions = reading.Initializers.Values |> Seq.map (_.Definition >> key) |> Set.ofSeq
     let incidence =
         (graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.collect Incidence.structuralIncidence |> Seq.toList)
         @ (graph.Edges |> List.filter (fun edge ->
@@ -382,7 +416,12 @@ let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<OrdinaryOmi
                 let dependencies = Incidence.structuralIncidence node |> List.collect _.Sources
                 expand (dependencies @ rest) (Set.add id found)
             | _ -> expand rest found
-    let containing = omissions |> Set.toList |> List.map (fun omission -> omission, expand [omission.Actual] Set.empty)
+    let containing = omissions |> Set.toList |> List.map (fun omission ->
+        let seeds =
+            match omission.Origin with
+            | OrdinaryOmissionOrigin.CallArgument _ -> [omission.Actual]
+            | OrdinaryOmissionOrigin.BindingInitializer -> [omission.Site; omission.Actual]
+        omission, expand seeds Set.empty)
     let candidates = containing |> List.map snd |> Set.unionMany
     let roots = graph.DeclarationRoots |> List.map fst |> Set.ofList
     let rec retain found =
@@ -391,6 +430,7 @@ let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<OrdinaryOmi
             (uses.TryFind id |> Option.defaultValue [] |> List.forall (fun edge ->
                 found.Contains edge.Target ||
                 (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Member) ||
+                definitions.Contains(key edge) ||
                 (edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Argument && omitted.Contains(edge.Target, edge.Ordinal, id)))))
         if next = found then found else retain next
     retain candidates |> Seq.map (fun id ->
