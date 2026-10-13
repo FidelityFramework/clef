@@ -20,7 +20,7 @@ module private SequenceOriginFixture =
             | SemanticKind.Binding(actual, _, _, _) -> actual = name || actual.StartsWith(name + "__mono")
             | _ -> false) |> Assert.Single
 
-    let origins graph = SequenceOrigins.settle graph graph.Codata.Value.Curry
+    let origins graph = SequenceOrigins.resolve graph
 
 /// These source/analysis gates establish origin identity and retained unknown
 /// alternatives. They do not grant frame layout, caller-result storage or a
@@ -122,7 +122,7 @@ let main _ =
         let raw = builder.Build []
         let first = { first with Kind = SemanticKind.VarRef("second", Some second.Id) }
         let graph = { raw with Nodes = raw.Nodes.Add(first.Id, first) }
-        let flows = SequenceOrigins.settleFlows graph graph.Codata.Value.Curry
+        let flows = SequenceOrigins.settleFlows graph
         for participant in [first.Id; second.Id] do
             Assert.Empty(flows[participant].Owners)
             Assert.Equal<Set<NodeId>>(Set.singleton participant, flows[participant].Unknown)
@@ -303,6 +303,6 @@ let main _ =
             Assert.False(current.ContainsKey observed.Id)
             Assert.Contains(facts[observed.Id], fun origin ->
                 match origin with SequenceOrigins.Origin.Unknown _ -> true | _ -> false)
-            let flow = (SequenceOrigins.settleFlows changed changed.Codata.Value.Curry)[observed.Id]
+            let flow = (SequenceOrigins.settleFlows changed)[observed.Id]
             Assert.NotEmpty flow.Unknown
         Assert.Equal(owner, (SequenceOriginFixture.origins graph |> fst)[observed.Id])

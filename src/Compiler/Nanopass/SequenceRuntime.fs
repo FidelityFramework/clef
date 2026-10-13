@@ -208,7 +208,7 @@ let private normalizePreparedWhenSourceAdmittedCore sourceAdmitted (prepared: Se
     let graph = prepared.Graph
     let realize = sourceAdmitted && graph.Platform.IsSome
     let curry = prepared.Curry
-    let origins, _ = Origins.settle graph curry
+    let origins, _ = Origins.resolve graph
     let graph = if realize then emptyConsumers graph origins else graph
     let admitted, currentEdges = SequenceCurrentAdmission.certify graph
     trace "current-admission"
@@ -219,7 +219,7 @@ let private normalizePreparedWhenSourceAdmittedCore sourceAdmitted (prepared: Se
     let admitted, currentEdges = snapshots.Reads, snapshots.Certificates
     let graph = { snapshots.Graph with Edges = (snapshots.Graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.IteratorCurrentAdmitted)) @ currentEdges }
     let graph = if snapshotsChanged then SequenceEvaluation.normalize graph else graph
-    let origins, originFacts = Origins.settle graph curry
+    let origins, originFacts = Origins.resolve graph
     trace "origins-and-snapshots"
     if not realize then graph, { empty with Origins = origins; Flows = Origins.describe graph originFacts; CurrentReads = admitted; Curry = curry }
     else

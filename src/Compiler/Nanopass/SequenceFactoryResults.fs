@@ -53,7 +53,7 @@ type private Plan = {
 
 let private prepareCore (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    let known, _ = Origins.settle graph curry
+    let known, _ = Origins.resolve graph
     let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
     let users = incidence |> List.filter Hyperedge.isStructural
                 |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))

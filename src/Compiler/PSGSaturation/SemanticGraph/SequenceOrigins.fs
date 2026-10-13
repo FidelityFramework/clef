@@ -16,7 +16,7 @@ type Origin = Known of NodeId | Unknown of NodeId
 let private sequenceType ty =
     match applySubst ty with NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> true | _ -> false
 
-let settle (graph: SemanticGraph) (_curry: CurryInfo) =
+let resolve (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     // Actual callable boundaries own formal/actual and returned-value flow.
     // Earlier supplies in declaration partials remain inputs, while a returned
@@ -165,6 +165,6 @@ let describe (graph: SemanticGraph) (facts: Map<NodeId, Set<Origin>>) : Map<Node
                        Owners = owners; Unknown = unknown })
         | _ -> None) |> Map.ofList
 
-let settleFlows graph curry =
-    let _, facts = settle graph curry
+let settleFlows graph =
+    let _, facts = resolve graph
     describe graph facts

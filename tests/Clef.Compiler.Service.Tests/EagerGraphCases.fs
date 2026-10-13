@@ -272,7 +272,7 @@ let main _ =
     0
 """
         let marker, operand = EagerGraph.markers graph |> Assert.Single
-        let origins, _ = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.settle graph graph.Codata.Value.Curry
+        let origins, _ = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.resolve graph
         Assert.Equal(operand.Id, origins[marker.Id])
         match operand.Kind with
         | SemanticKind.SeqExpr(generator, _) ->

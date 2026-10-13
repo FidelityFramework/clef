@@ -44,7 +44,7 @@ let main _ =
             | _ -> None) |> Map.ofSeq
 
     let plan graph =
-        Families.plan graph (FamilyOrigins.settleFlows graph graph.Codata.Value.Curry) (controls graph)
+        Families.plan graph (FamilyOrigins.settleFlows graph) (controls graph)
 
     let context : PlatformContext =
         let integer name family bits minimum maximum : NumericRepresentation =
@@ -74,7 +74,7 @@ type SequenceFamilyCases() =
         let graph = FamilyFixture.source ()
         let planning = FamilyFixture.plan graph
         Assert.Empty planning.Unresolved
-        let unique, _ = FamilyOrigins.settle graph graph.Codata.Value.Curry
+        let unique, _ = FamilyOrigins.resolve graph
         let owner name = unique[(FamilyFixture.binding name graph).Id]
         let shared = planning.Plans[planning.ByOwner[owner "small"]]
         Assert.Equal<Set<NodeId>>(Set.ofList [owner "small"; owner "large"; owner "empty"], shared.Owners)
@@ -187,7 +187,7 @@ type SequenceFamilyCases() =
     [<InlineData("wrong-element")>]
     member _.``Incomplete or contradictory alternatives cannot acquire a common protocol`` variant =
         let graph = FamilyFixture.source ()
-        let flows = FamilyOrigins.settleFlows graph graph.Codata.Value.Curry
+        let flows = FamilyOrigins.settleFlows graph
         let formal = flows.Values |> Seq.filter (fun flow -> flow.Owners.Count = 3) |> Seq.head
         let changed =
             if variant = "opaque" then { formal with Unknown = Set.singleton formal.Occurrence }

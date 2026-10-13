@@ -140,6 +140,7 @@ type private Program = {
     LoopRecognition: LoopRecipes.Recognition
     LoopAccumulations: Map<NodeId, LoopRecipes.Accumulation>
     LoopLinear: Map<NodeId, LoopRecipes.LinearRecurrence * int>
+    TailRecurrences: Map<NodeId, LoopRecipes.TailRecurrence>
     SequenceAccumulations: SequenceAccumulation.Accumulation list
     SequenceAccumulationTargets: Map<NodeId, SequenceAccumulation.Accumulation>
     LazyEffects: Map<NodeId, LazyEffectRanges.Bound>
@@ -1087,7 +1088,7 @@ let private sequenceElements (ingress: Lazy<CallableIngress.Reading>)
 let private sequenceEffectSources (currentCorrespondence: Lazy<Clef.Compiler.Baker.Ingredients.SequenceCurrentCorrespondence.Evidence list>)
                                   (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    let _, origins = SequenceOrigins.settle graph graph.Codata.Value.Curry
+    let _, origins = SequenceOrigins.resolve graph
     let edges = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Suspension)
     let byTarget = edges |> List.groupBy _.Target |> Map.ofList
     let pullBodies, initializations =
@@ -1359,11 +1360,12 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Callees = Map.empty
         Applications = Map.empty
         Effects = Map.empty
-        LoopRecognition = { Accumulations = []; Linear = []; Edges = [] }
+        LoopRecognition = { Accumulations = []; Linear = []; Tail = []; Edges = [] }
         SequenceAccumulations = []
         SequenceAccumulationTargets = Map.empty
         LoopAccumulations = Map.empty
         LoopLinear = Map.empty
+        TailRecurrences = Map.empty
         LazyEffects = Map.empty
         FiniteCells = Map.empty
         SequenceElements = sequenceElements continuationIngress currentCorrespondence graph
@@ -1861,6 +1863,14 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Assignments = program.Assignments
         Effects = program.Effects |> Map.map (fun _ effect -> effect.Definitions, effect.Unknown) }
     let graph, loops = LoopRanges.recognize inputs program.Graph
+    let tailInputs: LoopRecipes.TailInputs = {
+        Calls = program.Applications |> Map.toList |> List.choose (fun (site, alternatives) ->
+            match alternatives with
+            | [target] -> Some(site, (target.Lambda, target.Parameters |> List.map (fun (_, _, id) -> id), target.Arguments))
+            | _ -> None) |> Map.ofList
+        Suppliers = program.CallArguments
+        OpenParameters = Set.unionMany [program.RootParameters.Keys |> Set.ofSeq; program.Escaping.Keys |> Set.ofSeq; program.IndexSeeds.Keys |> Set.ofSeq] }
+    let graph, loops = LoopRanges.recognizeTail inputs tailInputs graph loops
     let graph, sequences = SequenceAccumulations.recognize inputs graph
     let program = { program with
                         Graph = graph
@@ -1868,7 +1878,8 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                         SequenceAccumulations = sequences
                         SequenceAccumulationTargets = sequences |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList
                         LoopAccumulations = loops.Accumulations |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList
-                        LoopLinear = loops.Linear |> List.collect (fun item -> item.Targets |> List.map (fun (id, index) -> id, (item, index))) |> Map.ofList }
+                        LoopLinear = loops.Linear |> List.collect (fun item -> item.Targets |> List.map (fun (id, index) -> id, (item, index))) |> Map.ofList
+                        TailRecurrences = loops.Tail |> List.collect (fun item -> (item.Counter :: item.CounterUpdate :: (item.Targets |> List.map fst)) |> List.distinct |> List.map (fun id -> id, item)) |> Map.ofList }
     let continuationRefinements =
         Clef.Compiler.Baker.Recipes.ContinuationGuardRecipes.forGraph program.Graph (fun id ->
             match program.Effects.TryFind id with
@@ -2397,6 +2408,13 @@ let private transfer (program: Program) (shared: Reading) (value: Reading) (appl
                 Some(ValueRange.meet range (ValueRange.Bounded(result.Invariant.Lower[index], result.Invariant.Upper[index])))
             | Result.Error _ -> Some range
         | _ -> computed
+    let computed =
+        match computed, program.TailRecurrences.TryFind node.Id with
+        | Some range, Some recurrence ->
+            match LoopRecipes.saturateTail shared recurrence with
+            | Result.Ok result -> Some(ValueRange.meet range result.Ranges[node.Id])
+            | Result.Error _ -> Some range
+        | _ -> computed
     match computed with
     | Some range when program.FiniteCells.ContainsKey node.Id ->
         Some(ValueRange.meet range (FiniteCellRanges.range program.FiniteCells[node.Id]))
@@ -2412,7 +2430,7 @@ let private contextualNode (program: Program) (node: SemanticNode) =
     let sharedOwner =
         program.ArrayLengths.ContainsKey node.Id || program.BoundarySeeds.ContainsKey node.Id ||
         program.LazyResults.ContainsKey node.Id || program.LoopAccumulations.ContainsKey node.Id ||
-        program.LoopLinear.ContainsKey node.Id || program.SequenceAccumulationTargets.ContainsKey node.Id ||
+        program.LoopLinear.ContainsKey node.Id || program.TailRecurrences.ContainsKey node.Id || program.SequenceAccumulationTargets.ContainsKey node.Id ||
         program.FiniteCells.ContainsKey node.Id || program.LazyEffects.ContainsKey node.Id
     if sharedOwner || not (isRanged node) then false
     else
@@ -3265,6 +3283,14 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
                    Range = node.Range; RelatedNodes = LoopRecipes.linearSources recurrence
                    Reachability = ReachabilityContext.Reachable }
         | _ -> None)
+    let resourceDiagnostics = resourceDiagnostics @ (program.LoopRecognition.Tail |> List.choose (fun recurrence ->
+        match LoopRecipes.saturateTail (current state) recurrence with
+        | Result.Error LoopRangeResidual.ProofResources when recurrence.Participants |> List.exists program.CommitmentSites.Contains ->
+            let node = graph.Nodes[recurrence.Counter]
+            Some { Severity = NativeDiagnosticSeverity.Error; Code = DiagnosticCodes.CCS8011_UnobservableRange
+                   Message = "The finite tail-transition proof exceeded its aggregate certificate-work budget; numeric range remains pending."
+                   Range = node.Range; RelatedNodes = recurrence.Participants; Reachability = ReachabilityContext.Reachable }
+        | _ -> None))
     let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state @ spelledDiagnostics program state @ resourceDiagnostics
                       |> contextProvenance contextFacts
     let graph = { graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }
@@ -3295,6 +3321,34 @@ let sourceFacts (graph: SemanticGraph) : Map<NodeId, ValueRange> =
         facts.Values |> Map.toList |> List.choose (function
             | (RangeContext.Shared, id), range -> Some(id, range)
             | _ -> None) |> Map.ofList
+
+/// A closed tail family with zero transitions at every entry never evaluates
+/// its continuing call or actuals. Source formals and their ABI positions stay
+/// present. This reads current producer evidence; Empty alone is no authority.
+let tailInactiveOccurrences (graph: SemanticGraph) =
+    match graph.RangeContextFacts with
+    | Some facts when Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent graph facts ->
+        let values = facts.Values |> Map.toList |> List.choose (function
+            | (RangeContext.Shared, id), range -> Some(id, range)
+            | _ -> None) |> Map.ofList
+        let subtree id =
+            let mutable seen = Set.empty
+            let mutable pending = Set.singleton id
+            while not pending.IsEmpty do
+                let frontier = pending
+                seen <- Set.union seen frontier
+                pending <- frontier |> Seq.collect (fun current ->
+                    graph.Nodes.TryFind current |> Option.map _.Children |> Option.defaultValue [])
+                           |> Set.ofSeq |> fun children -> Set.difference children seen
+            seen
+        (readProgram graph.Platform graph).LoopRecognition.Tail
+        |> List.fold (fun excluded item ->
+            match LoopRecipes.saturateTail (current values) item with
+            | Result.Ok result when not result.Certificates.IsEmpty &&
+                                    (result.Certificates |> List.forall (fun (_, _, model) -> model.MaximumIterations = 0I)) ->
+                Set.union excluded (subtree item.Call)
+            | _ -> excluded) Set.empty
+    | _ -> Set.empty
 
 /// Re-read the complete current source call/effect/origin and consumer census
 /// before a representation rewrite transports a finite-pull proof. This does

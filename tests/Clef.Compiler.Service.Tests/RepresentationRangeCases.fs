@@ -335,14 +335,14 @@ type MappedRepresentationRangeCases() =
                 | _ -> None)
             |> Assert.Single
         let access = RepresentationRangeFixture.relation EdgeRole.ContinuationSlotAccess iterator graph
-        let _, originalOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.settle graph graph.Codata.Value.Curry
+        let _, originalOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.resolve graph
         Assert.All(originalOrigins[iterator], fun origin ->
             Assert.True(match origin with Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.Origin.Known _ -> true | _ -> false))
         Assert.NotEmpty(originalOrigins[iterator])
         Assert.Contains(graph.Edges, fun edge -> edge.Target = call && edge.Role = EdgeRole.SequencePullBody)
         Assert.DoesNotContain(graph.Edges, fun edge -> edge.Target = call && edge.Role = EdgeRole.SequenceEffectUnknown)
         let changed = RepresentationStorageFixture.removeRow access graph
-        let _, origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.settle changed changed.Codata.Value.Curry
+        let _, origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.resolve changed
         Assert.True(origins[iterator] |> Set.exists (function Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins.Origin.Unknown _ -> true | _ -> false))
         let refreshed = Clef.Compiler.Nanopass.SequenceEffects.normalize changed
         Assert.Contains(refreshed.Edges, fun edge -> edge.Target = call && edge.Role = EdgeRole.SequenceEffectUnknown)

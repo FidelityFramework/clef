@@ -11,7 +11,7 @@ module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins
 
 let elaborate (graph: SemanticGraph) : Hyperedge list =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    let _, origins = Origins.settle graph graph.Codata.Value.Curry
+    let _, origins = Origins.resolve graph
     let edge role sources target =
         { Class = EdgeClass.Suspension; Role = role; Sources = sources; Target = target; Ordinal = 0 }
     let rec intrinsic seen id =

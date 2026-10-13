@@ -41,6 +41,7 @@ let private requiredSites (graph: SemanticGraph) =
         match OrdinaryDemand.tryInactivity graph with
         | Ok proof -> Set.union proof.Formals proof.Excluded
         | Error _ -> Set.empty
+    let inactive = Set.union inactive (RangeAnalysis.tailInactiveOccurrences graph)
     let declarations = declarationOnly graph
     let purposes = Reachability.declarationPurposes graph
     let demanded id (node: SemanticNode) =
@@ -104,7 +105,6 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
                              (inheritedRangeFacts: RangeContextFacts option) (graph: SemanticGraph) =
     let enrichId = Elaboration.freshId ()
     let anchor = Boundary.anchor enrichId graph |> fun node -> { node with Metadata = node.Metadata.Remove "Baker.BoundaryOwned" } |> Numeric.markOwned
-    let required, indexSites = requiredSites graph
     let sourceReading = PlatformResolution.read graph
     let sourceCore = sourceReading.Platform |> Option.bind _.Core
     let finiteRelations = Numeric.finiteCellRelations graph
@@ -120,6 +120,7 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
     // issues evidence without rewriting held annotations or selected widths.
     let issuedRange = RangeAnalysis.issue graph
     let issuedRangeFacts = issuedRange |> Result.toOption
+    let required, indexSites = requiredSites { graph with RangeContextFacts = issuedRangeFacts }
     let rangeCurrent = Result.isOk issuedRange
     // A failed issue retains the previous requirement, never its authority.
     // NumericSettlement installs only issuedRangeFacts on the graph.

@@ -7,6 +7,21 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module RangeAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 
 module private CallEffectRanges =
+    let mutableCallback = """
+[<EntryPoint>]
+let main _ =
+    let mutable state: int = 1
+    let mutable initialize: int -> int = fun _ -> 1
+    initialize <- fun _ -> state <- 300; 1
+    if state < 10 then
+        let values = Array.init 1 initialize
+        if values.[0] = 1 then
+            let observed = state
+            if observed = 300 then 0 else 1
+        else 1
+    else 2
+"""
+
     let check source =
         match parseAndCheck ("module CallEffects\n" + source) "call-effects.clef" with
         | Success result ->
@@ -16,11 +31,14 @@ module private CallEffectRanges =
         | CheckFailure result -> failwithf "Source did not reach a checked graph: %A" result.Diagnostics
         | ParseFailure errors -> failwithf "Parse failed: %A" errors
 
-    /// The diagnostics of a source that may not reach a checked graph.
-    let diagnostics source =
+    /// Current owner facts are inspected even for deliberately rejected premises.
+    let checkResult source =
         match parseAndCheck ("module CallEffects\n" + source) "call-effects.clef" with
-        | Success result | CheckFailure result -> result.Diagnostics
+        | Success result | CheckFailure result -> result
         | ParseFailure errors -> failwithf "Parse failed: %A" errors
+
+    /// The diagnostics of a source that may not reach a checked graph.
+    let diagnostics source = (checkResult source).Diagnostics
 
     let binding name (graph: SemanticGraph) =
         graph.Nodes.Values |> Seq.find (fun node ->
@@ -299,24 +317,107 @@ let main _ =
 
     [<Fact>]
     member _.``A mutable callback argument cannot inherit its initial lambda's pure effects``() =
-        let graph = CallEffectRanges.check """
-[<EntryPoint>]
-let main _ =
-    let mutable state: int = 1
-    let mutable initialize: int -> int = fun _ -> 1
-    initialize <- fun _ -> state <- 300; 1
-    if state < 10 then
-        let values = Array.init 1 initialize
-        if values.[0] = 1 then
-            let observed = state
-            if observed = 300 then 0 else 1
-        else 1
-    else 2
-"""
+        let graph = CallEffectRanges.check CallEffectRanges.mutableCallback
         // The write reaches `state` only when `values` is demanded (the reassigned callback runs
         // inside Array.init); ordinary bindings are deferred, so the guard that demands `values`
         // precedes the observation and the arm that observes `state` is entered after the write.
         CallEffectRanges.range "observed" 1I 300I graph
+
+    [<Fact>]
+    member _.``An unconditional overwrite defers only the initial callable value and preserves its index declaration``() =
+        let graph = CallEffectRanges.check CallEffectRanges.mutableCallback
+        let cell = CallEffectRanges.binding "initialize" graph
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.read graph
+        let proof = reading.Initializers[cell.Id]
+        Assert.False(proof.ExcludesBinding)
+        Assert.True(proof.InitializerUse.IsSome)
+        let deferred = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferredOnly graph
+        Assert.DoesNotContain(cell.Id, deferred)
+        Assert.Contains(proof.Initializer, deferred)
+        let initialCode =
+            match graph.Nodes[proof.Initializer].Kind with
+            | SemanticKind.TypeAnnotation(inner, _) -> graph.Nodes[inner]
+            | _ -> graph.Nodes[proof.Initializer]
+        match initialCode.Kind with
+        | SemanticKind.Lambda([(_, _, formal)], _, [], _, _) ->
+            Assert.Contains(formal, deferred)
+            Assert.False(reading.Formals.ContainsKey formal)
+            Assert.True(graph.Nodes.ContainsKey formal)
+        | _ -> failwith "The retained initializer lost its logical index declaration"
+        let sourceCells = Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.sourceFamilies graph |> fst
+        for _, _, written in sourceCells[cell.Id].Writes do
+            match graph.Nodes[written].Kind with
+            | SemanticKind.Lambda(parameters, _, _, _, _) -> Assert.Single parameters |> ignore
+            | _ -> failwith "Expected the retained replacement implementation"
+        CallEffectRanges.range "observed" 1I 300I graph
+
+    [<Theory>]
+    [<InlineData("read before write")>]
+    [<InlineData("eager snapshot")>]
+    [<InlineData("conditional write")>]
+    [<InlineData("captured cell")>]
+    [<InlineData("captured initializer")>]
+    member _.``Mutable initializer exclusion requires complete unconditional overwrite premises``(defect: string) =
+        let statements =
+            match defect with
+            | "read before write" -> "let before = eager (initialize 0)\n    initialize <- fun index -> index + 1\n    before + initialize 0"
+            | "eager snapshot" -> "let saved = eager initialize\n    initialize <- fun index -> index + 1\n    saved 0 + initialize 0"
+            | "conditional write" -> "if flag then initialize <- fun index -> index + 1\n    initialize 0"
+            | "captured cell" -> "let saved () = initialize 0\n    initialize <- fun index -> index + 1\n    saved ()"
+            | "captured initializer" -> "initialize <- fun index -> index + 1\n    initialize 0"
+            | other -> failwithf "Unknown overwrite premise: %s" other
+        let initial = if defect = "captured initializer" then "fun index -> captured + index" else "fun _ -> 1"
+        let result = CallEffectRanges.checkResult $"""
+let run flag =
+    let captured = 1
+    let mutable initialize: int -> int = {initial}
+    {statements}
+[<EntryPoint>]
+let main _ = run true + run false
+"""
+        let cell = CallEffectRanges.binding "initialize" result.Graph
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.analyze result.Graph
+        Assert.False(reading.Initializers.ContainsKey cell.Id, sprintf "Excluded the initializer with %s" defect)
+        Assert.False(reading.Formals.Values |> Seq.exists (fun proof ->
+            result.Graph.Nodes[proof.Implementation].Parent = Some cell.Children.Head))
+
+    [<Theory>]
+    [<InlineData("exported cell")>]
+    [<InlineData("exported initializer")>]
+    [<InlineData("duplicated initializer incidence")>]
+    [<InlineData("read moved before write")>]
+    member _.``Changed mutable initializer support refuses and retracts its previous demand row``(change: string) =
+        let graph = CallEffectRanges.check CallEffectRanges.mutableCallback
+        let cell = CallEffectRanges.binding "initialize" graph
+        let proof = (Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.read graph).Initializers[cell.Id]
+        let changed =
+            match change with
+            | "exported cell" -> { graph with DeclarationRoots = (cell.Id, DeclRoot.LibraryExport) :: graph.DeclarationRoots }
+            | "exported initializer" -> { graph with DeclarationRoots = (proof.Initializer, DeclRoot.LibraryExport) :: graph.DeclarationRoots }
+            | "duplicated initializer incidence" -> { graph with Edges = proof.InitializerUse.Value :: proof.InitializerUse.Value :: graph.Edges }
+            | "read moved before write" ->
+                let sourceCell = (Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.sourceFamilies graph |> fst)[cell.Id]
+                let writer, _, _ = sourceCell.Writes |> Assert.Single
+                let scope = graph.Nodes[graph.Nodes[writer].Parent.Value]
+                let statements = match scope.Kind with SemanticKind.Sequential statements -> statements | _ -> failwith "Expected the replacing write's ordered scope"
+                let at = statements |> List.findIndex ((=) writer)
+                let following = statements[at + 1]
+                let reordered = statements |> List.map (fun id -> if id = writer then following elif id = following then writer else id)
+                { graph with
+                    Nodes = graph.Nodes.Add(scope.Id, { scope with Kind = SemanticKind.Sequential reordered; Children = reordered })
+                    Edges = graph.Edges |> List.map (fun edge ->
+                        match edge.Target, edge.Class, edge.Sources with
+                        | target, EdgeClass.Structural, [source] when target = scope.Id && List.contains source reordered ->
+                            { edge with Ordinal = reordered |> List.findIndex ((=) source) }
+                        | _ -> edge) }
+            | other -> failwithf "Unknown current premise change: %s" other
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+        | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Occurrence = Some cell.Id)
+        | Result.Ok _ -> failwith "The stale initializer cut was accepted"
+        let renewed = Clef.Compiler.Nanopass.OrdinaryDemand.normalize changed
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.read renewed
+        Assert.False(reading.Initializers.ContainsKey cell.Id)
+        Assert.DoesNotContain(proof.Initializer, Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferredOnly renewed)
 
     [<Fact>]
     member _.``A branch-local snapshot observes the writes before its first demand and shares that value afterwards``() =

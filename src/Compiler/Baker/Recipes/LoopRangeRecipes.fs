@@ -54,9 +54,31 @@ type LinearRecurrence = {
     Participants: NodeId list
 }
 
+/// Complete ordinary call correspondences, projected by the existing range reader.
+type TailInputs = {
+    Calls: Map<NodeId, NodeId * NodeId list * NodeId list>
+    Suppliers: Map<NodeId, (NodeId * NodeId) list>
+    OpenParameters: Set<NodeId>
+}
+
+/// Immutable simultaneous parameters are not mutable loop stores.
+type TailRecurrence = {
+    Owner: NodeId
+    Guard: NodeId
+    Call: NodeId
+    Counter: NodeId
+    Step: NodeId
+    CounterUpdate: NodeId
+    Entries: (NodeId * NodeId list * NodeId) list
+    Matrix: bigint list list
+    Targets: (NodeId * int) list
+    Participants: NodeId list
+}
+
 type Recognition = {
     Accumulations: Accumulation list
     Linear: LinearRecurrence list
+    Tail: TailRecurrence list
     Edges: Hyperedge list
 }
 
@@ -415,7 +437,173 @@ let recognize (graph: SemanticGraph) (inputs: Inputs) : Recognition =
                 | _ -> None
             | _ -> None)
         |> Seq.fold (fun (xs, es) (ys, fs) -> xs @ ys, es @ fs) ([], [])
-    { Accumulations = items; Linear = List.rev linear; Edges = edges }
+    { Accumulations = items; Linear = List.rev linear; Tail = []; Edges = edges }
+
+/// Admit an exact closed tail transition. Only entry actuals seed the numeric
+/// certificate; a recursive formal or an earlier recurrence result cannot do so.
+let recognizeTail (graph: SemanticGraph) (inputs: Inputs) (calls: TailInputs) =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let node id = nodes.TryFind id
+    let sameType left right =
+        match node left, node right with
+        | Some left, Some right -> applySubst left.Type = applySubst right.Type
+        | _ -> false
+    let reference formal id =
+        match node id with
+        | Some { Kind = SemanticKind.VarRef(_, Some actual); Children = [] } -> actual = formal && sameType formal id
+        | _ -> false
+    let zero id = match node id with Some { Kind = SemanticKind.Literal(NativeLiteral.Int(0L, _)) } -> true | _ -> false
+    let authority id =
+        match node id with
+        | None -> false
+        | Some value ->
+            let children =
+                match value.Kind with
+                | SemanticKind.Lambda(parameters, body, _, _, _) ->
+                    if value.Children = [body] then [body] else (parameters |> List.map (fun (_, _, id) -> id)) @ [body]
+                | SemanticKind.IfThenElse(guard, yes, no) -> guard :: yes :: Option.toList no
+                | SemanticKind.Application(callee, arguments) -> callee :: arguments
+                | SemanticKind.VarRef _ | SemanticKind.Literal _ -> []
+                | _ -> value.Children
+            let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+            let source (edge: Hyperedge) = edge.Class = EdgeClass.Structural || edge.Role = EdgeRole.Definition
+            let expected = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence value |> List.filter source |> List.map key |> Set.ofList
+            let actual = graph.Edges |> List.filter (fun edge -> edge.Target = id && source edge) |> List.map key
+            children = value.Children && List.forall nodes.ContainsKey children &&
+            actual.Length = (Set.ofList actual).Count && List.forall expected.Contains actual &&
+            (match value.Kind with
+             | SemanticKind.VarRef(_, Some definition) -> sameType id definition
+             | SemanticKind.VarRef(_, None) -> false
+             | _ -> true)
+    let owner id =
+        let mutable pending = Some id
+        let mutable seen = Set.empty
+        let mutable found = None
+        while pending.IsSome do
+            let current = pending.Value
+            if seen.Contains current then pending <- None
+            else
+                seen <- seen.Add current
+                match node current with
+                | Some { Kind = SemanticKind.Lambda _ } -> found <- Some current; pending <- None
+                | Some value -> pending <- value.Parent
+                | _ -> pending <- None
+        found
+    // Owner-local postorder worklists visit each node once. Active-path checks
+    // reject source cycles; shared subexpressions retain their exact incidence.
+    let seedSupport (forbidden: Set<NodeId>) id =
+        let mutable pending = [id, false]
+        let mutable active = Set.empty
+        let mutable completed = Set.empty
+        let mutable valid = true
+        while valid && not pending.IsEmpty do
+            let (current, finish) = pending.Head
+            pending <- pending.Tail
+            if finish then
+                active <- active.Remove current
+                completed <- completed.Add current
+            elif forbidden.Contains current || active.Contains current then valid <- false
+            elif not (completed.Contains current) then
+                match node current with
+                | Some value when authority current ->
+                    match value.Kind with
+                    | SemanticKind.Lambda _ -> valid <- false
+                    | _ ->
+                        let children = match value.Kind with SemanticKind.VarRef(_, Some definition) -> [definition] | _ -> value.Children
+                        active <- active.Add current
+                        pending <- (children |> List.map (fun child -> child, false)) @ ((current, true) :: pending)
+                | _ -> valid <- false
+        if valid then Some(Set.toList completed) else None
+    nodes.Values |> Seq.choose (fun lambda ->
+        match lambda.Kind with
+        | SemanticKind.Lambda(parameters, body, captures, _, _) when captures.IsEmpty && (parameters.Length = 2 || parameters.Length = 3) ->
+            let formals = parameters |> List.map (fun (_, _, id) -> id)
+            let counter = List.last formals
+            let states = formals |> List.take (formals.Length - 1)
+            let coefficients id =
+                let mutable pending = [id, false]
+                let mutable active = Set.empty
+                let mutable rows: Map<NodeId, bigint list * Set<NodeId>> = Map.empty
+                let mutable valid = true
+                while valid && not pending.IsEmpty do
+                    let (current, finish) = pending.Head
+                    pending <- pending.Tail
+                    if finish then
+                        match inputs.Operators.TryFind current with
+                        | Some("op_Addition", [left; right]) when rows.ContainsKey left && rows.ContainsKey right ->
+                            let a, xs = rows[left]
+                            let b, ys = rows[right]
+                            rows <- rows.Add(current, (List.map2 (+) a b, Set.union xs ys |> Set.add current))
+                            active <- active.Remove current
+                        | _ -> valid <- false
+                    elif active.Contains current then valid <- false
+                    elif not (rows.ContainsKey current) then
+                        if not (authority current) then valid <- false else
+                        match states |> List.tryFindIndex (fun formal -> reference formal current) with
+                        | Some index ->
+                            rows <- rows.Add(current, (List.init states.Length (fun position -> if position = index then 1I else 0I), Set.singleton current))
+                        | None ->
+                            match inputs.Operators.TryFind current with
+                            | Some("op_Addition", [left; right]) when sameType current left && sameType current right ->
+                                active <- active.Add current
+                                pending <- (left, false) :: (right, false) :: (current, true) :: pending
+                            | _ -> valid <- false
+                if valid then rows.TryFind id |> Option.map (fun (row, support) -> row, Set.toList support) else None
+            let family = calls.Calls |> Map.toList |> List.choose (fun (site, (target, actualFormals, actuals)) ->
+                if target = lambda.Id then Some(site, actualFormals, actuals) else None)
+            let closed =
+                not family.IsEmpty && authority lambda.Id &&
+                (parameters |> List.forall (fun (_, ty, id) -> node id |> Option.exists (fun formal ->
+                    applySubst formal.Type = applySubst ty && formal.Parent = Some lambda.Id))) &&
+                (formals |> List.forall (fun formal -> not (calls.OpenParameters.Contains formal))) &&
+                (family |> List.forall (fun (_, actualFormals, actuals) ->
+                    actualFormals = formals && actuals.Length = formals.Length && List.forall2 sameType formals actuals)) &&
+                (formals |> List.indexed |> List.forall (fun (index, formal) ->
+                    let expected = family |> List.map (fun (site, _, actuals) -> site, actuals[index]) |> Set.ofList
+                    let supplied = calls.Suppliers.TryFind formal |> Option.defaultValue [] |> Set.ofList
+                    supplied = expected))
+            match node counter, node body with
+            | Some count, Some { Kind = SemanticKind.IfThenElse(guard, yes, Some no) } when
+                closed && Types.isIntegerType count.Type &&
+                (match applySubst count.Type with NativeType.TNum(_, dimension) -> dimension = Dimension.one | _ -> false) &&
+                (states |> List.forall (fun id -> node id |> Option.exists (fun state -> Types.isIntegerType state.Type && sameType id states.Head))) &&
+                authority body &&
+                (match inputs.Effects.TryFind body with Some(writes, false) -> writes.IsEmpty | _ -> false) ->
+                let continuing =
+                    match inputs.Operators.TryFind guard with
+                    | Some("op_LessThanOrEqual", [read; limit]) when reference counter read && zero limit && sameType counter limit -> Some(yes, no, [read; limit])
+                    | Some("op_GreaterThan", [read; limit]) when reference counter read && zero limit && sameType counter limit -> Some(no, yes, [read; limit])
+                    | _ -> None
+                match continuing with
+                | Some(baseCase, self, guardSupport) when authority guard && (states |> List.exists (fun formal -> reference formal baseCase)) ->
+                    match family |> List.tryFind (fun (site, _, _) -> site = self) with
+                    | Some(_, _, actuals) when authority self && owner self = Some lambda.Id ->
+                        let updates = actuals |> List.take states.Length
+                        let counterUpdate = List.last actuals
+                        match inputs.Operators.TryFind counterUpdate with
+                        | Some("op_Subtraction", [read; step]) when reference counter read && sameType counterUpdate counter && sameType counter step && authority counterUpdate ->
+                            let positive = match node step with Some { Kind = SemanticKind.Literal(NativeLiteral.Int(value, _)) } -> value > 0L | _ -> false
+                            let rows = updates |> List.map coefficients
+                            let entries = family |> List.filter (fun (site, _, _) -> site <> self)
+                            let forbidden = Set.ofList (lambda.Id :: body :: counterUpdate :: formals @ updates)
+                            let supports = entries |> List.map (fun (site, _, actuals) ->
+                                if owner site = Some lambda.Id || not (authority site) then None
+                                else actuals |> List.map (seedSupport forbidden) |> fun support ->
+                                    if List.exists Option.isNone support then None else Some(site :: (support |> List.choose id |> List.concat)))
+                            if not positive || entries.IsEmpty || List.exists Option.isNone rows || List.exists Option.isNone supports then None
+                            else
+                                let matrix, transitionSupport = rows |> List.choose id |> List.unzip
+                                let participants = lambda.Id :: body :: guard :: baseCase :: self :: counterUpdate :: read :: step ::
+                                                   (formals @ guardSupport @ List.concat transitionSupport @ (supports |> List.choose id |> List.concat)) |> List.distinct
+                                Some { Owner = lambda.Id; Guard = guard; Call = self; Counter = counter; Step = step; CounterUpdate = counterUpdate
+                                       Entries = entries |> List.map (fun (site, _, actuals) -> site, List.take states.Length actuals, List.last actuals)
+                                       Matrix = matrix; Targets = (List.indexed states @ List.indexed updates) |> List.map (fun (index, id) -> id, index)
+                                       Participants = participants }
+                        | _ -> None
+                    | _ -> None
+                | _ -> None
+            | _ -> None
+        | _ -> None) |> Seq.toList
 
 type Saturated = {
     Accumulation: Accumulation
@@ -520,6 +708,40 @@ let saturateLinearWithBudget maximumBits range (item: LinearRecurrence) : Result
 
 let saturateLinear range item = saturateLinearWithBudget defaultCertificateBits range item
 
+type TailSaturated = {
+    Recurrence: TailRecurrence
+    Certificates: (NodeId * FiniteLoopTripModel * FiniteLinearRecurrenceModel) list
+    Ranges: Map<NodeId, ValueRange>
+}
+
+/// Each entry retains its tuple/trip correlation. Recursive inputs and previous
+/// conclusions are deliberately absent from these numeric premises.
+let saturateTailWithBudget maximumBits range (item: TailRecurrence) =
+    let bounded id = match range id with ValueRange.Bounded(lo, hi) when 0I <= lo && lo <= hi -> Some(lo, hi) | _ -> None
+    match bounded item.Step with
+    | Some(stepLo, stepHi) when stepLo > 0I ->
+        item.Entries |> List.fold (fun result (site, seeds, count) ->
+            match result, bounded count, seeds |> List.map bounded with
+            | Ok(certificates, ranges, budget), Some(countLo, countHi), seedRanges when List.forall Option.isSome seedRanges ->
+                let lower, upper = seedRanges |> List.choose id |> List.unzip
+                let iterations = (countHi + stepLo - 1I) / stepLo
+                match certifyLinearWithBudget budget iterations lower upper item.Matrix item.Matrix with
+                | Error reason -> Error reason
+                | Ok(model, used) ->
+                    let trip = { InitialLower = -countHi; LimitUpper = 0I; MinimumStep = stepLo; Inclusive = false; MaximumIterations = iterations }
+                    let values = item.Targets |> List.map (fun (id, index) -> id, ValueRange.Bounded(model.Lower[index], model.Upper[index]))
+                    let counter = ValueRange.Bounded(min countLo (min 0I (1I - stepHi)), countHi)
+                    let ranges = (item.Counter, counter) :: (item.CounterUpdate, counter) :: values |> List.fold (fun ranges (id, range) ->
+                        Map.add id (ValueRange.join (Map.tryFind id ranges |> Option.defaultValue ValueRange.Empty) range) ranges) ranges
+                    Ok((site, trip, model) :: certificates, ranges, budget - used)
+            | Error reason, _, _ -> Error reason
+            | _ -> Error LoopRangeResidual.MissingBound) (Ok([], Map.empty, maximumBits))
+        |> Result.map (fun (certificates, ranges, _) -> { Recurrence = item; Certificates = List.rev certificates; Ranges = ranges })
+    | Some _ -> Error LoopRangeResidual.Step
+    | _ -> Error LoopRangeResidual.MissingBound
+
+let saturateTail range item = saturateTailWithBudget defaultCertificateBits range item
+
 /// Numeric conclusions are rebuilt from the current premise ranges. No bound
 /// from a previous graph or narrowing round supplies its own premise.
 let saturate (range: NodeId -> ValueRange) (item: Accumulation) : Result<Saturated, LoopRangeResidual> =
@@ -582,3 +804,19 @@ let private linearObligationsCore (graph: SemanticGraph) (settled: LinearSaturat
 
 let linearObligations graph settled =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> linearObligationsCore graph settled)
+
+let tailObligations graph (settled: TailSaturated list) =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () ->
+    settled |> List.collect (fun result ->
+        let item = result.Recurrence
+        let subject = graph.Nodes[item.Counter]
+        let (NodeId owner) = item.Owner
+        result.Certificates |> List.mapi (fun index (site, trip, model) ->
+            let (NodeId call) = site
+            let make name kind statement body =
+                let node = obligationNode subject index { Id = name; Kind = kind; Logic = "QF_LIA"; Statement = statement; Source = fmtRange subject.Range; Refs = []; Body = body }
+                { NewNodes = [node]; NewEdges = [constrains item.Participants node]; Annotated = [] }
+            Enrichment.combine
+                (make (sprintf "tail_trip_%d_%d" owner call) "finite-loop-trip" "The closed entry tuple and positive counter decrement bound all continuing tail transitions." (ObligationBody.FiniteLoopTrip trip))
+                (make (sprintf "tail_linear_%d_%d" owner call) "finite-linear-recurrence" "The source-backed simultaneous parameter transition preserves this enclosure through the final invocation." (ObligationBody.FiniteLinearRecurrence model))))
+    |> Enrichment.concat)

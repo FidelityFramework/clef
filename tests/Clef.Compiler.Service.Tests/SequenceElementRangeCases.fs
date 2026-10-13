@@ -88,7 +88,7 @@ let main _ =
             { graph with
                 Nodes = graph.Nodes |> Map.add lambda.Id outer |> Map.add innerId inner
                 Codata = lazy { graph.Codata.Value with Curry = curry } }
-        let unique, _ = ElementOrigins.settle raw curry
+        let unique, _ = ElementOrigins.resolve raw
         let enriched, certificates = ElementRangeFixture.evidence raw
         let certificate = Assert.Single certificates
         let iterator = match raw.Nodes[certificate.Target].Kind with SemanticKind.Application(_, [value]) -> value | _ -> failwith "No current"

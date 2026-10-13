@@ -698,3 +698,106 @@ let main _ =
         Assert.Contains(site, bound.Participants)
         Assert.True(Set.isSubset proof.Calls bound.Participants)
         Assert.True(FiniteCells.evidenceCurrent graph)
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteSequenceCallbacks")>]
+type FiniteSequenceCallbackCases() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Fresh finite consumers bound callback writes and count each acquisition separately`` twice =
+        let body =
+            """
+[<EntryPoint>]
+let main _ =
+    let mutable calls = 0
+    let observe (_: int) = calls <- calls + 1
+    let input = seq { yield 1; yield 2; yield 3 }
+    Seq.iter observe input
+"""
+
+        let source =
+            body + (if twice then "    Seq.iter observe input\n" else "") + "    calls\n"
+
+        let graph = FiniteCellFixture.check source
+
+        let cell =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding("calls", true, _, _) -> true
+                | _ -> false)
+            |> Assert.Single
+
+        let bound =
+            FiniteCells.recognize graph
+            |> List.filter (fun bound -> bound.Cell = cell.Id)
+            |> Assert.Single
+
+        let writer = Assert.Single bound.Writes
+        Assert.Equal((if twice then 6I else 3I), writer.MaximumActivations)
+
+        let pulls =
+            Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.currentPulls graph
+
+        Assert.Equal((if twice then 2 else 1), pulls.Length)
+        Assert.True(graph.Platform.IsNone)
+
+        let sourceOnly =
+            { graph with
+                Codata = lazy (failwith "Source pulls must not require frame or layout evidence")
+            }
+
+        Assert.Equal<Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.Pull list>(
+            pulls,
+            Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.sourcePulls sourceOnly
+        )
+
+        for pull in pulls do
+            Assert.Equal(3I, pull.Pulls.MaximumPulls)
+            Assert.True(Set.isSubset (Set.ofList pull.Participants) bound.Participants)
+
+        Assert.True(FiniteCells.evidenceCurrent graph)
+
+    [<Fact>]
+    member _.``An unaccounted iterator use retracts the callback activation bound``() =
+        let graph =
+            FiniteCellFixture.check
+                """
+[<EntryPoint>]
+let main _ =
+    let mutable calls = 0
+    let observe (_: int) = calls <- calls + 1
+    Seq.iter observe (seq { yield 1; yield 2 })
+    calls
+"""
+
+        let pull =
+            Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.currentPulls graph
+            |> Assert.Single
+
+        let cell =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding("calls", true, _, _) -> true
+                | _ -> false)
+            |> Assert.Single
+
+        Assert.Contains(FiniteCells.recognize graph, fun bound -> bound.Cell = cell.Id)
+
+        let extra =
+            {
+                Class = EdgeClass.Reference
+                Role = EdgeRole.Argument
+                Sources = [ pull.Enumerator ]
+                Target = pull.Owner
+                Ordinal = 99
+            }
+
+        let changed =
+            { graph with
+                Edges = extra :: graph.Edges
+            }
+
+        Assert.Empty(Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.currentPulls changed)
+        Assert.DoesNotContain(FiniteCells.recognize changed, fun bound -> bound.Cell = cell.Id)

@@ -38,6 +38,10 @@ type UnusedInitializer = {
     Binding: NodeId
     Initializer: NodeId
     Definition: Hyperedge
+    /// A used mutable cell retains its binding; only this exact initial-value use is cut.
+    InitializerUse: Hyperedge option
+    ExcludesBinding: bool
+    Participants: Set<NodeId>
 }
 type Reading = {
     Formals: Map<NodeId, Formal>
@@ -279,9 +283,85 @@ let analyze (graph: SemanticGraph) : Reading =
                     when not statements.IsEmpty && List.last statements <> binding.Id &&
                          definition.Class = EdgeClass.Structural && definition.Target = parent &&
                          definition.Sources = [binding.Id] ->
-                    Some(binding.Id, { Binding = binding.Id; Initializer = initializer; Definition = definition })
+                    Some(binding.Id, { Binding = binding.Id; Initializer = initializer; Definition = definition
+                                       InitializerUse = None; ExcludesBinding = true; Participants = Set.empty })
                 | _ -> None
             | _ -> None) |> Map.ofSeq
+    // A mutable cell's logical source census is independent of whether an
+    // opaque consumer admits its physical family. No callback actual vector is
+    // invented here: only an unconditional replacing write can exclude its
+    // earlier initializer, and every current read remains in this proof.
+    let sourceCells = MutableCallableStorage.sourceFamilies graph |> fst
+    let activations =
+        if sourceCells.IsEmpty then [] else Clef.Compiler.Baker.Ingredients.BindingDemand.activationFacts graph
+    let overwritten =
+        sourceCells.Values
+        |> Seq.choose (fun cell ->
+            let binding = nodes[cell.Binding]
+            let parents = uses.TryFind binding.Id |> Option.defaultValue [] |> List.filter Hyperedge.isStructural
+            let owners = activations |> List.filter (fun activation ->
+                activation.Entry.IsEmpty && (activation.Slots |> List.exists (fun slot -> slot.Statement = binding.Id)))
+            let formation =
+                let code =
+                    match nodes[cell.Initial].Kind with
+                    | SemanticKind.Lambda _ -> Some cell.Initial
+                    | SemanticKind.TypeAnnotation(inner, _) -> Some inner
+                    | _ -> None
+                code |> Option.bind (fun code ->
+                    match nodes.TryFind code with
+                    | Some ({ Kind = SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure) } as implementation)
+                        when valid cell.Initial && valid code && valid body &&
+                             not (externalImplementations.Contains code) &&
+                             applySubst implementation.Type = applySubst nodes[cell.Initial].Type &&
+                             (parameters |> List.forall (fun (_, ty, formal) -> valid formal && applySubst nodes[formal].Type = applySubst ty)) &&
+                             applySubst implementation.Type = applySubst (List.foldBack (fun (_, ty, _) result -> NativeType.TFun(ty, result)) parameters nodes[body].Type) ->
+                        Some(Set.ofList(cell.Initial :: code :: body :: (parameters |> List.map (fun (_, _, id) -> id))))
+                    | _ -> None)
+            let initializerUses = incidence |> List.filter (fun edge ->
+                edge.Target = binding.Id && edge.Sources = [cell.Initial] && Hyperedge.isStructural edge)
+            match binding.Kind, parents, owners, formation, initializerUses, ExplicitDemand.direct graph cell.Initial with
+            | SemanticKind.Binding(_, true, false, None), [definition], [activation], Some formation, [initializerUse], Ok None
+                when binding.Metadata.TryFind "SourceBinding.Local" = Some(MetadataValue.Bool true) &&
+                     cell.Captures.IsEmpty && cell.Borrows.IsEmpty && not cell.Reads.IsEmpty &&
+                     not (roots.Contains binding.Id) && (Set.intersect roots formation |> Set.isEmpty) &&
+                     valid binding.Id && valid definition.Target && valid activation.Owner && valid activation.Body &&
+                     // Attached binding children are canonical incidence even
+                     // before a recipe records a matching edge. An absent row
+                     // is no competing use; duplicates still fail validation.
+                     (recorded |> List.filter (fun edge -> key edge = key initializerUse) |> List.length) <= 1 ->
+                let slots = activation.Slots |> List.indexed
+                let uniqueSlots = slots |> List.forall (fun (_, slot) ->
+                    let parents = uses.TryFind slot.Statement |> Option.defaultValue [] |> List.filter Hyperedge.isStructural
+                    match nodes.TryFind slot.Statement, parents with
+                    | Some statement, [edge] ->
+                        valid slot.Statement && valid slot.Parent && statement.Parent = Some slot.Parent &&
+                        edge.Target = slot.Parent && edge.Ordinal = slot.Ordinal
+                    | _ -> false)
+                let slotOf id =
+                    slots |> List.choose (fun (index, slot) ->
+                        if (bodyParticipants slot.Statement).Contains id then Some index else None)
+                    |> function [index] -> Some index | _ -> None
+                let bindingAt = slotOf binding.Id
+                let replacing = cell.Writes |> List.choose (fun (site, _, value) ->
+                    match slots |> List.tryFind (fun (_, slot) -> slot.Statement = site), bindingAt with
+                    | Some(index, _), Some first when first < index && valid site && valid value -> Some(index, site)
+                    | _ -> None)
+                let beforeEveryRead = replacing |> List.filter (fun (at, _) ->
+                    cell.Reads |> Set.forall (fun read ->
+                        valid read && CallableIngress.tryExecutionOwner ingress read = Some activation.Owner &&
+                        (slotOf read |> Option.exists (fun later -> at < later))))
+                match uniqueSlots, beforeEveryRead with
+                | true, (_, writer) :: _ ->
+                    let participants =
+                        [ cell.Participants; formation; roots
+                          Set.ofList [activation.Owner; activation.Body; writer]
+                          activation.Slots |> List.collect (fun slot -> [slot.Parent; slot.Statement]) |> Set.ofList ] |> Set.unionMany
+                    Some(binding.Id, { Binding = binding.Id; Initializer = cell.Initial; Definition = definition
+                                       InitializerUse = Some initializerUse; ExcludesBinding = false; Participants = participants })
+                | _ -> None
+            | _ -> None)
+        |> Map.ofSeq
+    let initializers = Map.fold (fun found id proof -> Map.add id proof found) initializers overwritten
     { Formals = formals |> Map.filter (fun _ proof -> admitted.Contains proof.Implementation)
       Calls = calls |> Map.filter (fun _ proof -> admitted.Contains proof.Implementation)
       Inactivity = inactivity
@@ -307,7 +387,8 @@ let edges (reading: Reading) =
       for initializer in reading.Initializers.Values do
           yield { Class = EdgeClass.Demand; Role = EdgeRole.OrdinaryUnusedBindingInitializer
                   Target = initializer.Binding; Ordinal = initializer.Definition.Ordinal
-                  Sources = [initializer.Initializer; initializer.Definition.Target] } ]
+                  Sources = [initializer.Initializer; initializer.Definition.Target]
+                            @ (initializer.Participants.Remove initializer.Initializer |> Set.remove initializer.Definition.Target |> Set.toList) } ]
 
 /// Recompute against the immutable graph and require its exact current joint
 /// rows. An old codata/edge projection supplies no independent authority, and
@@ -397,7 +478,8 @@ let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<OrdinaryOmi
         ({ Site = initializer.Binding; Origin = OrdinaryOmissionOrigin.BindingInitializer
            Actual = initializer.Initializer }: OrdinaryOmission)) |> Set.ofSeq
     let omissions = Set.union calls initializers
-    let definitions = reading.Initializers.Values |> Seq.map (_.Definition >> key) |> Set.ofSeq
+    let definitions = reading.Initializers.Values |> Seq.choose (fun proof ->
+        if proof.ExcludesBinding then Some(key proof.Definition) else proof.InitializerUse |> Option.map key) |> Set.ofSeq
     let incidence =
         (graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.collect Incidence.structuralIncidence |> Seq.toList)
         @ (graph.Edges |> List.filter (fun edge ->
@@ -420,7 +502,8 @@ let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<OrdinaryOmi
         let seeds =
             match omission.Origin with
             | OrdinaryOmissionOrigin.CallArgument _ -> [omission.Actual]
-            | OrdinaryOmissionOrigin.BindingInitializer -> [omission.Site; omission.Actual]
+            | OrdinaryOmissionOrigin.BindingInitializer ->
+                if reading.Initializers[omission.Site].ExcludesBinding then [omission.Site; omission.Actual] else [omission.Actual]
         omission, expand seeds Set.empty)
     let candidates = containing |> List.map snd |> Set.unionMany
     let roots = graph.DeclarationRoots |> List.map fst |> Set.ofList

@@ -33,6 +33,27 @@ type PullComposition = {
     Loop: NodeId
 }
 
+/// One fresh consumer's complete source pull census. Formation retains a
+/// producer instance; this record bounds successful pulls, not acquisitions
+/// or callback invocation counts. Consumers supply their own activation proof.
+type Pull =
+    {
+        Owner: NodeId
+        Producer: NodeId
+        Generator: NodeId
+        Input: NodeId
+        Enumerator: NodeId
+        Acquisition: NodeId
+        Guard: NodeId
+        Loop: NodeId
+        Body: NodeId
+        Current: NodeId
+        Pulls: FiniteSequencePullModel
+        InnerPulls: FiniteSequencePullModel option
+        Composition: PullComposition list
+        Participants: NodeId list
+    }
+
 type Accumulation = {
     Owner: NodeId
     Producer: NodeId
@@ -375,11 +396,10 @@ let private sourceControl (graph: SemanticGraph) represented (ingress: Lazy<Ingr
                 | _ -> None
             | _ -> None
 
-let recognize (graph: SemanticGraph) (inputs: Loop.Inputs) : Accumulation list =
+let private recognizeCore (graph: SemanticGraph) (inputs: Loop.Inputs option) represented : Pull list * Accumulation list =
     // A receipt admits only the unchanged source-to-machine correspondence.
     // Pull counts and additive bounds are independently derived below from
     // typed source/evaluation/control and checked current machine inputs.
-    let represented = graph.SequenceRangeProvenance |> Option.exists (Numeric.sequenceRangeCurrent graph)
     let ingress = lazy (Ingress.analyze graph)
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let node id = nodes.TryFind id
@@ -442,8 +462,8 @@ let recognize (graph: SemanticGraph) (inputs: Loop.Inputs) : Accumulation list =
         nodes.Values |> Seq.choose (fun n ->
             match n.Kind with SemanticKind.Set(target, value) when reference target = Some cell -> Some(n.Id, value) | _ -> None) |> Seq.toList
     let effectsDisjoint cell id =
-        match inputs.Effects.TryFind id with Some(writes, false) -> not (writes.Contains cell) | _ -> false
-    let _, origins = Origins.settle graph graph.Codata.Value.Curry
+        match inputs |> Option.bind (fun inputs -> inputs.Effects.TryFind id) with Some(writes, false) -> not (writes.Contains cell) | _ -> false
+    let _, origins = Origins.resolve graph
     let rec currentValue current path id =
         if id = current then Some [id]
         elif Set.contains id path || not (valid id) then None
@@ -472,7 +492,9 @@ let recognize (graph: SemanticGraph) (inputs: Loop.Inputs) : Accumulation list =
                         | Some input when solely acquisition enumerator && solely guardReference guard && solely currentArgument current &&
                                           reference guardReference = Some enumerator && reference currentArgument = Some enumerator ->
                             let references = nodes.Values |> Seq.choose (fun n -> if reference n.Id = Some enumerator then Some n.Id else None) |> Set.ofSeq
-                            let uses = nodes.Values |> Seq.collect Closures.structuralIncidence |> Seq.filter (fun edge -> edge.Sources |> List.contains enumerator) |> Seq.toList
+                            let uses = graph.Edges |> List.filter (fun edge ->
+                                (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) &&
+                                List.contains enumerator edge.Sources)
                             let permitted edge =
                                 (edge.Role = EdgeRole.Definition && references.Contains edge.Target) ||
                                 (Hyperedge.isStructural edge && consumers.TryFind enumerator = Some [edge.Target] && List.contains enumerator ownerActions)
@@ -482,44 +504,58 @@ let recognize (graph: SemanticGraph) (inputs: Loop.Inputs) : Accumulation list =
                             | Some producer when references = Set.ofList [guardReference; currentArgument] && not (captured.Contains enumerator) && not (unknownCapture enumerator) &&
                                                  recordedUsesAgree (Set.ofList [enumerator; guardReference; currentArgument]) && (uses |> List.forall permitted) ->
                                 match sourceControl graph represented ingress producer with
-                                // Empty-consumer elimination owns the zero-pull
-                                // case; an unobservable current is no delta fact.
-                                | Some(control, pulls, producerSites, composition, innerPulls) when pulls.MaximumPulls > 0I ->
-                                    bodyActions |> List.choose (fun store ->
-                                        match node store with
-                                        | Some { Kind = SemanticKind.Set(target, update) } when valid store && uniqueWithin body Set.empty store && solely update store ->
-                                            match reference target, inputs.Operators.TryFind update with
-                                            | Some cell, Some("op_Addition", [left; right]) when valid update && not (captured.Contains cell) && not (unknownCapture cell) &&
-                                                                                                              recordedUsesAgree (Set.ofList [store; update; cell]) && Set.contains cell initialized ->
-                                                let delta = if reference left = Some cell then Some right elif reference right = Some cell then Some left else None
-                                                match node cell, delta |> Option.bind (fun delta -> currentValue current Set.empty delta |> Option.map (fun path -> delta, path)) with
-                                                | Some { Kind = SemanticKind.Binding(_, true, _, _); Children = [initial]; Type = ty }, Some(delta, deltaPath)
-                                                    when Types.isIntegerType ty && valid cell && same cell initial && same cell delta && same cell update &&
-                                                         (node initial |> Option.exists (fun node -> match node.Kind with SemanticKind.Literal(NativeLiteral.Int _ | NativeLiteral.UInt _) -> valid initial | _ -> false)) &&
-                                                         allStores cell = [store, update] && inputs.Assignments.TryFind cell = Some [update] &&
-                                                         (bodyActions |> List.forall (fun id -> id = store || effectsDisjoint cell id)) &&
-                                                         (ownerActions |> List.forall (fun id -> id = loopId || id = cell || effectsDisjoint cell id)) &&
-                                                         effectsDisjoint cell guard && effectsDisjoint cell acquisition && effectsDisjoint cell delta ->
-                                                    let participants =
-                                                        [owner; loopId; body; guard; guardReference; enumerator; acquisition; input; producer.Id; control.Generator;
-                                                         current; currentBinding; currentReference; currentArgument; action; cell; initial; target; store; update; left; right]
-                                                        @ ownerActions @ bodyActions @ deltaPath @ Set.toList producerSites
-                                                        |> List.distinct
-                                                    Some { Owner = owner; Producer = producer.Id; Generator = control.Generator; Input = input
-                                                           Enumerator = enumerator; Acquisition = acquisition; Guard = guard; Loop = loopId; Current = current
-                                                           Cell = cell; Initial = initial; Delta = delta; Update = update; Store = store; Pulls = pulls
-                                                           InnerPulls = innerPulls; Composition = composition; Participants = participants }
-                                                | _ -> None
-                                            | _ -> None
-                                        | _ -> None)
-                                | _ -> []
-                            | _ -> []
-                        | _ -> []
-                    | _ -> []
-                | _ -> []
-            | _ -> []
-        | _ -> []
-    nodes.Values |> Seq.collect (fun owner ->
+                                // A zero pull bound admits no body activation;
+                                // additive deltas still require an observable current.
+                                | Some(control, pulls, producerSites, composition, innerPulls) ->
+                                    let participants =
+                                        [owner; loopId; body; guard; guardReference; enumerator; acquisition; input; producer.Id; control.Generator;
+                                         current; currentBinding; currentReference; currentArgument; action]
+                                        @ ownerActions @ bodyActions @ Set.toList producerSites |> List.distinct
+                                    let pull: Pull =
+                                        { Owner = owner; Producer = producer.Id; Generator = control.Generator; Input = input
+                                          Enumerator = enumerator; Acquisition = acquisition; Guard = guard; Loop = loopId
+                                          Body = body; Current = current; Pulls = pulls; InnerPulls = innerPulls
+                                          Composition = composition; Participants = participants }
+                                    let accumulations =
+                                        match inputs with
+                                        | Some inputs when pulls.MaximumPulls > 0I ->
+                                            bodyActions |> List.choose (fun store ->
+                                                match node store with
+                                                | Some { Kind = SemanticKind.Set(target, update) } when valid store && uniqueWithin body Set.empty store && solely update store ->
+                                                    match reference target, inputs.Operators.TryFind update with
+                                                    | Some cell, Some("op_Addition", [left; right]) when valid update && not (captured.Contains cell) && not (unknownCapture cell) &&
+                                                                                                                      recordedUsesAgree (Set.ofList [store; update; cell]) && Set.contains cell initialized ->
+                                                        let delta = if reference left = Some cell then Some right elif reference right = Some cell then Some left else None
+                                                        match node cell, delta |> Option.bind (fun delta -> currentValue current Set.empty delta |> Option.map (fun path -> delta, path)) with
+                                                        | Some { Kind = SemanticKind.Binding(_, true, _, _); Children = [initial]; Type = ty }, Some(delta, deltaPath)
+                                                            when Types.isIntegerType ty && valid cell && same cell initial && same cell delta && same cell update &&
+                                                                 (node initial |> Option.exists (fun node -> match node.Kind with SemanticKind.Literal(NativeLiteral.Int _ | NativeLiteral.UInt _) -> valid initial | _ -> false)) &&
+                                                                 allStores cell = [store, update] && inputs.Assignments.TryFind cell = Some [update] &&
+                                                                 (bodyActions |> List.forall (fun id -> id = store || effectsDisjoint cell id)) &&
+                                                                 (ownerActions |> List.forall (fun id -> id = loopId || id = cell || effectsDisjoint cell id)) &&
+                                                                 effectsDisjoint cell guard && effectsDisjoint cell acquisition && effectsDisjoint cell delta ->
+                                                            let participants =
+                                                                [owner; loopId; body; guard; guardReference; enumerator; acquisition; input; producer.Id; control.Generator;
+                                                                 current; currentBinding; currentReference; currentArgument; action; cell; initial; target; store; update; left; right]
+                                                                @ ownerActions @ bodyActions @ deltaPath @ Set.toList producerSites
+                                                                |> List.distinct
+                                                            Some { Owner = owner; Producer = producer.Id; Generator = control.Generator; Input = input
+                                                                   Enumerator = enumerator; Acquisition = acquisition; Guard = guard; Loop = loopId; Current = current
+                                                                   Cell = cell; Initial = initial; Delta = delta; Update = update; Store = store; Pulls = pulls
+                                                                   InnerPulls = innerPulls; Composition = composition; Participants = participants }
+                                                        | _ -> None
+                                                    | _ -> None
+                                                | _ -> None)
+                                        | _ -> []
+                                    Some pull, accumulations
+                                | _ -> None, []
+                            | _ -> None, []
+                        | _ -> None, []
+                    | _ -> None, []
+                | _ -> None, []
+            | _ -> None, []
+        | _ -> None, []
+    let found = nodes.Values |> Seq.collect (fun owner ->
         match owner.Kind with
         | SemanticKind.Lambda(_, body, _, _, context) when context <> LambdaContext.SeqGenerator ->
             match actions Set.empty body with
@@ -527,11 +563,43 @@ let recognize (graph: SemanticGraph) (inputs: Loop.Inputs) : Accumulation list =
                 items |> List.fold (fun (initialized, found) id ->
                     let next = recognizeLoop owner.Id items initialized id
                     let initialized = match node id with Some { Kind = SemanticKind.Binding _ } -> Set.add id initialized | _ -> initialized
-                    initialized, found @ next) (Set.empty, []) |> snd
+                    initialized, found @ [next]) (Set.empty, []) |> snd
             | _ -> []
         | _ -> []) |> Seq.toList
-    |> List.groupBy _.Loop
-    |> List.collect (fun (_, items) -> match items with [item] -> [item] | _ -> [])
+    let pulls =
+        found
+        |> List.choose fst
+        |> List.groupBy _.Loop
+        |> List.choose (fun (_, items) ->
+            match items with
+            | [ item ] -> Some item
+            | _ -> None)
+
+    let accumulations =
+        found
+        |> List.collect snd
+        |> List.groupBy _.Loop
+        |> List.collect (fun (_, items) ->
+            match items with
+            | [ item ] -> [ item ]
+            | _ -> [])
+
+    pulls, accumulations
+
+/// Fresh source evaluation/control admits pulls without frame, layout or
+/// numeric receipts. Every acquisition/current/use premise is recomputed.
+let sourcePulls graph = recognizeCore graph None false |> fst
+
+/// The same source census can validate a retained producer after realization,
+/// but only through its current exact source-to-machine correspondence.
+let currentPulls graph = recognizeCore graph None true |> fst
+
+let recognize graph inputs =
+    let represented =
+        graph.SequenceRangeProvenance
+        |> Option.exists (Numeric.sequenceRangeCurrent graph)
+
+    recognizeCore graph (Some inputs) represented |> snd
 
 let saturate range (item: Accumulation) : AdditiveLoopInvariantModel option =
     match range item.Initial, range item.Delta with

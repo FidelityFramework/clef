@@ -25,6 +25,15 @@ let recognize inputs (graph: SemanticGraph) =
     let recognition = Recipes.recognize graph inputs
     Recipes.foldRelations recognition graph, recognition
 
+let recognizeTail inputs calls graph (recognition: Recipes.Recognition) =
+    let tail = Recipes.recognizeTail graph inputs calls
+    let edges = tail |> List.collect (fun item ->
+        item.Targets |> List.map (fun (target, _) ->
+            { Class = EdgeClass.Range; Role = EdgeRole.LoopLinearRecurrence
+              Sources = item.Participants; Target = target; Ordinal = 0 }))
+    let recognition = { recognition with Tail = tail; Edges = recognition.Edges @ edges }
+    Recipes.foldRelations recognition graph, recognition
+
 let private saturateCore range (recognition: Recipes.Recognition) (graph: SemanticGraph) =
     let settled, residuals = recognition.Accumulations |> List.fold (fun (settled, residuals) item ->
         match Recipes.saturate range item with
@@ -40,7 +49,16 @@ let private saturateCore range (recognition: Recipes.Recognition) (graph: Semant
                 { Class = EdgeClass.Range; Role = EdgeRole.LoopRangePending reason
                   Sources = Recipes.linearSources item; Target = cell; Ordinal = 0 })
             settled, pending @ residuals) ([], [])
+    let tail, tailResiduals = recognition.Tail |> List.fold (fun (settled, residuals) item ->
+        match Recipes.saturateTail range item with
+        | Ok result -> result :: settled, residuals
+        | Error reason ->
+            let pending = (item.Counter :: (item.Targets |> List.map fst)) |> List.distinct |> List.map (fun target ->
+                { Class = EdgeClass.Range; Role = EdgeRole.LoopRangePending reason
+                  Sources = item.Participants; Target = target; Ordinal = 0 })
+            settled, pending @ residuals) ([], [])
     let enrichment = Enrichment.combine (Recipes.obligations graph settled) (Recipes.linearObligations graph linear)
+                     |> fun value -> Enrichment.combine value (Recipes.tailObligations graph tail)
     let anchors = enrichment.NewNodes |> List.choose (fun node -> match node.Kind with SemanticKind.Obligation info -> Some(node.Id, info.Id) | _ -> None) |> Map.ofList
     let annotations =
         enrichment.NewEdges |> List.collect (fun edge ->
@@ -51,7 +69,7 @@ let private saturateCore range (recognition: Recipes.Recognition) (graph: Semant
     graph
     |> SemanticGraph.addNodes annotations
     |> SemanticGraph.addNodes enrichment.NewNodes
-    |> SemanticGraph.addEdges (enrichment.NewEdges @ residuals @ linearResiduals)
+    |> SemanticGraph.addEdges (enrichment.NewEdges @ residuals @ linearResiduals @ tailResiduals)
 
 let saturate range recognition graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> saturateCore range recognition graph)

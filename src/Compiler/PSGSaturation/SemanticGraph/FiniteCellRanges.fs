@@ -75,6 +75,12 @@ let recognize (graph: SemanticGraph) : Bound list =
         | _ -> Seq.empty) |> Set.ofSeq
     let calls = CallableOrigins.resolve graph
     let ingress = CallableIngress.analyzeWith graph calls
+    let sequencePulls =
+        lazy
+            (Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.currentPulls graph
+             |> List.map (fun pull -> pull.Loop, pull)
+             |> Map.ofList)
+
     let complete site implementation =
         calls.Calls.TryFind site |> Option.filter (fun call ->
             valid site && call.Complete && not call.Unknown && not call.Targets.IsEmpty &&
@@ -167,6 +173,40 @@ let recognize (graph: SemanticGraph) : Bound list =
                 match total, count seen input with
                 | Some(bound, dependencies), Some(more, required) -> Some(bound + more, Set.union dependencies required)
                 | _ -> None) (Some(0I, Set.singleton id))
+        let incoming () =
+            let inputs = parents id
+
+            if inputs.IsEmpty then
+                None
+            else
+                inputs
+                |> List.fold
+                    (fun total edge ->
+                        let contribution =
+                            match nodes[edge.Target].Kind with
+                            | SemanticKind.WhileLoop(guard, body) ->
+                                sequencePulls.Value.TryFind edge.Target
+                                |> Option.bind (fun pull ->
+                                    let repetitions =
+                                        if edge.Role = EdgeRole.Body && body = id && pull.Body = body then
+                                            Some pull.Pulls.MaximumPulls
+                                        elif edge.Role = EdgeRole.Guard && guard = id && pull.Guard = guard then
+                                            Some(pull.Pulls.MaximumPulls + 1I)
+                                        else
+                                            None
+
+                                    repetitions
+                                    |> Option.bind (fun repetitions ->
+                                        count seen edge.Target
+                                        |> Option.map (fun (bound, required) ->
+                                            repetitions * bound, Set.union required (Set.ofList pull.Participants))))
+                            | _ -> count seen edge.Target
+
+                        match total, contribution with
+                        | Some(bound, required), Some(more, dependencies) -> Some(bound + more, Set.union required dependencies)
+                        | _ -> None)
+                    (Some(0I, Set.singleton id))
+
         if id = startup.EntryLambda then
             if entryUncalled then Some(1I, startupParticipants) else None
         else
@@ -174,11 +214,14 @@ let recognize (graph: SemanticGraph) : Bound list =
             | SemanticKind.Lambda(_, _, _, _, LambdaContext.RegularClosure) ->
                 closedCalls id |> Option.bind (fun (sites, dependencies) ->
                     sum sites |> Option.map (fun (bound, required) -> bound, Set.union dependencies required))
-            | SemanticKind.Lambda _ | SemanticKind.WhileLoop _ | SemanticKind.ForLoop _
+            | SemanticKind.WhileLoop _ ->
+                sequencePulls.Value.TryFind id |> Option.bind (fun pull ->
+                    if CallableIngress.tryExecutionOwner ingress id <> Some pull.Owner then None else
+                    incoming () |> Option.map (fun (bound, required) ->
+                        bound, Set.union required (Set.ofList pull.Participants)))
+            | SemanticKind.Lambda _ | SemanticKind.ForLoop _
             | SemanticKind.ForEach _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ -> None
-            | _ ->
-                let incoming = parents id
-                if incoming.IsEmpty then None else sum (incoming |> List.map _.Target)
+            | _ -> incoming ()
     let environmentOrigins = lazy (ClosureEnvironments.origins graph)
     let environmentCalls = lazy (ClosureEnvironments.callEnvironments graph)
     let captureCache = System.Collections.Generic.Dictionary<NodeId * NodeId, (NodeId * Set<NodeId>) option>()

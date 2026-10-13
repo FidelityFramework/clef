@@ -31,44 +31,9 @@ let owned edge =
     | EdgeRole.OrdinaryBindingDemand _ | EdgeRole.OrdinaryBindingDemandPending _ -> true
     | _ -> false
 
-let analyze (graph: SemanticGraph) : Schedule list =
-    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    let local (node: SemanticNode) = node.Metadata.TryFind "SourceBinding.Local" = Some(MetadataValue.Bool true)
-    let scalar id =
-        match nodes.TryFind id with
-        | Some node ->
-            match Identity.ofType node.Type with
-            | TypeIdentity.Numeric _ -> true
-            | identity -> identity = Identity.ofType Types.boolType
-        | None -> false
-    let alias (node: SemanticNode) =
-        match node.Kind, node.Children with
-        | SemanticKind.Binding(_, false, false, None), [value] when local node ->
-            match nodes.TryFind value with
-            | Some { Kind = SemanticKind.VarRef(_, Some source) } -> Some(value, source)
-            | _ -> None
-        | _ -> None
-    let aliases = nodes.Values |> Seq.choose (fun node -> alias node |> Option.map (fun pair -> node.Id, pair)) |> Map.ofSeq
-    // No source candidate means there can be no schedule. Current-row validation
-    // still compares this empty result with retained rows, so stale admission is
-    // not hidden by the shortcut. No global absence/capture proof is skipped for
-    // an actual candidate.
-    let candidates = aliases |> Map.toList |> List.filter (fun (binding, (_, cell)) ->
-        match nodes.TryFind cell with
-        | Some { Kind = SemanticKind.Binding(_, true, _, _) } -> scalar binding
-        | _ -> false)
-    if candidates.IsEmpty then [] else
-    let recorded = graph.Edges |> List.filter (fun edge ->
-        edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
-    // Preserve every duplicate and its order: these are proof premises, not a
-    // set. Indexing avoids rescanning the entire edge list at each scope node.
-    let recordedAt = recorded |> List.groupBy _.Target |> Map.ofList
-    let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
-    let census = incidence @ recorded |> List.filter (fun edge -> nodes.ContainsKey edge.Target) |> List.distinctBy key
-    let uses = census |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
-               |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
-    let usesOf id = uses.TryFind id |> Option.defaultValue []
-    let structuralParents id = usesOf id |> List.filter (fun edge -> edge.Class = EdgeClass.Structural)
+let private currentValidity (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNode>) =
+    let recordedAt = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+                     |> List.groupBy _.Target |> Map.ofList
     let validity = System.Collections.Generic.Dictionary<NodeId, bool>()
     let valid id =
         match validity.TryGetValue id with
@@ -86,6 +51,9 @@ let analyze (graph: SemanticGraph) : Schedule list =
                     actual.Length = (List.distinct actual).Length && actual |> List.forall (fun row -> List.contains row expected)
             validity.Add(id, value)
             value
+    valid
+
+let private readActivations (nodes: Map<NodeId, SemanticNode>) (valid: NodeId -> bool) =
     // The selected arm is the demand unit (Expressions, Default Demand and Sharing):
     // one activation per lambda body and, nested in it, one per `Sequential` arm of a
     // reached decision. Runtime selection is the arm's activation condition, not a
@@ -126,6 +94,53 @@ let analyze (graph: SemanticGraph) : Schedule list =
                     root :: armActivations Set.empty root
                 | None -> []
             | _ -> []) |> Seq.toList
+    activations
+
+/// Current source order in each activation, including its dominating conditional prefix.
+/// Consumers still require unique statement ownership for their exact occurrence census.
+let activationFacts (graph: SemanticGraph) : Activation list =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    readActivations nodes (currentValidity graph nodes)
+
+let analyze (graph: SemanticGraph) : Schedule list =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let local (node: SemanticNode) = node.Metadata.TryFind "SourceBinding.Local" = Some(MetadataValue.Bool true)
+    let scalar id =
+        match nodes.TryFind id with
+        | Some node ->
+            match Identity.ofType node.Type with
+            | TypeIdentity.Numeric _ -> true
+            | identity -> identity = Identity.ofType Types.boolType
+        | None -> false
+    let alias (node: SemanticNode) =
+        match node.Kind, node.Children with
+        | SemanticKind.Binding(_, false, false, None), [value] when local node ->
+            match nodes.TryFind value with
+            | Some { Kind = SemanticKind.VarRef(_, Some source) } -> Some(value, source)
+            | _ -> None
+        | _ -> None
+    let aliases = nodes.Values |> Seq.choose (fun node -> alias node |> Option.map (fun pair -> node.Id, pair)) |> Map.ofSeq
+    // No source candidate means there can be no schedule. Current-row validation
+    // still compares this empty result with retained rows, so stale admission is
+    // not hidden by the shortcut. No global absence/capture proof is skipped for
+    // an actual candidate.
+    let candidates = aliases |> Map.toList |> List.filter (fun (binding, (_, cell)) ->
+        match nodes.TryFind cell with
+        | Some { Kind = SemanticKind.Binding(_, true, _, _) } -> scalar binding
+        | _ -> false)
+    if candidates.IsEmpty then [] else
+    let recorded = graph.Edges |> List.filter (fun edge ->
+        edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+    // Preserve every duplicate and its order: these are proof premises, not a
+    // set. Indexing avoids rescanning the entire edge list at each scope node.
+    let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
+    let census = incidence @ recorded |> List.filter (fun edge -> nodes.ContainsKey edge.Target) |> List.distinctBy key
+    let uses = census |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
+               |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
+    let usesOf id = uses.TryFind id |> Option.defaultValue []
+    let structuralParents id = usesOf id |> List.filter (fun edge -> edge.Class = EdgeClass.Structural)
+    let valid = currentValidity graph nodes
+    let activations = readActivations nodes valid
     candidates |> List.choose (fun (binding, (initialRead, cell)) ->
         match nodes.TryFind cell with
         | Some { Kind = SemanticKind.Binding(_, true, _, _) } when scalar binding ->
