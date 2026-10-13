@@ -46,6 +46,64 @@ let byteLength (s: string) : int = System.Text.Encoding.UTF8.GetByteCount s
 let fmtRange (r: SourceRange) : string =
     sprintf "%s:%d:%d" r.File r.Start.Line r.Start.Column
 
+/// Formatting only: the workspace owns the epoch, birth and declaration
+/// inventory. Length-prefix address segments so different paths cannot alias.
+let declarationIdentity (epoch: System.Guid) (birth: int64) (sourceUnit: string) (qualifiedAddress: string list) : string =
+    let address =
+        sourceUnit :: qualifiedAddress
+        |> List.map (fun segment -> string segment.Length + ":" + segment)
+        |> String.concat ""
+    "decl_" + epoch.ToString("N") + "_" + string birth + "_" +
+        System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes address)
+
+/// Source lifetimes come from the project source owner. Locations only match
+/// checked declarations there; the identity itself contains no source range,
+/// allocated node number, proposition or premise. Record checked structural
+/// paths before monomorphization and enrichment can allocate replacement nodes.
+let annotateSourceClaims (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
+    let declarations =
+        nodes |> Map.toList |> List.choose (fun (id, node) ->
+            match node.Kind, node.Metadata.TryFind "Source.DeclarationIncarnation" with
+            | SemanticKind.Binding _, Some(MetadataValue.String identity) -> Some(id, identity)
+            | _ -> None)
+    declarations |> List.fold (fun current (declaration, identity) ->
+        let initial = [declaration, ""], Set.empty, current
+        initial
+        |> Seq.unfold (fun (pending, seen, current: Map<NodeId, SemanticNode>) ->
+            match pending with
+            | [] -> None
+            | (id, _) :: rest when seen.Contains id -> Some(current, (rest, seen, current))
+            | (id, path) :: rest ->
+                let seen = seen.Add id
+                match current.TryFind id with
+                | None -> Some(current, (rest, seen, current))
+                | Some node when id <> declaration && node.Metadata.ContainsKey "Source.DeclarationIncarnation" ->
+                    Some(current, (rest, seen, current))
+                | Some node ->
+                    let children =
+                        (node.Children @
+                         (kindEdges id node.Kind
+                          |> List.filter Hyperedge.isStructural
+                          |> List.map Hyperedge.soleSource))
+                        |> List.distinct
+                        |> List.mapi (fun ordinal child -> child, path + "/" + string ordinal)
+                    let node = { node with Metadata = node.Metadata.Add("Source.ObligationSite", MetadataValue.String(identity + path)) }
+                    let current = current.Add(id, node)
+                    Some(current, (children @ rest, seen, current)))
+        |> Seq.fold (fun _ current -> current) current) nodes
+
+/// Encode the canonical source claim without a lossy hash. This is a symbol
+/// in the existing obligation ledger, not a second identity registry.
+let sourceClaimId (role: string) (subject: SemanticNode) : string option =
+    match subject.Metadata.TryFind SchemeMetadata.Specialization, subject.Metadata.TryFind "Source.ObligationSite" with
+    // Generated specializations have their own trace and transient claims.
+    // They cannot inherit the template's claim identity. Stable specialization
+    // identities and differential proof reuse remain part of D5.
+    | Some(MetadataValue.Specialization _), _ -> None
+    | _, Some(MetadataValue.String site) ->
+        Some("claim_" + System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(site + ":" + role)))
+    | _ -> None
+
 let describe (content: string) : string =
     match content with
     | "" -> "the empty string"

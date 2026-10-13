@@ -21,12 +21,24 @@ type PendingObligationCases() =
         { Id = "pending_order"; Kind = "program-initialization-order"; Logic = "QF_LIA"
           Statement = "initialization before every read"; Source = "pending.clef:4:2"; Refs = []; Body = body }
     let reasons = ["read occurrence has no settled use scope"; "initializer phase is unavailable"]
-    let graph body =
-        let checkedGraph = DimensionalCases.check "[<EntryPoint>]\nlet main _ = 0\n" |> _.Graph
+    let graphOn (checkedGraph: SemanticGraph) body =
         let template = checkedGraph.Nodes.Values |> Seq.head
         let node = { template with Id = NodeId.fresh (); Kind = SemanticKind.Obligation(obligation body)
                                    IsReachable = true; Children = []; Parent = None; Metadata = Map.empty }
         node.Id, { checkedGraph with Nodes = checkedGraph.Nodes.Add(node.Id, node) }
+    let graph body =
+        graphOn (DimensionalCases.check "[<EntryPoint>]\nlet main _ = 0\n" |> _.Graph) body
+    let pendingClaims graph =
+        PendingDischarge.ofGraph graph |> List.choose (fun claim ->
+            match claim.Body with
+            | ObligationBody.Pending missing -> Some(claim, missing)
+            | _ -> None)
+    let emit graph =
+        let inventory =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.completeness graph with
+            | [] -> Ok(PendingDischarge.ofGraph graph)
+            | failures -> Error(failures |> List.map _.Reason)
+        PendingDischarge.emit inventory
 
     // Extend the existing source authority to exercise the owning declaration
     // reader and source-site elaboration, including declaration withdrawal.
@@ -170,6 +182,15 @@ type PendingObligationCases() =
         Assert.Throws<InvalidOperationException>(fun () -> PendingDischarge.smtLib [pending] |> ignore) |> ignore
         let id, retained = graph pending.Body
         Assert.Contains(PendingDischarge.ofGraph retained, fun item -> item.Id = pending.Id && item.Body = pending.Body)
+        let allPending = pendingClaims retained
+        Assert.NotEmpty allPending
+        for claim, missing in allPending do
+            match PendingDischarge.trySmtLib [claim] with
+            | Ok query -> failwithf "Pending claim %s produced a query: %s" claim.Id query
+            | Error unavailable ->
+                let item = Assert.Single unavailable
+                Assert.Equal(claim.Id, item.Anchor)
+                Assert.Equal<string list>(missing, item.MissingPremises)
         let ledger = ArtifactJson.parse(PendingDischarge.ledgerJson [ready; pending])
         let rows = (ledger |> ArtifactJson.field "obligations" |> ArtifactJson.items) |> Seq.toList
         Assert.Equal("ready", (rows[0] |> ArtifactJson.field "state" |> ArtifactJson.text))
@@ -180,9 +201,16 @@ type PendingObligationCases() =
         let dispatch = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize retained |> Result.defaultWith (sprintf "%A" >> failwith)
         match dispatch.Query with
         | Error unavailable ->
-            let occurrence, missing = Assert.Single unavailable
+            let occurrence, missing =
+                unavailable |> List.filter (fst >> (=) id) |> Assert.Single
             Assert.Equal(id, occurrence)
             Assert.Equal<string list>(reasons, missing)
+            let expected = allPending |> List.map (fun (claim, missing) ->
+                let node = retained.Nodes.Values |> Seq.filter (fun node ->
+                    match node.Kind with SemanticKind.Obligation info -> info.Id = claim.Id | _ -> false) |> Assert.Single
+                node.Id, missing)
+            Assert.Equal(expected.Length, unavailable.Length)
+            Assert.Equal<Map<NodeId, string list>>(Map.ofList expected, Map.ofList unavailable)
         | Ok query -> failwithf "Pending source premises produced a dispatch: %s" query
         let blocked = { retained with Codata = lazy (failwith "Pending publication forced semantic analysis") }
         match Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish blocked with
@@ -198,6 +226,10 @@ type PendingObligationCases() =
     member _.``Pending emission removes stale solver text and settling removes unavailable evidence`` () =
         let _, pending = graph (ObligationBody.Pending reasons)
         let _, ready = graph (ObligationBody.ProgramInitializationOrder(0, 1, [1]))
+        let _, settled =
+            graphOn
+                (SourcePlatformFixture.check 64 "pending-emission.clef" "module PendingEmission\n[<EntryPoint>]\nlet main _ = 0\n")
+                (ObligationBody.ProgramInitializationOrder(0, 1, [ 1 ]))
         let directory = Path.Combine(Path.GetTempPath(), "clef-pending-obligation-" + Guid.NewGuid().ToString("N"))
         let previous = PhaseConfig.getConfig ()
         Directory.CreateDirectory directory |> ignore
@@ -206,13 +238,127 @@ type PendingObligationCases() =
         try
             PhaseConfig.enableArtifacts directory [6]
             File.WriteAllText(queryPath, "(assert false)\n(check-sat)\n")
-            PendingDischarge.emit pending
+            emit pending
             Assert.False(File.Exists queryPath)
             let unavailable = ArtifactJson.parse(File.ReadAllText unavailablePath)
-            Assert.Equal("pending_order", (unavailable |> ArtifactJson.at 0 |> ArtifactJson.field "Anchor" |> ArtifactJson.text))
-            PendingDischarge.emit ready
+            let anchors = unavailable |> ArtifactJson.items |> Seq.map (ArtifactJson.field "Anchor" >> ArtifactJson.text) |> Seq.toList
+            Assert.Contains("pending_order", anchors)
+            Assert.Equal<string list>(pendingClaims pending |> List.map (fun (claim, _) -> claim.Id) |> List.sort, List.sort anchors)
+            // Settling the fixture alone cannot erase other generated Pending
+            // claims whose platform premises are still absent.
+            emit ready
+            Assert.False(File.Exists queryPath)
+            let remaining = ArtifactJson.parse(File.ReadAllText unavailablePath) |> ArtifactJson.items
+                            |> Seq.map (ArtifactJson.field "Anchor" >> ArtifactJson.text) |> Seq.toList
+            Assert.NotEmpty remaining
+            Assert.DoesNotContain("pending_order", remaining)
+            Assert.Equal<string list>(pendingClaims ready |> List.map (fun (claim, _) -> claim.Id) |> List.sort, List.sort remaining)
+            // The existing source authority supplies those actual premises;
+            // only the fully ready inventory replaces unavailable evidence.
+            Assert.Empty(pendingClaims settled)
+            emit settled
             Assert.False(File.Exists unavailablePath)
-            Assert.Equal(PendingDischarge.smtLib (PendingDischarge.ofGraph ready) + "\n", File.ReadAllText queryPath)
+            Assert.Equal(PendingDischarge.smtLib (PendingDischarge.ofGraph settled) + "\n", File.ReadAllText queryPath)
         finally
             PhaseConfig.setConfig previous
             Directory.Delete(directory, true)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Incomplete or empty current inventory withdraws every earlier obligation artifact`` empty =
+        let ready =
+            SourcePlatformFixture.check 64 "complete-emission.clef" "module CompleteEmission\n[<EntryPoint>]\nlet main _ = 0\n"
+
+        let _, pending = graph (ObligationBody.Pending reasons)
+        let complete = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness
+        Assert.Empty(complete ready)
+        Assert.Empty(complete pending)
+
+        let current =
+            if empty then
+                { ready with
+                    Nodes = Map.empty
+                    Edges = []
+                    DeclarationRoots = []
+                }
+            else
+                let claim, info =
+                    ready.Nodes
+                    |> Map.toList
+                    |> List.pick (fun (id, node) ->
+                        match node.Kind with
+                        | SemanticKind.Obligation info when info.Kind = "numeric-carrier-coverage" -> Some(id, info)
+                        | _ -> None)
+
+                let incidence =
+                    ready.Edges
+                    |> List.find (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = claim)
+
+                let domain =
+                    ready.Edges
+                    |> List.pick (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericDomain domain -> Some domain
+                        | _ -> None)
+
+                let site = incidence.Sources |> List.find domain.Required.Contains
+
+                let changed =
+                    { ready with
+                        Nodes = ready.Nodes.Remove claim
+                        Edges =
+                            ready.Edges
+                            |> List.filter (fun edge -> edge.Target <> claim && not (List.contains claim edge.Sources))
+                            |> List.map (fun edge ->
+                                match edge.Role with
+                                | EdgeRole.NumericDomain domain ->
+                                    { edge with
+                                        Role =
+                                            EdgeRole.NumericDomain
+                                                { domain with
+                                                    Required = domain.Required.Remove site
+                                                }
+                                    }
+                                | _ -> edge)
+                    }
+
+                Assert.Contains(
+                    complete changed,
+                    fun (_, reason) -> reason.Contains("missing or duplicate claim") && reason.Contains(info.Id)
+                )
+
+                changed
+
+        if empty then
+            Assert.Empty(PendingDischarge.ofGraph current)
+            Assert.Empty(complete current)
+
+        let directory =
+            Path.Combine(Path.GetTempPath(), "clef-withdrawn-obligations-" + Guid.NewGuid().ToString("N"))
+
+        let previous = PhaseConfig.getConfig ()
+        let artifact name = Path.Combine(directory, name)
+
+        try
+            PhaseConfig.enableArtifacts directory [ 6 ]
+
+            for earlier in [ ready; pending ] do
+                emit earlier
+                Assert.True(File.Exists(artifact "06a_obligations.json"))
+                Assert.Equal((pendingClaims earlier).IsEmpty, File.Exists(artifact "06b_obligations.smt2"))
+                Assert.Equal(not (pendingClaims earlier).IsEmpty, File.Exists(artifact "06b_obligations.unavailable.json"))
+                emit current
+
+                for name in
+                    [
+                        "06a_obligations.json"
+                        "06b_obligations.smt2"
+                        "06b_obligations.unavailable.json"
+                    ] do
+                    Assert.False(File.Exists(artifact name), "Stale obligation artifact survived: " + name)
+        finally
+            PhaseConfig.setConfig previous
+
+            if Directory.Exists directory then
+                Directory.Delete(directory, true)

@@ -7,9 +7,30 @@ module Numeric = Clef.Compiler.Baker.Ingredients.NumericValues
 module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
 module Operations = Clef.Compiler.Baker.Ingredients.NumericOperations
 
-let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessProjectionFailure list> =
+/// Completeness is checked before ledger emission as well as strict projection.
+/// This validates the producer's rules without choosing a representation.
+let completeness (graph: SemanticGraph) : WitnessProjectionFailure list =
+    Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness graph
+    |> List.map (fun (site, reason) ->
+        {
+            Kind = WitnessProjectionFailureKind.Settlement
+            Occurrence = Some site
+            Participants = Set.singleton site
+            Reason = reason
+        })
+
+let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessProjectionFailure list> =
     let domains = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.NumericDomain domain -> Some(edge.Target, domain) | _ -> None)
-    let reject site participants reason = Error [{ Occurrence = site; Participants = participants; Reason = "NumericPublication: " + reason }]
+    let reject site participants reason =
+        Error
+            [
+                {
+                    Kind = WitnessProjectionFailureKind.Settlement
+                    Occurrence = site
+                    Participants = participants
+                    Reason = "NumericPublication: " + reason
+                }
+            ]
     match domains with
     | [anchor, domain] ->
         let participants = Map.keys domain.Premises |> Set.ofSeq
@@ -30,7 +51,17 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
         elif domain.CaptureRelations <> Numeric.captureRelations graph then
             reject (Some anchor) participants "Closure capture relation premises changed; source numeric settlement is required."
         elif not domain.Unresolved.IsEmpty then
-            Error(domain.Unresolved |> Map.toList |> List.map (fun (site, reason) -> { Occurrence = Some site; Participants = Set.singleton site; Reason = "NumericPublication: " + reason }))
+            Error(
+                domain.Unresolved
+                |> Map.toList
+                |> List.map (fun (site, reason) ->
+                    {
+                        Kind = WitnessProjectionFailureKind.Settlement
+                        Occurrence = Some site
+                        Participants = Set.singleton site
+                        Reason = "NumericPublication: " + reason
+                    })
+            )
         elif not rangeCurrent then
             reject (Some anchor) participants "Invocation-context range premises changed or the producer receipt is absent; source range settlement is required."
         elif domain.Premises <> Numeric.premises graph then
@@ -145,3 +176,37 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
                      ElementTypes = domain.ElementTypes; DeclaredScalars = domain.DeclaredScalars
                      OccurrenceRepresentations = domain.OccurrenceRepresentations; TypeRepresentations = domain.TypeRepresentations }
     | _ -> reject None Set.empty "Exactly one source NumericSettlement domain is required before witnessing."
+
+/// Retain each Pending identity beside the currentness refusal that explains it.
+/// Completeness is checked first; neither a partial ledger nor a Pending claim
+/// can grant physical publication.
+let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessProjectionFailure list> =
+    let pending =
+        graph.Nodes
+        |> Map.toList
+        |> List.choose (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Obligation info when Numeric.owned node ->
+                match info.Body with
+                | ObligationBody.Pending reasons ->
+                    Some
+                        {
+                            Kind = WitnessProjectionFailureKind.Settlement
+                            Occurrence = Some id
+                            Participants = Set.singleton id
+                            Reason =
+                                "NumericPublication: Pending claim "
+                                + info.Id
+                                + ": "
+                                + String.concat "; " reasons
+                        }
+                | _ -> None
+            | _ -> None)
+
+    match completeness graph with
+    | failures when not failures.IsEmpty -> Error(failures @ pending)
+    | _ ->
+        match projectDomain graph, pending with
+        | Error failures, _ -> Error(failures @ pending)
+        | Ok _, _ :: _ -> Error pending
+        | Ok projection, [] -> Ok projection

@@ -2,6 +2,7 @@
 module Clef.Compiler.Baker.Ingredients.NumericOperations
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph
 open Clef.Compiler.NativeTypedTree.NativeTypes
 
 let classify = function
@@ -53,6 +54,49 @@ let operation (graph: SemanticGraph) (node: SemanticNode) =
     match node.Kind with
     | SemanticKind.Application(callee, _) -> resolve Set.empty node.Id [] |> Option.map (fun (_, kind, actuals, identities) -> callee, kind, actuals, identities)
     | _ -> None
+
+type private ObligationRole = Coverage | DivisorNonzero | ShiftCount
+
+let private roleName = function
+    | Coverage -> "numeric-operation-coverage"
+    | DivisorNonzero -> "numeric-operation-divisor-nonzero"
+    | ShiftCount -> "numeric-operation-shift-count"
+
+let private bodyRole = function
+    | ObligationBody.IntegerRepresentationCoverage _ -> Some Coverage
+    | ObligationBody.IntegerDivisorNonzero _ -> Some DivisorNonzero
+    | ObligationBody.IntegerShiftCount _ -> Some ShiftCount
+    | _ -> None
+
+/// Source rules determine which claims are owed before representation succeeds.
+/// Definedness is a separate role from capacity and retains its own identity.
+let obligationRoles (graph: SemanticGraph) (_, kind, actuals, _) =
+    let integerInputs = actuals |> List.forall (fun id ->
+        graph.Nodes.TryFind id |> Option.bind (fun node -> Types.tryGetNTUKind node.Type)
+        |> Option.exists (fun kind -> NTUKind.isInteger kind || kind = NTUKind.NTUbool || kind = NTUKind.NTUchar))
+    if not integerInputs then [] else
+    Coverage ::
+        (match kind with
+         | NumericOperationKind.Divide | NumericOperationKind.Remainder -> [DivisorNonzero]
+         | NumericOperationKind.ShiftLeft | NumericOperationKind.ShiftRight -> [ShiftCount]
+         | _ -> [])
+    |> List.map roleName
+
+/// Pair each concrete proposition with its semantic role, independently of the
+/// producer's body order. The same source census used by completeness must be
+/// covered exactly once; drift is an unavailable construction, never an index
+/// exception or a proposition filed under another claim's identity.
+let associateBodies graph recipe (bodies: ObligationBody list) =
+    let expected = obligationRoles graph recipe
+    let paired = bodies |> List.choose (fun body -> bodyRole body |> Option.map (fun role -> roleName role, body))
+    let byRole = Map.ofList paired
+    if paired.Length <> bodies.Length || byRole.Count <> bodies.Length
+       || (byRole |> Map.keys |> Set.ofSeq) <> Set.ofList expected then None
+    else Some(expected |> List.map (fun role -> role, byRole[role]))
+
+let claimId (node: SemanticNode) ordinal role =
+    Obligations.sourceClaimId role node
+    |> Option.defaultValue (sprintf "numeric_operation_%d_%d" (NodeId.value node.Id) ordinal)
 
 let proofOutcome = function
     | ObligationBody.IntegerDivisorNonzero(lo, hi) -> lo <= hi && (hi < 0I || lo > 0I)

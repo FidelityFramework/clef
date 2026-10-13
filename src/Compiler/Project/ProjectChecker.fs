@@ -42,11 +42,17 @@ module ProjectChecker =
     /// description compiled into the graph and filled in at saturation
     /// (PlatformDeclaration.fill, plan D8, L-13). No word size is read from a
     /// project file and no target is assumed when the section is absent.
-    let private buildPlatformContext (options: FidprojOptions) (platformSources: Set<string>) : PlatformContext option =
-        // Libraries are substrate-neutral — no platform context needed
-        match options.TargetPlatform with
-        | TargetPlatform.Library -> None
-        | target ->
+    let private buildPlatformContext (options: FidprojOptions) (selectedTarget: TargetPlatform option) (platformSources: Set<string>) : PlatformContext option =
+        // A library stays neutral until its project explicitly selects a
+        // platform dependency. That binding supplies the target; no CPU default
+        // or executable startup is inferred from source retention.
+        let target =
+            match options.TargetPlatform with
+            | TargetPlatform.Library -> selectedTarget |> Option.filter ((<>) TargetPlatform.Library)
+            | target -> Some target
+        match target with
+        | None -> None
+        | Some target ->
         let substrateKind =
             match target with
             | TargetPlatform.CPU  -> SubstrateKind.CPU
@@ -137,6 +143,18 @@ module ProjectChecker =
         | TargetPlatform.Library, _ | _, DeploymentMode.Library -> Set.empty
         | _ -> options.SourceFiles |> List.map (fun file -> normalizePath (Path.Combine(options.ProjectDirectory, file))) |> Set.ofList
 
+    /// Only this library's implementation units may supply export roots. A
+    /// dependency can remain reachable without becoming an exported declaration.
+    let private ownedLibrarySources (options: FidprojOptions) =
+        match options.TargetPlatform, options.DeploymentMode with
+        | TargetPlatform.Library, _
+        | _, DeploymentMode.Library ->
+            options.SourceFiles
+            |> List.map (fun file -> normalizePath (Path.Combine(options.ProjectDirectory, file)))
+            |> Set.ofList
+            |> Some
+        | _ -> None
+
     /// Capture every loader read once. Dependency/platform options and the checker
     /// consume these same bytes; no post-check discovery or cross-edit hash reuse.
     let internal prepare (fidprojPath: string) (volatileContent: Map<string, string>) : Result<PreparedProject, string> =
@@ -195,7 +213,7 @@ module ProjectChecker =
         Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None; SequenceRangeProvenance = None; RangeContextFacts = None
     }
 
-    let internal checkPrepared (prepared: PreparedProject) : ProjectCheckResult =
+    let private checkPreparedWithIdentity identify (prepared: PreparedProject) : ProjectCheckResult =
         Clef.Compiler.CheckExecution.synchronized (fun () ->
             let parsed = prepared.Sources |> List.map (fun (path, content) -> path, parseStringWithDefaults content path)
             let errors = parsed |> List.choose (function path, ParseError errors -> Some(path, errors) | _ -> None) |> Map.ofList
@@ -204,14 +222,24 @@ module ProjectChecker =
                 if not (Map.isEmpty errors) then
                     { Graph = emptyGraph; Diagnostics = []; PlatformContext = None }
                 else
-                    let inputs = parsed |> List.choose (function _, ParseSuccess input -> Some input | _ -> None)
-                    checkParsedInputsWithPlatformAndSources inputs
-                        (buildPlatformContext prepared.Options prepared.PlatformSources)
+                    let units = parsed |> List.choose (function path, ParseSuccess input -> Some(path, input) | _ -> None)
+                    // Complete parsing is the observation boundary, independent
+                    // of whether the subsequent semantic check succeeds.
+                    let identities = identify |> Option.map (fun observe -> observe units)
+                    checkParsedInputsWithDeclarations (List.map snd units)
+                        (buildPlatformContext prepared.Options prepared.PlatformTarget prepared.PlatformSources)
                         (ownedApplicationSources prepared.Options)
+                        (ownedLibrarySources prepared.Options) identities
             { Options = prepared.Options
               CheckResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics prepared.Options }
               SourceFiles = prepared.Sources; InputFiles = prepared.Inputs
               PlatformTarget = prepared.PlatformTarget; ParseErrors = errors })
+
+    let internal checkPreparedWithDeclarations identify prepared =
+        checkPreparedWithIdentity (Some identify) prepared
+
+    /// Stateless checks open a fresh declaration epoch in the source checker.
+    let internal checkPrepared prepared = checkPreparedWithIdentity None prepared
 
     /// Existing synchronous API uses the same immutable capture and process gate.
     let checkProjectWithVolatile fidprojPath volatileContent : Result<ProjectCheckResult, string> =

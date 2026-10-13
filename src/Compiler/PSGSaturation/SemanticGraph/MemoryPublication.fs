@@ -8,7 +8,16 @@ module Memory = Clef.Compiler.Baker.Ingredients.MemoryValues
 module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
 
 let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessProjection, WitnessProjectionFailure list> =
-    let reject site participants reason = Error [{ Occurrence = site; Participants = participants; Reason = "MemoryPublication: " + reason }]
+    let reject site participants reason =
+        Error
+            [
+                {
+                    Kind = WitnessProjectionFailureKind.Settlement
+                    Occurrence = site
+                    Participants = participants
+                    Reason = "MemoryPublication: " + reason
+                }
+            ]
     let domains = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.MemoryDomain domain -> Some(edge.Target, domain) | _ -> None)
     match domains with
     | [anchor, domain] ->
@@ -20,7 +29,17 @@ let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessPr
            domain.CopyConstructions <> Memory.copyConstructions graph then
             reject (Some anchor) participants "The exact memory source, guard, meet or declaration premises changed; source settlement is required."
         elif not domain.Unresolved.IsEmpty then
-            Error(domain.Unresolved |> Map.toList |> List.map (fun (site, reason) -> { Occurrence = Some site; Participants = Set.singleton site; Reason = "MemoryPublication: " + reason }))
+            Error(
+                domain.Unresolved
+                |> Map.toList
+                |> List.map (fun (site, reason) ->
+                    {
+                        Kind = WitnessProjectionFailureKind.Settlement
+                        Occurrence = Some site
+                        Participants = Set.singleton site
+                        Reason = "MemoryPublication: " + reason
+                    })
+            )
         elif (domain.Operations |> List.map fst |> List.sort) <> Set.toList domain.Required then
             reject (Some anchor) participants "A required source memory operation is absent or duplicated."
         elif (domain.CopyConstructions |> List.map _.Site |> List.filter(Memory.executable graph excluded) |> List.sort) <> (domain.ArrayCopies |> List.map _.Site |> List.sort) then

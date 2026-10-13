@@ -1,7 +1,10 @@
 namespace Clef.Compiler.Project
 
 open System
+open System.IO
 open System.Threading
+open Clef.Compiler.Syntax
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.Infrastructure
 open Fidelity.FSharp.Incremental
 open Fidelity.FSharp.Incremental.Hosting
@@ -56,6 +59,92 @@ type private ProjectGeneration<'View> = {
     mutable Output: (ValueToken * Result<'View, ProjectWorkspaceError>) option
 }
 
+/// Source addresses describe declarations, not their current graph allocation,
+/// source coordinates, body or proof premises. Type members remain outside Q2.
+type internal DeclarationAddress = {
+    SourceUnit: string
+    Owner: string list
+    Name: string
+}
+
+type internal DeclarationLifetime = {
+    BirthRevision: int64
+    RetiredAt: int64 option
+}
+
+type internal DeclarationLineage = {
+    Epoch: string
+    Revision: int64
+    Active: Map<DeclarationAddress, DeclarationLifetime>
+    Tombstones: Map<DeclarationAddress * int64, DeclarationLifetime>
+}
+
+module internal DeclarationLineage =
+    let empty epoch = { Epoch = epoch; Revision = 0L; Active = Map.empty; Tombstones = Map.empty }
+
+    let private normalized path = Path.GetFullPath(path).Replace('\\', '/')
+
+    /// Complete parsed input is required. Unsupported binding shapes cannot
+    /// silently turn a declaration into an observed absence.
+    let inventory (inputs: (string * ParsedInput) list) =
+        let sourceRange path (range: Clef.Compiler.Text.range) : SourceRange =
+            { File = path
+              Start = { Line = range.StartLine; Column = range.StartColumn }
+              End = { Line = range.EndLine; Column = range.EndColumn } }
+        let rec names = function
+            | SynPat.Named(SynIdent(ident, _), _, _, _) -> [ident]
+            | SynPat.LongIdent(longId, _, _, _, _, _) ->
+                match List.tryLast longId.LongIdent with
+                | Some ident -> [ident]
+                | None -> invalidOp "Declaration observation has an empty binding name."
+            | SynPat.Paren(inner, _) | SynPat.Typed(inner, _, _) -> names inner
+            | SynPat.Tuple(_, patterns, _, _) -> List.collect names patterns
+            | SynPat.Wild _ | SynPat.Const(SynConst.Unit, _) -> []
+            | _ -> invalidOp "Declaration observation cannot determine this binding's complete named inventory."
+        let rec declarations (path: string) (owner: string list) (decls: SynModuleDecl list) =
+            decls |> List.collect (function
+                | SynModuleDecl.Let(bindings = bindings) ->
+                    bindings |> List.collect (fun binding ->
+                        Clef.Compiler.NativeTypedTree.Expressions.Bindings.getHeadPattern binding
+                        |> names |> List.map (fun ident ->
+                            { SourceUnit = path; Owner = owner; Name = ident.idText }, sourceRange path ident.idRange))
+                | SynModuleDecl.NestedModule(moduleInfo = SynComponentInfo(longId = longId); decls = nested) ->
+                    declarations path (owner @ (longId |> List.map _.idText)) nested
+                | SynModuleDecl.NamespaceFragment fragment -> moduleDeclarations path fragment
+                | _ -> [])
+        and moduleDeclarations path (SynModuleOrNamespace(longId = longId; decls = decls)) =
+            declarations path (longId |> List.map _.idText) decls
+        let units = inputs |> List.map (fun (path, input) -> normalized path, input)
+        if units |> List.map fst |> List.distinct |> List.length <> units.Length then
+            invalidOp "Declaration observation contains duplicate source units."
+        let entries = units |> List.collect (fun (path, input) ->
+            if normalized input.FileName <> path then
+                invalidOp "Declaration observation source identity does not match its parsed unit."
+            match input with
+            | ParsedInput.ImplFile file -> file.Contents |> List.collect (moduleDeclarations path)
+            | ParsedInput.SigFile _ -> [])
+        if entries |> List.map fst |> List.distinct |> List.length <> entries.Length then
+            invalidOp "Declaration observation contains a duplicate canonical declaration address."
+        if entries |> List.map snd |> List.distinct |> List.length <> entries.Length then
+            invalidOp "Declaration observation contains an ambiguous declaration location."
+        entries
+
+    /// The workspace gate admits this transition before semantic checking. A
+    /// parse or inventory error leaves the previous complete observation intact.
+    let observe revision entries state =
+        if revision < state.Revision then
+            invalidOp "A superseded declaration observation cannot replace newer lineage."
+        let addresses = entries |> List.map fst |> Set.ofList
+        if revision = state.Revision && addresses <> (state.Active |> Map.keys |> Set.ofSeq) then
+            invalidOp "One reserved revision cannot attest conflicting declaration inventories."
+        let tombstones = state.Active |> Map.fold (fun retired address lifetime ->
+            if addresses.Contains address then retired
+            else retired |> Map.add (address, lifetime.BirthRevision) { lifetime with RetiredAt = Some revision }) state.Tombstones
+        let active = addresses |> Set.fold (fun current address ->
+            let lifetime = state.Active |> Map.tryFind address |> Option.defaultValue { BirthRevision = revision; RetiredAt = None }
+            current |> Map.add address lifetime) Map.empty
+        { state with Revision = revision; Active = active; Tombstones = tombstones }
+
 /// A cold, CCS-owned whole-project coordinator. A generation has one immutable
 /// capture, shared checks and consumer demands; a reserved edit never reuses a
 /// prior generation's result or proof. Projectors must freeze their public view
@@ -67,7 +156,8 @@ type ProjectWorkspace<'View> internal
      prepare: string -> Map<string, string> -> Result<PreparedProject, string>) =
 
     let gate = obj()
-    let identity = Guid.NewGuid().ToString("N")
+    let epoch = Guid.NewGuid()
+    let identity = epoch.ToString("N")
     let capacity = 256
     let mutable revision = 0L
     let mutable nextDemand = 0UL
@@ -76,6 +166,7 @@ type ProjectWorkspace<'View> internal
     let mutable activeDemands = 0
     let mutable closing = false
     let mutable generation: ProjectGeneration<'View> option = None
+    let mutable declarations = DeclarationLineage.empty identity
     let work value = WorkId(uint64 value)
 
     let evaluate invocation cancellation = async {
@@ -119,8 +210,22 @@ type ProjectWorkspace<'View> internal
                             Clef.Compiler.CheckExecution.run configuration (fun () ->
                                 if WorkCancellation.isRequested cancellation then None
                                 else
-                                    try Some(Ok(project (ProjectChecker.checkPrepared prepared)))
-                                    with error -> Some(Error(ProjectWorkspaceError.CheckFailed error.Message)))
+                                    let identify inputs =
+                                        let inventory = DeclarationLineage.inventory inputs
+                                        lock gate (fun () ->
+                                            if closing || captured.Revision <> revision || WorkCancellation.isRequested cancellation then
+                                                raise (OperationCanceledException "Declaration observation was withdrawn before admission.")
+                                            let observed = DeclarationLineage.observe captured.Revision inventory declarations
+                                            let identities = inventory |> List.map (fun (address, range) ->
+                                                let lifetime = observed.Active[address]
+                                                range, Clef.Compiler.Baker.Ingredients.Obligations.declarationIdentity
+                                                    epoch lifetime.BirthRevision address.SourceUnit (address.Owner @ [address.Name])) |> Map.ofList
+                                            declarations <- observed
+                                            identities)
+                                    try Some(Ok(project (ProjectChecker.checkPreparedWithDeclarations identify prepared)))
+                                    with
+                                    | :? OperationCanceledException -> None
+                                    | error -> Some(Error(ProjectWorkspaceError.CheckFailed error.Message)))
                 match result with
                 | None -> return StepOutcome.Complete Completion.Cancelled
                 | Some result ->
@@ -154,6 +259,8 @@ type ProjectWorkspace<'View> internal
 
     member _.Revision = lock gate (fun () -> revision)
     member _.Identity = identity
+    /// Source-provenance history only. It conveys no discharge or reuse authority.
+    member internal _.DeclarationLineage = lock gate (fun () -> declarations)
     member _.Current = lock gate currentOutput
     /// Includes failures from withdrawn work; a successful close is a cleanup
     /// receipt and does not erase evaluation diagnostics.

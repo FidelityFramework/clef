@@ -309,7 +309,7 @@ let private validate graph : Result<Reading, WitnessProjectionFailure list> =
                   else
                       sprintf "PSG settlement (OrdinaryDemand) did not settle the ordinary-demand relations for node %d: the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof." (NodeId.value target)
               Some {
-                Occurrence = Some target
+                Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some target
                 Reason = reason
                 Participants = (expectedAt @ actualAt) |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList })
         |> Error

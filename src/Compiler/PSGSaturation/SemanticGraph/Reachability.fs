@@ -164,7 +164,7 @@ let private hardwareDesignReferences (graph: SemanticGraph) (node: SemanticNode)
     | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule), [value] -> record value
     | _ -> None
 
-let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
+let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Root) list) : Map<NodeId, Set<'Root>> =
     // Build qualified binding index once for string-literal → binding resolution.
     // This enables reachability through dlsym(RTLD_DEFAULT, "Module.function"):
     // if a string literal naming a compiled function is itself reachable,
@@ -197,14 +197,15 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
             | _ -> None)
         |> Map.ofList
 
-    let rec walk (visited: Set<NodeId>) (nodeId: NodeId) =
-        if Set.contains nodeId visited then
+    let rec walk root (visited: Map<NodeId, Set<'Root>>) (nodeId: NodeId) =
+        let held = visited.TryFind nodeId |> Option.defaultValue Set.empty
+        if held.Contains root then
             visited
         else
             match SemanticGraph.tryGetNode nodeId graph with
             | None -> visited
             | Some node ->
-                let visited = Set.add nodeId visited
+                let visited = visited.Add(nodeId, held.Add root)
                 // Follow structural children and semantic references
                 let refs =
                     match Map.tryFind node.Id mappedReferences with
@@ -241,9 +242,32 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
                     match hardwareDesignReferences graph node with
                     | Some executable -> executable @ typeRefs
                     | None -> allRefs
-                allRefs |> List.fold walk visited
+                allRefs |> List.fold (walk root) visited
 
-    entries |> List.fold walk Set.empty
+    entries |> List.fold (fun visited (nodeId, root) -> walk root visited nodeId) Map.empty
+
+/// The same dependency walk carries each declaration's purpose. A binding can
+/// contribute both library retention and concrete commitment; neither row may
+/// erase the other. Read this from the current graph after allocating rewrites.
+let declarationPurposes (graph: SemanticGraph) : Map<NodeId, Set<NodeId * DeclRoot>> =
+    graph.DeclarationRoots
+    |> List.map (fun ((id, _) as root) -> id, root)
+    |> computeContributions graph
+
+/// Only an accounted, exclusively retained node avoids concrete representation
+/// commitment. Missing purpose evidence grants no exemption.
+let requiresRepresentation (purposes: Map<NodeId, Set<NodeId * DeclRoot>>) nodeId =
+    match purposes.TryFind nodeId with
+    | Some roots when not roots.IsEmpty ->
+        roots |> Set.exists (fun (_, root) -> root <> DeclRoot.LibraryExport)
+    | _ -> true
+
+let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
+    entries
+    |> List.map (fun id -> id, ())
+    |> computeContributions graph
+    |> Map.keys
+    |> Set.ofSeq
 
 /// Check for missing intrinsic implementation functions.
 /// Only checks LIBRARY-BACKED intrinsics (Signal, Effect, Memo, Batch).

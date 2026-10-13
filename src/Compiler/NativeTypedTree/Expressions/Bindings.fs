@@ -364,19 +364,39 @@ let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (n
     (sourceValue source || sourceResidual 0 source)
     && safe node.Id
 
+/// Checked module declarations use these exact identifier locations for source
+/// provenance and accessibility. Tuple leaves remain separate declarations.
+let sourceBindingNames (binding: SynBinding) =
+    let (SynBinding(accessibility, _, _, _, _, _, _, pattern, _, _, _, _, _)) = binding
+
+    let isPublic =
+        function
+        | None
+        | Some(SynAccess.Public _) -> true
+        | _ -> false
+
+    let rec names visible =
+        function
+        | SynPat.Named(SynIdent(ident, _), _, access, _) -> [ ident.idText, rangeToSourceRange ident.idRange, visible && isPublic access ]
+        | SynPat.LongIdent(longId, _, _, _, access, _) ->
+            longId.LongIdent
+            |> List.tryLast
+            |> Option.toList
+            |> List.map (fun ident -> ident.idText, rangeToSourceRange ident.idRange, visible && isPublic access)
+        | SynPat.Paren(inner, _)
+        | SynPat.Typed(inner, _, _) -> names visible inner
+        | SynPat.Tuple(_, patterns, _, _) -> List.collect (names visible) patterns
+        | _ -> []
+
+    names (isPublic accessibility) pattern
+
 /// Preserve the source identifier and RHS boundary before graph rewriting.
 /// Substituted inline/literal bindings need separate use tracking and remain
 /// exempt. The local marker distinguishes lexical values from module APIs.
 let recordSourceBinding (isLocal: bool) (builder: NodeBuilder) (binding: SynBinding) (node: SemanticNode) (substituted: bool) =
-    let (SynBinding(_, _, _, _, _, _, _, pattern, _, _, _, _, _)) = binding
-    let rec identifier = function
-        | SynPat.Named(SynIdent(ident, _), _, _, _) -> Some ident
-        | SynPat.LongIdent(longId, _, _, _, _, _) -> longId.LongIdent |> List.tryLast
-        | SynPat.Paren(inner, _) | SynPat.Typed(inner, _, _) -> identifier inner
-        | _ -> None
-    match node.Kind, identifier pattern with
-    | SemanticKind.Binding _, Some ident when not substituted ->
-        builder.SetMetadata(node.Id, "SourceBinding.NameRange", MetadataValue.SourceRange(rangeToSourceRange ident.idRange)) |> ignore
+    match node.Kind, sourceBindingNames binding with
+    | SemanticKind.Binding _, [_, nameRange, _] when not substituted ->
+        builder.SetMetadata(node.Id, "SourceBinding.NameRange", MetadataValue.SourceRange nameRange) |> ignore
         builder.SetMetadata(node.Id, "SourceBinding.FullRange", MetadataValue.SourceRange(rangeToSourceRange binding.RangeOfBindingWithRhs)) |> ignore
         builder.SetMetadata(node.Id, "SourceBinding.Local", MetadataValue.Bool isLocal) |> ignore
     | _ -> ()

@@ -162,7 +162,7 @@ let completedCalls (graph: SemanticGraph) (held: CurryInfo) (resolution: Callabl
     let current = analyze graph held.AbsorbedLambdas
     let errors = ResizeArray<WitnessProjectionFailure>()
     let refuse site participants =
-        errors.Add { Occurrence = Some site; Participants = participants
+        errors.Add { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some site; Participants = participants
                      Reason = "Completed partial application lacks its exact source declaration, immutable saved arguments and current invocation correspondence." }
     for KeyValue(site, saturated) in current.SaturatedCalls do
         if not (held.SaturatedCalls.ContainsKey site) then

@@ -146,12 +146,301 @@ let tests = [
                 match Clef.Compiler.Project.ProjectChecker.checkProject project with
                 | Result.Error error -> failwith error
                 | Result.Ok result ->
-                    noErrors result.CheckResult
+                    try
+                        noErrors result.CheckResult
+                    with error ->
+                        failwithf "Library output matrix %s/%s: %s" target output error.Message
                     let warning = result.CheckResult.Diagnostics |> List.exists Diagnostic.isUnnecessary
                     if warning <> expectedWarning then
                         failwithf "Unused warning ignored project output %s/%s: %A" target output result.CheckResult.Diagnostics
+                    let graph = result.CheckResult.Graph
+                    let exports = graph.DeclarationRoots |> List.choose (fun (id, purpose) ->
+                        if purpose <> DeclRoot.LibraryExport then None else
+                        match graph.Nodes[id].Kind with
+                        | SemanticKind.Binding(name = name) -> Some name
+                        | other -> failwithf "Library export is not the checked binding: %A" other) |> Set.ofList
+                    if expectedWarning then
+                        if not exports.IsEmpty || not (graph.DeclarationRoots |> List.exists (snd >> (=) DeclRoot.EntryPoint)) then
+                            failwithf "Console lost its concrete entry purpose: %A" graph.DeclarationRoots
+                    elif exports <> Set.ofList ["publicApi"; "main"]
+                         || (graph.DeclarationRoots |> List.exists (snd >> (=) DeclRoot.EntryPoint)) then
+                        failwithf "Library main inferred execution or public roots were lost: %A / %A" exports graph.DeclarationRoots
         finally
             System.IO.Directory.Delete(directory, true)
+
+    "explicit library entry conflict preserves checked concrete and retention purposes", fun () ->
+        let input =
+            match parseStringWithDefaults "module Library\n[<EntryPoint>]\nlet start _ = 0\n" "Library.clef" with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        for libraryOutput in [false; true] do
+            let librarySources = if libraryOutput then Some(Set.singleton "Library.clef") else None
+            let result = checkParsedInputsWithDeclarations [input] None Set.empty librarySources None
+            let conflicts = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8417")
+            if libraryOutput then
+                match conflicts with
+                | [diagnostic] ->
+                    if diagnostic.Severity <> NativeDiagnosticSeverity.Error
+                       || diagnostic.Message <> "An explicit EntryPoint declaration is not permitted in library output."
+                       || diagnostic.Range.File <> "Library.clef" || diagnostic.Range.Start.Line <> 3
+                       || diagnostic.Range.Start.Column <> 4 || diagnostic.Range.End.Column <> 9 then
+                        failwithf "Library mode conflict lost its exact source reason/location: %A" diagnostic
+                    let declaration = List.exactlyOne diagnostic.RelatedNodes
+                    match result.Graph.Nodes[declaration].Kind with
+                    | SemanticKind.Binding("start", _, _, Some DeclRoot.EntryPoint) -> ()
+                    | other -> failwithf "Conflict rewrote the explicit entry annotation: %A" other
+                    if not (List.contains (declaration, DeclRoot.LibraryExport) result.Graph.DeclarationRoots) then
+                        failwith "Explicit concrete annotation suppressed independent public export eligibility"
+                | _ -> failwithf "Expected one exact library entry conflict: %A" conflicts
+            else
+                noErrors result
+                if not conflicts.IsEmpty then failwithf "Executable output inherited the library conflict: %A" conflicts
+            if not (result.Graph.DeclarationRoots |> List.exists (snd >> (=) DeclRoot.EntryPoint)) then
+                failwith "The checked concrete entry purpose was lost"
+
+    "library roots use checked enclosing visibility and retain separate tuple declarations", fun () ->
+        let source = """module Library
+let publicValue = true
+let private hiddenValue = false
+let internal assemblyValue = false
+let inline expanded x = x
+[<Literal>]
+let constantValue = 7
+let left, right = true, false
+module private Hidden =
+    let apparentlyPublic = true
+module Visible =
+    let nestedPublic = true
+    let private nestedPrivate = false
+let main _ = true
+"""
+        let input =
+            match parseStringWithDefaults source "Library.clef" with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithDeclarations [input] None Set.empty (Some(Set.singleton "Library.clef")) None
+        noErrors result
+        let exports = result.Graph.DeclarationRoots |> List.map (fun (id, purpose) ->
+            if purpose <> DeclRoot.LibraryExport then failwithf "Retention fabricated concrete purpose %A" purpose
+            match result.Graph.Nodes[id].Kind with
+            | SemanticKind.Binding(name = name) -> name
+            | other -> failwithf "Export does not identify a checked binding: %A" other) |> Set.ofList
+        if exports <> Set.ofList ["publicValue"; "left"; "right"; "nestedPublic"; "main"] then
+            failwithf "Incorrect public library surface: %A" exports
+
+    "library generic source remains retained beside its used specializations", fun () ->
+        let input =
+            match parseStringWithDefaults "module Library\nlet identity x = x\nlet booleanValue = identity true\nlet unitValue = identity ()\n" "Library.clef" with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithDeclarations [input] None Set.empty (Some(Set.singleton "Library.clef")) None
+        noErrors result
+        let graph = result.Graph
+        let declaration =
+            graph.DeclarationRoots
+            |> List.choose (fun (id, purpose) ->
+                match purpose, graph.Nodes[id].Kind with
+                | DeclRoot.LibraryExport, SemanticKind.Binding(name = "identity") -> Some id
+                | _ -> None)
+            |> List.exactlyOne
+        if not (graph.Nodes[declaration].IsReachable) then failwith "The generic library template was retired"
+        let derivations =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Metadata.TryFind SchemeMetadata.Specialization with
+                | Some(MetadataValue.Specialization trace) when trace.SourceDeclaration = declaration -> Some trace
+                | _ -> None)
+            |> Seq.toList
+        let clones = derivations |> List.map _.CloneDeclaration |> Set.ofList
+        if clones.Count <> 2 || (derivations |> List.exists _.RetiresSource) then
+            failwithf "Internal instances erased or falsely retired the source library template: %A" derivations
+
+    "library dependencies stay retained without becoming export roots", fun () ->
+        let files = [
+            "Dependency.clef", "module Dependency\nlet data = true\nlet unusedApi (x: bool) = x\n"
+            "Library.clef", "module Library\nlet publicApi (x: bool) = if x then Dependency.data else false\n"
+        ]
+        let inputs = files |> List.map (fun (path, source) ->
+            match parseStringWithDefaults source path with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors)
+        let result = checkParsedInputsWithDeclarations inputs None Set.empty (Some(Set.singleton "Library.clef")) None
+        noErrors result
+        match result.Graph.DeclarationRoots with
+        | [id, DeclRoot.LibraryExport] ->
+            match result.Graph.Nodes[id].Kind with
+            | SemanticKind.Binding(name = "publicApi") -> ()
+            | other -> failwithf "Wrong owned declaration rooted: %A" other
+        | roots -> failwithf "Imported implementation became an export or entry point: %A" roots
+        if not (result.Graph.Nodes.Values |> Seq.exists (fun node ->
+            match node.Kind with SemanticKind.Binding(name = "data") -> true | _ -> false)) then
+            failwith "Retention lost the exported body's dependency"
+
+    "stateless library checks mint distinct declaration epochs without changing source identity lookup", fun () ->
+        let input =
+            match parseStringWithDefaults "module Library\nlet publicValue = true\n" "Library.clef" with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let check identities = checkParsedInputsWithDeclarations [input] None Set.empty (Some(Set.singleton "Library.clef")) identities
+        let declaration result =
+            noErrors result
+            let id, _ = List.exactlyOne result.Graph.DeclarationRoots
+            let node = result.Graph.Nodes[id]
+            match Map.tryFind "Source.DeclarationIncarnation" node.Metadata, Map.tryFind "SourceBinding.NameRange" node.Metadata with
+            | Some(MetadataValue.String identity), Some(MetadataValue.SourceRange range) -> identity, range
+            | values -> failwithf "Checked declaration lost source provenance: %A" values
+        let first, range = check None |> declaration
+        let second, nextRange = check None |> declaration
+        if first = second || range <> nextRange then
+            failwith "Cold checking reused declaration authority or changed its exact identifier lookup"
+        let supplied, _ = check (Some(Map.ofList [range, first])) |> declaration
+        if supplied <> first then failwith "Complete source identity observation was replaced by a fresh identity"
+
+    "retained numeric census refuses deletion of both a claim and its recorded requirement", fun () ->
+        let input =
+            match parseStringWithDefaults "module Library\nlet publicApi (x: int) = x\n" "Library.clef" with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithDeclarations [input] None Set.empty (Some(Set.singleton "Library.clef")) None
+        noErrors result
+        let graph = result.Graph
+        let validate = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness
+        if not (validate graph).IsEmpty then failwithf "Generated ledger is incomplete: %A" (validate graph)
+        let claim, info = graph.Nodes |> Map.toList |> List.pick (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind = "numeric-carrier-coverage" -> Some(id, info)
+            | _ -> None)
+        match info.Body with
+        | ObligationBody.Pending _ -> ()
+        | body -> failwithf "An open exported input acquired a ready width claim: %A" body
+        let incidence = graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = claim)
+        let domain = graph.Edges |> List.pick (fun edge ->
+            match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None)
+        let site = incidence.Sources |> List.find domain.Required.Contains
+        let withoutIncidence =
+            { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.Constrains || edge.Target <> claim) }
+        if not (validate withoutIncidence |> List.exists (fun (_, reason) -> reason.Contains "source incidence" && reason.Contains info.Id)) then
+            failwith "Dropping a claim's source incidence escaped the completeness check"
+        let withoutBoth =
+            { graph with
+                Nodes = graph.Nodes.Remove claim
+                Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> claim && not (List.contains claim edge.Sources))
+                        |> List.map (fun edge ->
+                            match edge.Role with
+                            | EdgeRole.NumericDomain domain -> { edge with Role = EdgeRole.NumericDomain { domain with Required = domain.Required.Remove site } }
+                            | _ -> edge) }
+        if not (validate withoutBoth |> List.exists (fun (_, reason) -> reason.Contains "missing or duplicate claim" && reason.Contains info.Id)) then
+            failwith "Deleting both the claim and its recorded requirement fabricated a complete ledger"
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project withoutBoth with
+        | Result.Error failures when failures |> List.exists (fun failure -> failure.Reason.Contains "completeness" && failure.Reason.Contains info.Id) -> ()
+        | result -> failwithf "Strict publication did not preserve the completeness refusal: %A" result
+
+    "retained division owes separate Pending capacity and nonzero claims", fun () ->
+        let input =
+            match parseStringWithDefaults "module Library\nlet quotient (a: int) (b: int) = a / b\n" "Library.clef" with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithDeclarations [input] None Set.empty (Some(Set.singleton "Library.clef")) None
+        noErrors result
+        let graph = result.Graph
+        let operation = graph.Nodes.Values |> Seq.filter (fun node ->
+            match Clef.Compiler.Baker.Ingredients.NumericOperations.operation graph node with
+            | Some(_, NumericOperationKind.Divide, [_; _], _) -> true
+            | _ -> false) |> Seq.exactlyOne
+        let claims = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && List.contains operation.Id edge.Sources)
+                     |> List.choose (fun edge ->
+                         match graph.Nodes[edge.Target].Kind with
+                         | SemanticKind.Obligation info when info.Kind = "numeric-operation-proof" -> Some info
+                         | _ -> None)
+        let expected = ["numeric-operation-coverage"; "numeric-operation-divisor-nonzero"]
+                       |> List.mapi (Clef.Compiler.Baker.Ingredients.NumericOperations.claimId operation) |> Set.ofList
+        if claims.Length <> 2 || (claims |> List.map _.Id |> Set.ofList) <> expected then
+            failwithf "Division lost separate capacity/definedness identities: %A" claims
+        for claim in claims do
+            match claim.Body with
+            | ObligationBody.Pending reasons when not reasons.IsEmpty -> ()
+            | body -> failwithf "Open division invented ready premises: %A" body
+        if not (Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness graph).IsEmpty then
+            failwith "Division source census and generated claims disagree"
+
+    "retained generic templates do not lend claim identities to numeric specializations", fun () ->
+        let input =
+            match parseStringWithDefaults "module Library\nlet scale (x: int) tag = x * 2\nlet firstValue = scale 3 true\nlet secondValue = scale 7 ()\n" "Library.clef" with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithDeclarations [input] None Set.empty (Some(Set.singleton "Library.clef")) None
+        noErrors result
+        let graph = result.Graph
+        let template =
+            graph.DeclarationRoots |> List.choose (fun (id, purpose) ->
+                match purpose, graph.Nodes[id].Kind with
+                | DeclRoot.LibraryExport, SemanticKind.Binding(name = "scale") -> Some id
+                | _ -> None) |> List.exactlyOne
+        let subtree root =
+            let rec visit seen id =
+                if Set.contains id seen then seen
+                else graph.Nodes[id].Children |> List.fold visit (Set.add id seen)
+            visit Set.empty root |> Set.toList |> List.map (fun id -> graph.Nodes[id])
+        let instances =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Metadata.TryFind SchemeMetadata.Specialization with
+                | Some(MetadataValue.Specialization trace) when trace.SourceDeclaration = template -> Some trace.CloneDeclaration
+                | _ -> None)
+            |> Set.ofSeq
+        if instances.Count <> 2 then failwithf "Expected two independently typed specializations: %A" instances
+        let sites declaration =
+            let nodes = subtree declaration
+            let parameter = nodes |> List.pick (fun node ->
+                match node.Kind with
+                | SemanticKind.Lambda(parameters, _, _, _, _) ->
+                    parameters |> List.tryPick (fun (name, _, id) -> if name = "x" then Some graph.Nodes[id] else None)
+                | _ -> None)
+            let operation = nodes |> List.filter (fun node ->
+                match Clef.Compiler.Baker.Ingredients.NumericOperations.operation graph node with
+                | Some(_, NumericOperationKind.Multiply, [_; _], _) -> true
+                | _ -> false) |> List.exactlyOne
+            parameter, operation
+        let claim key kind (site: SemanticNode) =
+            let id, info = graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+                match node.Kind with
+                | SemanticKind.Obligation info when info.Id = key && info.Kind = kind -> Some(id, info)
+                | _ -> None) |> List.exactlyOne
+            let incidence = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = id) |> List.exactlyOne
+            if not (List.contains site.Id incidence.Sources) then failwithf "Claim %s lost its exact subject" key
+            info.Id
+        let sourceKey role site =
+            let key = Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId role site |> Option.get
+            if not (key.StartsWith("claim_", System.StringComparison.Ordinal)) then failwith "Template lost canonical claim identity"
+            key
+        let parameter, operation = sites template
+        let templateKeys =
+            [ claim (sourceKey "numeric-carrier-coverage" parameter) "numeric-carrier-coverage" parameter
+              claim (sourceKey "numeric-operation-coverage" operation) "numeric-operation-proof" operation ]
+        let generatedKeys = instances |> Set.toList |> List.collect (fun declaration ->
+            for node in subtree declaration do
+                if node.Metadata.ContainsKey "Source.ObligationSite" || node.Metadata.ContainsKey "Source.DeclarationIncarnation" then
+                    failwithf "Generated node %A retained source declaration or occurrence identity" node.Id
+                for role in ["numeric-carrier-coverage"; "numeric-operation-coverage"] do
+                    if (Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId role node).IsSome then
+                        failwith "A generated specialization subtree borrowed its template's claim identity"
+            let parameter, operation = sites declaration
+            [ claim (sprintf "numeric_carrier_%d" (NodeId.value parameter.Id)) "numeric-carrier-coverage" parameter
+              claim (sprintf "numeric_operation_%d_0" (NodeId.value operation.Id)) "numeric-operation-proof" operation ])
+        let selectedKeys = templateKeys @ generatedKeys
+        if (List.distinct selectedKeys).Length <> 6 then
+            failwithf "Template or clone carrier/operation identities collide: %A" selectedKeys
+        let claims =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Obligation info when info.Kind = "numeric-carrier-coverage" || info.Kind = "numeric-operation-proof" -> Some info.Id
+                | _ -> None)
+            |> Seq.toList
+        if claims.IsEmpty || (List.distinct claims).Length <> claims.Length then
+            failwithf "Numeric specialization claims are absent or collide: %A" claims
+        if not (Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness graph).IsEmpty then
+            failwith "Source template and generated specialization census disagree"
 
     "measured real literals retain exact source points beside their numeric carrier", fun () ->
         let result = check "let distance = 12.0<m>\nlet elapsed = 3.0<s>\n"

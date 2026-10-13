@@ -16,7 +16,7 @@ let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjec
         |> List.map (fun (target, rows) -> target, rows |> List.map _.Sources)
         |> Map.ofList
     let failure occurrence reason =
-        { Occurrence = occurrence
+        { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = occurrence
           Participants =
             constrains |> List.filter (fun edge -> Some edge.Target = occurrence)
             |> List.collect _.Sources |> Set.ofList

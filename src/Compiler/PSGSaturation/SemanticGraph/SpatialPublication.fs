@@ -30,7 +30,16 @@ let private hardwareProofsAgree (proofs: SpatialProof list) (plan: HardwareModul
     (plan.ResetFields |> List.forall (fun field -> plan.Participants.Contains field.Literal))
 
 let project (graph: SemanticGraph) : Result<SpatialModuleProjection, WitnessProjectionFailure list> =
-    let reject site participants reason = Error [{ Occurrence=site; Participants=participants; Reason="SpatialPublication: " + reason }]
+    let reject site participants reason =
+        Error
+            [
+                {
+                    Kind = WitnessProjectionFailureKind.Settlement
+                    Occurrence = site
+                    Participants = participants
+                    Reason = "SpatialPublication: " + reason
+                }
+            ]
     let domains = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.SpatialModuleDomain domain -> Some(edge.Target,domain) | _ -> None)
     match domains with
     | [anchor,domain] ->
@@ -43,7 +52,17 @@ let project (graph: SemanticGraph) : Result<SpatialModuleProjection, WitnessProj
            domain.Representations <> numeric.OccurrenceRepresentations || domain.Carriers <> numeric.Values || domain.NumericOperations <> numeric.Operations then
             reject (Some anchor) participants "The exact spatial declaration, numeric construction, pin or source premises changed; source settlement is required."
         elif not domain.Unresolved.IsEmpty then
-            Error(domain.Unresolved |> Map.toList |> List.map (fun (site,reason) -> { Occurrence=Some site; Participants=Set.singleton site; Reason="SpatialPublication: " + reason }))
+            Error(
+                domain.Unresolved
+                |> Map.toList
+                |> List.map (fun (site, reason) ->
+                    {
+                        Kind = WitnessProjectionFailureKind.Settlement
+                        Occurrence = Some site
+                        Participants = Set.singleton site
+                        Reason = "SpatialPublication: " + reason
+                    })
+            )
         elif ((domain.Hardware |> List.map _.Site) @ (domain.Kernels |> List.map _.Site) |> List.sort) <> Set.toList domain.Required then
             reject (Some anchor) participants "A required source spatial module is absent or duplicated."
         else

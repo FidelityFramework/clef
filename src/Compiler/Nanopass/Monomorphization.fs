@@ -227,6 +227,13 @@ let private collectSubtree (nodes: Map<NodeId, SemanticNode>) (rootId: NodeId) :
     walk rootId
     List.ofSeq acc
 
+/// Generated instances keep specialization provenance, not source declaration
+/// or occurrence identity; stable specialization claim identity is separate work.
+let private generatedMetadata metadata =
+    metadata
+    |> Map.remove "Source.ObligationSite"
+    |> Map.remove "Source.DeclarationIncarnation"
+
 /// Clone the subtree rooted at `rootId` with fresh NodeIds, substituting `f` into every
 /// type, remapping internal references, and re-parenting the clone under `newParent`.
 /// Returns the new root id and the cloned nodes.
@@ -253,7 +260,7 @@ let internal cloneSubtreeWithOrigins
                 Id = remap id
                 Kind = mapKind remap f node.Kind
                 Type = f node.Type
-                Metadata = node.Metadata |> Map.map (fun key value ->
+                Metadata = generatedMetadata node.Metadata |> Map.map (fun key value ->
                     match value with
                     | MetadataValue.Type ty -> MetadataValue.Type(f ty)
                     | MetadataValue.NodeId id when key = SchemeMetadata.Definition || key = SchemeMetadata.ImplementationDeclaration ->
@@ -393,7 +400,7 @@ let private snapshot (node: SemanticNode) : SpecializationNodeSnapshot =
     { Kind = sprintf "%A" node.Kind; Type = formatType node.Type
       Children = node.Children; Parent = node.Parent }
 
-let private recordDerivation sourceDeclaration cloneDeclaration parameters arguments requests
+let private recordDerivation retiresSource sourceDeclaration cloneDeclaration parameters arguments requests
                              (before: Map<NodeId, SemanticNode>) (mapping: Map<NodeId, NodeId>)
                              (after: Map<NodeId, SemanticNode>) =
     let scheme = formatType (NativeType.TForall(parameters, before[sourceDeclaration].Type |> function NativeType.TForall(_, body) -> body | ty -> ty))
@@ -403,7 +410,7 @@ let private recordDerivation sourceDeclaration cloneDeclaration parameters argum
             CloneDeclaration = cloneDeclaration; CloneNode = clone
             Scheme = scheme; Parameters = parameters |> List.map (fun parameter -> parameter.Id, string parameter.Kind)
             CodeArguments = arguments |> List.map formatType
-            Requests = requests; RetiresSource = true
+            Requests = requests; RetiresSource = retiresSource
             Input = snapshot before[source]; Output = snapshot after[clone] }
         let node = nodes[clone]
         let node = { node with Metadata = node.Metadata.Add(SchemeMetadata.Specialization, MetadataValue.Specialization trace) }
@@ -416,7 +423,7 @@ let private recordDerivation sourceDeclaration cloneDeclaration parameters argum
 /// Recursive declarations are specialized together: reserve each requested
 /// declaration before visiting its body, then redirect self/peer references
 /// through that reservation. No partially rewritten component is installed.
-let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>) =
+let rec private specializeRecursiveComponents (retainedDeclarations: Set<NodeId>) (nodes: Map<NodeId, SemanticNode>) =
     let declarations =
         nodes |> Map.toList |> List.choose (fun (id, node) ->
             match node.Kind, node.Children with
@@ -444,6 +451,7 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
     while not remaining.IsEmpty do
         let first = Set.minElement remaining
         let group = closure[first] |> Set.filter (fun id -> closure[id].Contains first)
+        let retainSource = not (Set.intersect group retainedDeclarations).IsEmpty
         remaining <- Set.difference remaining group
         let schemes = group |> Seq.map (fun id ->
             let node, _ = declarations[id]
@@ -562,13 +570,23 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
                     let binding =
                         { original with Id = bindingId; Kind = SemanticKind.Binding(symbol, false, true, None)
                                         Type = substitute body; Children = [root]
-                                        Metadata = residualMetadata bindingId residual signature original.Metadata }
+                                        Metadata = residualMetadata bindingId residual signature (generatedMetadata original.Metadata) }
                     created <- created.Add(bindingId, binding)
                     derivations <- (originalId, bindingId, parameters, arguments, mapping.Add(originalId, bindingId)) :: derivations
                     replacements <- replacements.Add(originalId, (replacements.TryFind originalId |> Option.defaultValue []) @ [bindingId])
                 if valid then
                     for original, clone, parameters, arguments, mapping in derivations do
-                        let updated, edges = recordDerivation original clone parameters arguments (requests[clone] |> Seq.distinct |> Seq.toList) current mapping created
+                        let updated, edges =
+                            recordDerivation
+                                (not retainSource)
+                                original
+                                clone
+                                parameters
+                                arguments
+                                (requests[clone] |> Seq.distinct |> Seq.toList)
+                                current
+                                mapping
+                                created
                         created <- updated
                         evidence <- edges @ evidence
                     let retired = Set.union group inside
@@ -576,7 +594,7 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
                     // subtree can still cite these original identities. Keep
                     // the source graph closed while retiring its execution.
                     current <- current |> Map.map (fun id node ->
-                        if retired.Contains id then
+                        if not retainSource && retired.Contains id then
                             { node with IsReachable = false; Metadata = node.Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) }
                         else node)
                     for KeyValue(id, node) in created do current <- current.Add(id, node)
@@ -589,16 +607,24 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
                         let name = match node.Kind with SemanticKind.VarRef(name, _) -> name | _ -> invalidOp "Recursive use required"
                         current <- current.Add(node.Id, { node with Kind = SemanticKind.VarRef(name, Some target); Metadata = metadata })
                     for original in group do
-                        current <- replaceBindingMembership original (replacements.TryFind original |> Option.defaultValue []) true current
+                        let replacements = replacements.TryFind original |> Option.defaultValue []
+
+                        let replacements =
+                            if retainSource then
+                                original :: replacements
+                            else
+                                replacements
+
+                        current <- replaceBindingMembership original replacements true current
     if obj.ReferenceEquals(nodes, current) then current, evidence
     else
-        let result, subsequent = specializeRecursiveComponents current
+        let result, subsequent = specializeRecursiveComponents retainedDeclarations current
         result, evidence @ subsequent
 
 type Result = { Nodes: Map<NodeId, SemanticNode>; Derivations: Hyperedge list }
 
 /// Run specialization and retain its applied derivations for initial F.
-let private runWithEvidenceCore (nodes: Map<NodeId, SemanticNode>) : Result =
+let private runWithEvidenceCore (retainedDeclarations: Set<NodeId>) (nodes: Map<NodeId, SemanticNode>) : Result =
     // Preserve the checked binders and their actual implementation ownership.
     // Measures do not split native bodies, but their occurrence substitutions
     // remain source facts; erasing TForall must not erase that authority.
@@ -623,7 +649,8 @@ let private runWithEvidenceCore (nodes: Map<NodeId, SemanticNode>) : Result =
                 | _ -> ()
             | _ -> ()
         | _ -> ()
-    let recursiveNodes, recursiveEvidence = specializeRecursiveComponents current
+    let recursiveNodes, recursiveEvidence =
+        specializeRecursiveComponents retainedDeclarations current
     current <- recursiveNodes
     let mutable evidence = recursiveEvidence
     let mutable progress = true
@@ -661,7 +688,11 @@ let private runWithEvidenceCore (nodes: Map<NodeId, SemanticNode>) : Result =
                         match node.Kind with
                         | SemanticKind.VarRef (_, Some def) when node.IsReachable && def = bindingId -> Some (id, node)
                         | _ -> None)
-                if List.isEmpty useSites then
+                if List.isEmpty useSites && retainedDeclarations.Contains bindingId then
+                    // An exported source scheme remains open even when there
+                    // are no internal occurrences requesting specialization.
+                    ()
+                elif List.isEmpty useSites then
                     // No live instantiation: retire execution without erasing
                     // earlier derivation participants or source navigation.
                     progress <- true
@@ -730,7 +761,7 @@ let private runWithEvidenceCore (nodes: Map<NodeId, SemanticNode>) : Result =
                                 Kind = SemanticKind.Binding (cloneName, false, false, None)
                                 Type = signature
                                 Children = [newLambdaId]
-                                Metadata = residualMetadata newBindingId residual signature bindingNode.Metadata }
+                                Metadata = residualMetadata newBindingId residual signature (generatedMetadata bindingNode.Metadata) }
                         for n in clonedNodes do
                             let node =
                                 if n.Id = newLambdaId then
@@ -739,7 +770,17 @@ let private runWithEvidenceCore (nodes: Map<NodeId, SemanticNode>) : Result =
                             current <- Map.add node.Id node current
                         current <- Map.add newBindingId newBinding current
                         let requests = members |> List.map (fun (_, _, useId) -> useId, formatType before[useId].Type)
-                        let updated, edges = recordDerivation bindingId newBindingId typars args requests before (mapping.Add(bindingId, newBindingId)) current
+                        let updated, edges =
+                            recordDerivation
+                                (not (retainedDeclarations.Contains bindingId))
+                                bindingId
+                                newBindingId
+                                typars
+                                args
+                                requests
+                                before
+                                (mapping.Add(bindingId, newBindingId))
+                                current
                         current <- updated
                         evidence <- edges @ evidence
                         cloneIds <- cloneIds @ [newBindingId]
@@ -759,14 +800,19 @@ let private runWithEvidenceCore (nodes: Map<NodeId, SemanticNode>) : Result =
                                                Metadata = instanceMetadata[useId] } current
                         | None -> ()
                     // Replace execution membership; keep source participants.
-                    current <- replaceBindingMembership bindingId cloneIds true current
-                    // Retired source is evidence, never an executable root.
-                    for id in collectSubtree current bindingId do
-                        current <- current.Add(id, { current[id] with IsReachable = false; Metadata = current[id].Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) })
+                    let retainSource = retainedDeclarations.Contains bindingId
+                    current <- replaceBindingMembership bindingId (if retainSource then bindingId :: cloneIds else cloneIds) true current
+                    // Source retention and occurrence specialization coexist;
+                    // an exported template is not retired by its internal uses.
+                    if not retainSource then
+                        for id in collectSubtree current bindingId do
+                            current <- current.Add(id, { current[id] with IsReachable = false; Metadata = current[id].Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) })
     { Nodes = current; Derivations = evidence }
 
-let runWithEvidence nodes =
-  Clef.Compiler.CheckExecution.enrich (NodeId.withReservation (Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeIdIn nodes [])) (fun () -> runWithEvidenceCore nodes)
+let runWithEvidencePreserving retainedDeclarations nodes =
+  Clef.Compiler.CheckExecution.enrich (NodeId.withReservation (Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeIdIn nodes [])) (fun () -> runWithEvidenceCore retainedDeclarations nodes)
+
+let runWithEvidence nodes = runWithEvidencePreserving Set.empty nodes
 
 
 /// Compatibility for callers that only need the executable node rewrite.

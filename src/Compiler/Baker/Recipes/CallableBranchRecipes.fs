@@ -33,7 +33,7 @@ let validate (graph: SemanticGraph) : Result<CallableBranchAuthority, WitnessPro
         |> Seq.collect (fun participant -> [participant.Node; participant.Group])
         |> Set.ofSeq
     Result.Error [{
-        Occurrence = None
+        Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None
         Participants = Set.union (participants held) (participants expected)
         Reason = "Callable branch authority is missing or differs from the current whole-revision origin census; Baker branch settlement is required."
     }]

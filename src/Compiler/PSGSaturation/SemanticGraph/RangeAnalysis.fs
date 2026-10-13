@@ -1298,6 +1298,7 @@ let internal completeApplications
 
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let purposes = Reachability.declarationPurposes graph
     let ordered = reachableNodes |> Map.toList |> List.map snd
     let omittedFormals =
         OrdinaryDemand.tryRead graph
@@ -1340,7 +1341,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Context = context
         Reachable = reachableNodes
         Ordered = ordered
-        CommitmentSites = reachableNodes.Keys |> Set.ofSeq |> fun sites -> Set.difference sites deferred
+        CommitmentSites =
+            reachableNodes.Keys
+            |> Seq.filter (Reachability.requiresRepresentation purposes)
+            |> Set.ofSeq
+            |> fun sites -> Set.difference sites deferred
         Parents = parents
         Callees = Map.empty
         Applications = Map.empty
@@ -2136,9 +2141,14 @@ let rec private aggregateElement (program: Program) (value: Reading) (visited: S
                     Map.tryFind node.Id program.Assignments |> Option.defaultValue [] |> List.fold (fun acc a -> ValueRange.join acc (recurse a)) value
                 else value
             | SemanticKind.PatternBinding _ when Set.contains node.Id program.Parameters ->
-                match Map.tryFind node.Id program.CallArguments with
-                | Some args -> args |> List.fold (fun acc (_, a) -> ValueRange.join acc (recurse a)) ValueRange.Empty
-                | None -> ValueRange.Unbounded
+                if program.RootParameters.TryFind node.Id = Some DeclRoot.LibraryExport then
+                    ValueRange.Unbounded
+                else
+                    match Map.tryFind node.Id program.CallArguments with
+                    | Some args ->
+                        args
+                        |> List.fold (fun acc (_, a) -> ValueRange.join acc (recurse a)) ValueRange.Empty
+                    | None -> ValueRange.Unbounded
             | SemanticKind.PatternBinding _ ->
                 match List.tryLast node.Children with
                 | Some valueId -> recurse valueId
@@ -2281,7 +2291,11 @@ let private transfer (program: Program) (shared: Reading) (value: Reading) (appl
             // seen call reaches) has no observable range here
             let supplied = Map.tryFind node.Id program.CallArguments |> Option.defaultValue []
             let seeded = Map.tryFind node.Id program.IndexSeeds |> Option.defaultValue []
-            if program.InactiveFormals.Contains node.Id then Some ValueRange.Empty
+            // Internal callers do not enumerate a retained API's external
+            // callers. Their exact inputs remain invocation-context facts;
+            // the source formal keeps its open shared domain.
+            if program.RootParameters.TryFind node.Id = Some DeclRoot.LibraryExport then Some fallback
+            elif program.InactiveFormals.Contains node.Id then Some ValueRange.Empty
             elif List.isEmpty supplied && List.isEmpty seeded then Some fallback
             else
                 let fromCalls = supplied |> List.fold (fun acc (callId, a) -> ValueRange.join acc (read program shared callId a)) ValueRange.Empty

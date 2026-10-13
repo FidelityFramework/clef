@@ -224,7 +224,7 @@ let validate (graph: SemanticGraph) layouts (contracts: Map<NodeId, CallableCont
              (carriers: Map<NodeId, CallableCarrier>) : WitnessProjectionFailure list =
     let failures = ResizeArray<WitnessProjectionFailure>()
     let fail site reason =
-        failures.Add { Occurrence = Some site; Participants = Set.singleton site
+        failures.Add { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some site; Participants = Set.singleton site
                        Reason = "Callable contract: " + reason }
     let owner = numericOwner graph
     let mutable required = Set.empty

@@ -515,17 +515,26 @@ let private unavailableJson (pending: UnavailableObligation list) =
 let ofGraph (graph: SemanticGraph) : ObligationInfo list =
     SemanticGraph.obligations graph |> List.map snd
 
-/// Write 06a and 06b beside the other intermediates when emission is enabled.
-let emit (graph: SemanticGraph) : unit =
+/// Write an explicitly validated source inventory beside the intermediates.
+/// The source caller owns completeness; this early artifact owner consumes its
+/// result without invoking later recipes or reading an unvalidated graph.
+let emit (inventory: Result<ObligationInfo list, string list>) : unit =
     if shouldEmit () then
-        match ofGraph graph with
-        | [] -> ()
-        | obs ->
-            let dir = getOutputDir ()
+        let dir = getOutputDir ()
+        let ledgerPath = Path.Combine(dir, "06a_obligations.json")
+        let queryPath = Path.Combine(dir, "06b_obligations.smt2")
+        let unavailablePath = Path.Combine(dir, "06b_obligations.unavailable.json")
+        let clear () =
+            if Directory.Exists dir then
+                for path in [ledgerPath; queryPath; unavailablePath] do File.Delete path
+        // The source owner reports census diagnostics. This artifact owner must
+        // still withdraw earlier output; neither silence nor a partial ledger
+        // represents an incomplete current inventory.
+        match inventory with
+        | Error _ | Ok [] -> clear ()
+        | Ok obs ->
             Directory.CreateDirectory dir |> ignore
-            File.WriteAllText(Path.Combine(dir, "06a_obligations.json"), ledgerJson obs)
-            let queryPath = Path.Combine(dir, "06b_obligations.smt2")
-            let unavailablePath = Path.Combine(dir, "06b_obligations.unavailable.json")
+            File.WriteAllText(ledgerPath, ledgerJson obs)
             match trySmtLib obs with
             | Ok query ->
                 File.Delete unavailablePath

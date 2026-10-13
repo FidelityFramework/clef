@@ -5,6 +5,7 @@ open Clef.Compiler.NativeService
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+module BoundaryEmission = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission
 
 module private BoundaryValuesFixture =
     let check source =
@@ -32,8 +33,115 @@ let main _ =
         |> Seq.filter (fun contract -> contract.Kind = CallableKind.NativeEntry)
         |> Assert.Single
 
+    let library source concreteRoot =
+        let path = System.IO.Path.GetFullPath "library-native.clef"
+        let parse text file =
+            match parseStringWithDefaults text file with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Library native source did not parse: %A" errors
+        let inputs =
+            [ parse SourcePlatformFixture.authority "write-authority.clef"
+              parse ("module LibraryNative\n" + source) path ]
+        let inputs =
+            if concreteRoot then
+                inputs @ [parse "module Program\n[<EntryPoint>]\nlet main _ = 0\n" "native-program.clef"]
+            else inputs
+        checkParsedInputsWithDeclarations inputs (Some SourcePlatformFixture.platform)
+            Set.empty (Some(Set.singleton path)) None
+
+    let exported name (graph: SemanticGraph) =
+        graph.DeclarationRoots |> List.choose (fun (id, purpose) ->
+            match purpose, graph.Nodes[id].Kind with
+            | DeclRoot.LibraryExport, SemanticKind.Binding(name = actual) when actual = name -> Some graph.Nodes[id]
+            | _ -> None) |> Assert.Single
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BoundaryValues")>]
 type BoundaryValueCases() =
+    [<Theory>]
+    [<InlineData("let exported (pointer: FnPtr<bool -> bool>) = true\n", "parameter")>]
+    [<InlineData("let exported (flag: bool) (pointer: FnPtr<bool -> bool>) = flag\n", "result.parameter")>]
+    [<InlineData("let private callback (flag: bool) = flag\nlet exported (flag: bool) : FnPtr<bool -> bool> = FnPtr.ofFunction callback\n", "result")>]
+    [<InlineData("type Listener = { Entry: FnPtr<bool -> bool> }\nlet exported (listener: Listener) = true\n", "parameter.Entry")>]
+    [<InlineData("let exported (pair: bool * FnPtr<bool -> bool>) = true\n", "parameter.Item2")>]
+    [<InlineData("let exported (candidate: option<FnPtr<bool -> bool>>) = true\n", "parameter.Some")>]
+    [<InlineData("let exported (entries: FnPtr<bool -> bool> array) = true\n", "parameter.element")>]
+    [<InlineData("type Inner = { Entry: FnPtr<bool -> bool> }\ntype Outer = { Nested: option<Inner> }\nlet exported (value: Outer) = true\n", "Nested.Some")>]
+    [<InlineData("let private callback (flag: bool) = flag\nlet mutable exported : FnPtr<bool -> bool> = FnPtr.ofFunction callback\n", "public interface")>]
+    member _.``Library native public shapes retain the typed host loading refusal``(source: string, slot: string) =
+        let result = BoundaryValuesFixture.library source false
+        let declaration = BoundaryValuesFixture.exported "exported" result.Graph
+        let failures = BoundaryEmission.exportedInterfaceFailures result.Graph
+        let failure = Assert.Single failures
+        Assert.Equal(WitnessProjectionFailureKind.LibraryNativeInterfaceLoading, failure.Kind)
+        Assert.Equal(Some declaration.Id, failure.Occurrence)
+        Assert.Contains(slot, failure.Reason)
+        Assert.Contains(result.Diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8416" && diagnostic.Severity = NativeDiagnosticSeverity.Error &&
+            diagnostic.Range = declaration.Range && List.contains declaration.Id diagnostic.RelatedNodes)
+        Assert.True(Result.isError(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph))
+
+    [<Fact>]
+    member _.``A public boolean function does not export its private native implementation``() =
+        let source = "let private callback (flag: bool) = flag\nlet exported (flag: bool) : bool =\n    let pointer = FnPtr.ofFunction callback\n    FnPtr.invoke pointer flag\n"
+        let result = BoundaryValuesFixture.library source false
+        DimensionalCases.noErrors result
+        let declaration = BoundaryValuesFixture.exported "exported" result.Graph
+        Assert.Equal<NativeType>(NativeType.TFun(Types.boolType, Types.boolType), declaration.Type)
+        Assert.Contains(result.Graph.Nodes.Values, fun node -> Types.tryGetNTUKind node.Type = Some NTUKind.NTUfnptr)
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures result.Graph)
+        Assert.DoesNotContain(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
+
+    [<Fact>]
+    member _.``An opaque handle phantom argument is not an exported native callable slot``() =
+        let result = BoundaryValuesFixture.library "let exported (handle: CHandle<FnPtr<bool -> bool>>) = true\n" false
+        DimensionalCases.noErrors result
+        BoundaryValuesFixture.exported "exported" result.Graph |> ignore
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures result.Graph)
+        Assert.DoesNotContain(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
+
+    [<Fact>]
+    member _.``A concrete root does not suppress a retained native interface diagnostic``() =
+        let result = BoundaryValuesFixture.library "let exported (pointer: FnPtr<bool -> bool>) = true\n" true
+        let declaration = BoundaryValuesFixture.exported "exported" result.Graph
+        Assert.Contains(result.Graph.DeclarationRoots, fun (_, purpose) -> purpose = DeclRoot.EntryPoint)
+        Assert.DoesNotContain(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8417")
+        Assert.Contains(result.Diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8416" && List.contains declaration.Id diagnostic.RelatedNodes)
+
+    [<Fact>]
+    member _.``Native interface refusal survives an independently invalid ordinary demand proof``() =
+        let result = BoundaryValuesFixture.library "let exported (pointer: FnPtr<bool -> bool>) = true\n" false
+        let declaration = BoundaryValuesFixture.exported "exported" result.Graph
+        let invalidDemand =
+            { Class = EdgeClass.Demand; Target = declaration.Id; Ordinal = 0; Sources = []
+              Role = EdgeRole.OrdinaryBindingDemandPending("invalid demand fixture", { Participants = []; SourceTypes = Map.empty }) }
+        let graph = { result.Graph with Edges = invalidDemand :: result.Graph.Edges }
+        Assert.True(Result.isError(Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.projectValidated graph))
+        match BoundaryEmission.prepare graph with
+        | Result.Ok _ -> failwith "Invalid ordinary demand and native export were admitted"
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Kind = WitnessProjectionFailureKind.LibraryNativeInterfaceLoading)
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement && failure.Reason.Contains("OrdinaryBindingDemand"))
+
+    [<Fact>]
+    member _.``Program image residence and diagnostic prose cannot establish host loading``() =
+        let graph = BoundaryValuesFixture.nativeGraph 64
+        let contract = BoundaryValuesFixture.nativeContract graph
+        match contract.Convention with
+        | CallableConvention.CompilerOwnedPortable convention ->
+            Assert.True(graph.Nodes.ContainsKey convention.CodeLifetime.Implementation)
+        | other -> failwithf "Expected valid program image residence, got %A" other
+        let listener = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Binding(name = "listener") -> true | _ -> false) |> Assert.Single
+        let exported = { graph with DeclarationRoots = (listener.Id, DeclRoot.LibraryExport) :: graph.DeclarationRoots }
+        let failure = BoundaryEmission.exportedInterfaceFailures exported |> Assert.Single
+        let diagnostic = BoundaryEmission.diagnostics exported [{ failure with Reason = "An unrelated explanatory sentence." }] |> Assert.Single
+        Assert.Equal("CCS8416", diagnostic.Code)
+        Assert.Equal(listener.Range, diagnostic.Range)
+        Assert.Contains(listener.Id, diagnostic.RelatedNodes)
+        Assert.True(Result.isError(BoundaryEmission.prepare exported))
+
     [<Theory>]
     [<InlineData("[<EntryPoint>]\nlet main _ = let mutable value = true in let address = &&value in 0")>]
     [<InlineData("let raw (value: bool) = &&value\n[<EntryPoint>]\nlet main _ = 0")>]

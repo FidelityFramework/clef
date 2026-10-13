@@ -11,7 +11,12 @@ module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
 module StringOrigins = Clef.Compiler.Baker.Ingredients.StringOrigins
 
 let private failure occurrence participants reason =
-    { Occurrence = occurrence; Participants = participants; Reason = "BoundaryEmission: " + reason }
+    {
+        Kind = WitnessProjectionFailureKind.Settlement
+        Occurrence = occurrence
+        Participants = participants
+        Reason = "BoundaryEmission: " + reason
+    }
 
 let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessProjectionFailure list> =
     let domains = graph.Edges |> List.choose (fun edge ->

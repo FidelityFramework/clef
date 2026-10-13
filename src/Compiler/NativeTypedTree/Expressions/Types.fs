@@ -125,6 +125,10 @@ module DiagnosticCodes =
     // Only when commitment relies on an unproved exclusion; absent inactivity or
     // unused-binding evidence normally preserves demand and is not itself an error.
     let CCS8415_OrdinaryDemandExclusionEvidence = "CCS8415"
+    // Retained native callable interfaces still require a host loading contract.
+    let CCS8416_LibraryNativeInterfaceLoading = "CCS8416"
+    // An explicit executable entry cannot be declared by a library output.
+    let CCS8417_LibraryEntryPointConflict = "CCS8417"
     // An own-project source function has no incoming reference in an executable.
     let CCS8500_UnusedBinding = "CCS8500"
     // Record field label resolution (CCS8701-CCS8705, inference-name-resolution.md)

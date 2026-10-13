@@ -58,7 +58,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
         let keys = Set.union (current |> Map.keys |> Set.ofSeq) (held |> Map.keys |> Set.ofSeq)
         for id in keys do
             if Map.tryFind id current <> Map.tryFind id held then
-                errors.Add({ Occurrence = Some id; Participants = Set.singleton id
+                errors.Add({ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some id; Participants = Set.singleton id
                              Reason = $"{name} at {NodeId.value id} is missing or does not match its current source participants." })
     let logicalResolution = CallableOrigins.resolveCallableBranches graph
     // A logical selected arm is not an executable-reachability proof. Keep
@@ -161,7 +161,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                                    Arguments = proof.Arguments; Result = proof.Result; SignatureData = proof.SignatureData
                                    Participants = proof.Participants }
                         | None ->
-                            errors.Add { Occurrence = Some site
+                            errors.Add { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some site
                                          Participants = Set.ofList (site :: callee :: target.Lambda :: arguments)
                                          Reason = $"Baker callable instantiation did not settle a dimensional call instance for call site {NodeId.value site}: callee {NodeId.value target.Lambda} has measure-polymorphic formals and no checked scheme instance was proved along its actual callee/environment path." }
                             None
@@ -182,7 +182,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                         owner = layout.Owner && layout.Thunk = declaration.Implementation &&
                         Clef.Compiler.Nanopass.LazyRuntime.validate graph layout)
                 if not hasLayout then
-                    errors.Add { Occurrence = Some declaration.Implementation
+                    errors.Add { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some declaration.Implementation
                                  Participants = declaration.Participants
                                  Reason = "Live lazy thunk declaration has no current validated storage layout." }
     let rec directCallee seen id =
@@ -282,7 +282,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                         formal, count)
                 if components |> List.exists (snd >> Option.isNone) then
                     if node.IsReachable then
-                        errors.Add { Occurrence = Some implementation
+                        errors.Add { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some implementation
                                      Participants = declarations[implementation].Participants
                                      Reason = "Callable declaration lacks a settled physical component convention for every logical formal." }
                     None
@@ -316,7 +316,13 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
             match aliasTarget Set.empty id with
             | Result.Ok value -> Some value
             | Result.Error participants ->
-                errors.Add { Occurrence = Some id; Participants = participants; Reason = "SSA source aliases contain a cycle rather than one declared value identity." }
+                errors.Add
+                    {
+                        Kind = WitnessProjectionFailureKind.Settlement
+                        Occurrence = Some id
+                        Participants = participants
+                        Reason = "SSA source aliases contain a cycle rather than one declared value identity."
+                    }
                 None)
     let aliasTargets = aliases |> Map.map (fun _ (target, _) -> target)
     let unitNodes =

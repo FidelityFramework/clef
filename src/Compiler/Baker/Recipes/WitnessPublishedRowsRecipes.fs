@@ -8,7 +8,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Ingredients.PublishedFactRows
 
 let private failure occurrence reason : WitnessProjectionFailure =
-    { Occurrence = occurrence; Participants = Set.ofList (Option.toList occurrence)
+    { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = occurrence; Participants = Set.ofList (Option.toList occurrence)
       Reason = "Frozen publication rows: " + reason }
 
 let private freezeNode (node: SemanticNode) =

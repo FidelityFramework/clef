@@ -60,7 +60,7 @@ let private historyIdentities = function
 let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmissionProjection option) (graph: SemanticGraph) : Result<WitnessLiveScopePlan, WitnessProjectionFailure list> =
     let failures = ResizeArray<WitnessProjectionFailure>()
     let fail occurrence participants reason =
-        failures.Add { Occurrence = occurrence; Participants = Set.ofList participants
+        failures.Add { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = occurrence; Participants = Set.ofList participants
                        Reason = "WitnessScopes: " + reason }
     if budget.MaxPaths < 0L || budget.MaxFrames < 0L then
         fail None [] "The source host supplied a negative occurrence-context resource budget."

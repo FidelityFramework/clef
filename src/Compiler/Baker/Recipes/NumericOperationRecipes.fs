@@ -59,11 +59,14 @@ let private settleCore (graph: SemanticGraph) anchor (values: Map<NodeId, Scalar
         let participants = inputCarriers |> List.choose id |> List.fold (fun participants carrier -> Set.union participants carrier.Participants) baseParticipants
         let scalarInput = lazy (inputCarriers |> List.map (need "An operation input lacks its source-settled scalar carrier."))
         let make form slot representation declaration range operands resultAdaptation bodies =
+            let claims =
+                Operations.associateBodies graph (callee, kind, actuals, identities) bodies
+                |> need "The operation's concrete proof bodies do not match its required semantic roles."
             let participants = declaration |> Option.map (fun id -> Set.add id participants) |> Option.defaultValue participants
             let expansion = Elaboration.freshId ()
-            let proofs = bodies |> List.mapi (fun ordinal body ->
+            let proofs = claims |> List.mapi (fun ordinal (role, body) ->
                 let citizen = obligationNode node expansion
-                                { Id = sprintf "numeric_operation_%d_%d" (NodeId.value node.Id) ordinal
+                                { Id = Operations.claimId node ordinal role
                                   Kind = "numeric-operation-proof"; Logic = "QF_LIA"
                                   Statement = "The exact source operation construction satisfies its capacity or definedness requirement."
                                   Source = fmtRange node.Range; Refs = []; Body = body } |> Numeric.markOwned
@@ -158,7 +161,15 @@ let private settleCore (graph: SemanticGraph) anchor (values: Map<NodeId, Scalar
                 let operation, added, ownProofs = settleOne node recipe
                 let unresolved = if ownProofs |> List.forall _.Proven then unresolved else Map.add id "The operation's capacity or definedness obligation is refuted under its retained source ranges." unresolved
                 Enrichment.combine enrichment added, operation :: operations, unresolved, required, ownProofs @ proofs
-            with MissingOperation reason -> enrichment, operations, Map.add id reason unresolved, required, proofs)
+            with MissingOperation reason ->
+                let expansion = Elaboration.freshId ()
+                let pending = Operations.obligationRoles graph recipe |> List.mapi (fun ordinal role ->
+                    obligationNode node expansion
+                        { Id = Operations.claimId node ordinal role; Kind = "numeric-operation-proof"; Logic = "QF_LIA"
+                          Statement = "The exact source operation construction satisfies its capacity or definedness requirement."
+                          Source = fmtRange node.Range; Refs = []; Body = ObligationBody.Pending [reason] } |> Numeric.markOwned)
+                let own = { NewNodes = pending; Annotated = []; NewEdges = pending |> List.map (constrains [id; anchor]) }
+                Enrichment.combine enrichment own, operations, Map.add id reason unresolved, required, proofs)
         (Enrichment.empty, [], Map.empty, Set.empty, [])
 
 let settle graph anchor values runtime =

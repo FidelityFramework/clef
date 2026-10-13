@@ -4,6 +4,11 @@
 module Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
+module AggregateTypes = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes
+module TypeIdentity = Clef.Compiler.NativeTypedTree.TypeIdentities
+module Codes = Clef.Compiler.NativeTypedTree.Expressions.Types.DiagnosticCodes
 module ProofDispatch = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes
 module LiveScopes = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes
 module PreparedRows = Clef.Compiler.Baker.Recipes.WitnessForeignDemandRecipes
@@ -12,7 +17,91 @@ module PublishedRows = Clef.Compiler.Baker.Recipes.WitnessPublishedRowsRecipes
 
 type Projection = WitnessEmissionProjection
 
+/// Library retention is not a host-loading contract. Read only each checked
+/// public type: native values formed privately inside a body are not exports.
+let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure list =
+    let rec exposed seen participants path ty =
+        let ty = applySubst ty
+
+        if Types.tryGetNTUKind ty = Some NTUKind.NTUfnptr then
+            [ path, participants ]
+        else
+            let identity = TypeIdentity.ofType ty
+
+            if Set.contains identity seen then
+                []
+            else
+                let seen = Set.add identity seen
+
+                let child name =
+                    exposed seen participants (path @ [ name ])
+
+                match ty with
+                | NativeType.TForall(_, body) -> exposed seen participants path body
+                | NativeType.TFun(parameter, result) -> child "parameter" parameter @ child "result" result
+                | NativeType.TByref(element, _)
+                | NativeType.TNativePtr element
+                | NativeType.TLazy element
+                | NativeType.TSeq element
+                | NativeType.TSeqEnumerator element
+                | NativeType.TList element
+                | NativeType.TSet element -> child "element" element
+                | NativeType.TMap(key, value) -> child "key" key @ child "value" value
+                | _ ->
+                    match AggregateTypes.shape graph ty with
+                    | Some(AggregateTypes.Shape.Record(declaration, fields)) ->
+                        let participants = Set.union participants (Set.ofList (Option.toList declaration))
+
+                        fields
+                        |> List.collect (fun (name, field) -> exposed seen participants (path @ [ name ]) field)
+                    | Some(AggregateTypes.Shape.Union(declaration, cases)) ->
+                        let participants = Set.union participants (Set.ofList (Option.toList declaration))
+
+                        cases
+                        |> List.collect (fun (case, fields) ->
+                            fields
+                            |> List.mapi (fun ordinal (name, field) ->
+                                exposed seen participants (path @ [ case; Option.defaultValue ($"Item{ordinal + 1}") name ]) field)
+                            |> List.concat)
+                    | None ->
+                        // Only collection element positions carry values here.
+                        // Opaque phantom arguments, such as CHandle<'Tag>, do not.
+                        match ty, Types.tryGetNTUKind ty with
+                        | NativeType.TApp(_, [ element ]),
+                          Some(NTUKind.NTUarray | NTUKind.NTUborrowedview | NTUKind.NTUlazy | NTUKind.NTUseq | NTUKind.NTUlist | NTUKind.NTUset) ->
+                            child "element" element
+                        | NativeType.TApp(_, [ key; value ]), Some NTUKind.NTUmap -> child "key" key @ child "value" value
+                        | _ -> []
+
+    graph.DeclarationRoots
+    |> List.choose (fun (id, root) -> if root = DeclRoot.LibraryExport then Some id else None)
+    |> List.distinct
+    |> List.collect (fun id ->
+        match graph.Nodes.TryFind id with
+        | None ->
+            [
+                {
+                    Kind = WitnessProjectionFailureKind.Settlement
+                    Occurrence = Some id
+                    Participants = Set.singleton id
+                    Reason = "A retained library declaration is absent from the current source graph."
+                }
+            ]
+        | Some node ->
+            exposed Set.empty (Set.singleton id) [ "public interface" ] node.Type
+            |> List.map (fun (path, participants) ->
+                let location = String.concat "." path
+
+                {
+                    Kind = WitnessProjectionFailureKind.LibraryNativeInterfaceLoading
+                    Occurrence = Some id
+                    Participants = participants
+                    Reason =
+                        $"Library native callable exposure at {location} has no admitted host loading contract (L3); source retention and ProgramImageCodeLifetime do not establish host loading."
+                }))
+
 let private project graph =
+    let exported = exportedInterfaceFailures graph
     let ordinary = OrdinaryDemand.projectValidated graph
     // Callable component positions depend on this exact validated omission
     // proof. Reading an older held mask would publish inconsistent domains.
@@ -26,19 +115,32 @@ let private project graph =
     let memory = MemoryPublication.project graph
     let spatial = SpatialPublication.project graph
     match ordinary, callable, storage, boundary, numeric, memory, spatial with
-    | Ok ordinary, Ok callable, Ok storage, Ok boundary, Ok numeric, Ok memory, Ok spatial ->
+    | Ok ordinary, Ok callable, Ok storage, Ok boundary, Ok numeric, Ok memory, Ok spatial when exported.IsEmpty ->
         Ok { Ordinary = ordinary; Callable = callable; Storage = storage; Boundary = boundary; Numeric = numeric; Memory = memory; Spatial = spatial }
     | _ ->
         let failures = function Ok _ -> [] | Error failures -> failures
         // Failed demand validation already owns its diagnostic; the dependent
         // callable domain cannot contribute an independent result in that case.
         let callableFailures = match ordinary with Ok _ -> failures callable | Error _ -> []
-        Error (failures ordinary @ callableFailures @ failures storage @ failures boundary @ failures numeric @ failures memory @ failures spatial)
+        Error(
+            exported
+            @ failures ordinary
+            @ callableFailures
+            @ failures storage
+            @ failures boundary
+            @ failures numeric
+            @ failures memory
+            @ failures spatial
+        )
 
-/// The failures of `prepare` as CCS8403 diagnostics, each at the range of its occurrence.
+/// Preserve each typed failure's diagnostic meaning and source occurrence.
 let diagnostics (graph: SemanticGraph) (failures: WitnessProjectionFailure list) : Diagnostics.Diagnostic list =
     failures |> List.map (fun failure ->
-        ({ Severity = Diagnostics.NativeDiagnosticSeverity.Error; Code = "CCS8403"
+        let code =
+            match failure.Kind with
+            | WitnessProjectionFailureKind.Settlement -> "CCS8403"
+            | WitnessProjectionFailureKind.LibraryNativeInterfaceLoading -> Codes.CCS8416_LibraryNativeInterfaceLoading
+        ({ Severity = Diagnostics.NativeDiagnosticSeverity.Error; Code = code
            Message = "Source settlement is required before witnessing: " + failure.Reason
            Range = failure.Occurrence |> Option.bind graph.Nodes.TryFind |> Option.map _.Range |> Option.defaultValue Clef.Compiler.NativeTypedTree.NativeTypes.dummyRange
            RelatedNodes = Set.toList failure.Participants; Reachability = Diagnostics.ReachabilityContext.Reachable } : Diagnostics.Diagnostic))
@@ -167,40 +269,40 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
     match ProofDispatch.materialize graph with
     | Error failures -> Error failures
     | Ok current when facts.ProofDispatch |> Option.exists (fun held -> ProofDispatch.matches held current) |> not ->
-        Error [{ Occurrence = None; Participants = Set.empty
+        Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                  Reason = "Proof dispatch differs from the current source snapshot." }]
     | Ok dispatch ->
       match project graph with
       | Error failures -> Error failures
       | Ok projection ->
         if facts.OrdinaryDemand <> projection.Ordinary || facts.WitnessEmission <> Some projection then
-            Error [{ Occurrence = None; Participants = Set.empty
+            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Witness projection differs from the current source snapshot." }]
         elif
             (match LiveScopes.projectWithEmission projection graph with
              | Ok liveScope -> facts.WitnessSegmentation = Some (WitnessSegmentation.project graph projection liveScope)
              | Error _ -> false) |> not then
-            Error [{ Occurrence = None; Participants = Set.empty
+            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Witness segmentation differs from the current source snapshot." }]
         elif
             (match LiveScopes.projectWithEmission projection graph, facts.WitnessLiveScope with
              | Ok current, Some held -> LiveScopes.matches held current
              | _ -> false) |> not then
-            Error [{ Occurrence = None; Participants = Set.empty
+            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Live occurrence scope differs from the current source snapshot." }]
         elif
             (facts.WitnessPreparedRows |> Option.exists (fun held -> PreparedRows.matches held (PreparedRows.project graph))) |> not then
-            Error [{ Occurrence = None; Participants = Set.empty
+            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Baker-prepared foreign, demand and incidence rows differ from the current source snapshot." }]
         elif
             (match facts.WitnessLiveScope, facts.WitnessPreparedRows, facts.WitnessSegmentation, facts.WitnessLiveRows with
              | Some scope, Some prepared, Some segmentation, Some held ->
                  LiveRows.matches held (LiveRows.project graph projection scope prepared segmentation)
              | _ -> false) |> not then
-            Error [{ Occurrence = None; Participants = Set.empty
+            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Baker-selected live fact rows differ from the current source snapshot." }]
         elif not (isMaterialized graph) then
-            Error [{ Occurrence = None; Participants = Set.empty
+            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Witness input contains deferred source computations." }]
         elif
             (match facts.WitnessLiveScope, facts.WitnessLiveRows, facts.WitnessPublishedRows with
@@ -209,7 +311,7 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
                  | Ok current -> PublishedRows.matches held current
                  | Error _ -> false
              | _ -> false) |> not then
-            Error [{ Occurrence = None; Participants = Set.empty
+            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Baker-frozen publication rows differ from the current source snapshot." }]
         else Ok ()
 

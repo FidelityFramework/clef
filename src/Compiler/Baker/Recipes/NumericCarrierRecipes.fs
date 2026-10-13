@@ -32,6 +32,37 @@ let private resultSite (node: SemanticNode) =
     | SemanticKind.Binding _ | SemanticKind.PatternBinding _ | SemanticKind.Obligation _ -> false
     | _ -> true
 
+/// The owed census is derived from source demand, never from surviving carrier
+/// or obligation rows. Retention keeps an exported input visible even when a
+/// closed caller would otherwise establish an unused-formal omission.
+let private requiredSites (graph: SemanticGraph) =
+    let deferred = OrdinaryDemand.tryDeferredOnly graph |> Result.defaultValue Set.empty
+    let inactive =
+        match OrdinaryDemand.tryInactivity graph with
+        | Ok proof -> Set.union proof.Formals proof.Excluded
+        | Error _ -> Set.empty
+    let declarations = declarationOnly graph
+    let purposes = Reachability.declarationPurposes graph
+    let demanded id (node: SemanticNode) =
+        let retained = purposes |> Map.tryFind id |> Option.exists (Set.exists (snd >> (=) DeclRoot.LibraryExport))
+        node.IsReachable && not (declarations.Contains id) &&
+        (retained || (not (deferred.Contains id) && not (inactive.Contains id)))
+    let required = graph.Nodes |> Map.fold (fun ids id node ->
+        if demanded id node && scalarKind node.Type then Set.add id ids else ids) Set.empty
+    let indices = graph.Nodes.Values |> Seq.choose (fun node ->
+        match node.Kind with
+        | SemanticKind.ContinuationDispatch(operand, _, _) when demanded node.Id node -> Some(node, operand)
+        | _ -> None) |> Seq.toList
+    required, indices
+
+let private coverageId (node: SemanticNode) =
+    sourceClaimId "numeric-carrier-coverage" node
+    |> Option.defaultValue ($"numeric_carrier_{NodeId.value node.Id}")
+
+let private indexId (node: SemanticNode) =
+    sourceClaimId "numeric-index-coverage" node
+    |> Option.defaultValue ($"numeric_index_{NodeId.value node.Id}")
+
 let rec private kinds ty =
     let own = Types.tryGetNTUKind ty |> Option.toList
     let children =
@@ -73,17 +104,7 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
                              (inheritedRangeFacts: RangeContextFacts option) (graph: SemanticGraph) =
     let enrichId = Elaboration.freshId ()
     let anchor = Boundary.anchor enrichId graph |> fun node -> { node with Metadata = node.Metadata.Remove "Baker.BoundaryOwned" } |> Numeric.markOwned
-    let deferred = OrdinaryDemand.tryDeferredOnly graph |> Result.defaultValue Set.empty
-    let inactive =
-        match OrdinaryDemand.tryInactivity graph with
-        | Ok proof -> Set.union proof.Formals proof.Excluded
-        // The demand owner reports rejected evidence. It grants no exception
-        // to numeric commitment while that evidence is invalid or absent.
-        | Error _ -> Set.empty
-    let declarations = declarationOnly graph
-    let required = graph.Nodes |> Map.fold (fun ids id node ->
-        if node.IsReachable && not (deferred.Contains id) && not (inactive.Contains id) &&
-           not (declarations.Contains id) && scalarKind node.Type then Set.add id ids else ids) Set.empty
+    let required, indexSites = requiredSites graph
     let sourceReading = PlatformResolution.read graph
     let sourceCore = sourceReading.Platform |> Option.bind _.Core
     let finiteRelations = Numeric.finiteCellRelations graph
@@ -162,22 +183,48 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
             | None -> Error "The real scalar carrier has no unique source width declaration."
         | Some(NTUKind.NTUposit _) -> Error "The posit carrier requires its exact source format identity; IEEE width alone cannot authorize a posit representation."
         | _ -> Error "The required scalar carrier has no source settlement rule."
+    let pendingCoverage id reason =
+        match Types.tryGetNTUKind graph.Nodes[id].Type with
+        | Some kind when NTUKind.isInteger kind ->
+            let node =
+                obligationNode
+                    graph.Nodes[id]
+                    enrichId
+                    {
+                        Id = coverageId graph.Nodes[id]
+                        Kind = "numeric-carrier-coverage"
+                        Logic = "QF_LIA"
+                        Statement = "the held scalar carrier covers its exact source range under the retained source domain"
+                        Source = fmtRange graph.Nodes[id].Range
+                        Refs = []
+                        Body = ObligationBody.Pending [ reason ]
+                    }
+                |> Numeric.markOwned
+
+            {
+                NewNodes = [ node ]
+                Annotated = []
+                NewEdges = [ constrains [ id; anchor.Id ] node ]
+            }
+        | _ -> Enrichment.empty
     let values, unresolved, proofs = required |> Set.fold (fun (values, unresolved, proofs) id ->
         match select graph.Nodes[id] with
-        | Error reason -> values, Map.add id reason unresolved, proofs
+        | Error reason -> values, Map.add id reason unresolved, Enrichment.combine proofs (pendingCoverage id reason)
         | Ok carrier ->
             match carrier.Slot, Numeric.coverage carrier with
             | SettledSlot.Integer _, Some body ->
-                if Clef.Compiler.Baker.Ingredients.StringBytes.proofOutcome body <> BoundaryProofOutcome.Proven then
-                    values, Map.add id "The selected scalar carrier does not cover its established source range." unresolved, proofs
-                else
-                    let node = obligationNode graph.Nodes[id] enrichId
-                                   { Id = $"numeric_carrier_{NodeId.value id}"; Kind = "numeric-carrier-coverage"; Logic = "QF_LIA"
-                                     Statement = "the held scalar carrier covers its exact source range under the retained source domain"
-                                     Source = fmtRange graph.Nodes[id].Range; Refs = []; Body = body } |> Numeric.markOwned
-                    let carrier = { carrier with Obligations = [node.Id] }
-                    carrier :: values, unresolved, Enrichment.combine proofs { NewNodes = [node]; Annotated = []; NewEdges = Numeric.proofRows carrier node.Id body }
-            | SettledSlot.Integer _, None -> values, Map.add id "The required scalar coverage obligation is unavailable." unresolved, proofs
+                let unresolved =
+                    if Clef.Compiler.Baker.Ingredients.StringBytes.proofOutcome body = BoundaryProofOutcome.Proven then unresolved
+                    else Map.add id "The selected scalar carrier does not cover its established source range." unresolved
+                let node = obligationNode graph.Nodes[id] enrichId
+                               { Id = coverageId graph.Nodes[id]; Kind = "numeric-carrier-coverage"; Logic = "QF_LIA"
+                                 Statement = "the held scalar carrier covers its exact source range under the retained source domain"
+                                 Source = fmtRange graph.Nodes[id].Range; Refs = []; Body = body } |> Numeric.markOwned
+                let carrier = { carrier with Obligations = [node.Id] }
+                carrier :: values, unresolved, Enrichment.combine proofs { NewNodes = [node]; Annotated = []; NewEdges = Numeric.proofRows carrier node.Id body }
+            | SettledSlot.Integer _, None ->
+                let reason = "The required scalar coverage obligation is unavailable."
+                values, Map.add id reason unresolved, Enrichment.combine proofs (pendingCoverage id reason)
             | _ -> carrier :: values, unresolved, proofs) ([], Map.empty, Enrichment.empty)
     let elements = graph.Nodes |> Map.toList |> List.choose (fun (id, node) -> elementSlot graph node |> Option.map (fun slot -> id, slot)) |> Map.ofList
     let elementTypes =
@@ -204,13 +251,6 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
         if combined |> List.groupBy _.Operand |> List.exists (fun (_, sameActual) -> sameActual.Length > 1) then
             Map.add site "An operation's ordered occurrences demand contradictory adaptations for one actual identity." failures
         else failures) unresolved
-    let indexSites =
-        graph.Nodes.Values |> Seq.choose (fun node ->
-            match node.Kind with
-            | SemanticKind.ContinuationDispatch(operand, _, _)
-                when node.IsReachable && not(deferred.Contains node.Id) && not(inactive.Contains node.Id) && not(declarations.Contains node.Id) ->
-                Some(node, operand)
-            | _ -> None) |> Seq.toList
     let pointer = sourceCore |> Option.bind (fun core ->
         match core.Widths |> List.filter (fun width -> width.Name = "Pointer" && width.Bits > 0) with
         | [width] -> Some width
@@ -218,7 +258,30 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
     let bySite = values |> List.map (fun value -> value.Site, value) |> Map.ofList
     let indexEnrichment, indexTransports, unresolved =
         indexSites |> List.fold (fun (enrichment, transports, failures) (node, operand) ->
-            let refuse reason = enrichment, transports, Map.add node.Id reason failures
+            let refuse reason =
+                let proof =
+                    obligationNode
+                        node
+                        enrichId
+                        {
+                            Id = indexId node
+                            Kind = "numeric-index-coverage"
+                            Logic = "QF_LIA"
+                            Statement = "the exact dispatch selector range fits the declared platform index transport"
+                            Source = fmtRange node.Range
+                            Refs = []
+                            Body = ObligationBody.Pending [ reason ]
+                        }
+                    |> Numeric.markOwned
+
+                let own =
+                    {
+                        NewNodes = [ proof ]
+                        Annotated = []
+                        NewEdges = [ constrains [ node.Id; operand; anchor.Id ] proof ]
+                    }
+
+                Enrichment.combine enrichment own, transports, Map.add node.Id reason failures
             match pointer, bySite.TryFind operand with
             | Some width, Some carrier ->
                 match carrier.Slot, carrier.Range with
@@ -231,7 +294,7 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
                         let minimum, maximum = match capacity with ValueRange.Bounded(a,b) -> a,b | _ -> invalidOp "Finite index capacity expected."
                         let body = ObligationBody.IntegerRepresentationCoverage(lo, hi, minimum, maximum)
                         let proof = obligationNode node enrichId
-                                        { Id = $"numeric_index_{NodeId.value node.Id}"; Kind = "numeric-index-coverage"; Logic = "QF_LIA"
+                                        { Id = indexId node; Kind = "numeric-index-coverage"; Logic = "QF_LIA"
                                           Statement = "the exact dispatch selector range fits the declared platform index transport"
                                           Source = fmtRange node.Range; Refs = []; Body = body } |> Numeric.markOwned
                         let transport =
@@ -292,3 +355,88 @@ let elaborateWithFiniteReview inheritedFiniteReview graph =
     elaborateWithRangeReview inheritedFiniteReview false false None None graph |> fst
 
 let elaborate graph = elaborateWithRangeReview false false false None None graph |> fst
+
+/// Validate the source-rule census before a ledger or physical projection can
+/// be accepted. Deleting a requirement row together with its claim cannot make
+/// the surviving ledger appear complete.
+let completeness (graph: SemanticGraph) : (NodeId * string) list =
+    let required, indices = requiredSites graph
+
+    let expected =
+        (required
+         |> Set.toList
+         |> List.collect (fun id ->
+             let node = graph.Nodes[id]
+
+             let carrier =
+                 if Types.tryGetNTUKind node.Type |> Option.exists NTUKind.isInteger then
+                     [ id, coverageId node, "numeric-carrier-coverage" ]
+                 else
+                     []
+
+             let operations =
+                 Clef.Compiler.Baker.Ingredients.NumericOperations.operation graph node
+                 |> Option.map (fun recipe ->
+                     Clef.Compiler.Baker.Ingredients.NumericOperations.obligationRoles graph recipe
+                     |> List.mapi (fun ordinal role ->
+                         id, Clef.Compiler.Baker.Ingredients.NumericOperations.claimId node ordinal role, "numeric-operation-proof"))
+                 |> Option.defaultValue []
+
+             carrier @ operations))
+        @ (indices
+           |> List.map (fun (node, _) -> node.Id, indexId node, "numeric-index-coverage"))
+
+    let numericKind kind =
+        kind = "numeric-carrier-coverage"
+        || kind = "numeric-operation-proof"
+        || kind = "numeric-index-coverage"
+
+    let actual =
+        graph.Nodes
+        |> Map.toList
+        |> List.choose (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Obligation info when Numeric.owned node && numericKind info.Kind -> Some(id, info)
+            | _ -> None)
+
+    let collisions =
+        expected
+        |> List.groupBy (fun (_, key, _) -> key)
+        |> List.collect (fun (key, claims) ->
+            if claims.Length = 1 then
+                []
+            else
+                claims
+                |> List.map (fun (site, _, _) -> site, "Numeric obligation identity collision: " + key))
+
+    let missing =
+        expected
+        |> List.choose (fun (site, key, kind) ->
+            match actual |> List.filter (fun (_, info) -> info.Id = key && info.Kind = kind) with
+            | [ id, _ ] ->
+                let incidence =
+                    graph.Edges
+                    |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = id)
+
+                match incidence with
+                | [ edge ] when List.contains site edge.Sources -> None
+                | _ ->
+                    Some(
+                        site,
+                        "Numeric obligation completeness: missing or duplicate source incidence for "
+                        + key
+                    )
+            | _ -> Some(site, "Numeric obligation completeness: missing or duplicate claim " + key))
+
+    let unexpected =
+        actual
+        |> List.choose (fun (id, info) ->
+            if
+                expected
+                |> List.exists (fun (_, key, kind) -> key = info.Id && kind = info.Kind)
+            then
+                None
+            else
+                Some(id, "Numeric obligation completeness: unexpected claim " + info.Id))
+
+    collisions @ missing @ unexpected

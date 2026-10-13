@@ -2795,7 +2795,13 @@ type OrdinaryCallProjection = {
 /// use census, dependency closure and proof discharge belong to CCS/Baker.
 /// Resolved source declaration identity. The witness formats this admitted name;
 /// it does not recover declaration scope by following parent pointers.
+[<RequireQualifiedAccess>]
+type WitnessProjectionFailureKind =
+    | Settlement
+    | LibraryNativeInterfaceLoading
+
 type WitnessProjectionFailure = {
+    Kind: WitnessProjectionFailureKind
     Occurrence: NodeId option
     Reason: string
     Participants: Set<NodeId>

@@ -77,7 +77,12 @@ let private sequence (graph: SemanticGraph) occurrence (flow: SequenceFlow) =
     | _ -> Error "Sequence occurrence has incomplete or differently typed source alternatives."
 
 let private failure occurrence participants reason : WitnessProjectionFailure =
-    { Occurrence = occurrence; Reason = reason; Participants = participants }
+    {
+        Kind = WitnessProjectionFailureKind.Settlement
+        Occurrence = occurrence
+        Reason = reason
+        Participants = participants
+    }
 
 let project (graph: SemanticGraph) : Result<StorageWitnessProjection, WitnessProjectionFailure list> =
     let codata = graph.Codata.Value

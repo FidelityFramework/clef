@@ -350,5 +350,5 @@ let failures graph : WitnessProjectionFailure list =
             if List.map key rows <> List.map key retained then Some "The current binding demand relation differs from its complete typed scope/use proof."
             else pending
         reason |> Option.map (fun reason ->
-            { Occurrence = Some target; Reason = "PSG settlement (OrdinaryBindingDemand): " + reason
+            { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some target; Reason = "PSG settlement (OrdinaryBindingDemand): " + reason
               Participants = rows @ retained |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList }))

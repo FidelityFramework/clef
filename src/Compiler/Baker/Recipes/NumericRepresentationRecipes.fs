@@ -64,7 +64,7 @@ let renewAggregateTypes (affected: Set<TypeIdentity>) (graph: SemanticGraph) =
             let scalarUnchanged = domain.Values |> List.forall (fun carrier ->
                 occurrences.TryFind carrier.Site = domain.OccurrenceRepresentations.TryFind carrier.Site)
             if not changesAdmitted || not scalarUnchanged || Numeric.premises placed <> domain.Premises then
-                Error [{ Occurrence = Some held.Target; Participants = occurrenceChanges
+                Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some held.Target; Participants = occurrenceChanges
                          Reason = "Callable aggregate placement changed a non-aggregate source premise or scalar representation; its owning recipe must settle that change." }]
             elif layoutChanges.IsEmpty && occurrenceChanges.IsEmpty && typeChanges.IsEmpty then
                 Ok(graph, Set.empty)
@@ -80,7 +80,7 @@ let renewAggregateTypes (affected: Set<TypeIdentity>) (graph: SemanticGraph) =
                     |> Graph.invalidateWitness
                 // The ordinary numeric reader remains the acceptance rule.
                 Publication.project updated |> Result.map (fun _ -> updated, occurrenceChanges)
-        | _ -> Error [{ Occurrence = None; Participants = Set.empty
+        | _ -> Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                         Reason = "Aggregate representation renewal requires one current numeric account." }])
 
 let renewAggregateStorage (graph: SemanticGraph) =

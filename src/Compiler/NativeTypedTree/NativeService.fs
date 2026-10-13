@@ -561,7 +561,7 @@ let private residualDiagnostics (builder: NodeBuilder) (reported: Diagnostic lis
 /// - Named "main" (implies DeclRoot.EntryPoint), or
 /// - Have [<EntryPoint>] attribute (DeclRoot.EntryPoint), or
 /// - Have [<HardwareModule>] attribute (DeclRoot.HardwareModule)
-let private findDeclarationRoots (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes: SemanticNode list) : (NodeId * DeclRoot) list =
+let private findDeclarationRoots (libraryOutput: bool) (libraryExports: Set<NodeId>) (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes: SemanticNode list) : (NodeId * DeclRoot) list * Set<NodeId> =
     // Helper to get DeclRoot for a binding node
     let getBindingDeclRoot (node: SemanticNode option) =
         match node with
@@ -569,8 +569,9 @@ let private findDeclarationRoots (allNodes: Map<NodeId, SemanticNode>) (topLevel
             match memberNode.Kind with
             | SemanticKind.Binding(name, _, _, declRoot) ->
                 match declRoot with
+                | Some DeclRoot.LibraryExport -> None
                 | Some root -> Some (memberNode.Id, root)
-                | None when name = "main" -> Some (memberNode.Id, DeclRoot.EntryPoint)
+                | None when not libraryOutput && name = "main" -> Some (memberNode.Id, DeclRoot.EntryPoint)
                 | None -> None
             | _ -> None
         | None -> None
@@ -580,33 +581,31 @@ let private findDeclarationRoots (allNodes: Map<NodeId, SemanticNode>) (topLevel
         Map.tryFind nodeId allNodes
 
     // Find declaration roots: modules containing root bindings, or top-level root bindings
-    let roots =
+    let selected =
         topLevelNodes
-        |> List.collect (fun node ->
+        |> List.map (fun node ->
             match node.Kind with
             | SemanticKind.ModuleDef (_, memberIds) ->
-                // Check if this module contains a declaration root binding
-                let hasRoot =
-                    memberIds |> List.exists (fun memberId ->
-                        (getBindingDeclRoot (tryGetNode memberId)).IsSome)
-                if hasRoot then
-                    // Return the module's NodeId paired with the first root's DeclRoot flavor
-                    let firstRoot =
-                        memberIds
-                        |> List.tryPick (fun memberId -> getBindingDeclRoot (tryGetNode memberId))
-                    match firstRoot with
-                    | Some (_, root) -> [(node.Id, root)]
-                    | None -> []
-                else []
-            | SemanticKind.Binding(name, _, _, declRoot) ->
-                match declRoot with
-                | Some root -> [(node.Id, root)]
-                | None when name = "main" -> [(node.Id, DeclRoot.EntryPoint)]
-                | None -> []
-            | _ -> []
+                let bindings = memberIds |> List.choose (tryGetNode >> getBindingDeclRoot)
+                match bindings with
+                | (_, root) :: _ -> [(node.Id, root)], bindings |> List.map fst
+                | [] -> [], []
+            | _ ->
+                match getBindingDeclRoot (Some node) with
+                | Some root -> [root], [fst root]
+                | None -> [], []
         )
 
-    roots
+    // Binding slots retain explicit concrete annotations. Export eligibility is
+    // checked separately; one declaration may contribute both purposes.
+    let roots =
+        (selected |> List.collect fst) @ (libraryExports |> Set.toList |> List.map (fun id -> id, DeclRoot.LibraryExport))
+        |> List.distinct
+    // A containing-module root also retains the source binding that selected
+    // it. Inferred main can be generic before startup supplies its argument;
+    // specialization cannot delete that entry and leave the whole module live.
+    let declarations = selected |> List.collect snd |> Set.ofList |> Set.union libraryExports
+    roots, declarations
 
 //-------------------------------------------------------------------------
 // Graph Building Helpers
@@ -939,7 +938,7 @@ let private unusedBindingDiagnostics (ownedSources: Set<string>) (graph: Semanti
 
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
-let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) (ownedSources: Set<string>) : CheckResult =
+let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) (ownedSources: Set<string>) (libraryOutput: bool) (libraryExports: Set<NodeId>) : CheckResult =
     // Host-only diagnosis of source settlement; never changes the graph or
     // supplies semantic evidence. Disabled unless explicitly requested.
     let phaseTimer = System.Diagnostics.Stopwatch.StartNew()
@@ -947,7 +946,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         if System.Environment.GetEnvironmentVariable("CLEF_PHASE_TIMING") = "1" then
             System.Console.Error.WriteLine("[CCS phase] {0} {1:F3}s", name, phaseTimer.Elapsed.TotalSeconds)
     tracePhase "source-input"
-    let declRoots = findDeclarationRoots builder.Nodes topLevelNodes
+    let declRoots, retainedDeclarations =
+        findDeclarationRoots libraryOutput libraryExports builder.Nodes topLevelNodes
 
     // CRITICAL: Apply type substitutions to resolve type variables after constraint solving.
     // During type checking, nodes are created with fresh type variables that get unified
@@ -959,13 +959,15 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         |> Map.map (fun _id node -> SemanticGraph.mapNodeTypes applySubst node)
         // An application of a generalised binding records its instance (design b.4 step 4).
         |> annotateInstantiations
+        |> Clef.Compiler.Baker.Ingredients.Obligations.annotateSourceClaims
     // The saturation residual (CS-8): asserted here, where types have left the stores and before
     // the map is copied per instantiation; from here the node map is immutable (I2).
     let residual = saturationResidual builder resolvedNodes diagnostics
     let sourceNodes = resolvedNodes
     // Applied specialization has historical source/clone correspondence before
     // ordinary saturation starts; seed those derivations in initial F.
-    let specialization = Monomorphization.runWithEvidence resolvedNodes
+    let specialization =
+        Monomorphization.runWithEvidencePreserving retainedDeclarations resolvedNodes
     let resolvedNodes =
         specialization.Nodes
         // `+` resolved at the string kind carries the concat intrinsic (design c.3, D5).
@@ -1017,7 +1019,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // the later source-admission gate still prevents native realization.
     let graph, programInitializationDiagnostics =
         let roots = topLevelNodes |> List.map _.Id
-        if ownedSources.IsEmpty then Clef.Compiler.Nanopass.ProgramInitialization.normalize roots graph
+        if libraryOutput then graph, []
+        elif ownedSources.IsEmpty then Clef.Compiler.Nanopass.ProgramInitialization.normalize roots graph
         else Clef.Compiler.Nanopass.ProgramInitialization.normalizeOwned ownedSources roots graph
 
     // Phase 4: Reachability analysis
@@ -1255,24 +1258,37 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
          |> not)
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
     let sourceAdmitted = sourceAdmitted && programStorageDiagnostics.IsEmpty
+    // Export retention has no physical commitment. A concrete root, including
+    // one alongside retained roots, still takes the strict whole-graph path.
+    let physicalAdmitted =
+        sourceAdmitted
+        && (not libraryOutput
+            || (finalGraph.DeclarationRoots
+                |> List.exists (snd >> ((<>) DeclRoot.LibraryExport))))
     let finalGraph, curry, environmentFactoryResults =
-        if sourceAdmitted && finalGraph.Platform.IsSome then
+        if physicalAdmitted && finalGraph.Platform.IsSome then
             Clef.Compiler.Nanopass.EnvironmentFactoryResults.prepareWithAccounts finalGraph curry
         else finalGraph, curry, Map.empty
     let finalGraph, curry =
-        if sourceAdmitted && finalGraph.Platform.IsSome then
+        if physicalAdmitted && finalGraph.Platform.IsSome then
             Clef.Compiler.Nanopass.LazyFactoryResults.prepare finalGraph curry
         else finalGraph, curry
     // Destinations describe where results will be formed. Prepare both families
     // before proving residence, so no preliminary missing-lifetime diagnostic
     // survives after its owning relationship has been supplied.
-    let preparedSequences = Clef.Compiler.Nanopass.SequenceRuntime.prepareWhenSourceAdmitted sourceAdmitted finalGraph curry
+    let preparedSequences =
+        Clef.Compiler.Nanopass.SequenceRuntime.prepareWhenSourceAdmitted physicalAdmitted finalGraph curry
     tracePhase "sequence-preparation"
     let finalGraph = preparedSequences.Graph
-    let finalGraph, environments = Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.settlePreparedWhenSourceAdmitted sourceAdmitted
+    let finalGraph, environments = Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.settlePreparedWhenSourceAdmitted physicalAdmitted
                                     preparedSequences.Destinations preparedSequences.FactoryCalls finalGraph
     tracePhase "environment-settlement"
-    let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizePreparedWhenSourceAdmitted sourceAdmitted { preparedSequences with Graph = finalGraph }
+    let finalGraph, sequences =
+        Clef.Compiler.Nanopass.SequenceRuntime.normalizePreparedWhenSourceAdmitted
+            physicalAdmitted
+            { preparedSequences with
+                Graph = finalGraph
+            }
     tracePhase "sequence-settlement"
     let curry = sequences.Curry
     // Representation nanopasses can clone or retire marked occurrences. Demand
@@ -1285,7 +1301,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // supplies the physical omission convention before callable projection.
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph, premiseDiagnostics = Clef.Compiler.Nanopass.PremiseEstablishment.normalize finalGraph
-    let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
+    let finalGraph, lazies =
+        Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted physicalAdmitted finalGraph
     let finalGraph, initializationOrderDiagnostics, programInitializationOrders =
         Clef.Compiler.Nanopass.ProgramInitializationOrder.settleWithAccounts finalGraph
     let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
@@ -1295,7 +1312,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let environmentOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins finalGraph
     let knownCallables = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables finalGraph
     let callableCarriers, callableCarrierResiduals =
-        if sourceAdmitted && finalGraph.Platform.IsSome then
+        if physicalAdmitted && finalGraph.Platform.IsSome then
             Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.settle
                 { Layouts = environments.Layouts; Origins = environmentOrigins; Known = knownCallables
                   Contracts = finalGraph.Codata.Value.CallableContracts } finalGraph
@@ -1397,14 +1414,14 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // actual scalar representations. Aggregate storage is settled before the
     // memory/spatial/boundary owners consume its extent.
     let finalGraph, callableCarrierDiagnostics, callableFlowDiagnostics =
-        if not sourceAdmitted || finalGraph.Platform.IsNone then
+        if not physicalAdmitted || finalGraph.Platform.IsNone then
             finalGraph, callableCarrierDiagnostics, callableFlowDiagnostics
         else
             let refined, carrierResiduals, flowResiduals =
                 Clef.Compiler.Nanopass.CallableBranchSettlement.normalize finalGraph
             refined, carrierDiagnostics refined carrierResiduals, flowDiagnostics refined flowResiduals
     let finalGraph, aggregateResiduals =
-        if not sourceAdmitted || finalGraph.Platform.IsNone then finalGraph, []
+        if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.normalize finalGraph
     // Inventory consumes the aggregate owner's final physical extents.
     let programInventory = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle finalGraph
@@ -1416,10 +1433,15 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
     let finalGraph, aggregateAccountResiduals =
-        if not sourceAdmitted || finalGraph.Platform.IsNone then finalGraph, []
+        if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts finalGraph
     let storagePremiseDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.premiseGuard finalGraph
-    ObligationDischarge.emit finalGraph
+    let obligationCompleteness =
+        Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.completeness finalGraph
+    let obligationInventory =
+        if obligationCompleteness.IsEmpty then Result.Ok(ObligationDischarge.ofGraph finalGraph)
+        else Result.Error(obligationCompleteness |> List.map _.Reason)
+    ObligationDischarge.emit obligationInventory
     tracePhase "obligations"
 
     // Publication retains the exact prepared input roots, including collection
@@ -1430,12 +1452,19 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         // publication uses the same readiness boundary as callable settlement;
         // it must neither demand a target from that source query nor admit it
         // to an emitter without declared physical facts.
-        if not sourceAdmitted || finalGraph.Platform.IsNone then finalGraph, []
+        if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else
             match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare finalGraph with
             | Result.Ok admitted -> admitted, []
             | Result.Error failures ->
                 finalGraph, Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics finalGraph failures
+
+    let witnessEmissionDiagnostics =
+        witnessEmissionDiagnostics
+        @ (obligationCompleteness
+           @ Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.exportedInterfaceFailures finalGraph
+           |> Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics finalGraph)
+        |> List.distinct
 
     let aggregateDiagnostics =
         let demanded =
@@ -2016,7 +2045,54 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
 type private ModuleContext = {
     Path: ModulePath
     IsRecursive: bool
+    IsPublic: bool
+    LibrarySources: Set<string>
+    LibraryExports: Set<NodeId> ref
+    DeclarationIdentities: Map<SourceRange, string> option
+    SourceEpoch: System.Guid
 }
+
+let private sourceModuleContext librarySources identities = {
+    Path = []; IsRecursive = false; IsPublic = true
+    LibrarySources = librarySources; LibraryExports = ref Set.empty
+    DeclarationIdentities = identities; SourceEpoch = System.Guid.NewGuid()
+}
+
+/// Attach declaration provenance while the checked source binding and its
+/// identifier still coincide. Source coordinates are lookup keys, never identity.
+let private recordModuleDeclaration (ctx: ModuleContext) (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) (checkedBinding: Bindings.CheckedBinding) =
+    let (SynBinding(_, _, isInline, _, attrs, _, _, _, _, _, _, _, _)) = binding
+    let namedNodes =
+        match checkedBinding.Declares with
+        | Bindings.Declared.Name name -> [name, checkedBinding.Node]
+        | Bindings.Declared.Components nodes -> nodes
+        | Bindings.Declared.Nothing -> []
+    for name, nameRange, visible in Bindings.sourceBindingNames binding do
+        match namedNodes |> List.tryFind (fun (declaredName, _) -> declaredName = name) with
+        | None -> () // A refused binding has no admitted declaration.
+        | Some (_, node) ->
+            let identity =
+                match ctx.DeclarationIdentities with
+                | Some identities ->
+                    identities |> Map.tryFind nameRange
+                    |> Option.defaultWith (fun () -> invalidOp "Checked declaration is absent from the complete source identity observation.")
+                | None ->
+                    let sourceUnit = System.IO.Path.GetFullPath(nameRange.File).Replace('\\', '/')
+                    Clef.Compiler.Baker.Ingredients.Obligations.declarationIdentity ctx.SourceEpoch 0L sourceUnit (ctx.Path @ [name])
+            builder.SetMetadata(node.Id, "Source.DeclarationIncarnation", MetadataValue.String identity) |> ignore
+            if Set.contains nameRange.File ctx.LibrarySources && hasEntryPointAttribute attrs then
+                addDiagnostic {
+                    Severity = NativeDiagnosticSeverity.Error
+                    Code = DiagnosticCodes.CCS8417_LibraryEntryPointConflict
+                    Message = "An explicit EntryPoint declaration is not permitted in library output."
+                    Range = nameRange
+                    RelatedNodes = [node.Id]
+                    Reachability = ReachabilityContext.Unknown
+                } env
+            if ctx.IsPublic && visible && Set.contains nameRange.File ctx.LibrarySources
+               && not isInline && not (hasLiteralAttribute attrs)
+               && (extractFidelityExternAttribute attrs).IsNone then
+                ctx.LibraryExports.Value <- Set.add node.Id ctx.LibraryExports.Value
 
 /// Check if a type definition has the [<Measure>] attribute
 let private hasMeasureAttribute (attrs: SynAttributes) : bool =
@@ -2199,6 +2275,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         let node = checkedBinding.Node
                         Bindings.recordSourceBinding false builder binding node
                             (checkedBinding.InlineBody.IsSome || checkedBinding.Literal.IsSome)
+                        recordModuleDeclaration ctx accEnv builder binding checkedBinding
 
                         // Unify placeholder type with inferred type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
@@ -2222,6 +2299,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let node = checkedBinding.Node
                     Bindings.recordSourceBinding false builder binding node
                         (checkedBinding.InlineBody.IsSome || checkedBinding.Literal.IsSome)
+                    recordModuleDeclaration ctx accEnv builder binding checkedBinding
                     // Let-polymorphism: a top-level function with free type variables left after
                     // solving the constraints so far becomes a TForall scheme (Binding node + env).
                     // [<Literal>] bindings are registered for compile-time substitution.
@@ -2609,14 +2687,15 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         let range = rangeToSourceRange moduleRange
 
         // Extract module name from moduleInfo
-        let (SynComponentInfo(attrs, _, _, longId, _, _, _, _)) = moduleInfo
+        let (SynComponentInfo(attrs, _, _, longId, _, _, accessibility, _)) = moduleInfo
         let moduleParts = longId |> List.map (fun id -> id.idText)
         let moduleName = String.concat "." moduleParts
         checkModuleAttributes attrs moduleRange env
 
         // Create nested context with extended path
         let nestedPath = ctx.Path @ moduleParts
-        let nestedCtx = { Path = nestedPath; IsRecursive = isRecursive }
+        let visible = match accessibility with None | Some (SynAccess.Public _) -> true | _ -> false
+        let nestedCtx = { ctx with Path = nestedPath; IsRecursive = isRecursive; IsPublic = ctx.IsPublic && visible }
 
         // Check all declarations in the nested module
         let declaredEnv =
@@ -2719,13 +2798,13 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
         NodeId.reset()
         solvedConstraintCount <- 0
 
-        let ctx = { Path = []; IsRecursive = false }
+        let ctx = sourceModuleContext Set.empty None
         let (finalEnv, nodes) = checkModuleDecls env builder ctx decls
         // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
         let reported = solveAndGetDiagnostics finalEnv !(env.Constraints) @ List.rev !(env.Diagnostics)
         let diagnostics = reported @ residualDiagnostics builder reported
 
-        buildResult builder nodes Map.empty diagnostics None Set.empty
+        buildResult builder nodes Map.empty diagnostics None Set.empty false Set.empty
 
     //-------------------------------------------------------------------------
     // Type Checking: Module or Namespace Level
@@ -2733,8 +2812,8 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
     )
 
 /// Check a module or namespace and return updated environment and semantic nodes
-let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (moduleOrNs: SynModuleOrNamespace) : TypeEnv * ModulePath * SemanticNode list =
-    let (SynModuleOrNamespace(longId, isRecursive, kind, decls, _xmlDoc, attrs, _accessibility, nsRange, _trivia)) = moduleOrNs
+let private checkModuleOrNamespace (sourceContext: ModuleContext) (env: TypeEnv) (builder: NodeBuilder) (moduleOrNs: SynModuleOrNamespace) : TypeEnv * ModulePath * SemanticNode list =
+    let (SynModuleOrNamespace(longId, isRecursive, kind, decls, _xmlDoc, attrs, accessibility, nsRange, _trivia)) = moduleOrNs
 
     // Build the module path from the long identifier
     let modulePath: ModulePath = longId |> List.map (fun id -> id.idText)
@@ -2749,7 +2828,8 @@ let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (module
         | SynModuleOrNamespaceKind.GlobalNamespace -> true
 
     // Create context for checking declarations
-    let ctx = { Path = modulePath; IsRecursive = isRecursive }
+    let visible = match accessibility with None | Some (SynAccess.Public _) -> true | _ -> false
+    let ctx = { sourceContext with Path = modulePath; IsRecursive = isRecursive; IsPublic = visible }
 
     // Check all declarations
     checkModuleAttributes attrs nsRange env
@@ -2793,11 +2873,13 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
         // Track which file we're processing (for diagnostics)
         let _ = fileName  // Could be added to CheckResult metadata
         let _ = qualifiedNameOfFile  // The qualified name can be used for module resolution
+        let sourceContext = sourceModuleContext Set.empty None
 
         // Process each module or namespace in the file, threading environment
         let (finalEnv, moduleResults) =
             contents |> List.fold (fun (accEnv, accResults) moduleOrNs ->
-                let (updatedEnv, path, nodes) = checkModuleOrNamespace accEnv builder moduleOrNs
+                let (updatedEnv, path, nodes) =
+                    checkModuleOrNamespace sourceContext accEnv builder moduleOrNs
                 (updatedEnv, (path, nodes) :: accResults)
             ) (initialEnv, [])
 
@@ -2814,7 +2896,7 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
         let reported = solved @ List.rev !(initialEnv.Diagnostics)
         let diagnostics = reported @ residualDiagnostics builder reported
 
-        buildResult builder allNodes modulePaths diagnostics None Set.empty
+        buildResult builder allNodes modulePaths diagnostics None Set.empty false Set.empty
     )
 
 /// Check multiple parsed implementation files together with optional platform context.
@@ -2824,12 +2906,14 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
 ///
 /// platformContext: Optional platform context. When Some, enables entry point elaboration
 /// for freestanding builds (adds _start wrapper that calls main).
-let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platformContext: PlatformContext option) (ownedSources: Set<string>) : CheckResult =
+let checkParsedInputsWithDeclarations (inputs: ParsedInput list) (platformContext: PlatformContext option) (ownedSources: Set<string>) (librarySources: Set<string> option) (identities: Map<SourceRange, string> option) : CheckResult =
     Clef.Compiler.CheckExecution.synchronized (fun () ->
         let initialEnv = createTypeEnv()
         let builder = NodeBuilder()
         NodeId.reset()
         solvedConstraintCount <- 0
+        let sourceContext =
+            sourceModuleContext (Option.defaultValue Set.empty librarySources) identities
 
         // Process all files in order, threading environment
         let (finalEnv, allModuleResults) =
@@ -2840,7 +2924,8 @@ let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platform
                     // Process each module in this file
                     let (updatedEnv, fileResults) =
                         contents |> List.fold (fun (env, results) moduleOrNs ->
-                            let (newEnv, path, nodes) = checkModuleOrNamespace env builder moduleOrNs
+                            let (newEnv, path, nodes) =
+                                checkModuleOrNamespace sourceContext env builder moduleOrNs
                             (newEnv, (path, nodes) :: results)
                         ) (accEnv, [])
                     // Both accumulators are reversed. Preserve that invariant
@@ -2875,8 +2960,20 @@ let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platform
         let reported = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
         let allDiagnostics = reported @ residualDiagnostics builder reported
 
-        buildResult builder allNodes modulePaths allDiagnostics platformContext ownedSources
+        buildResult
+            builder
+            allNodes
+            modulePaths
+            allDiagnostics
+            platformContext
+            ownedSources
+            librarySources.IsSome
+            sourceContext.LibraryExports.Value
     )
+
+/// Existing callers retain executable inference and open a fresh source epoch.
+let checkParsedInputsWithPlatformAndSources inputs platformContext ownedSources =
+    checkParsedInputsWithDeclarations inputs platformContext ownedSources None None
 
 /// The general checking API has no project ownership facts, so it does not
 /// classify public declarations as unused application helpers.
