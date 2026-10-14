@@ -60,6 +60,179 @@ let main _ =
 """
 
 type CallableAggregateCases() =
+    [<Fact>]
+    member _.``Published callable projection refuses coherent supplying construction withdrawal``() =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.source true)
+
+        let revision =
+            AggregatePublication.publish graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let callable = revision.Emission.Callable
+
+        let project =
+            callable.AggregateValues.Values
+            |> Seq.collect id
+            |> Seq.find (fun row -> row.Operation = Fidelity.PSG.CallableAggregateOperation.Project)
+
+        let construction = project.FormationInputs.Head
+
+        let retained (row: Fidelity.PSG.CallableAggregateValue) =
+            not (
+                row.Occurrence = construction
+                && row.Slot = project.Slot
+                && row.Operation = Fidelity.PSG.CallableAggregateOperation.Construct
+            )
+
+        let values =
+            callable.AggregateValues
+            |> Map.map (fun _ rows -> List.filter retained rows)
+            |> Map.filter (fun _ rows -> not rows.IsEmpty)
+
+        let refresh (account: Fidelity.PSG.CallableAggregateDependencyAccount) =
+            let parts =
+                (account.Slots |> List.collect _.Participants)
+                @ (account.Values
+                   |> List.collect (fun row ->
+                       row.Participants
+                       @ (row.Tag |> Option.map _.Participants |> Option.defaultValue [])))
+                @ (account.Carriers |> List.collect _.Lifetime)
+                @ (account.Contracts |> List.collect _.Participants)
+
+            let ids = parts |> List.map _.Node |> List.distinct
+            let sources = account.Sources |> List.map (fun row -> row.Node, row) |> Map.ofList
+            let claims = Map.ofList account.Claims
+
+            { account with
+                Participants = parts
+                Sources = ids |> List.choose sources.TryFind
+                Claims =
+                    ids
+                    |> List.choose (fun id -> claims.TryFind id |> Option.map (fun claim -> id, claim))
+            }
+
+        let accounts =
+            callable.AggregateDependencies
+            |> Map.toList
+            |> List.choose (fun (site, account) ->
+                let rows = account.Values |> List.filter retained
+
+                if rows.IsEmpty then
+                    None
+                else
+                    Some(site, refresh { account with Values = rows }))
+            |> Map.ofList
+
+        let withdrawn =
+            { revision with
+                Codata =
+                    { revision.Codata with
+                        CallableAggregateValues = values
+                        CallableAggregateDependencies = accounts
+                    }
+                Emission =
+                    { revision.Emission with
+                        Callable =
+                            { callable with
+                                AggregateValues = values
+                                AggregateDependencies = accounts
+                            }
+                    }
+            }
+
+        let failures = Fidelity.PSG.Integrity.callableAggregates withdrawn
+        Assert.DoesNotContain(failures, fun failure -> failure.Part.EndsWith(".I6"))
+
+        Assert.Contains(
+            failures,
+            fun failure ->
+                failure.Part.EndsWith(".I5")
+                && failure.Node = Some project.Occurrence
+                && failure.Reason = "The callable projection differs from its supplying construction."
+        )
+
+    [<Theory>]
+    [<InlineData(true)>]
+    [<InlineData(false)>]
+    member _.``Published callable projections retain exact alias subjects and supplying constructors`` record =
+        let original = CallableAggregateFixture.source record
+
+        let source =
+            if record then
+                original.Replace("    if holder.Apply true", "    let alias = holder\n    if alias.Apply true")
+            else
+                original.Replace(
+                    "let main _ = if Result.defaultValue fallback (input ()) true then 0 else 1",
+                    "let main _ =\n    let supplied = input ()\n    let alias = supplied\n    if Result.defaultValue fallback alias true then 0 else 1"
+                )
+
+        let graph = CallableAggregateFixture.check source
+
+        let revision =
+            AggregatePublication.publish graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+        let rows =
+            revision.Emission.Callable.AggregateValues.Values
+            |> Seq.collect id
+            |> Seq.toList
+
+        let projections =
+            rows
+            |> List.filter (fun row -> row.Operation = Fidelity.PSG.CallableAggregateOperation.Project)
+
+        Assert.NotEmpty projections
+
+        for projection in projections do
+            let node =
+                Fidelity.PSG.Revision.tryNode projection.Occurrence revision |> Option.get
+
+            let subject =
+                match node.Kind with
+                | Fidelity.PSG.SemanticKind.FieldGet(subject, _) -> subject
+                | Fidelity.PSG.SemanticKind.DUEliminate(subject, _, _, _) -> subject
+                | kind -> failwithf "Unexpected callable projection: %A" kind
+
+            Assert.Equal(subject, projection.Aggregate)
+            Assert.Equal(2, projection.FormationInputs.Length)
+
+            let supplying =
+                rows
+                |> List.find (fun row ->
+                    row.Occurrence = projection.FormationInputs.Head
+                    && row.Slot = projection.Slot
+                    && row.Operation = Fidelity.PSG.CallableAggregateOperation.Construct)
+
+            Assert.Equal(Some(List.last projection.FormationInputs), supplying.Value)
+            Assert.Equal(None, projection.Value)
+            Assert.Equal(None, projection.SelectedAlternative)
+            Assert.Equal(Some 0, supplying.SelectedAlternative)
+            Assert.Equal<Fidelity.PSG.CallableAggregateAlternative list>(supplying.Alternatives, projection.Alternatives)
+            Assert.Equal(supplying.Selector, projection.Selector)
+            Assert.Equal(supplying.Bytes, projection.Bytes)
+            Assert.Equal(supplying.Alignment, projection.Alignment)
+
+        if not record then
+            // N3-SOURCE-INACTIVITY: the absent payload/default route is not
+            // committed yet. Preserve its precise source refusal rather than
+            // manufacturing a Project or claiming fallback publication.
+            let absent =
+                CallableAggregateFixture.checkResult (source.Replace("= Ok first", "= Error true"))
+
+            Assert.Contains(
+                absent.Diagnostics,
+                fun failure ->
+                    failure.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error
+                    && failure.Code = "CCS8414"
+                    && failure.Message =
+                        "A callable projection names an absent union payload; it needs source inactivity evidence before demand may be excluded."
+                    && failure.Range.File = "callable-aggregate.clef"
+                    && not failure.RelatedNodes.IsEmpty
+            )
+
     [<Theory>]
     [<InlineData(0)>]
     [<InlineData(1)>]
