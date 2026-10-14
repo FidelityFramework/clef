@@ -6,7 +6,8 @@
 /// the ledger (06a_obligations.json) and the solver-ready SMT-LIB artifact
 /// (06b_obligations.smt2) that cvc5 discharges. Refutation style throughout:
 /// each obligation is a named Boolean anchor; its definition and its negation
-/// are asserted; `unsat` means it holds.
+/// are asserted. Conditional foreign claims also require the dispatcher's
+/// separate premise-satisfiability check; a rendered query is no discharge.
 ///
 /// The anchor name is the identity that travels: the build-time dispatch
 /// (Composer's SMTTransfer, over the witnessed MLIR) reads the same records
@@ -19,6 +20,7 @@ module Clef.Compiler.Nanopass.ObligationDischarge
 open System.IO
 open Fidelity.Data.JSON
 open Clef.Compiler.NativeTypedTree.DimensionAlgebra
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
@@ -26,6 +28,27 @@ open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
 //=============================================================================
 // SMT-LIB RENDERING
 //=============================================================================
+
+// Transcribe native data only. The public owner supplies the conditional law.
+let private foreignProjection (model: ForeignResultCoverageModel) =
+    let bound = function
+        | ForeignResultBound.Constant value -> Fidelity.PSG.ForeignResultBound.Constant value
+        | ForeignResultBound.Argument index -> Fidelity.PSG.ForeignResultBound.Argument index
+    let range = function
+        | ValueRange.Empty -> Fidelity.PSG.ValueRange.Empty
+        | ValueRange.Bounded(lower, upper) -> Fidelity.PSG.ValueRange.Bounded(lower, upper)
+        | ValueRange.Above lower -> Fidelity.PSG.ValueRange.Above lower
+        | ValueRange.Below upper -> Fidelity.PSG.ValueRange.Below upper
+        | ValueRange.Unbounded -> Fidelity.PSG.ValueRange.Unbounded
+    match model.Application.Hypothesis with
+    | None -> Error "Foreign result behavior contract is missing"
+    | Some _ when model.Abi.IsNone ->
+        Error "Foreign result coverage has no actual ABI premise"
+    | Some hypothesis ->
+        Fidelity.PSG.ForeignResultCoverage.project
+            (bound hypothesis.Lower) (bound hypothesis.Upper)
+            (model.Application.Arguments |> List.map (fun actual -> actual.Index, range actual.Enclosure))
+            (range model.ResultRange) (range model.Destination) (range model.AbiRange)
 
 /// One obligation's scope: the anchor's definition, then its negation.
 let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
@@ -40,6 +63,13 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     match body with
     | ObligationBody.Pending reasons ->
         invalidArg "body" ("A pending obligation has no solver term: " + String.concat "; " reasons)
+    | ObligationBody.ForeignResultCoverage model ->
+        match foreignProjection model with
+        | Error reason -> invalidArg "body" reason
+        | Ok projection ->
+            Fidelity.PSG.ForeignResultCoverage.declarations projection
+            @ [ sprintf "(assert (= %s %s))" id (Fidelity.PSG.ForeignResultCoverage.smtLib projection.Conclusion)
+                sprintf "(assert (not %s))" id ]
     | ObligationBody.ProgramInitializationOrder(initializerOrdinal, initializerCount, useOrdinals) ->
         let ordinal, count = integer (bigint initializerOrdinal), integer (bigint initializerCount)
         let clauses =
@@ -420,7 +450,8 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
           sprintf "(assert (not %s))" id ]
 
 /// The solver-ready artifact: one scope per obligation; `unsat` on every
-/// (check-sat) means every obligation holds.
+/// (check-sat) supplies the refutation result. Conditional premises must also
+/// pass their separate satisfiability check before discharge is accepted.
 let private readySmtLib (obligations: ObligationInfo list) : string =
     obligations
     |> List.map (fun ob ->
@@ -445,6 +476,11 @@ let unavailable (obligations: ObligationInfo list) : UnavailableObligation list 
         match obligation.Body with
         | ObligationBody.Pending reasons ->
             Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = reasons }
+        | ObligationBody.ForeignResultCoverage model ->
+            match foreignProjection model with
+            | Ok _ -> None
+            | Error reason ->
+                Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = [reason] }
         | _ -> None)
 
 let trySmtLib (obligations: ObligationInfo list) : Result<string, UnavailableObligation list> =
@@ -472,29 +508,114 @@ let smtLib (obligations: ObligationInfo list) : string =
 /// surface, and the anchor list the build-time dispatch is paired against.
 let private stringArray values = values |> List.map JsonValue.String |> JsonValue.Array
 
+/// Transcribe stated foreign premises separately from graph-derived enclosures.
+/// These rows describe the trusted base; projection readiness is no discharge.
+let private foreignLedgerFields (model: ForeignResultCoverageModel) =
+    let node id =
+        JsonValue.String(string (NodeId.value id))
+
+    let bound =
+        function
+        | ForeignResultBound.Constant value -> string value
+        | ForeignResultBound.Argument index -> sprintf "argument[%d]" index
+
+    let hypothesis =
+        model.Application.Hypothesis
+        |> Option.map (fun hypothesis ->
+            JsonValue.Object
+                [
+                    "kind", JsonValue.String "external-execution-hypothesis"
+                    "identity", JsonValue.String hypothesis.Identity
+                    "version", JsonValue.String hypothesis.Version
+                    "source", JsonValue.String hypothesis.Source
+                    "quote", node hypothesis.Quote
+                    "declaration", node hypothesis.Declaration
+                    "lower", JsonValue.String(bound hypothesis.Lower)
+                    "upper", JsonValue.String(bound hypothesis.Upper)
+                ])
+        |> Option.toList
+
+    let abi =
+        model.Abi
+        |> Option.map (fun premise ->
+            JsonValue.Object
+                [
+                    "kind", JsonValue.String "stated-target-abi"
+                    "node", node premise
+                    "identity",
+                    model.AbiIdentity
+                    |> Option.map JsonValue.String
+                    |> Option.defaultValue JsonValue.Null
+                    "range", JsonValue.String(ValueRange.render model.AbiRange)
+                ])
+        |> Option.toList
+
+    [
+        "role",
+        JsonValue.String(
+            match model.Role with
+            | ForeignResultProofRole.LogicalCoverage -> "logical-coverage"
+            | ForeignResultProofRole.AbiNarrowing -> "abi-narrowing"
+        )
+        "trustedBase", JsonValue.Array(hypothesis @ abi)
+    ]
+
 let ledgerJson (obligations: ObligationInfo list) : string =
     let hasPending = unavailable obligations |> List.isEmpty |> not
-    let rows = obligations |> List.map (fun ob ->
-        let fields = [
-            "id", JsonValue.String ob.Id
-            "kind", JsonValue.String ob.Kind
-            "logic", JsonValue.String ob.Logic
-            "statement", JsonValue.String ob.Statement
-            "source", JsonValue.String ob.Source
-            "refs", stringArray ob.Refs ]
-        let readiness =
-            if not hasPending then []
-            else
-                let state, reasons =
-                    match ob.Body with
-                    | ObligationBody.Pending reasons -> "pending", reasons
-                    | _ -> "ready", []
-                [ "state", JsonValue.String state; "missingPremises", stringArray reasons ]
-        JsonValue.Object (fields @ readiness))
-    JsonValue.Object [
-        "version", JsonValue.String (if hasPending then "1.1" else "1.0")
-        "description", JsonValue.String "Proof obligations: born in the PSG as graph citizens, design-time form"
-        "obligations", JsonValue.Array rows ]
+
+    let hasForeign =
+        obligations
+        |> List.exists (fun obligation ->
+            match obligation.Body with
+            | ObligationBody.ForeignResultCoverage _ -> true
+            | _ -> false)
+
+    let rows =
+        obligations
+        |> List.map (fun ob ->
+            let fields =
+                [
+                    "id", JsonValue.String ob.Id
+                    "kind", JsonValue.String ob.Kind
+                    "logic", JsonValue.String ob.Logic
+                    "statement", JsonValue.String ob.Statement
+                    "source", JsonValue.String ob.Source
+                    "refs", stringArray ob.Refs
+                ]
+
+            let foreign =
+                match ob.Body with
+                | ObligationBody.ForeignResultCoverage model -> foreignLedgerFields model
+                | _ -> []
+
+            let readiness =
+                if not hasPending && not hasForeign then
+                    []
+                else
+                    let state, reasons =
+                        match ob.Body with
+                        | ObligationBody.Pending reasons -> "pending", reasons
+                        | ObligationBody.ForeignResultCoverage model ->
+                            match foreignProjection model with
+                            | Ok _ -> "ready", []
+                            | Error reason -> "pending", [ reason ]
+                        | _ -> "ready", []
+
+                    [ "state", JsonValue.String state; "missingPremises", stringArray reasons ]
+
+            JsonValue.Object(fields @ foreign @ readiness))
+
+    JsonValue.Object
+        [
+            "version",
+            JsonValue.String(
+                if hasForeign then "1.2"
+                elif hasPending then "1.1"
+                else "1.0"
+            )
+            "description", JsonValue.String "Proof obligations: born in the PSG as graph citizens, design-time form"
+            "obligations", JsonValue.Array rows
+        ]
     |> Json.serializePretty
 
 let private unavailableJson (pending: UnavailableObligation list) =

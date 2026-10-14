@@ -68,7 +68,22 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
                 (call.Arguments |> List.mapi (fun ordinal operand -> call.Site, ordinal, operand.Actual)) @
-                (call.Result |> Option.toList |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
+                (call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ -> false | _ -> true) |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
+            let foreignResultErrors =
+                let integerCalls = calls |> List.filter (fun call -> match call.Result with Some(BoundaryScalar.Integer _) -> true | _ -> false)
+                if integerCalls.IsEmpty then [] else
+                match NumericPublication.project graph with
+                | Error failures -> failures
+                | Ok numeric -> integerCalls |> List.choose (fun call ->
+                    let declaration = imports |> List.tryFind (fun import -> import.Identity = call.Import) |> Option.map _.Binding
+                    let accounts = numeric.ForeignResultUses |> List.filter (fun account -> account.Application.Call = call.Site)
+                    let sourceHypotheses = domain.ResultHypotheses |> List.filter (fun hypothesis -> Some hypothesis.Declaration = declaration)
+                    if not accounts.IsEmpty && (accounts |> List.forall (fun account ->
+                        Some account.Application.Declaration = declaration &&
+                        (match account.Application.Hypothesis, sourceHypotheses with
+                         | Some hypothesis, [current] -> hypothesis = current
+                         | _ -> false))) then None
+                    else Some(failure (Some call.Site) call.Participants "The integer result lacks its complete current conditional numeric account and declared behavioral hypothesis."))
             let coverageMembership = coverages |> List.map (fun coverage -> coverage.Site, coverage.Ordinal, coverage.Operand) |> List.sort
             if (imports |> List.map _.Identity |> List.sort) <> domain.Imports || (calls |> List.map _.Site |> List.sort) <> domain.Calls || expectedCoverage <> coverageMembership then
                 stale "The boundary domain lost or duplicated an import, call or ordered coverage occurrence."
@@ -140,7 +155,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                             | edge :: tail when key edge = key expected -> Some (List.rev prefix @ tail)
                             | edge :: tail -> remove (edge :: prefix) tail
                         match remove [] remaining with Some remaining -> subtract remaining rest | None -> false
-                let proofErrors = intrinsicProofErrors @ proofErrors
+                let proofErrors = foreignResultErrors @ intrinsicProofErrors @ proofErrors
                 let expectedIntrinsicProofs = domain.IntrinsicCalls |> List.collect (fun call -> [-1;0;1;2] |> List.map (fun ordinal -> call.Site, ordinal)) |> List.sort
                 let actualIntrinsicProofs = domain.IntrinsicProofs |> List.map (fun proof -> proof.Site, proof.Ordinal) |> List.sort
                 if not proofErrors.IsEmpty then Error (List.rev proofErrors)
@@ -149,7 +164,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 else
                     let imports = imports |> List.map (fun import -> import.Identity, import) |> Map.ofList
                     let byScope = imports.Values |> Seq.groupBy _.Scope |> Seq.map (fun (scope, imports) -> scope, imports |> Seq.map _.Identity |> Seq.sort |> Seq.toList) |> Map.ofSeq
-                    Ok { Imports = imports; Calls = callsById; ByScope = byScope
+                    Ok { Imports = imports; Calls = callsById; ByScope = byScope; ResultHypotheses = domain.ResultHypotheses
                          ByteViews = domain.ByteViews |> List.map (fun view -> view.Site, view) |> Map.ofList
                          StringExtents = domain.StringExtents |> List.map (fun extent -> extent.Site, extent) |> Map.ofList
                          IntrinsicWriteImports = domain.IntrinsicImports |> List.map (fun import -> import.Identity, import) |> Map.ofList

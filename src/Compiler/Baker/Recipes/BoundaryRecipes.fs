@@ -222,7 +222,8 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
         | Some abi -> checked' {
             do! require (supportedType abi site.Type) "The call result's source kind disagrees with its boundary declaration."
             let! targetBits = sourceWidth graph site.Id abi
-            return! adaptation graph site.Id site.Id (scalarBits abi) targetBits (scalarRange abi) }
+            let input = match abi with BoundaryScalar.Integer _ -> site.ValueRange |> Option.defaultValue ValueRange.Unbounded | _ -> scalarRange abi
+            return! adaptation graph site.Id site.Id (scalarBits abi) targetBits input }
     let! types = sourceTypes graph (site.Id :: args)
     return { Site = site.Id; Import = import.Identity; Callee = callee; Arguments = arguments; ErasedUnitArguments = erased
              Result = import.Result; ResultAdaptation = resultAdaptation
@@ -518,7 +519,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         let argumentRanges = call.Arguments |> List.mapi (fun ordinal operand ->
             let input = match operand.Abi with BoundaryScalar.Boolean -> ValueRange.boolean | _ -> graph.Nodes[operand.Actual].ValueRange |> Option.defaultValue ValueRange.Unbounded
             ordinal, operand.Actual, input, scalarRange operand.Abi)
-        let resultRange = call.Result |> Option.toList |> List.map (fun abi ->
+        // Integer result narrowing belongs to Numeric's conditional foreign
+        // account. The C carrier is an ABI premise, not a behavioral enclosure.
+        let resultRange = call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ -> false | _ -> true) |> List.map (fun abi ->
             let destination =
                 match abi with
                 | BoundaryScalar.Boolean -> ValueRange.boolean
@@ -544,6 +547,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let domain =
         { Premises = Ingredients.premises graph; Platform = Ingredients.platformPremise graph.Platform; Meets = graph.Codata.Value.Meets
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
+          ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
           ByteViews = intrinsic.Views; StringExtents = intrinsic.Extents; IntrinsicDeclarations = intrinsic.Declarations
           StringOriginRelations = originRelations

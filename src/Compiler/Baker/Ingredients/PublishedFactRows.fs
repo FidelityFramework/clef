@@ -211,6 +211,7 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         DeclarationOnly = (value.DeclarationOnly |> Set.map (fun x -> nodeId x))
         Links = value.Links
         Failures = (value.Failures |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, (t1 |> Set.map (fun x -> nodeId x)), t2))))
+        ResultHypotheses = (value.ResultHypotheses |> List.map (fun x -> mapForeignResultHypothesis x))
     } : Fidelity.PSG.BoundaryDomain)
 
 and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fidelity.PSG.BoundaryEmissionProjection =
@@ -226,6 +227,7 @@ and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fideli
         DeclarationLeaves = (value.DeclarationLeaves |> Set.map (fun x -> nodeId x))
         DeclarationOnly = (value.DeclarationOnly |> Set.map (fun x -> nodeId x))
         Links = value.Links
+        ResultHypotheses = (value.ResultHypotheses |> List.map (fun x -> mapForeignResultHypothesis x))
     } : Fidelity.PSG.BoundaryEmissionProjection)
 
 and mapBoundaryImport (value: S.BoundaryImport) : Fidelity.PSG.BoundaryImport =
@@ -1114,6 +1116,63 @@ and mapFiniteSequencePullStep (value: S.FiniteSequencePullStep) : Fidelity.PSG.F
         Remaining = value.Remaining
     } : Fidelity.PSG.FiniteSequencePullStep)
 
+and mapForeignResultApplication (value: S.ForeignResultApplication) : Fidelity.PSG.ForeignResultApplication =
+    ({
+        Declaration = nodeId value.Declaration
+        Call = nodeId value.Call
+        Context = (value.Context |> List.map (fun x -> nodeId x))
+        Hypothesis = (value.Hypothesis |> Option.map (fun x -> mapForeignResultHypothesis x))
+        Arguments = (value.Arguments |> List.map (fun x -> mapForeignResultArgument x))
+    } : Fidelity.PSG.ForeignResultApplication)
+
+and mapForeignResultArgument (value: S.ForeignResultArgument) : Fidelity.PSG.ForeignResultArgument =
+    ({
+        Index = value.Index
+        Node = nodeId value.Node
+        Enclosure = mapValueRange value.Enclosure
+    } : Fidelity.PSG.ForeignResultArgument)
+
+and mapForeignResultBound (value: S.ForeignResultBound) : Fidelity.PSG.ForeignResultBound =
+    match value with
+    | S.ForeignResultBound.Constant(a0) -> Fidelity.PSG.ForeignResultBound.Constant(a0)
+    | S.ForeignResultBound.Argument(a0) -> Fidelity.PSG.ForeignResultBound.Argument(a0)
+
+and mapForeignResultCoverageModel (value: S.ForeignResultCoverageModel) : Fidelity.PSG.ForeignResultCoverageModel =
+    ({
+        Application = mapForeignResultApplication value.Application
+        Role = mapForeignResultProofRole value.Role
+        ResultRange = mapValueRange value.ResultRange
+        Destination = mapValueRange value.Destination
+        DestinationDeclaration = (value.DestinationDeclaration |> Option.map (fun x -> nodeId x))
+        Abi = (value.Abi |> Option.map (fun x -> nodeId x))
+        AbiRange = mapValueRange value.AbiRange
+        AbiIdentity = value.AbiIdentity
+        DestinationIdentity = value.DestinationIdentity
+    } : Fidelity.PSG.ForeignResultCoverageModel)
+
+and mapForeignResultHypothesis (value: S.ForeignResultHypothesis) : Fidelity.PSG.ForeignResultHypothesis =
+    ({
+        Quote = nodeId value.Quote
+        Declaration = nodeId value.Declaration
+        Identity = value.Identity
+        Version = value.Version
+        Source = value.Source
+        Lower = mapForeignResultBound value.Lower
+        Upper = mapForeignResultBound value.Upper
+    } : Fidelity.PSG.ForeignResultHypothesis)
+
+and mapForeignResultProofRole (value: S.ForeignResultProofRole) : Fidelity.PSG.ForeignResultProofRole =
+    match value with
+    | S.ForeignResultProofRole.LogicalCoverage -> Fidelity.PSG.ForeignResultProofRole.LogicalCoverage
+    | S.ForeignResultProofRole.AbiNarrowing -> Fidelity.PSG.ForeignResultProofRole.AbiNarrowing
+
+and mapForeignResultUse (value: S.ForeignResultUse) : Fidelity.PSG.ForeignResultUse =
+    ({
+        Application = mapForeignResultApplication value.Application
+        Participants = mapParticipantEvidence value.Participants
+        Claims = (value.Claims |> List.map (fun x -> (let (t0, t1) = x in (mapForeignResultProofRole t0, nodeId t1))))
+    } : Fidelity.PSG.ForeignResultUse)
+
 and mapFunctionPointerPlan (value: S.FunctionPointerPlan) : Fidelity.PSG.FunctionPointerPlan =
     match value with
     | S.FunctionPointerPlan.Address(a0, a1) -> Fidelity.PSG.FunctionPointerPlan.Address(a0, nodeId a1)
@@ -1810,6 +1869,7 @@ and mapNumericDomain (value: S.NumericDomain) : Fidelity.PSG.NumericDomain =
         IndexTransports = (value.IndexTransports |> List.map (fun x -> mapNumericIndexTransport x))
         IndexRequired = (value.IndexRequired |> Set.map (fun x -> nodeId x))
         Unresolved = (value.Unresolved |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
+        ForeignResultUses = (value.ForeignResultUses |> List.map (fun x -> mapForeignResultUse x))
     } : Fidelity.PSG.NumericDomain)
 
 and mapNumericIndexTransport (value: S.NumericIndexTransport) : Fidelity.PSG.NumericIndexTransport =
@@ -1916,6 +1976,7 @@ and mapNumericWitnessProjection (value: S.NumericWitnessProjection) : Fidelity.P
         DeclaredScalars = (value.DeclaredScalars |> Map.toSeq |> Seq.map (fun (k, v) -> mapNTUKind k, mapSettledSlot v) |> Map.ofSeq)
         OccurrenceRepresentations = (value.OccurrenceRepresentations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (match v with Ok x -> Ok (mapValueRepresentation x) | Error x -> Error (x))) |> Map.ofSeq)
         TypeRepresentations = (value.TypeRepresentations |> Map.toSeq |> Seq.map (fun (k, v) -> mapTypeIdentity k, (match v with Ok x -> Ok (mapValueRepresentation x) | Error x -> Error (x))) |> Map.ofSeq)
+        ForeignResultUses = (value.ForeignResultUses |> List.map (fun x -> mapForeignResultUse x))
     } : Fidelity.PSG.NumericWitnessProjection)
 
 and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
@@ -1950,6 +2011,7 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.InputCopyBound(a0, a1) -> Fidelity.PSG.ObligationBody.InputCopyBound(a0, a1)
     | S.ObligationBody.FiniteLinearRecurrence(a0) -> Fidelity.PSG.ObligationBody.FiniteLinearRecurrence(mapFiniteLinearRecurrenceModel a0)
     | S.ObligationBody.FiniteAdditiveEffects(a0, a1, a2, a3) -> Fidelity.PSG.ObligationBody.FiniteAdditiveEffects(a0, a1, a2, a3)
+    | S.ObligationBody.ForeignResultCoverage(a0) -> Fidelity.PSG.ObligationBody.ForeignResultCoverage(mapForeignResultCoverageModel a0)
 
 and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
     ({
@@ -2126,6 +2188,13 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.BranchSelectedArm -> Fidelity.PSG.ParticipantRole.BranchSelectedArm
     | S.ParticipantRole.BranchConstructor -> Fidelity.PSG.ParticipantRole.BranchConstructor
     | S.ParticipantRole.BranchPayload -> Fidelity.PSG.ParticipantRole.BranchPayload
+    | S.ParticipantRole.ForeignResultDeclaration -> Fidelity.PSG.ParticipantRole.ForeignResultDeclaration
+    | S.ParticipantRole.ForeignResultCall -> Fidelity.PSG.ParticipantRole.ForeignResultCall
+    | S.ParticipantRole.ForeignResultContext -> Fidelity.PSG.ParticipantRole.ForeignResultContext
+    | S.ParticipantRole.ForeignResultHypothesis -> Fidelity.PSG.ParticipantRole.ForeignResultHypothesis
+    | S.ParticipantRole.ForeignResultActual -> Fidelity.PSG.ParticipantRole.ForeignResultActual
+    | S.ParticipantRole.ForeignResultAbi -> Fidelity.PSG.ParticipantRole.ForeignResultAbi
+    | S.ParticipantRole.ForeignResultDestination -> Fidelity.PSG.ParticipantRole.ForeignResultDestination
 
 and mapPattern (value: S.Pattern) : Fidelity.PSG.Pattern =
     match value with

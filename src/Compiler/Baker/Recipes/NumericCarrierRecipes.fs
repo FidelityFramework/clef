@@ -64,6 +64,182 @@ let private indexId (node: SemanticNode) =
     sourceClaimId "numeric-index-coverage" node
     |> Option.defaultValue ($"numeric_index_{NodeId.value node.Id}")
 
+/// Claim provenance follows the declaration, source call and role. Current
+/// graph numbers locate citizens; they never supply the claim's identity.
+let private foreignClaimId (graph: SemanticGraph) (application: ForeignResultApplication) role =
+    let anchor id =
+        match graph.Nodes.TryFind id with
+        | Some node ->
+            match sourceClaimId "foreign-result-site" node with
+            | Some identity -> identity, true
+            | None -> fmtRange node.Range, false
+        | None -> invalidOp "A foreign result claim has a missing source participant."
+
+    let role =
+        match role with
+        | ForeignResultProofRole.LogicalCoverage -> "logical-coverage"
+        | ForeignResultProofRole.AbiNarrowing -> "abi-narrowing"
+
+    let anchors =
+        anchor application.Declaration
+        :: anchor application.Call
+        :: List.map anchor application.Context
+
+    let segments = List.map fst anchors @ [role]
+
+    let provenance =
+        segments
+        |> List.map (fun value -> string value.Length + ":" + value)
+        |> String.concat ""
+
+    (if anchors |> List.forall snd then "foreign_result_" else "transient_foreign_result_")
+    + System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes provenance)
+
+/// Passive readers compare the exact models issued by this owning recipe.
+let foreignResultModels (graph: SemanticGraph) (values: ScalarCarrier list) (evidence: RangeAnalysis.ForeignResultEvidence) =
+    let application = evidence.Application
+    let bySite = values |> List.map (fun value -> value.Site, value) |> Map.ofList
+    let carrier = bySite.TryFind application.Call
+
+    let capacity =
+        carrier
+        |> Option.bind (fun carrier ->
+            match carrier.Representation, carrier.Slot with
+            | Some representation, _ -> RangeSources.declaredRange representation
+            | None, SettledSlot.Integer(bits, _) when bits > 0 ->
+                Some(
+                    if ValueRange.contains (ValueRange.unsignedOf bits) carrier.Range then
+                        ValueRange.unsignedOf bits
+                    else
+                        ValueRange.twosComplement bits
+                )
+            | _ -> None)
+        |> Option.defaultValue ValueRange.Unbounded
+
+    let abi = evidence.Abi |> Option.map _.Node
+
+    let premiseIdentity role id =
+        graph.Nodes.TryFind id |> Option.bind (sourceClaimId role)
+
+    let abiRange =
+        evidence.Abi
+        |> Option.bind _.Return
+        |> Option.map _.Range
+        |> Option.defaultValue ValueRange.Unbounded
+
+    let model role =
+        {
+            Application = application
+            Role = role
+            ResultRange = evidence.ResultRange
+            Destination =
+                if role = ForeignResultProofRole.LogicalCoverage then
+                    evidence.ResultRange
+                else
+                    capacity
+            DestinationDeclaration =
+                if role = ForeignResultProofRole.LogicalCoverage then
+                    None
+                else
+                    carrier |> Option.bind _.Declaration
+            Abi = abi
+            AbiIdentity = abi |> Option.bind (premiseIdentity "foreign-result-abi")
+            DestinationIdentity =
+                if role = ForeignResultProofRole.LogicalCoverage then
+                    None
+                else
+                    carrier
+                    |> Option.bind _.Declaration
+                    |> Option.bind (premiseIdentity "foreign-result-destination")
+            AbiRange = abiRange
+        }
+
+    [ ForeignResultProofRole.LogicalCoverage; ForeignResultProofRole.AbiNarrowing ]
+    |> List.map (fun role -> role, model role)
+
+let foreignResultParticipants (application: ForeignResultApplication) (models: (ForeignResultProofRole * ForeignResultCoverageModel) list) =
+    let participant role ordinal node =
+        {
+            Node = node
+            Role = role
+            Ordinal = ordinal
+            Group = application.Call
+        }
+
+    [
+        participant ParticipantRole.ForeignResultDeclaration 0 application.Declaration
+        participant ParticipantRole.ForeignResultCall 0 application.Call
+    ]
+    @ (application.Context
+       |> List.mapi (participant ParticipantRole.ForeignResultContext))
+    @ (application.Hypothesis
+       |> Option.map (fun hypothesis -> participant ParticipantRole.ForeignResultHypothesis 0 hypothesis.Quote)
+       |> Option.toList)
+    @ (application.Arguments
+       |> List.map (fun argument -> participant ParticipantRole.ForeignResultActual argument.Index argument.Node))
+    @ (models
+       |> List.mapi (fun ordinal (_, model) ->
+           (model.Abi
+            |> Option.map (participant ParticipantRole.ForeignResultAbi ordinal)
+            |> Option.toList)
+           @ (model.DestinationDeclaration
+              |> Option.map (participant ParticipantRole.ForeignResultDestination ordinal)
+              |> Option.toList))
+       |> List.concat)
+
+let private foreignClaims graph enrichId (values: ScalarCarrier list) rangeFacts =
+    match RangeAnalysis.foreignResultApplications graph rangeFacts with
+    | Error reason -> Error reason
+    | Ok applications ->
+        applications
+        |> List.fold
+            (fun (enrichment, uses) evidence ->
+                let application = evidence.Application
+                let models = foreignResultModels graph values evidence
+                let participants = foreignResultParticipants application models
+
+                let claims =
+                    models
+                    |> List.map (fun (role, model) ->
+                        let node =
+                            obligationNode
+                                graph.Nodes[application.Call]
+                                enrichId
+                                {
+                                    Id = foreignClaimId graph application role
+                                    Kind = "foreign-result-coverage"
+                                    Logic = "QF_LIA"
+                                    Statement =
+                                        if role = ForeignResultProofRole.LogicalCoverage then
+                                            "the declared foreign relation covers the reachable argument domain and inferred result enclosure"
+                                        else
+                                            "the foreign result is representable at the selected Clef destination width"
+                                    Source = fmtRange graph.Nodes[application.Call].Range
+                                    Refs = []
+                                    Body = ObligationBody.ForeignResultCoverage model
+                                }
+                            |> Numeric.markOwned
+
+                        role, node)
+
+                let use' =
+                    {
+                        Application = application
+                        Participants = ParticipantEvidence.Established participants
+                        Claims = claims |> List.map (fun (role, node) -> role, node.Id)
+                    }
+
+                let own =
+                    {
+                        NewNodes = claims |> List.map snd
+                        Annotated = []
+                        NewEdges = Numeric.foreignProofRows use'
+                    }
+
+                Enrichment.combine enrichment own, uses @ [ use' ])
+            (Enrichment.empty, [])
+        |> Ok
+
 let rec private kinds ty =
     let own = Types.tryGetNTUKind ty |> Option.toList
     let children =
@@ -320,10 +496,15 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
         match issuedRange with
         | Ok _ -> unresolved
         | Error reason -> unresolved.Add(anchor.Id, "Invocation-context range issuance failed: " + reason)
+    let foreignEnrichment, foreignUses, unresolved =
+        match foreignClaims graph enrichId values issuedRangeFacts with
+        | Ok (claims, uses) -> claims, uses, unresolved
+        | Error (site, reason) -> Enrichment.empty, [], unresolved.Add(site, "Foreign-result source census is unavailable: " + reason)
     let domain =
         { RequiresSequenceReview = sequenceActive
           SequenceRangeAuthority = sequenceAuthority
           RangeContextFacts = rangeFacts
+          ForeignResultUses = foreignUses
           RequiresFiniteCellReview = currentFiniteActive || (inheritedFiniteReview && not unresolved.IsEmpty)
           FiniteCellRelations = finiteRelations |> Result.defaultValue None
           FiniteCellObligations = finiteObligations
@@ -342,7 +523,7 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
           IndexTransports = List.rev indexTransports; IndexRequired = indexSites |> List.map (fst >> _.Id) |> Set.ofList
           Values = List.rev values; Unresolved = unresolved }
     let enrichment =
-        Enrichment.combine (Enrichment.combine (Enrichment.combine proofs operationEnrichment) indexEnrichment)
+        Enrichment.combine (Enrichment.combine (Enrichment.combine (Enrichment.combine proofs operationEnrichment) indexEnrichment) foreignEnrichment)
             { NewNodes = [anchor]; Annotated = []
               NewEdges = Numeric.domainRow anchor.Id domain :: Numeric.domainRewrite anchor.Id domain :: (domain.Values |> List.map Numeric.carrierRow) }
     enrichment, issuedRangeFacts
@@ -362,6 +543,7 @@ let elaborate graph = elaborateWithRangeReview false false false None None graph
 /// the surviving ledger appear complete.
 let completeness (graph: SemanticGraph) : (NodeId * string) list =
     let required, indices = requiredSites graph
+    let foreignApplications = RangeAnalysis.foreignResultApplications graph graph.RangeContextFacts
 
     let expected =
         (required
@@ -386,11 +568,17 @@ let completeness (graph: SemanticGraph) : (NodeId * string) list =
              carrier @ operations))
         @ (indices
            |> List.map (fun (node, _) -> node.Id, indexId node, "numeric-index-coverage"))
+        @ (match foreignApplications with
+           | Ok applications -> applications |> List.collect (fun evidence ->
+               [ForeignResultProofRole.LogicalCoverage; ForeignResultProofRole.AbiNarrowing]
+               |> List.map (fun role -> evidence.Application.Call, foreignClaimId graph evidence.Application role, "foreign-result-coverage"))
+           | Error _ -> [])
 
     let numericKind kind =
         kind = "numeric-carrier-coverage"
         || kind = "numeric-operation-proof"
         || kind = "numeric-index-coverage"
+        || kind = "foreign-result-coverage"
 
     let actual =
         graph.Nodes
@@ -440,4 +628,8 @@ let completeness (graph: SemanticGraph) : (NodeId * string) list =
             else
                 Some(id, "Numeric obligation completeness: unexpected claim " + info.Id))
 
-    collisions @ missing @ unexpected
+    let foreignCensusFailures =
+        match foreignApplications with
+        | Ok _ -> []
+        | Error (site, reason) -> [site, "Numeric obligation completeness: foreign-result source census is unavailable: " + reason]
+    foreignCensusFailures @ collisions @ missing @ unexpected

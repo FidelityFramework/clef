@@ -34,7 +34,7 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
-type private Ctx = { Graph: SemanticGraph; Word: int option; Curry: CurryInfo }
+type private Ctx = { Graph: SemanticGraph; Word: int option; Curry: CurryInfo; BoundaryResultBits: Map<NodeId, int> }
 
 let private isWordInteger (kind: NTUKind) : bool =
     match kind with
@@ -135,10 +135,14 @@ let private elementSlotWidth (graph: SemanticGraph) (arrayId: NodeId) : int opti
       | _ -> None
 
 /// A direct call's result read from the callee's body width to the call node's own.
-let private callResultMeet (graph: SemanticGraph) (node: SemanticNode) (lambda: SemanticNode) : Meet list =
+let private callResultMeet (ctx: Ctx) (node: SemanticNode) (lambda: SemanticNode) : Meet list =
+    let graph = ctx.Graph
     match lambda.Kind with
     | SemanticKind.Lambda (_, bodyId, _, _, _) ->
-        match nodeWidth graph bodyId, nodeWidth graph node.Id with
+        // A foreign placeholder has no behavioral result range. Its physical
+        // incoming width still comes from the existing ABI declaration reader.
+        let incoming = ctx.BoundaryResultBits.TryFind bodyId |> Option.orElseWith (fun () -> nodeWidth graph bodyId)
+        match incoming, nodeWidth graph node.Id with
         | Some from, Some target -> Option.toList (meet graph node.Id node.Id from target)
         | _ -> []
     | _ -> []
@@ -150,7 +154,7 @@ let private applicationMeets (ctx: Ctx) (node: SemanticNode) (funcId: NodeId) (a
         let n = min parameters.Length args.Length
         (List.zip (List.truncate n parameters) (List.truncate n args)
          |> List.choose (fun ((_, _, paramId), argId) -> meetInto graph node.Id argId (nodeWidth graph paramId)))
-        @ callResultMeet graph node lambda
+        @ callResultMeet ctx node lambda
     match functionNodeOf graph funcId with
     | Some { Kind = SemanticKind.Intrinsic info } ->
         match info.Module, info.Operation, args with
@@ -316,7 +320,16 @@ let private wordOf (context: PlatformContext option) : int option =
 let derive (context: PlatformContext option) (graph: SemanticGraph) (curry: CurryInfo) : Map<NodeId, Meet list> =
     if onFabric context then Map.empty
     else
-        let ctx = { Graph = graph; Word = wordOf context; Curry = curry }
+        let boundaryResultBits =
+            PlatformResolution.readDescriptors graph |> _.Functions
+            |> List.choose (fun descriptor ->
+                match descriptor.Body, descriptor.Return with
+                | Some body, Some result -> Some(body, result.Bits)
+                | _ -> None)
+            |> List.groupBy fst
+            |> List.choose (fun (body, declarations) -> match declarations with [_, bits] -> Some(body, bits) | _ -> None)
+            |> Map.ofList
+        let ctx = { Graph = graph; Word = wordOf context; Curry = curry; BoundaryResultBits = boundaryResultBits }
         graph.Nodes
         |> Map.toList
         |> List.choose (fun (_, node) ->

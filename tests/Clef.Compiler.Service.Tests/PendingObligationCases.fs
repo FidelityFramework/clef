@@ -21,6 +21,18 @@ type PendingObligationCases() =
         { Id = "pending_order"; Kind = "program-initialization-order"; Logic = "QF_LIA"
           Statement = "initialization before every read"; Source = "pending.clef:4:2"; Refs = []; Body = body }
     let reasons = ["read occurrence has no settled use scope"; "initializer phase is unavailable"]
+    let foreignModel stated : ForeignResultCoverageModel =
+        let hypothesis : ForeignResultHypothesis =
+            { Quote = NodeId 4; Declaration = NodeId 1; Identity = "posix-read"
+              Version = "profile-1"; Source = "pilot/read"
+              Lower = ForeignResultBound.Constant -1I; Upper = ForeignResultBound.Argument 0 }
+        { Application = { Declaration = NodeId 1; Call = NodeId 2; Context = [NodeId 5]
+                          Hypothesis = if stated then Some hypothesis else None
+                          Arguments = [{Index = 0; Node = NodeId 3; Enclosure = ValueRange.Bounded(4I, 4I)}] }
+          Role = ForeignResultProofRole.LogicalCoverage; AbiRange = ValueRange.Bounded(-8I, 7I)
+          ResultRange = ValueRange.Bounded(-1I, 4I)
+          Destination = ValueRange.Bounded(-8I, 7I); DestinationDeclaration = Some(NodeId 6); Abi = Some(NodeId 7)
+          AbiIdentity = None; DestinationIdentity = None }
     let graphOn (checkedGraph: SemanticGraph) body =
         let template = checkedGraph.Nodes.Values |> Seq.head
         let node = { template with Id = NodeId.fresh (); Kind = SemanticKind.Obligation(obligation body)
@@ -362,3 +374,217 @@ type PendingObligationCases() =
 
             if Directory.Exists directory then
                 Directory.Delete(directory, true)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Foreign result projection preserves typed provenance and missing contract remains pending`` stated =
+        let model = foreignModel stated
+        let mapped = Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapForeignResultCoverageModel model
+        Assert.Equal(Fidelity.PSG.NodeId 1, mapped.Application.Declaration)
+        Assert.Equal(Fidelity.PSG.NodeId 2, mapped.Application.Call)
+        Assert.Equal<Fidelity.PSG.NodeId list>([Fidelity.PSG.NodeId 5], mapped.Application.Context)
+        Assert.Equal(ValueRange.Bounded(4I, 4I), model.Application.Arguments.Head.Enclosure)
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(4I, 4I), mapped.Application.Arguments.Head.Enclosure)
+        Assert.Equal(Fidelity.PSG.ForeignResultProofRole.LogicalCoverage, mapped.Role)
+        match mapped.Application.Hypothesis with
+        | None -> Assert.False stated
+        | Some hypothesis ->
+            Assert.True stated
+            Assert.Equal("profile-1", hypothesis.Version)
+            Assert.Equal("pilot/read", hypothesis.Source)
+            Assert.Equal(Fidelity.PSG.ForeignResultBound.Constant -1I, hypothesis.Lower)
+            Assert.Equal(Fidelity.PSG.ForeignResultBound.Argument 0, hypothesis.Upper)
+        let info = obligation (ObligationBody.ForeignResultCoverage model)
+        match stated, PendingDischarge.trySmtLib [info] with
+        | true, Ok query ->
+            let projected = Fidelity.PSG.ForeignResultCoverage.ofModel mapped |> Result.toOption |> Option.get
+            let expected = Fidelity.PSG.ForeignResultCoverage.smtLib projected.Conclusion
+            Assert.Contains("(assert (= " + info.Id + " " + expected + "))", query)
+            Assert.Contains("(declare-fun foreign_arg_0 () Int)", query)
+            Assert.Contains("(declare-fun foreign_result () Int)", query)
+            Assert.Empty(PendingDischarge.unavailable [info])
+        | false, Error rows ->
+            let refusal = Assert.Single rows
+            Assert.Equal(info.Id, refusal.Anchor)
+            Assert.Equal(info.Source, refusal.Source)
+            Assert.Equal<string list>(["Foreign result behavior contract is missing"], refusal.MissingPremises)
+            let ledger = PendingDischarge.ledgerJson [info]
+            Assert.Contains(info.Id, ledger)
+            Assert.Contains("\"pending\"", ledger)
+            Assert.DoesNotContain("\"ready\"", ledger)
+            Assert.Throws<InvalidOperationException>(fun () -> PendingDischarge.smtLib [info] |> ignore) |> ignore
+        | result -> failwithf "Wrong foreign projection availability: %A" result
+
+    [<Fact>]
+    member _.``Foreign projection distinguishes relevant unknown input and unknown ABI from irrelevant pointer`` () =
+        let model = foreignModel true
+        let pending reason changed =
+            let info = obligation (ObligationBody.ForeignResultCoverage changed)
+            match PendingDischarge.trySmtLib [info] with
+            | Ok query -> failwithf "Missing premise produced a solver query: %s" query
+            | Error rows ->
+                let row = Assert.Single rows
+                Assert.Equal(info.Id, row.Anchor)
+                Assert.Equal(info.Source, row.Source)
+                Assert.Equal<string list>([reason], row.MissingPremises)
+        pending "Foreign result coverage has no established finite enclosure"
+            { model with Application = { model.Application with Arguments = [{model.Application.Arguments.Head with Enclosure = ValueRange.Unbounded}] } }
+        for abiRange in [ValueRange.Unbounded; ValueRange.Empty] do
+            pending "Foreign result coverage has no established finite ABI enclosure" { model with AbiRange = abiRange }
+        for role in [ForeignResultProofRole.LogicalCoverage; ForeignResultProofRole.AbiNarrowing] do
+            pending "Foreign result coverage has no actual ABI premise" { model with Role = role; Abi = None }
+        let pointer = { Index = 1; Node = NodeId 8; Enclosure = ValueRange.Unbounded }
+        let admitted = {model with Application = {model.Application with Arguments = model.Application.Arguments @ [pointer]} }
+        match PendingDischarge.trySmtLib [obligation (ObligationBody.ForeignResultCoverage admitted)] with
+        | Error rows -> failwithf "Irrelevant pointer was assigned an integer domain: %A" rows
+        | Ok query -> Assert.DoesNotContain("foreign_arg_1", query)
+
+    [<Fact>]
+    member _.``Contradictory foreign hypothesis and incompatible ABI stay projectable for satisfiability refusal`` () =
+        let model = foreignModel true
+        let hypothesis = model.Application.Hypothesis.Value
+        for changed in
+            [ {model with Application = {model.Application with Hypothesis = Some {hypothesis with Lower = ForeignResultBound.Constant 5I; Upper = ForeignResultBound.Constant 4I}}}
+              {model with AbiRange = ValueRange.Bounded(5I, 6I)}
+              {model with Application = {model.Application with Arguments = [{model.Application.Arguments.Head with Enclosure = ValueRange.Empty}]}}
+              {model with ResultRange = ValueRange.Empty}
+              {model with Destination = ValueRange.Empty} ] do
+            let mapped = Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapForeignResultCoverageModel changed
+            let projection = Fidelity.PSG.ForeignResultCoverage.ofModel mapped |> Result.toOption |> Option.get
+            let info = obligation (ObligationBody.ForeignResultCoverage changed)
+            match PendingDischarge.trySmtLib [info] with
+            | Error rows -> failwithf "Known contradictory premises incorrectly became Pending: %A" rows
+            | Ok query ->
+                Assert.Contains(Fidelity.PSG.ForeignResultCoverage.smtLib projection.Conclusion, query)
+                Assert.DoesNotContain("(assert " + Fidelity.PSG.ForeignResultCoverage.smtLib projection.Premises + ")", query)
+            Assert.Empty(PendingDischarge.unavailable [info])
+            let premiseQuery = Fidelity.PSG.ForeignResultCoverage.premisesQuery projection
+            Assert.DoesNotContain(Fidelity.PSG.ForeignResultCoverage.smtLib projection.Claim, premiseQuery)
+
+    [<Fact>]
+    member _.``Ordinary ready projection remains available beside foreign plumbing`` () =
+        let info = obligation (ObligationBody.IntegerLiteralRange(4I, 4I, 4I))
+        match PendingDischarge.trySmtLib [info] with
+        | Ok query -> Assert.Contains("(check-sat)", query)
+        | Error rows -> failwithf "Existing ready projection became unavailable: %A" rows
+        let ledger = PendingDischarge.ledgerJson [info] |> ArtifactJson.parse
+        Assert.Equal("1.0", ledger |> ArtifactJson.field "version" |> ArtifactJson.text)
+        let text = PendingDischarge.ledgerJson [info]
+        Assert.DoesNotContain("\"trustedBase\"", text)
+        Assert.DoesNotContain("\"state\"", text)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Foreign ledger records ready role and exactly its external and ABI assumptions`` narrowing =
+        let role, name =
+            if narrowing then
+                ForeignResultProofRole.AbiNarrowing, "abi-narrowing"
+            else
+                ForeignResultProofRole.LogicalCoverage, "logical-coverage"
+
+        let model =
+            { foreignModel true with
+                Role = role
+                AbiIdentity = Some "source-issued-abi"
+            }
+
+        let info = obligation (ObligationBody.ForeignResultCoverage model)
+        let ledger = PendingDischarge.ledgerJson [ info ] |> ArtifactJson.parse
+        Assert.Equal("1.2", ledger |> ArtifactJson.field "version" |> ArtifactJson.text)
+
+        let row =
+            ledger
+            |> ArtifactJson.field "obligations"
+            |> ArtifactJson.items
+            |> Assert.Single
+
+        Assert.Equal(info.Id, row |> ArtifactJson.field "id" |> ArtifactJson.text)
+        Assert.Equal(info.Source, row |> ArtifactJson.field "source" |> ArtifactJson.text)
+        Assert.Equal(name, row |> ArtifactJson.field "role" |> ArtifactJson.text)
+        Assert.Equal("ready", row |> ArtifactJson.field "state" |> ArtifactJson.text)
+
+        let assumptions =
+            row |> ArtifactJson.field "trustedBase" |> ArtifactJson.items |> Seq.toList
+
+        Assert.Equal(2, assumptions.Length)
+        let hypothesis = assumptions[0]
+
+        for key, expected in
+            [
+                "kind", "external-execution-hypothesis"
+                "identity", "posix-read"
+                "version", "profile-1"
+                "source", "pilot/read"
+                "quote", "4"
+                "declaration", "1"
+                "lower", "-1"
+                "upper", "argument[0]"
+            ] do
+            Assert.Equal(expected, hypothesis |> ArtifactJson.field key |> ArtifactJson.text)
+
+        let abi = assumptions[1]
+        Assert.Equal("stated-target-abi", abi |> ArtifactJson.field "kind" |> ArtifactJson.text)
+        Assert.Equal("7", abi |> ArtifactJson.field "node" |> ArtifactJson.text)
+        Assert.Equal("source-issued-abi", abi |> ArtifactJson.field "identity" |> ArtifactJson.text)
+        Assert.Equal(ValueRange.render model.AbiRange, abi |> ArtifactJson.field "range" |> ArtifactJson.text)
+        Assert.DoesNotContain("discharged", PendingDischarge.ledgerJson [ info ])
+
+    [<Fact>]
+    member _.``Missing foreign behavior stays pending with only the independently stated ABI assumption``() =
+        let model = foreignModel false
+        let info = obligation (ObligationBody.ForeignResultCoverage model)
+        let ledger = PendingDischarge.ledgerJson [ info ] |> ArtifactJson.parse
+        Assert.Equal("1.2", ledger |> ArtifactJson.field "version" |> ArtifactJson.text)
+
+        let row =
+            ledger
+            |> ArtifactJson.field "obligations"
+            |> ArtifactJson.items
+            |> Assert.Single
+
+        Assert.Equal(info.Id, row |> ArtifactJson.field "id" |> ArtifactJson.text)
+        Assert.Equal(info.Source, row |> ArtifactJson.field "source" |> ArtifactJson.text)
+        Assert.Equal("logical-coverage", row |> ArtifactJson.field "role" |> ArtifactJson.text)
+        Assert.Equal("pending", row |> ArtifactJson.field "state" |> ArtifactJson.text)
+
+        let abi =
+            row |> ArtifactJson.field "trustedBase" |> ArtifactJson.items |> Assert.Single
+
+        Assert.Equal("stated-target-abi", abi |> ArtifactJson.field "kind" |> ArtifactJson.text)
+        Assert.Equal("7", abi |> ArtifactJson.field "node" |> ArtifactJson.text)
+        Assert.Equal(JsonValue.Null, abi |> ArtifactJson.field "identity")
+        Assert.Equal(ValueRange.render model.AbiRange, abi |> ArtifactJson.field "range" |> ArtifactJson.text)
+
+        let reason =
+            row
+            |> ArtifactJson.field "missingPremises"
+            |> ArtifactJson.items
+            |> Assert.Single
+
+        Assert.Equal("Foreign result behavior contract is missing", ArtifactJson.text reason)
+        Assert.DoesNotContain("discharged", PendingDischarge.ledgerJson [ info ])
+
+    [<Fact>]
+    member _.``Range context retains exact boundary declaration census including withdrawn duplicate and malformed rows`` () =
+        let _, current = graph (ObligationBody.IntegerLiteralRange(4I, 4I, 4I))
+        let node = current.Nodes.Values |> Seq.head |> _.Id
+        let declaration : BoundaryDeclaration =
+            { Binding = node; Path = [node]; Implementation = node; Formals = [node]; Body = node }
+        let row =
+            { current.Edges.Head with
+                Class = EdgeClass.Boundary
+                Role = EdgeRole.BoundaryDeclaration declaration
+                Sources = [node]
+                Target = node
+                Ordinal = 0 }
+        let census edges =
+            Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations {current with Edges = edges}
+            |> Result.defaultWith failwith
+        let held = census [row]
+        Assert.Equal(SourceRangeRelationKind.BoundaryDeclaration declaration, (Assert.Single held).Kind)
+        Assert.NotEqual<SourceRangeRelation list>(held, census [])
+        Assert.NotEqual<SourceRangeRelation list>(held, census [row; row])
+        Assert.NotEqual<SourceRangeRelation list>(held, census [{row with Role = EdgeRole.BoundaryDeclaration {declaration with Formals = []}}])
+        Assert.NotEqual<SourceRangeRelation list>(held, census [{row with Sources = []; Target = NodeId 999999}])

@@ -174,6 +174,28 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
         (MappedBindings.read graph).Mappings
         |> List.map (fun mapping -> mapping.Binding, [mapping.AcquireBinding; mapping.ReleaseBinding])
         |> Map.ofList
+    // An issued native declaration retains its source path and formals. Its
+    // placeholder is not an executable result; actual calls own result demand.
+    // Missing or malformed incidence grants no exemption from the usual walk.
+    let foreignBodies =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Class, edge.Role with
+            | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration declaration
+                when edge.Target = declaration.Binding &&
+                     edge.Sources = declaration.Path @ declaration.Formals @ [declaration.Body] &&
+                     List.tryLast declaration.Path = Some declaration.Implementation ->
+                match graph.Nodes.TryFind declaration.Binding, graph.Nodes.TryFind declaration.Implementation with
+                | Some binding, Some { Kind = SemanticKind.Lambda(formals, body, captures, _, _) }
+                    when (binding.Metadata.ContainsKey "FidelityExtern.Library" || binding.Metadata.ContainsKey "FidelityExtern.Symbol") &&
+                         captures.IsEmpty && body = declaration.Body &&
+                         (formals |> List.map (fun (_, _, formal) -> formal)) = declaration.Formals ->
+                    Some(declaration.Implementation, body)
+                | _ -> None
+            | _ -> None)
+        |> List.groupBy fst
+        |> List.choose (fun (implementation, rows) ->
+            match rows with [(_, body)] -> Some(implementation, body) | _ -> None)
+        |> Map.ofList
     // Lazy cache/guard declarations have no value initializer. Retain the
     // exact declarations named by their source formation, without making
     // either a computation or a cache value into a structural child. This
@@ -241,6 +263,10 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
                 let allRefs =
                     match hardwareDesignReferences graph node with
                     | Some executable -> executable @ typeRefs
+                    | None -> allRefs
+                let allRefs =
+                    match foreignBodies.TryFind node.Id with
+                    | Some placeholder -> allRefs |> List.filter ((<>) placeholder)
                     | None -> allRefs
                 allRefs |> List.fold (walk root) visited
 

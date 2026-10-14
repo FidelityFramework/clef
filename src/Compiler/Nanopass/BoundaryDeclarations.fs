@@ -13,3 +13,6 @@ let normalize graph =
     else
         let retained = graph.Edges |> List.filter (owned >> not)
         { graph with Edges = retained @ rows } |> SemanticGraph.invalidateWitness
+        // Declaration incidence changes the execution walk. Refresh its marks
+        // before demand and ranges consume them, retaining source participants.
+        |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable

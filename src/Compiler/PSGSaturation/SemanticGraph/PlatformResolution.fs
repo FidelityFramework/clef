@@ -194,28 +194,33 @@ type Reading = {
 /// quotation to the expression it quotes, through a VarRef to its binding's
 /// value, and through a conversion application (`int64 X`) to its operand.
 /// Stops at the first node that is none of those.
-let valueOf (graph: SemanticGraph) (id: NodeId) : SemanticNode option =
-    let rec follow seen id =
+let private valuePath (graph: SemanticGraph) (id: NodeId) : (SemanticNode * NodeId list) option =
+    let rec follow seen path id =
         // A cyclic declaration has no settled literal value. Keep its graph
         // intact for the owning declaration/dependency diagnostic.
         if Set.contains id seen then None else
         let seen = Set.add id seen
+        let path = path @ [id]
         match SemanticGraph.tryGetNode id graph with
         | None -> None
         | Some node ->
             match node.Kind with
-            | SemanticKind.TypeAnnotation (inner, _) -> follow seen inner
-            | SemanticKind.Quote (inner, _) -> follow seen inner
+            | SemanticKind.TypeAnnotation (inner, _) -> follow seen path inner
+            | SemanticKind.Quote (inner, _) -> follow seen path inner
             | SemanticKind.VarRef (_, Some bindingId) ->
                 match SemanticGraph.tryGetNode bindingId graph with
-                | Some ({ Children = [ valueId ] } : SemanticNode) -> follow seen valueId
+                | Some ({ Children = [ valueId ] } : SemanticNode) -> follow seen (path @ [bindingId]) valueId
                 | _ -> None
             | SemanticKind.Application (funcId, [ arg ]) ->
-                match follow seen funcId with
-                | Some ({ Kind = SemanticKind.Intrinsic { Category = IntrinsicCategory.Conversion } } : SemanticNode) -> follow seen arg
-                | _ -> Some node
-            | _ -> Some node
-    follow Set.empty id
+                match follow seen path funcId with
+                | Some (({ Kind = SemanticKind.Intrinsic { Category = IntrinsicCategory.Conversion } } : SemanticNode), functionPath) -> follow seen functionPath arg
+                | _ -> Some (node, path)
+            | _ -> Some (node, path)
+    follow Set.empty [] id
+
+/// The existing value API projects the same owner, which also retains quote incidence.
+let valueOf (graph: SemanticGraph) (id: NodeId) : SemanticNode option =
+    valuePath graph id |> Option.map fst
 
 /// The node a finding about `id` is located at: the value it denotes, else the
 /// referencing node itself.
@@ -883,10 +888,23 @@ type DeclaredFunction = {
     Return: DeclaredParameter option
 }
 
+/// A source-quoted behavioral hypothesis and its exact boundary declaration.
+/// SourcePath preserves quotation/alias occurrence; Node is the actual record.
+type DeclaredResultRange = {
+    Node: NodeId
+    DescriptorBinding: NodeId
+    SourcePath: NodeId list
+    Declaration: BoundaryDeclaration
+    Hypothesis: ForeignResultHypothesis
+    AbiDescriptor: NodeId
+    Participants: NodeId list
+}
+
 /// Every boundary declaration in the graph, with every defect found reading them.
 type Descriptors = {
     Layouts: DeclaredLayout list
     Functions: DeclaredFunction list
+    ResultRanges: DeclaredResultRange list
     Findings: DeclarationFinding list
 }
 
@@ -1225,7 +1243,7 @@ let readFunctionForBinding (graph: SemanticGraph) (binding: SemanticNode) (_bind
 /// Resolve the generated extern beside its descriptor, then use the same reader as callbacks.
 let private readFunction graph binding bindingName node fields =
     let target = externBeside graph binding bindingName |> Option.defaultValue binding
-    readFunctionForBinding graph target bindingName node fields
+    target.Id, readFunctionForBinding graph target bindingName node fields
 
 /// Every boundary declaration in the graph: a module-level binding whose value, through an
 /// annotation or a quotation, is a `StructDescriptor`, a `PeripheralDescriptor` or a
@@ -1236,24 +1254,125 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
         match node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) with
         | Some { Kind = SemanticKind.ModuleDef _ } -> true
         | _ -> false
-    graph.Nodes
-    |> Map.toList
-    |> List.fold (fun (layouts, functions, findings) (_, node) ->
-        match node.Kind with
-        | SemanticKind.Binding (name, _, _, _) when isModuleLevel node && not (List.isEmpty node.Children) ->
-            match recordOf graph (List.last node.Children) with
-            | Some (record, fields) ->
-                match typeName record with
-                | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
-                    let layout, more = readLayout graph record fields
-                    (Option.toList layout @ layouts, functions, findings @ more)
-                | Some "FunctionDescriptor" ->
-                    let f, more = readFunction graph node name record fields
-                    (layouts, Option.toList f @ functions, findings @ more)
-                | _ -> (layouts, functions, findings)
-            | None -> (layouts, functions, findings)
-        | _ -> (layouts, functions, findings)) ([], [], [])
-    |> fun (layouts, functions, findings) -> { Layouts = List.rev layouts; Functions = List.rev functions; Findings = findings }
+    // Keep the existing single source census. Resolve result contracts from the
+    // retained declaration/ABI inventories, never by C symbol or beside-name.
+    let layouts, functions, resultDeclarations, externs, findings =
+        graph.Nodes
+        |> Map.toList
+        |> List.fold (fun (layouts, functions, ranges, externs, findings) (_, node) ->
+            let externs =
+                if node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol" then
+                    qualifiedExportName graph node |> Option.map (fun name -> (name, node.Id) :: externs) |> Option.defaultValue externs
+                else externs
+            match node.Kind with
+            | SemanticKind.Binding (name, _, _, _) when isModuleLevel node && not (List.isEmpty node.Children) ->
+                match valuePath graph (List.last node.Children) with
+                | Some (({ Kind = SemanticKind.RecordExpr(fields, _) } as record), path) ->
+                    match typeName record with
+                    | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
+                        let layout, more = readLayout graph record fields
+                        (Option.toList layout @ layouts, functions, ranges, externs, findings @ more)
+                    | Some "FunctionDescriptor" ->
+                        let target, (f, more) = readFunction graph node name record fields
+                        (layouts, (f |> Option.map (fun f -> target, f) |> Option.toList) @ functions, ranges, externs, findings @ more)
+                    | Some "ResultRangeDescriptor" ->
+                        (layouts, functions, (node, record, fields, path) :: ranges, externs, findings)
+                    | _ -> (layouts, functions, ranges, externs, findings)
+                | Some (value, _) when typeName value = Some "ResultRangeDescriptor" ->
+                    (layouts, functions, ranges, externs, findings @ [findingAt value DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"])
+                | _ ->
+                    let declared =
+                        match node.Type with
+                        | NativeType.TApp(_, [inner]) -> typeName { node with Type = inner } = Some "ResultRangeDescriptor"
+                        | _ -> typeName node = Some "ResultRangeDescriptor"
+                    let more = if declared then [findingAt node DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"] else []
+                    (layouts, functions, ranges, externs, findings @ more)
+            | _ -> (layouts, functions, ranges, externs, findings)) ([], [], [], [], [])
+    let readResult (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredResultRange, DeclarationFinding> =
+        let malformed reason = Error (findingAt node DeclarationDefect.Malformed ("a ResultRangeDescriptor " + reason))
+        let invalid reason = Error (findingAt node DeclarationDefect.Invalid ("a ResultRangeDescriptor " + reason))
+        let immutablePath ids = ids |> List.forall (fun id ->
+            match graph.Nodes.TryFind id |> Option.map _.Kind with
+            | Some (SemanticKind.Binding(_, true, _, _)) -> false
+            | _ -> true)
+        let quotes = path |> List.choose (fun id ->
+            match graph.Nodes.TryFind id |> Option.map _.Kind with Some (SemanticKind.Quote _) -> Some id | _ -> None)
+        let name = field "Binding" fields |> Option.bind (stringOf graph)
+        let role = field "Role" fields |> Option.bind (caseOf graph)
+        match quotes, name, role, field "Hypothesis" fields |> Option.bind (recordOf graph) with
+        | [quote], Some name, Some (_, "ReturnValue", None), Some (hypothesisNode, hypothesisFields)
+            when immutablePath (binding.Id :: path) && typeName hypothesisNode = Some "ExternalExecutionHypothesis" ->
+            let text key = field key hypothesisFields |> Option.bind (stringOf graph) |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+            match text "Identity", text "Version", text "Source" with
+            | Some identity, Some version, Some source ->
+                match externs |> List.filter (fun (candidate, _) -> candidate = name) with
+                | [_, target] ->
+                    let rows = graph.Edges |> List.choose (fun edge ->
+                        match edge.Class, edge.Role with
+                        | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration declaration when edge.Target = target && declaration.Binding = target -> Some(edge, declaration)
+                        | _ -> None)
+                    match rows, functions |> List.filter (fun (binding, _) -> binding = target) with
+                    | [edge, declaration], [_, abi] when edge.Sources = declaration.Path @ declaration.Formals @ [declaration.Body] &&
+                                                       (edge.Sources |> List.forall graph.Nodes.ContainsKey) ->
+                        match graph.Nodes.TryFind declaration.Implementation |> Option.map _.Kind, recordOf graph abi.Node with
+                        | Some (SemanticKind.Lambda(formals, body, captures, _, _)), Some (_, abiFields)
+                            when captures.IsEmpty && body = declaration.Body && (formals |> List.map (fun (_, _, id) -> id)) = declaration.Formals ->
+                            let parameters = field "Parameters" abiFields |> Option.bind (elementsOf graph)
+                            let returned = field "ReturnType" abiFields |> Option.map (readTypeRef graph)
+                            match parameters, returned with
+                            | Some parameters, Some (Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer _))) when abi.Body = Some body && abi.Parameters.Length = parameters.Length &&
+                                   (graph.Nodes.TryFind body |> Option.exists (fun body -> Types.isIntegerType body.Type)) ->
+                                let endpoint key =
+                                    match field key fields |> Option.bind (caseOf graph) with
+                                    | Some (_, "Constant", Some payload) ->
+                                        match int64Of graph payload with
+                                        | Some value when value >= int64 System.Int32.MinValue && value <= int64 System.Int32.MaxValue -> Ok (ForeignResultBound.Constant (bigint value))
+                                        | _ -> malformed (key + " Constant requires a literal int value")
+                                    | Some (_, "Argument", Some payload) ->
+                                        match int64Of graph payload with
+                                        | Some ordinal when ordinal >= 0L && ordinal < int64 parameters.Length ->
+                                            let index = int ordinal
+                                            match recordOf graph parameters[index] with
+                                            | Some (_, parameterFields) ->
+                                                match field "PassBy" parameterFields |> Option.bind (caseOf graph), field "Type" parameterFields |> Option.map (readTypeRef graph), List.tryItem index abi.Parameters with
+                                                | Some (_, "Value", None), Some (Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer _))), Some (_, Some _) when List.tryItem index formals |> Option.exists (fun (_, ty, _) -> Types.isIntegerType ty) -> Ok (ForeignResultBound.Argument index)
+                                                | _ -> invalid (sprintf "%s Argument %d requires a native scalar integer Value parameter" key index)
+                                            | _ -> malformed (key + " Argument requires a ParameterInfo record")
+                                        | _ -> invalid (key + " Argument is outside the exact native arity")
+                                    | _ -> malformed (key + " must be Constant int or Argument int")
+                                match endpoint "Lower", endpoint "Upper" with
+                                | Ok lower, Ok upper ->
+                                    let participantFields = (fields @ hypothesisFields) |> List.map snd
+                                    let endpoints = ["Lower"; "Upper"] |> List.collect (fun key ->
+                                        field key fields |> Option.bind (caseOf graph) |> Option.map (fun (_, _, payload) -> Option.toList payload) |> Option.defaultValue [])
+                                    let paths = participantFields @ endpoints |> List.collect (fun id -> valuePath graph id |> Option.map snd |> Option.defaultValue [id])
+                                    let abiParameterFields = parameters |> List.collect (fun id -> recordOf graph id |> Option.map (snd >> List.map snd) |> Option.defaultValue [id])
+                                    let abiTypes = (field "ReturnType" abiFields |> Option.toList) @ (parameters |> List.choose (fun id -> recordOf graph id |> Option.bind (snd >> field "Type")))
+                                    let abiPayloads = abiTypes |> List.collect (fun id ->
+                                        caseOf graph id |> Option.bind (fun (_, _, payload) -> payload) |> Option.map (fun payload ->
+                                            payload :: (pairOf graph payload |> Option.map (fun (sign, bits) -> [sign; bits]) |> Option.defaultValue [])) |> Option.defaultValue [])
+                                    let abiPaths = (abiFields |> List.map snd) @ abiParameterFields @ abiTypes @ abiPayloads |> List.collect (fun id -> valuePath graph id |> Option.map snd |> Option.defaultValue [id])
+                                    if not (immutablePath (paths @ abiPaths)) then invalid "requires immutable literal hypothesis inputs" else
+                                    match lower, upper with
+                                    | ForeignResultBound.Constant lo, ForeignResultBound.Constant hi when lo > hi -> invalid "constant bounds are contradictory"
+                                    | _ -> Ok {
+                                        Node = node.Id; DescriptorBinding = binding.Id; SourcePath = path; Declaration = declaration
+                                        Hypothesis = { Quote = quote; Declaration = target; Identity = identity; Version = version; Source = source; Lower = lower; Upper = upper }
+                                        AbiDescriptor = abi.Node
+                                        Participants = binding.Id :: path @ [hypothesisNode.Id] @ paths @ edge.Sources @ [abi.Node] @ parameters @ abiPaths }
+                                | Error finding, _ | _, Error finding -> Error finding
+                            | _ -> invalid "requires an exact-arity scalar integer native return ABI descriptor"
+                        | _ -> invalid "requires its existing capture-free boundary declaration identity row"
+                    | _ -> invalid "requires exactly one boundary declaration row and paired native ABI descriptor"
+                | [] -> invalid (sprintf "Binding '%s' names no fully qualified extern declaration" name)
+                | _ -> invalid (sprintf "Binding '%s' is ambiguous" name)
+            | _ -> malformed "requires nonempty literal hypothesis Identity, Version and Source"
+        | _ -> malformed "requires one immutable quotation, literal Binding, ReturnValue role and ExternalExecutionHypothesis record"
+    let results = List.rev resultDeclarations |> List.map readResult
+    let ranges = results |> List.choose (function Ok range -> Some range | _ -> None)
+    let duplicateFindings = duplicates "result contract" (fun range -> string range.Declaration.Binding) _.Node graph ranges
+    { Layouts = List.rev layouts; Functions = List.rev functions |> List.map snd; ResultRanges = ranges
+      Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings }
 
 /// The bounded scalar references a call passes, paired with its actual arrays.
 /// The descriptor supplies the element ABI; the lowering must retain an extent

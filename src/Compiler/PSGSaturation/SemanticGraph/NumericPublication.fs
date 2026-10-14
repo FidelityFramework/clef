@@ -151,11 +151,30 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
                 transport.Carrier.Site = transport.Operand &&
                 (domain.Values |> List.tryFind (fun value -> value.Site = transport.Operand)) = Some transport.Carrier &&
                 transport.Participants = (transport.Carrier.Participants |> Set.add transport.Site |> Set.add transport.PointerDeclaration))
+            let foreignValuesValid =
+                match RangeAnalysis.foreignResultApplications graph domain.RangeContextFacts with
+                | Error _ -> false
+                | Ok applications ->
+                    (applications |> List.map (fun (evidence: RangeAnalysis.ForeignResultEvidence) -> evidence.Application)) =
+                        (domain.ForeignResultUses |> List.map (fun account -> account.Application)) &&
+                    List.forall2 (fun (evidence: RangeAnalysis.ForeignResultEvidence) (account: ForeignResultUse) ->
+                        let models = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.foreignResultModels graph domain.Values evidence
+                        let participants = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.foreignResultParticipants evidence.Application models
+                        account.Participants = ParticipantEvidence.Established participants &&
+                        List.map fst account.Claims = List.map fst models &&
+                        (account.Claims |> List.map snd |> List.distinct).Length = models.Length &&
+                        List.forall2 (fun (_, citizen) (_, model) ->
+                            graph.Nodes.TryFind citizen |> Option.exists (fun node ->
+                                Numeric.owned node &&
+                                (match node.Kind with
+                                 | SemanticKind.Obligation info -> info.Kind = "foreign-result-coverage" && info.Body = ObligationBody.ForeignResultCoverage model
+                                 | _ -> false))) account.Claims models) applications domain.ForeignResultUses
             let proofRows = proofs |> List.collect (fun (carrier, id, body) -> body |> Option.toList |> List.collect (Numeric.proofRows carrier id))
             let expected = Numeric.domainRow anchor domain :: Numeric.domainRewrite anchor domain :: (domain.Values |> List.map Numeric.carrierRow) @ proofRows
                            @ (domain.Operations |> List.map Operations.operationRow) @ (domain.OperationProofs |> List.collect Operations.proofRows)
                            @ (domain.IndexTransports |> List.collect Numeric.indexRows)
-            let targets = Set.add anchor ((proofs |> List.map (fun (_, id, _) -> id)) @ (domain.OperationProofs |> List.map _.Obligation) @ (domain.IndexTransports |> List.map _.Obligation) |> Set.ofList)
+                           @ (domain.ForeignResultUses |> List.collect Numeric.foreignProofRows)
+            let targets = Set.add anchor ((proofs |> List.map (fun (_, id, _) -> id)) @ (domain.OperationProofs |> List.map _.Obligation) @ (domain.IndexTransports |> List.map _.Obligation) @ (domain.ForeignResultUses |> List.collect (_.Claims >> List.map snd)) |> Set.ofList)
             let actual = graph.Edges |> List.filter (fun edge ->
                 match edge.Role with
                 | EdgeRole.NumericDomain _ | EdgeRole.NumericCarrier _ | EdgeRole.NumericProof _ | EdgeRole.NumericOperation _ | EdgeRole.NumericOperationProof _ | EdgeRole.NumericIndexTransport _ -> true
@@ -165,10 +184,11 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
             let representationMembership = domain.OccurrenceRepresentations |> Map.keys |> Set.ofSeq
             let elementForms = domain.Elements |> Map.forall (fun site slot ->
                 domain.OccurrenceRepresentations.TryFind site = Some(Ok(ValueRepresentation.Buffer(None, ValueRepresentation.Scalar slot))))
-            if not valid || not operationProofsValid || not operationValuesValid || not indexValuesValid || not elementForms || representationMembership <> participants || domain.SourceTypes <> (domain.Premises |> Map.map (fun _ premise -> premise.Shape.SourceType)) || membership <> targets || not (Numeric.sameRows expected actual) then
+            if not valid || not operationProofsValid || not operationValuesValid || not indexValuesValid || not foreignValuesValid || not elementForms || representationMembership <> participants || domain.SourceTypes <> (domain.Premises |> Map.map (fun _ premise -> premise.Shape.SourceType)) || membership <> targets || not (Numeric.sameRows expected actual) then
                 reject (Some anchor) participants "The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent."
             else
                 Ok { Values = domain.Values |> List.map (fun carrier -> carrier.Site, carrier) |> Map.ofList
+                     ForeignResultUses = domain.ForeignResultUses
                      Operations = domain.Operations |> List.map (fun operation -> operation.Site, operation) |> Map.ofList; OperationRequired = domain.OperationRequired
                      IndexTransports = domain.IndexTransports |> List.map (fun transport -> transport.Site, transport) |> Map.ofList
                      Required = domain.Required; ResultSites = domain.ResultSites; Unresolved = domain.Unresolved
@@ -200,6 +220,12 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
                                 + ": "
                                 + String.concat "; " reasons
                         }
+                | ObligationBody.ForeignResultCoverage _ ->
+                    Clef.Compiler.Nanopass.ObligationDischarge.unavailable [info]
+                    |> List.tryHead
+                    |> Option.map (fun unavailable ->
+                        { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some id; Participants = Set.singleton id
+                          Reason = "NumericPublication: Pending claim " + info.Id + ": " + String.concat "; " unavailable.MissingPremises })
                 | _ -> None
             | _ -> None)
 

@@ -55,6 +55,7 @@ let private sourceRelation owner (edge: Hyperedge) : Result<SourceRangeRelation,
         | EdgeRole.OrdinaryBindingDemandPending(reason, evidence) -> Ok(SourceRangeRelationKind.OrdinaryBindingDemandPending(reason, evidence))
         | EdgeRole.OrdinaryBindingDemandHistory evidence -> Ok(SourceRangeRelationKind.OrdinaryBindingDemandHistory evidence)
         | EdgeRole.KernelIngress ingress -> Ok(SourceRangeRelationKind.KernelIngress ingress)
+        | EdgeRole.BoundaryDeclaration declaration -> Ok(SourceRangeRelationKind.BoundaryDeclaration declaration)
         | role ->
             let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
             if fields.Length = 0 then Ok(SourceRangeRelationKind.Named case.Name)
@@ -94,6 +95,7 @@ let rangeContextRelations (graph: SemanticGraph) =
             | EdgeRole.OrdinaryBindingDemand _ | EdgeRole.OrdinaryBindingDemandPending _ | EdgeRole.OrdinaryBindingDemandHistory _
             | EdgeRole.EagerDemand _ | EdgeRole.EagerDemandPending
             | EdgeRole.KernelIngress _
+            | EdgeRole.BoundaryDeclaration _
             | EdgeRole.StringExtent _ | EdgeRole.StringByteView _ | EdgeRole.StringByteStorage _ | EdgeRole.StringByteRange _
             | EdgeRole.StringByteRead | EdgeRole.StringByteSnapshot | EdgeRole.StringToBytesSnapshot
             | EdgeRole.StringAscii | EdgeRole.StringUtf8Constant _ | EdgeRole.ArrayAllocationConstruction _ -> true
@@ -339,6 +341,18 @@ let indexRows (transport: NumericIndexTransport) =
     [ row (EdgeRole.NumericIndexTransport transport) sources transport.Site
       { Class = EdgeClass.Obligation; Role = EdgeRole.Constrains; Ordinal = 0; Sources = sources; Target = transport.Obligation }
       { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = transport.Obligation } ]
+
+/// Conditional citizens share their complete ordered source account. This is
+/// incidence, not a second range rule or a solver discharge.
+let foreignProofRows (account: ForeignResultUse) =
+    let participants =
+        match account.Participants with
+        | ParticipantEvidence.Established rows -> rows
+        | ParticipantEvidence.Pending early -> early.Derived
+    let sources = participants |> List.map _.Node
+    account.Claims |> List.collect (fun (_, citizen) ->
+        [{ Class = EdgeClass.Obligation; Role = EdgeRole.Constrains; Ordinal = 0; Sources = sources; Target = citizen }
+         { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = citizen }])
 
 let sameRows expected actual =
     let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target

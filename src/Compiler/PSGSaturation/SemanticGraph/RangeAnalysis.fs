@@ -136,6 +136,13 @@ type private Program = {
     Callees: Map<NodeId, Callee * NodeId list>
     /// Complete ordinary applications keep each alternative's actual correspondence.
     Applications: Map<NodeId, CallableOrigins.CallTarget list>
+    /// Exact foreign declaration rows are incidence, never behavior inferred from a stub.
+    ForeignDeclarations: Map<NodeId, BoundaryDeclaration list>
+    ForeignBodies: Set<NodeId>
+    ForeignEffectBodies: Set<NodeId>
+    ForeignDeclarationFailure: (NodeId * string) option
+    ForeignResultRanges: Map<NodeId, PlatformResolution.DeclaredResultRange list>
+    ForeignAbi: Map<NodeId, PlatformResolution.DeclaredFunction list>
     Effects: Map<NodeId, WriteEffect>
     LoopRecognition: LoopRecipes.Recognition
     LoopAccumulations: Map<NodeId, LoopRecipes.Accumulation>
@@ -531,6 +538,7 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
         match callee with
         | Callee.Direct (parameters, body) ->
             if args.Length < parameters.Length then noWrites
+            elif program.ForeignEffectBodies.Contains body then unknownWrites
             elif args.Length = parameters.Length then read effects body
             else
                 let surplus = List.skip parameters.Length args
@@ -540,7 +548,7 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
             let initial = if poisoned || List.isEmpty possible then unknownWrites else noWrites
             possible |> List.fold (fun acc candidate ->
                 if args.Length < candidate.Parameters.Length - candidate.Offset then acc
-                else joinWrites acc (read effects candidate.Body)) initial
+                else joinWrites acc (if program.ForeignEffectBodies.Contains candidate.Body then unknownWrites else read effects candidate.Body)) initial
         | Callee.Intrinsic info ->
             // The emission category is not a callback-effect declaration. Read
             // the existing callback table, and keep delayed/foreign operations
@@ -747,7 +755,7 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
                 // call site and are dropped, as is a bound on a mutable the callee reads but does not
                 // own.
                 match Map.tryFind guardId program.Callees with
-                | Some (Callee.Direct (parameters, body), allArgs) ->
+                | Some (Callee.Direct (parameters, body), allArgs) when not (program.ForeignEffectBodies.Contains body) ->
                     let argOf = parameters |> List.mapi (fun i (_, _, id) -> id, List.tryItem i allArgs) |> Map.ofList
                     // a bound that reads a parameter reads this call's argument instead: the
                     // argument's range is exactly the parameter's value here, where the parameter
@@ -1359,6 +1367,12 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Parents = parents
         Callees = Map.empty
         Applications = Map.empty
+        ForeignDeclarations = Map.empty
+        ForeignBodies = Set.empty
+        ForeignEffectBodies = Set.empty
+        ForeignDeclarationFailure = None
+        ForeignResultRanges = Map.empty
+        ForeignAbi = Map.empty
         Effects = Map.empty
         LoopRecognition = { Accumulations = []; Linear = []; Tail = []; Edges = [] }
         SequenceAccumulations = []
@@ -1640,6 +1654,40 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     // seed and stays unobservable (CCS8011 names the missing declaration); nothing is invented.
     let descriptors = PlatformResolution.readDescriptors graph
     let descriptors = { descriptors with Functions = descriptors.Functions @ ((CallbackDeclarations.read graph).Callbacks |> List.map (fun c -> c.Function)) }
+    let foreignDeclarations =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Class, edge.Role with
+            | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration declaration
+                when edge.Target = declaration.Binding && edge.Sources = declaration.Path @ declaration.Formals @ [declaration.Body] &&
+                     (graph.Nodes.TryFind declaration.Binding |> Option.exists (fun node ->
+                         node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol")) &&
+                     (graph.Nodes.TryFind declaration.Body |> Option.exists (fun node -> Types.isIntegerType node.Type)) -> Some declaration
+            | _ -> None)
+        |> List.groupBy _.Body |> Map.ofList
+    // The existing boundary identity owner supplies the expected source census.
+    // Missing incidence removes authority; it must not make the placeholder an
+    // ordinary body or turn its physical ABI into promised behavior.
+    let expectedExternal =
+        graph.Nodes |> Map.toList |> List.choose (fun (_, node) ->
+            if not (Clef.Compiler.Baker.Recipes.BoundaryDeclarations.isExternal node) then None else
+            match Clef.Compiler.Baker.Recipes.BoundaryDeclarations.bindingPath graph node.Id with
+            | Ok(path, formals, body) -> Some(node.Id, path, formals |> List.map (fun (_, _, formal) -> formal), body)
+            | _ -> None)
+    let foreignEffectBodies = expectedExternal |> List.map (fun (_, _, _, body) -> body) |> Set.ofList
+    let expectedForeign = expectedExternal |> List.filter (fun (_, _, _, body) ->
+        graph.Nodes.TryFind body |> Option.exists (fun body -> Types.isIntegerType body.Type))
+    let foreignBodies = expectedForeign |> List.map (fun (_, _, _, body) -> body) |> Set.ofList
+    let missingForeign = expectedForeign |> List.filter (fun (binding, path, formals, body) ->
+        let matching = foreignDeclarations.TryFind body |> Option.defaultValue [] |> List.filter (fun declaration ->
+            declaration.Binding = binding && declaration.Path = path && declaration.Implementation = List.last path && declaration.Formals = formals)
+        matching.Length <> 1)
+    let foreignDeclarationFailure =
+        missingForeign |> List.tryHead |> Option.map (fun (binding, _, _, _) ->
+            let range = graph.Nodes[binding].Range
+            binding, sprintf "The integer foreign boundary declaration at %s:%d has no unique current identity row." range.File range.Start.Line)
+    let foreignResultRanges = descriptors.ResultRanges |> List.groupBy (fun range -> range.Declaration.Binding) |> Map.ofList
+    let foreignAbi = descriptors.Functions |> List.choose (fun abi -> abi.Body |> Option.map (fun body -> body, abi))
+                     |> List.groupBy fst |> List.map (fun (body, rows) -> body, rows |> List.map snd) |> Map.ofList
     let inputSeeds =
         descriptors.Layouts
         |> List.fold (fun (acc: Map<NominalTypeIdentity, Map<string, ValueRange>>) layout ->
@@ -1660,6 +1708,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             let seeds = f.Parameters |> List.fold (fun s (paramId, d) -> match d with Some d -> Map.add paramId d.Range s | None -> s) seeds
             let seeds =
                 match f.Body, f.Return with
+                | Some body, Some _ when foreignBodies.Contains body -> seeds
                 | Some body, Some r -> Map.add body r.Range seeds
                 | _ -> seeds
             (seeds, declared @ (f.Parameters |> List.choose (fun (paramId, d) -> d |> Option.map (fun d -> paramId, d))))) (Map.empty, [])
@@ -1831,6 +1880,12 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         { baseProgram with
             Callees = callees
             Applications = completeApplications reachableNodes inactiveCalls callArguments callableFlow.Calls
+            ForeignDeclarations = foreignDeclarations
+            ForeignBodies = foreignBodies
+            ForeignEffectBodies = foreignEffectBodies
+            ForeignDeclarationFailure = foreignDeclarationFailure
+            ForeignResultRanges = foreignResultRanges
+            ForeignAbi = foreignAbi
             CallArguments = callArguments
             IndexSeeds = indexSeeds
             Escaping = escaping
@@ -2217,12 +2272,48 @@ let rec private aggregateElement (program: Program) (value: Reading) (visited: S
                 | None -> ValueRange.Unbounded
             | _ -> ValueRange.Unbounded
 
+/// Match existing direct formal/body correspondence, never a C symbol or a new callee walk.
+let private foreignDeclaration (program: Program) call =
+    match program.Callees.TryFind call with
+    | Some (Callee.Direct(formals, body), actuals) when program.ForeignDeclarations.ContainsKey body ->
+        let declarations = program.ForeignDeclarations[body] |> List.filter (fun declaration ->
+            declaration.Formals = (formals |> List.map (fun (_, _, formal) -> formal)))
+        match declarations with
+        | [declaration] when actuals.Length = declaration.Formals.Length -> Some(declaration, actuals)
+        | _ -> None
+    | _ -> None
+
+let private foreignResultDescriptor (program: Program) (declaration: BoundaryDeclaration) =
+    match program.ForeignResultRanges.TryFind declaration.Binding with Some [descriptor] -> Some descriptor | _ -> None
+
+/// A conditional enclosure reads each actual with the existing use-edge refinement.
+/// It authorizes no proof, representation choice, or foreign execution by itself.
+let private foreignRange (program: Program) value call =
+    match foreignDeclaration program call with
+    | None -> ValueRange.Unbounded
+    | Some(declaration, actuals) ->
+        match foreignResultDescriptor program declaration with
+        | None -> ValueRange.Unbounded
+        | Some descriptor ->
+            let endpoint = function
+                | ForeignResultBound.Constant value -> ValueRange.point value
+                | ForeignResultBound.Argument ordinal ->
+                    actuals |> List.tryItem ordinal |> Option.map (read program value call) |> Option.defaultValue ValueRange.Unbounded
+            match endpoint descriptor.Hypothesis.Lower, endpoint descriptor.Hypothesis.Upper with
+            | ValueRange.Empty, _ | _, ValueRange.Empty -> ValueRange.Empty
+            | ValueRange.Bounded(lo, _), ValueRange.Bounded(_, hi) -> ValueRange.bounded lo hi
+            | _ -> ValueRange.Unbounded
+
 /// The range an application computes: the table's fact for an intrinsic (`RangeSources`), the
 /// element range for an element read, or every complete target's contextual
 /// body fact. Other established calls retain shared body
 /// enclosures; unresolved calls and untabled intrinsics remain unobservable.
 let private applicationRange (program: Program) (shared: Reading) (value: Reading) (application: NodeId -> ValueRange option) (node: SemanticNode) (fallback: ValueRange) : ValueRange =
     match Map.tryFind node.Id program.Callees with
+    | Some (Callee.Direct(_, body), _) when program.ForeignEffectBodies.Contains body ->
+        if program.ForeignBodies.Contains body then foreignRange program value node.Id else fallback
+    | Some (Callee.Value(candidates, _), _) when candidates |> List.exists (fun candidate -> program.ForeignEffectBodies.Contains candidate.Body) ->
+        fallback
     | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [iterator]) ->
         match program.SequenceElements.TryFind node.Id with
         | Some (actual, payloads) when actual = iterator ->
@@ -2283,7 +2374,9 @@ let private transfer (program: Program) (shared: Reading) (value: Reading) (appl
                     | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Constant value -> ValueRange.point value
                     | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Count count -> shared count
                 ValueRange.join range value) ValueRange.Empty |> Some
-        // a node a binding descriptor declares (an extern's parameter, its result): the declaration binds
+        | _ when program.ForeignBodies.Contains node.Id -> Some ValueRange.Unbounded
+        // ABI parameter carriers remain declaration inputs; foreign return widths
+        // do not constitute a behavioral source range.
         | _ when Map.containsKey node.Id program.BoundarySeeds -> Map.tryFind node.Id program.BoundarySeeds
         | _ when program.LazyResults.ContainsKey node.Id ->
             // Read the thunk's whole result enclosure. A guard on a mutable
@@ -2472,7 +2565,11 @@ let private contextProgram (program: Program) =
             match program.Reachable.TryFind id with
             | Some { Kind = SemanticKind.Lambda _ } | None -> seen
             | Some node -> List.fold bodyOccurrences seen node.Children
-    let targets = program.Applications.Values |> Seq.collect id |> Seq.distinctBy _.Lambda |> Seq.toList
+    // External execution has no source body activation. Its application stays
+    // in the caller's lexical region, where the result contract reads actuals.
+    let applications = program.Applications |> Map.map (fun _ targets ->
+        targets |> List.filter (fun target -> not (program.ForeignEffectBodies.Contains target.Body)))
+    let targets = applications.Values |> Seq.collect id |> Seq.distinctBy _.Lambda |> Seq.toList
     let fullParameters (target: CallableOrigins.CallTarget) =
         match program.Reachable.TryFind target.Lambda with
         | Some { Kind = SemanticKind.Lambda (parameters, _, _, _, _) } -> parameters |> List.map (fun (_, _, id) -> id)
@@ -2501,7 +2598,7 @@ let private contextProgram (program: Program) =
             let additions =
                 members[parent]
                 |> Seq.collect (fun call ->
-                    program.Applications.TryFind call |> Option.defaultValue [] |> List.map (fun target ->
+                    applications.TryFind call |> Option.defaultValue [] |> List.map (fun target ->
                         { RangeInvocationRow.Context = childContext parent call
                           Caller = parent; Call = call; Target = target.Lambda; Body = target.Body
                           Arguments = List.zip (target.Parameters |> List.map (fun (_, _, id) -> id)) target.Arguments }))
@@ -2531,6 +2628,11 @@ let private contextProgram (program: Program) =
       Calls = rows |> List.groupBy (fun row -> row.Caller, row.Call) |> Map.ofList
       Occurrences = occurrences; Coordinates = coordinates }
 
+let private contextReading (contexts: ContextProgram) get context id =
+    if context <> RangeContext.Shared &&
+       (contexts.Members.TryFind context |> Option.exists (Set.contains id)) then get (context, id)
+    else get (RangeContext.Shared, id)
+
 /// Every transfer reads already-issued state cells. No reader calls transfer;
 /// context cycles therefore have the same convergence owner as shared facts.
 let private evaluate (program: Program) (contexts: ContextProgram) (state: ContextState) context (node: SemanticNode) =
@@ -2539,10 +2641,7 @@ let private evaluate (program: Program) (contexts: ContextProgram) (state: Conte
         reads <- Set.add key reads
         state.Values.TryFind key |> Option.defaultValue ValueRange.Empty
     let shared id = get (RangeContext.Shared, id)
-    let reading context id =
-        if context <> RangeContext.Shared &&
-           (contexts.Members.TryFind context |> Option.exists (Set.contains id)) then get (context, id)
-        else shared id
+    let reading context id = contextReading contexts get context id
     let application context call =
         contexts.Calls.TryFind (context, call) |> Option.map (fun rows ->
             rows |> List.fold (fun range row -> ValueRange.join range (reading row.Context row.Body)) ValueRange.Empty)
@@ -3310,6 +3409,49 @@ let issue (graph: SemanticGraph) : Result<RangeContextFacts, string> =
         let _, facts = readProgram graph.Platform graph |> fixpoint
         let facts = retainSupport graph facts
         facts.SourceRelations |> Result.map (fun _ -> facts)
+
+/// Passive source evidence from the existing context-state/read owner. Numeric
+/// recipes consume it without reconstructing guards or executing range transfer.
+type ForeignResultEvidence = {
+    Application: ForeignResultApplication
+    Descriptor: PlatformResolution.DeclaredResultRange option
+    Abi: PlatformResolution.DeclaredFunction option
+    ResultRange: ValueRange
+    Support: NodeId list
+    Reads: Set<RangeContext * NodeId>
+}
+
+let foreignResultApplications (graph: SemanticGraph) (facts: RangeContextFacts option) : Result<ForeignResultEvidence list, NodeId * string> =
+    let facts = facts |> Option.filter (Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent graph)
+    let program = readProgram graph.Platform graph
+    match program.ForeignDeclarationFailure with
+    | Some reason -> Result.Error reason
+    | None ->
+        let contexts = contextProgram program
+        let rows = contexts.Coordinates |> List.choose (fun (context, node) ->
+            let summarized = context = RangeContext.Shared && contexts.Occurrences.ContainsKey node.Id
+            if summarized then None else
+            foreignDeclaration program node.Id |> Option.map (fun (declaration, actuals) ->
+                let mutable reads = facts |> Option.bind (fun facts -> facts.Reads.TryFind(context, node.Id)) |> Option.defaultValue Set.empty
+                let get key =
+                    reads <- reads.Add key
+                    facts |> Option.bind (fun facts -> facts.Values.TryFind key) |> Option.defaultValue ValueRange.Unbounded
+                let value = contextReading contexts get context
+                let descriptor = foreignResultDescriptor program declaration
+                let arguments = actuals |> List.mapi (fun index actual ->
+                    let ranged = program.Reachable.TryFind actual |> Option.exists isRanged
+                    { Index = index; Node = actual; Enclosure = if ranged && facts.IsSome then read program value node.Id actual else ValueRange.Unbounded } : ForeignResultArgument)
+                let abi = match program.ForeignAbi.TryFind declaration.Body with Some [abi] -> Some abi | _ -> None
+                let coordinates = match context with RangeContext.Invocation calls -> calls | RangeContext.Shared -> []
+                { Application = { Declaration = declaration.Binding; Call = node.Id; Context = coordinates
+                                  Hypothesis = descriptor |> Option.map _.Hypothesis; Arguments = arguments }
+                  Descriptor = descriptor; Abi = abi
+                  ResultRange = facts |> Option.bind (fun facts -> facts.Values.TryFind(context, node.Id)) |> Option.defaultValue ValueRange.Unbounded
+                  Support = declaration.Path @ declaration.Formals @ [declaration.Body; node.Id] @ actuals @
+                            (descriptor |> Option.map _.Participants |> Option.defaultValue []) @
+                            (abi |> Option.map (fun abi -> [abi.Node]) |> Option.defaultValue []) @ (reads |> Set.toList |> List.map snd)
+                  Reads = reads }))
+        Result.Ok rows
 
 /// Fresh logical source facts for a Baker recipe checking current premises.
 /// This computes the existing range rules without publishing annotations,

@@ -157,6 +157,16 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
             add row.Import; add row.Callee
             row.Arguments |> List.iter (fun value -> add value.Actual; add value.Formal))
         selected before emission.Boundary.Imports |> Map.iter (fun _ row -> add row.Identity; add row.Binding; add row.Scope; row.Parameters |> List.iter (fst >> add))
+        emission.Numeric.ForeignResultUses
+        |> List.filter (fun account -> before.Contains account.Application.Call)
+        |> List.iter (fun account ->
+            add account.Application.Declaration; addMany account.Application.Context
+            account.Application.Arguments |> List.iter (fun argument -> add argument.Node)
+            account.Application.Hypothesis |> Option.iter (fun hypothesis -> add hypothesis.Quote; add hypothesis.Declaration)
+            match account.Participants with
+            | ParticipantEvidence.Established rows -> participants rows
+            | ParticipantEvidence.Pending early -> participants early.Derived
+            account.Claims |> List.iter (snd >> add))
         selected before emission.Boundary.IntrinsicWrites |> Map.iter (fun _ row -> add row.Import; add row.Callee; add row.Fd; add row.Buffer; add row.Count)
         selected before emission.Numeric.Operations |> Map.iter (fun _ row -> add row.Callee; row.Operands |> List.iter (fun value -> add value.Actual))
         selected before emission.Numeric.IndexTransports |> Map.iter (fun _ row -> add row.Operand)
@@ -302,6 +312,11 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
     let storage = value.Storage
     let boundary = value.Boundary
     let numeric = value.Numeric
+    // A current source occurrence selects its complete account as facts. Its
+    // retained descriptor, arguments and citizens do not demand new bodies.
+    let foreignUses = numeric.ForeignResultUses |> List.filter (fun account -> ids.Contains account.Application.Call)
+    let foreignDeclarations = foreignUses |> List.map (fun account -> account.Application.Declaration) |> Set.ofList
+    let resultHypotheses = boundary.ResultHypotheses |> List.filter (fun hypothesis -> foreignDeclarations.Contains hypothesis.Declaration)
     let imports = rows boundary.Imports
     let startup = storage.Startup |> Option.filter (fun row -> ids |> Set.contains row.EntryLambda)
     let inactivityIds =
@@ -346,14 +361,14 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
                   EnvironmentFactoryResults = rows storage.EnvironmentFactoryResults
                   EnvironmentResidences = rows storage.EnvironmentResidences
                   ProgramInitializationOrders = rows storage.ProgramInitializationOrders }
-      Boundary = { Imports = imports
+      Boundary = { Imports = imports; ResultHypotheses = resultHypotheses
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)
                    Calls = rows boundary.Calls; ByteViews = rows boundary.ByteViews; StringExtents = rows boundary.StringExtents
                    IntrinsicWriteImports = rows boundary.IntrinsicWriteImports; IntrinsicWrites = rows boundary.IntrinsicWrites
                    IntrinsicWriteProofs = rows boundary.IntrinsicWriteProofs; DeclarationLeaves = values boundary.DeclarationLeaves
                    DeclarationOnly = values boundary.DeclarationOnly
                    Links = imports.Values |> Seq.map _.Library |> Set.ofSeq }
-      Numeric = { Values = valueRows numeric.Values; Operations = rows numeric.Operations; OperationRequired = values numeric.OperationRequired
+      Numeric = { Values = valueRows numeric.Values; ForeignResultUses = foreignUses; Operations = rows numeric.Operations; OperationRequired = values numeric.OperationRequired
                   IndexTransports = rows numeric.IndexTransports; Required = values numeric.Required; ResultSites = values numeric.ResultSites
                   Unresolved = rows numeric.Unresolved; SourceTypes = valueRows numeric.SourceTypes; Layouts = typeRows numeric.Layouts
                   Elements = rows numeric.Elements; ElementTypes = typeRows numeric.ElementTypes; DeclaredScalars = numeric.DeclaredScalars

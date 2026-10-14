@@ -304,6 +304,46 @@ type FiniteLinearRecurrenceModel = {
     Upper: bigint list
 }
 
+/// Native twins of the published foreign-result account. The descriptor is an
+/// external hypothesis; current incidence does not establish durable claim identity.
+[<RequireQualifiedAccess>]
+type ForeignResultBound = Constant of bigint | Argument of int
+
+[<RequireQualifiedAccess>]
+type ForeignResultProofRole = LogicalCoverage | AbiNarrowing
+
+type ForeignResultHypothesis = {
+    Quote: NodeId
+    Declaration: NodeId
+    Identity: string
+    Version: string
+    Source: string
+    Lower: ForeignResultBound
+    Upper: ForeignResultBound
+}
+
+type ForeignResultArgument = { Index: int; Node: NodeId; Enclosure: ValueRange }
+
+type ForeignResultApplication = {
+    Declaration: NodeId
+    Call: NodeId
+    Context: NodeId list
+    Hypothesis: ForeignResultHypothesis option
+    Arguments: ForeignResultArgument list
+}
+
+type ForeignResultCoverageModel = {
+    Application: ForeignResultApplication
+    Role: ForeignResultProofRole
+    AbiRange: ValueRange
+    ResultRange: ValueRange
+    Destination: ValueRange
+    DestinationDeclaration: NodeId option
+    Abi: NodeId option
+    AbiIdentity: string option
+    DestinationIdentity: string option
+}
+
 [<RequireQualifiedAccess>]
 type ObligationBody =
     /// Baker retained the obligation, but cannot supply its complete premises.
@@ -387,6 +427,7 @@ type ObligationBody =
     /// separately binds each (maximum executions, exact delta) contribution to
     /// current typed stores and actual memoization-instance activation counts.
     | FiniteAdditiveEffects of initial: bigint * contributions: (bigint * bigint) list * lower: bigint * upper: bigint
+    | ForeignResultCoverage of ForeignResultCoverageModel
 
 /// The obligation record carried by an Obligation node.
 type ObligationInfo = {
@@ -782,6 +823,8 @@ type ParticipantRole =
     /// choice group; payloads use their field ordinal and constructor group.
     | BranchChoice | BranchGuard | BranchOperator | BranchTagRead | BranchSubject | BranchLiteral
     | BranchTrueArm | BranchFalseArm | BranchSelectedArm | BranchConstructor | BranchPayload
+    | ForeignResultDeclaration | ForeignResultCall | ForeignResultContext
+    | ForeignResultHypothesis | ForeignResultActual | ForeignResultAbi | ForeignResultDestination
 
 /// One occurrence in a relation: the node, its role, its ordinal within the role (an
 /// argument or parameter position; 0 for a role without positions) and its group. The
@@ -807,6 +850,14 @@ type EarlyDerivation = { Derived: Participant list }
 type ParticipantEvidence =
     | Pending of EarlyDerivation
     | Established of Participant list
+
+/// The current source account links existing claim citizens; it does not duplicate
+/// their obligation records or grant solver, ABI or execution authority.
+type ForeignResultUse = {
+    Application: ForeignResultApplication
+    Participants: ParticipantEvidence
+    Claims: (ForeignResultProofRole * NodeId) list
+}
 
 /// The early derivation of the string borrow at a site, apart from the current row.
 type BorrowHistory = { Site: NodeId; Early: EarlyDerivation }
@@ -1057,6 +1108,7 @@ type SourceRangeRelationKind =
     | OrdinaryBindingDemandPending of string * BindingDemandEvidence
     | OrdinaryBindingDemandHistory of BindingDemandEvidence
     | KernelIngress of KernelIngress
+    | BoundaryDeclaration of BoundaryDeclaration
 
 type SourceRangeRelation = {
     Class: EdgeClass
@@ -1111,6 +1163,7 @@ type NumericDomain = {
     RequiresSequenceReview: bool
     SequenceRangeAuthority: SequenceRangeAuthority option
     RangeContextFacts: RangeContextFacts option
+    ForeignResultUses: ForeignResultUse list
     RequiresFiniteCellReview: bool
     FiniteCellRelations: FiniteCellSourceRelation list option
     FiniteCellObligations: (NodeId * ObligationInfo) list
@@ -1405,6 +1458,7 @@ type BoundaryDomain = {
     Platform: BoundaryPlatformPremise option
     Meets: Map<NodeId, Meet list>
     Declarations: BoundaryDeclaration list
+    ResultHypotheses: ForeignResultHypothesis list
     Imports: NodeId list
     Calls: NodeId list
     ByteViews: BoundaryByteView list
@@ -3059,6 +3113,7 @@ module StorageWitnessProjection =
 
 type BoundaryEmissionProjection = {
     Imports: Map<NodeId, BoundaryImport>
+    ResultHypotheses: ForeignResultHypothesis list
     ByScope: Map<NodeId, NodeId list>
     Calls: Map<NodeId, BoundaryCall>
     ByteViews: Map<NodeId, BoundaryByteView>
@@ -3080,6 +3135,7 @@ type BoundaryEmissionProjection = {
 /// distinct from a valid publication whose domain maps happen to be empty.
 type NumericWitnessProjection = {
     Values: Map<NodeId, ScalarCarrier>
+    ForeignResultUses: ForeignResultUse list
     Operations: Map<NodeId, NumericOperationWitness>
     OperationRequired: Set<NodeId>
     IndexTransports: Map<NodeId, NumericIndexTransport>
