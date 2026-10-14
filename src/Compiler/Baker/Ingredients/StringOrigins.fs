@@ -14,7 +14,8 @@ let used participants =
         | ParticipantEvidence.Established values -> values
         | ParticipantEvidence.Pending early -> early.Derived
     occurrences |> List.exists (fun participant ->
-        participant.Role = ParticipantRole.LazyStringOrigin || participant.Role = ParticipantRole.CapturedStringOrigin)
+        participant.Role = ParticipantRole.LazyStringOrigin || participant.Role = ParticipantRole.CapturedStringOrigin ||
+        participant.Role = ParticipantRole.CalleeBody)
 
 /// The complete recorded incidence census, including duplicates and extra
 /// consumers, plus every provenance/demand relation read by the origin readers.

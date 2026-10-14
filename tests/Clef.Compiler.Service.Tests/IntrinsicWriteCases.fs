@@ -308,6 +308,65 @@ module private LazyStringOriginFixture =
 
 type IntrinsicWriteCases() =
     [<Theory>]
+    [<InlineData("literal")>]
+    [<InlineData("conditional")>]
+    [<InlineData("forwarded")>]
+    member _.``Ordinary string call results retain immutable borrow origins and call support`` shape =
+        let declaration, expression =
+            match shape with
+            | "conditional" -> "let make (flag: bool) = if flag then \"é\" else \"plane\"\n", "make true"
+            | "forwarded" -> "let make (text: string) = text\n", "make \"é\""
+            | _ -> "let make () = \"é\"\n", "make ()"
+        let source = "module StringCallResult\n" + declaration +
+                     "[<EntryPoint>]\nlet main _ =\n    let text = " + expression +
+                     "\n    let _ = Sys.write 1 text.Bytes text.Length\n    0\n"
+        let graph, projection = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.writableAuthority source |> IntrinsicWriteFixture.graphAndProjection
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let extent = projection.StringExtents[call.Count]
+        let expected =
+            [ IntrinsicWriteFixture.literal graph "é", 2I ] @
+            (if shape = "conditional" then [IntrinsicWriteFixture.literal graph "plane", 5I] else []) |> Map.ofList
+        Assert.Equal<Map<NodeId,bigint>>(expected, view.StaticOrigins)
+        Assert.Equal<Map<NodeId,bigint>>(expected, extent.StaticOrigins)
+        let result = graph.Nodes[view.ExtentSource]
+        Assert.True(match result.Kind with SemanticKind.Application _ -> true | _ -> false)
+        for evidence in [view.Participants; extent.Participants] do
+            let participants = IntrinsicWriteFixture.established evidence
+            Assert.Contains(participants, fun participant -> participant.Role = ParticipantRole.Callee && participant.Group = result.Id)
+            Assert.Contains(participants, fun participant -> participant.Role = ParticipantRole.CalleeBody)
+        let changedResult = { result with Children = List.rev result.Children }
+        let changed = { graph with Nodes = graph.Nodes.Add(result.Id, changedResult) }
+        let flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+        let assertRefused current =
+            Assert.Equal(Ok None, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin current flow result.Id result.Id)
+        assertRefused changed
+        Assert.True(IntrinsicBoundary.project changed |> Result.isError)
+        let resolved = flow.Calls[result.Id]
+        for refused in [{ resolved with Complete = false }; { resolved with Unknown = true }; { resolved with Targets = [] }] do
+            let alteredFlow = { flow with Calls = flow.Calls.Add(result.Id, refused) }
+            Assert.Equal(Ok None, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph alteredFlow result.Id result.Id)
+        let target = Assert.Single resolved.Targets
+        let binding =
+            let callee = match result.Kind with SemanticKind.Application(callee, _) -> callee | _ -> failwith "Missing call"
+            match graph.Nodes[callee].Kind with SemanticKind.VarRef(_, Some binding) -> binding | _ -> failwith "Missing binding"
+        let declaration =
+            match Clef.Compiler.Baker.Recipes.BoundaryDeclarations.bindingPath graph binding with
+            | Ok(path, formals, body) ->
+                { Binding = binding; Path = path; Implementation = List.last path
+                  Formals = formals |> List.map (fun (_, _, formal) -> formal); Body = body }
+            | Error reason -> failwith reason
+        Assert.Equal(target.Lambda, declaration.Implementation)
+        let markedForeign = Clef.Compiler.Baker.Recipes.BoundaryDeclarations.row declaration
+        let foreignGraph = { graph with Edges = markedForeign :: graph.Edges }
+        assertRefused foreignGraph
+        Assert.True(IntrinsicBoundary.project foreignGraph |> Result.isError)
+        let unknownBody = { graph.Nodes[target.Body] with Kind = SemanticKind.VarRef("unknown", None); Children = [] }
+        let unknownGraph = { graph with Nodes = graph.Nodes.Add(target.Body, unknownBody) }
+        assertRefused unknownGraph
+        Assert.True(IntrinsicBoundary.project unknownGraph |> Result.isError)
+
+    [<Theory>]
     [<InlineData("flag", "plane", 5)>]
     [<InlineData("flag", "xy", 2)>]
     [<InlineData("true", "plane", 5)>]

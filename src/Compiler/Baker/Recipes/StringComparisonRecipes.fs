@@ -30,10 +30,27 @@ module CapturedStrings = Clef.Compiler.Baker.Ingredients.CapturedStrings
 /// derivation, whatever the other inputs derive; `Ok None` is a source with no
 /// complete static origin.
 let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (group: NodeId) source =
-    let inputs = FormalDemand.reader graph flow
+    let inputs = lazy (FormalDemand.reader graph flow)
     let capturedString = lazy (CapturedStrings.reader graph)
     let lazyFacts = lazy (LazyValues.settle graph)
     let capturedSource = lazy (LazyValues.tryCapturedSourceReference graph)
+    // Foreign declaration bodies are placeholders, never result contracts.
+    let externalImplementations =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.BoundaryDeclaration declaration -> Some declaration.Implementation
+            | _ -> None) |> Set.ofList
+    let callResult id =
+        match graph.Nodes.TryFind id, flow.Calls.TryFind id with
+        | Some { Kind = SemanticKind.Application(callee, actuals); Children = children; Type = ty }, Some resolved
+            when Types.isStringType ty && children = callee :: actuals &&
+                 resolved.Complete && not resolved.Unknown && not resolved.Targets.IsEmpty &&
+                 resolved.Targets |> List.forall (fun target ->
+                     not (externalImplementations.Contains target.Lambda) &&
+                     target.Arguments = actuals &&
+                     graph.Nodes.TryFind target.Body |> Option.exists (fun body -> Types.isStringType body.Type)) ->
+            Some(callee, resolved.Targets)
+        | _ -> None
     let force id =
         let facts = lazyFacts.Value
         if facts.Residuals.IsEmpty then facts.Forces.TryFind id else None
@@ -68,6 +85,7 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
         // Preserve the current invocation's read identity. The initializer
         // enumerates possible bytes; it does not replace the environment read.
         | Some { Kind = SemanticKind.EnvironmentRead _ } -> capturedString.Value id |> Option.map (fun _ -> id, seen)
+        | Some { Kind = SemanticKind.Application _ } when (callResult id).IsSome -> Some(id, seen)
         | Some { Kind = SemanticKind.Literal(NativeLiteral.String _) }
         | Some { Kind = SemanticKind.PatternBinding _ } -> Some(id, seen)
         | _ -> None
@@ -135,7 +153,7 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
                 |> path
             | None -> Ok None
         | Some { Kind = SemanticKind.PatternBinding _ } ->
-            match inputs id with
+            match inputs.Value id with
             | Some formal ->
                 (formal.Demanded |> List.map (fun input -> input, origins seen input.Call input.Actual))
                 @ (formal.Omitted |> List.map (fun omitted -> omitted.Input, Ok (Some(Map.empty, []))))
@@ -151,6 +169,19 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
                     | Ok _, Ok _, _ -> Ok None) (Ok (Some(Map.empty, [Participants.occurrence id ParticipantRole.Formal 0 group])))
                 |> Result.map (Option.map (fun (values, participants) -> values, participants @ Participants.ofInputs id formal))
             | _ -> Ok None
+        | Some { Kind = SemanticKind.Application _ } ->
+            match callResult id with
+            | Some(callee, targets) ->
+                Participants.ofTargets id targets |> Result.bind (fun targetParticipants ->
+                    targets |> List.fold (fun state target ->
+                        match state, origins seen target.Lambda target.Body with
+                        | Error failure, _ | _, Error failure -> Error failure
+                        | Ok(Some(values, participants)), Ok(Some(more, dependencies)) when not more.IsEmpty ->
+                            Ok(Some(Map.fold (fun acc key value -> Map.add key value acc) values more, participants @ dependencies))
+                        | _ -> Ok None)
+                        (Ok(Some(Map.empty, Participants.occurrence callee ParticipantRole.Path 0 id :: targetParticipants))))
+                |> path
+            | None -> Ok None
         | _ -> Ok None
     origins Set.empty group source |> Result.map (fun derived ->
         match canonical Set.empty source, derived with
