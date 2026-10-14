@@ -27,8 +27,23 @@ let private plan enrichId (graph: SemanticGraph) =
     // callee path and the nodes of a local construction.
     let own site occurrences = occurrences |> List.map (fun (node, role) -> Participants.occurrence node role 0 site)
     let constructed site nodes = own site (nodes |> Set.toList |> List.map (fun node -> node, ParticipantRole.Construction))
+    // Logical descriptor lineage supplies early numeric support only. Runtime
+    // storage, snapshot immutability and lifetime remain late memory premises.
+    let descriptorOrigin site source =
+        Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph source
+        |> Option.filter (fun extent -> not extent.StringSources.IsEmpty)
+        |> Option.bind (fun extent ->
+            let identity =
+                match Set.toList extent.StringSources with
+                | [terminal] -> Some terminal
+                | _ -> PlatformResolution.valueOf graph source |> Option.map _.Id
+            identity |> Option.map (fun identity ->
+                identity, Map.empty, constructed site extent.Participants))
+    let origin site source =
+        stringOrigin graph flow site source |> Result.map (fun derived ->
+            derived |> Option.orElseWith (fun () -> descriptorOrigin site source))
     let localOrigin site view = StringComparisonRecipes.localView graph view |> Option.map (fun (source,_,participants) ->
-        stringOrigin graph flow site source |> Result.map (function
+        origin site source |> Result.map (function
             | Some(_,origins,originPremises) -> source,origins,constructed site participants @ originPremises
             | None -> source,Map.empty,constructed site participants))
     let localExtent site =
@@ -39,13 +54,13 @@ let private plan enrichId (graph: SemanticGraph) =
             StringComparisonRecipes.lengthConstructions graph |> List.tryPick (fun construction ->
                 let source = if construction.LeftLength=site then Some construction.LeftSource elif construction.RightLength=site then Some construction.RightSource else None
                 source |> Option.map (fun source ->
-                    stringOrigin graph flow site source |> Result.map (fun derived ->
+                    origin site source |> Result.map (fun derived ->
                         let origins,originPremises = derived |> Option.map (fun (_,origins,participants) -> origins,participants) |> Option.defaultValue (Map.empty,[])
                         let participants = originPremises @ constructed site (Set.ofList(construction.Site::construction.Left::construction.Right::construction.Evidence))
                         source,origins,participants))))
     let extent site source path =
         localExtent site
-        |> Option.defaultWith (fun () -> stringOrigin graph flow site source |> Result.map (Option.defaultValue (source,Map.empty,[])))
+        |> Option.defaultWith (fun () -> origin site source |> Result.map (Option.defaultValue (source,Map.empty,[])))
         |> Result.map (fun (identity,origins,participants) ->
             let occurrences =
                 own site ([site, ParticipantRole.Site; source, ParticipantRole.Source; identity, ParticipantRole.ExtentSource]
@@ -64,7 +79,7 @@ let private plan enrichId (graph: SemanticGraph) =
         | SemanticKind.FieldGet(source, "Bytes")
         | SemanticKind.StringByteBorrow source when graph.Nodes.TryFind source |> Option.exists (fun source -> Types.isStringType source.Type) ->
             let updated = { node with Kind = SemanticKind.StringByteBorrow source; Children = [source] } |> Elaboration.markBaker "StringByteBorrow" enrichId
-            let derived = localOrigin node.Id node.Id |> Option.map (Result.map Some) |> Option.defaultWith (fun () -> stringOrigin graph flow node.Id source)
+            let derived = localOrigin node.Id node.Id |> Option.map (Result.map Some) |> Option.defaultWith (fun () -> origin node.Id source)
             let rows, failures =
                 match derived, representation with
                 | Error failure, _ -> [], (node.Id, failure) :: failures

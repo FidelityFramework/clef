@@ -361,6 +361,7 @@
     <Compile Include="Baker\Ingredients\CapturedStrings.fs" />
     <Compile Include="Baker\Ingredients\StringOrigins.fs" />
     <Compile Include="Baker\Recipes\StringComparisonRecipes.fs" />
+    <Compile Include="Baker\Ingredients\ArrayShapes.fs" />
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />
     <Compile Include="Baker\Ingredients\MemoryValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
@@ -442,7 +443,6 @@
     <Compile Include="PSGSaturation\SemanticGraph\StringByteStorage.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\LazyEffectRanges.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\FiniteCellRanges.fs" />
-    <Compile Include="Baker\Ingredients\ArrayShapes.fs" />
     <Compile Include="Baker\Ingredients\ArrayInitialization.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\RangeAnalysis.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableFlows.fs" />

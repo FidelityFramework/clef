@@ -25,12 +25,27 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
     | [domainRow, domain] ->
         let participants = Map.keys domain.Premises |> Set.ofSeq
         let stale reason = Error [failure (Some domainRow.Target) participants reason]
+        let borrowMembership =
+            let sites values = List.distinct values |> List.sort
+            let snapshots = domain.StringBorrowSnapshots |> List.map _.Snapshot |> sites
+            let copies = domain.StringBorrowCopies |> List.map _.Site |> sites
+            let allocations = domain.StringBorrowAllocations |> List.map _.Site |> sites
+            snapshots=copies &&
+            (domain.StringBorrowCopies |> List.forall (fun copy -> copy.Allocation.IsSome)) &&
+            (domain.StringBorrowCopies |> List.choose _.Allocation |> sites)=allocations &&
+            (domain.IntrinsicCalls |> List.forall (fun call ->
+                match domain.ByteViews |> List.filter (fun view -> view.Site=call.Buffer) with
+                | [view] when view.StaticOrigins.IsEmpty ->
+                    domain.StringBorrowSnapshots |> List.exists (fun snapshot -> snapshot.Site=view.ExtentSource)
+                | _ -> true))
         let anchorValid = graph.Nodes.TryFind domainRow.Target |> Option.exists (fun node ->
             Ingredients.ownedNode node && match node.Kind with SemanticKind.Literal NativeLiteral.Unit -> true | _ -> false)
         if not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.platformPremise graph.Platform || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
             stale "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph."
         elif not domain.Failures.IsEmpty then
             Error (domain.Failures |> List.map (fun (site, participants, reason) -> failure (Some site) participants reason))
+        elif not borrowMembership then
+            stale "The source-published snapshot, copy or allocation dependency account is incomplete."
         elif (match domain.StringOriginRelations with
               | Some expected ->
                   StringOrigins.relations graph <> Ok expected || domain.StringOriginRoots <> Some graph.DeclarationRoots
@@ -38,14 +53,15 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                   (domain.ByteViews |> List.exists (fun view -> StringOrigins.used view.Participants)) ||
                   (domain.StringExtents |> List.exists (fun extent -> StringOrigins.used extent.Participants))) then
             stale "The string-origin relation premises changed; Baker must settle the new source graph."
-        elif (not domain.StringComparisonReads.IsEmpty || not domain.StringComparisonSnapshots.IsEmpty || not domain.StringComparisonCopies.IsEmpty) &&
+        elif (not domain.StringComparisonReads.IsEmpty || not domain.StringBorrowSnapshots.IsEmpty || not domain.StringBorrowCopies.IsEmpty || not domain.StringBorrowAllocations.IsEmpty) &&
              (match MemoryPublication.project graph with
               | Error _ -> true
               | Ok memory ->
                   (domain.StringComparisonReads |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAccess fact))) ||
-                  (domain.StringComparisonSnapshots |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.StringView fact))) ||
-                  (domain.StringComparisonCopies |> List.exists (fun fact -> memory.ArrayCopies.TryFind fact.Site <> Some fact))) then
-            stale "A local string comparison lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
+                  (domain.StringBorrowSnapshots |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.StringView fact))) ||
+                  (domain.StringBorrowCopies |> List.exists (fun fact -> memory.ArrayCopies.TryFind fact.Site <> Some fact)) ||
+                  (domain.StringBorrowAllocations |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAllocation fact)))) then
+            stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
         else
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
             let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)

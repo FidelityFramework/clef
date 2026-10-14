@@ -237,6 +237,9 @@ type private IntrinsicDomain = {
     Imports: IntrinsicWriteImport list
     Calls: IntrinsicWriteCall list
     Proofs: IntrinsicWriteProof list
+    Snapshots: MemoryStringViewWitness list
+    Copies: MemoryArrayCopyWitness list
+    Allocations: MemoryArrayAllocationWitness list
     Enrichment: Enrichment
     Errors: (NodeId * Set<NodeId> * string) list
 }
@@ -262,9 +265,9 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
         let! fd, buffer, count = match args with [fd; buffer; count] -> Ok(fd, buffer, count) | _ -> Error "Sys.write requires exactly fd, a bounded read-only byte view, and its explicit count."
         do! require (node.Children = callee :: args) "Sys.write's ordered operands differ from its source structural occurrence."
         let! import = declarations |> List.filter (fun (site, _) -> site = node.Id) |> List.map snd |> unique "Sys.write requires one selected source syscall endpoint, return contract, Register dimension and offered octet declaration before numeric settlement."
-        let! view = views |> List.filter (fun view -> view.Site = buffer) |> unique "Sys.write requires a proved string.Bytes read-only borrow; this bounded slice admits only immutable program-resident string origins."
+        let! view = views |> List.filter (fun view -> view.Site = buffer) |> unique "Sys.write requires a proved string.Bytes read-only borrow with complete source storage and lifetime premises."
         let! extent = extents |> List.filter (fun extent -> extent.Site = count) |> unique "Sys.write's count must preserve the exact borrowed string's per-invocation Length relation."
-        do! require (view.ExtentSource = extent.ExtentSource && view.StaticOrigins = extent.StaticOrigins && not view.StaticOrigins.IsEmpty)
+        do! require (view.ExtentSource = extent.ExtentSource && view.StaticOrigins = extent.StaticOrigins)
                 "Sys.write's buffer and count do not refer to the same per-invocation string extent and complete origin domain."
         do! require (view.Representation = import.ByteRepresentation) "The byte borrow and intrinsic ABI have different source-selected byte carriers."
         do! require (graph.Nodes[buffer].Kind = SemanticKind.StringByteBorrow view.Source && graph.Nodes[count].Kind = SemanticKind.FieldGet(extent.Source, "Length"))
@@ -277,18 +280,51 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
              | SemanticKind.Application(_, [_; actual; _]), Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Sys; Operation = "write" } }, _) when actual = buffer -> true
              | _ -> false))
         do! require readonlyUse "A read-only string byte borrow escapes the admitted write operand or has a mutable/unknown use."
-        let! pool = graph.StaticStringPool |> needed "A byte borrow requires the settled immutable program string pool."
-        let! storage = view.StaticOrigins |> Map.toList |> List.map (fun (origin, length) -> checked' {
-            let! entry = pool.Entries |> List.filter (fun entry -> List.contains origin entry.NodeIds) |> unique "A string borrow origin has no unique program-resident immutable storage entry."
-            do! require (bigint entry.Length = length && System.Text.Encoding.UTF8.GetByteCount entry.Content = entry.Length && entry.StorageLength = entry.Length + 1)
-                    "The string borrow extent differs from its exact immutable storage entry."
-            do! require (graph.Nodes.TryFind origin |> Option.exists (fun node -> node.Kind = SemanticKind.Literal(NativeLiteral.String entry.Content)))
-                    "The program storage entry no longer belongs to the exact literal source bytes."
-            return length, length, bigint entry.StorageLength }) |> collect
         let! fdRange = range fd
         let! countRange = range count
-        let expectedCount = ValueRange.bounded (view.StaticOrigins.Values |> Seq.min) (view.StaticOrigins.Values |> Seq.max)
-        do! require (countRange = expectedCount) "The scalar count range no longer matches the complete exact string extent domain."
+        let! borrowProof, storageParticipants, snapshots, copies, allocations =
+            if not view.StaticOrigins.IsEmpty then checked' {
+                let! pool = graph.StaticStringPool |> needed "A byte borrow requires the settled immutable program string pool."
+                let! storage = view.StaticOrigins |> Map.toList |> List.map (fun (origin, length) -> checked' {
+                    let! entry = pool.Entries |> List.filter (fun entry -> List.contains origin entry.NodeIds) |> unique "A string borrow origin has no unique program-resident immutable storage entry."
+                    do! require (bigint entry.Length = length && System.Text.Encoding.UTF8.GetByteCount entry.Content = entry.Length && entry.StorageLength = entry.Length + 1)
+                            "The string borrow extent differs from its exact immutable storage entry."
+                    do! require (graph.Nodes.TryFind origin |> Option.exists (fun node -> node.Kind = SemanticKind.Literal(NativeLiteral.String entry.Content)))
+                            "The program storage entry no longer belongs to the exact literal source bytes."
+                    return length, length, bigint entry.StorageLength }) |> collect
+                let expectedCount = ValueRange.bounded (view.StaticOrigins.Values |> Seq.min) (view.StaticOrigins.Values |> Seq.max)
+                do! require (countRange = expectedCount) "The scalar count range no longer matches the complete exact string extent domain."
+                return ObligationBody.StringBorrowBound storage, Set.singleton pool.DeclarationNode, [], [], [] }
+            else checked' {
+                let! memory = MemoryPublication.project graph |> Result.mapError (fun _ -> "A runtime string write requires admitted source memory, copy and UTF-8 snapshot premises.")
+                let! snapshots, copies, lineage = StringViewRecipes.localLineage graph memory view.Source
+                let! snapshot = snapshots |> unique "A runtime string write requires one exact immutable local snapshot terminal."
+                do! require (Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph view.Source
+                             |> Option.exists (fun descriptor -> descriptor.StringSources=Set.singleton snapshot.Site))
+                        "A runtime string write requires a complete single-snapshot source domain."
+                let! copy = copies |> unique "A runtime string write requires the snapshot's exact complete copy receipt."
+                let! allocationId = copy.Allocation |> needed "A runtime string write requires the snapshot's independent allocation."
+                let! allocation = memory.Operations.TryFind allocationId |> Option.bind (function MemoryWitnessOperation.ArrayAllocation value -> Some value | _ -> None)
+                                  |> needed "A runtime string write lost its exact source-admitted allocation."
+                let canonical id = Declarations.valueOf graph id |> Option.map _.Id
+                do! require (snapshot.Snapshot = copy.Site && snapshot.Extent = copy.CountCarrier &&
+                             canonical allocation.Count = canonical copy.Count && canonical copy.Count <> None)
+                        "The runtime borrow's snapshot, copy and allocation must retain the same actual descriptor count."
+                let! scope = MemoryAccessRecipes.nearestLambda graph node.Id |> needed "A runtime string write requires an exact lexical activation."
+                do! require (MemoryAccessRecipes.nearestLambda graph snapshot.Site = Some scope &&
+                             (match allocation.Residence with MemoryResidence.Stack(owner,_) -> owner=scope | _ -> false))
+                        "A runtime string borrow cannot cross its snapshot allocation's lexical activation."
+                do! require (snapshot.Representation=import.ByteRepresentation && allocation.Element=snapshot.Element && allocation.ElementBytes=1)
+                        "The runtime string's snapshot and allocation disagree with the native byte carrier."
+                let! countValue =
+                    match countRange with
+                    | ValueRange.Bounded(lo,hi) when lo=hi && 0I<=lo && hi<=bigint System.Int64.MaxValue -> Ok lo
+                    | _ -> Error "A runtime string write requires a singleton complete descriptor count; relational dynamic extent proof remains pending."
+                do! require (snapshot.Extent.Range=countRange && allocation.CountCarrier.Range=countRange &&
+                             allocation.MinimumCount=countValue && allocation.MaximumCount=countValue)
+                        "The runtime write count must equal its exact copied descriptor and allocation extent."
+                return ObligationBody.InputBufferBound(int64 countValue,int64 countValue),
+                       Set.union lineage allocation.Participants, snapshots, copies, [allocation] }
         let! platform = Declarations.resolve graph |> needed "Sys.write lost its selected source platform description."
         let! result = platform.Returns |> List.filter (fun bound -> bound.Node = import.ReturnContract && bound.Endpoint = "write" && bound.AtMost = "count") |> unique "Sys.write lost its exact declared signed return bound."
         let! upper = match countRange with ValueRange.Bounded(_, hi) -> Ok hi | _ -> Error "The write count is not bounded."
@@ -309,10 +345,10 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
         let! extentParticipants = Participants.established extent.Participants
         let participants =
             Set.unionMany [path; import.Participants; Set.ofList (Participants.nodes viewParticipants); Set.ofList (Participants.nodes extentParticipants)
-                           Set.ofList [anchor; node.Id; callee; fd; buffer; count; pool.DeclarationNode]]
+                           storageParticipants; Set.ofList [anchor; node.Id; callee; fd; buffer; count]]
         let call = { Site = node.Id; Import = import.Identity; Callee = callee; Fd = fd; Buffer = buffer; Count = count
                      FdAdaptation = fdMeet; CountAdaptation = countMeet; ResultAdaptation = resultMeet; Participants = participants }
-        return import, call, [0, fdProof; 1, ObligationBody.StringBorrowBound storage; 2, countProof; -1, resultProof] }
+        return import, call, [0, fdProof; 1, borrowProof; 2, countProof; -1, resultProof], snapshots, copies, allocations }
     let evidenceErrors =
         if currentEvidence then [] else
         // The related nodes of each row: its established participants, or its site while they are pending.
@@ -325,7 +361,8 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
     // Each borrow site whose origins are reached through a call whose targets the
     // participant form cannot state, at the site, naming the call.
     let originErrors = sourceFailures |> List.map (fun (site, failure) -> StringComparisonRecipes.originError graph site failure)
-    let initial = { Views = views; Extents = extents; Declarations = declarations; Imports = []; Calls = []; Proofs = []; Enrichment = Enrichment.empty; Errors = originErrors @ evidenceErrors }
+    let initial = { Views = views; Extents = extents; Declarations = declarations; Imports = []; Calls = []; Proofs = []
+                    Snapshots=[]; Copies=[]; Allocations=[]; Enrichment = Enrichment.empty; Errors = originErrors @ evidenceErrors }
     graph.Nodes |> Map.fold (fun state _ node ->
         match node.Kind with
         | SemanticKind.Application(callee, args) when node.IsReachable ->
@@ -333,7 +370,7 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
             | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Sys; Operation = "write" } }, path) ->
                 match read node callee args path with
                 | Error reason -> { state with Errors = (node.Id, Set.union path (Set.ofList(node.Id :: args)), reason) :: state.Errors }
-                | Ok(import, call, bodies) ->
+                | Ok(import, call, bodies, snapshots, copies, allocations) ->
                     let proofs, enrichment, errors = bodies |> List.fold (fun (proofs, enrichment, errors) (ordinal, body) ->
                         let info =
                             { Id = $"intrinsic_write_{NodeId.value node.Id}_{ordinal}"; Kind = "intrinsic-write-proof"; Logic = "QF_LIA"
@@ -343,7 +380,9 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
                         let proof = { Site = node.Id; Obligation = obligation.Id; Ordinal = ordinal; Body = body; Participants = call.Participants }
                         let errors = if Bytes.proofOutcome body = BoundaryProofOutcome.Proven then errors else (node.Id, call.Participants, "The intrinsic write obligation was refuted.") :: errors
                         proof :: proofs, Enrichment.combine enrichment { NewNodes = [obligation]; Annotated = []; NewEdges = Bytes.proofRows proof }, errors) (state.Proofs, state.Enrichment, state.Errors)
-                    { state with Imports = import :: state.Imports; Calls = call :: state.Calls; Proofs = proofs; Enrichment = enrichment; Errors = errors }
+                    { state with Imports = import :: state.Imports; Calls = call :: state.Calls; Proofs = proofs
+                                 Snapshots=snapshots@state.Snapshots; Copies=copies@state.Copies; Allocations=allocations@state.Allocations
+                                 Enrichment = enrichment; Errors = errors }
             | _ -> state
         | _ -> state) initial
 
@@ -512,8 +551,13 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           StringComparisons = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringComparisonConstruction negated -> Some(edge.Target,negated,edge.Sources) | _ -> None)
           StringLengthComparisons = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringLengthComparison negated -> Some(edge.Target,negated,edge.Sources) | _ -> None)
           StringComparisonReads = localReads
-          StringComparisonSnapshots = List.distinct localSnapshots
-          StringComparisonCopies = List.distinct localCopies
+          StringBorrowSnapshots = List.distinct (localSnapshots@intrinsic.Snapshots)
+          StringBorrowCopies = List.distinct (localCopies@intrinsic.Copies)
+          StringBorrowAllocations =
+            let memory = MemoryPublication.project graph |> Result.toOption
+            let local = localCopies |> List.choose (fun copy -> copy.Allocation |> Option.bind (fun id ->
+                memory |> Option.bind (fun memory -> memory.Operations.TryFind id) |> Option.bind (function MemoryWitnessOperation.ArrayAllocation fact -> Some fact | _ -> None)))
+            List.distinct (local@intrinsic.Allocations)
           IntrinsicImports = List.distinct intrinsic.Imports; IntrinsicCalls = intrinsic.Calls; IntrinsicProofs = intrinsic.Proofs
           StringStorage = Bytes.storagePremise graph
           DeclarationLeaves = leaves; DeclarationOnly = declarationOnly

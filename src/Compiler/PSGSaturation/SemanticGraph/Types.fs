@@ -1416,8 +1416,9 @@ type BoundaryDomain = {
     StringComparisons: (NodeId * bool * NodeId list) list
     StringLengthComparisons: (NodeId * bool * NodeId list) list
     StringComparisonReads: MemoryArrayAccessWitness list
-    StringComparisonSnapshots: MemoryStringViewWitness list
-    StringComparisonCopies: MemoryArrayCopyWitness list
+    StringBorrowSnapshots: MemoryStringViewWitness list
+    StringBorrowCopies: MemoryArrayCopyWitness list
+    StringBorrowAllocations: MemoryArrayAllocationWitness list
     IntrinsicDeclarations: (NodeId * IntrinsicWriteImport) list
     IntrinsicImports: IntrinsicWriteImport list
     IntrinsicCalls: IntrinsicWriteCall list

@@ -1187,6 +1187,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             let arrayGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize arrayGraph
             let arrayGraph = Clef.Compiler.Nanopass.EagerDemand.normalize arrayGraph
             let arrayGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize arrayGraph
+            // Snapshot/copy formation supplies new source descriptor identities.
+            // Renew the existing borrow owner before ranges consume those rows;
+            // the late boundary owner still requires exact current evidence.
+            let arrayGraph = Clef.Compiler.Nanopass.StringBorrows.normalize arrayGraph
             RangeAnalysis.run platformContext arrayGraph
 
     //=========================================================================

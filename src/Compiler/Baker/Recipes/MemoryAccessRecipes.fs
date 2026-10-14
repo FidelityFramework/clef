@@ -371,6 +371,11 @@ let arrayUses graph site =
             | SemanticKind.Application _ ->
                 match intrinsic graph target.Id [] with
                 | Some(info, [buffer]) when (info.Module = IntrinsicModule.Array || info.Module = IntrinsicModule.String) && info.Operation = "length" && aliases.Contains buffer -> ()
+                | Some({Module=IntrinsicModule.Sys;Operation="write"},[_;buffer;_])
+                    when aliases.Contains buffer &&
+                         (match (live graph buffer).Kind with SemanticKind.StringByteBorrow _ -> true | _ -> false) &&
+                         nearestLambda graph target.Id = nearestLambda graph site &&
+                         (nearestLambda graph site).IsSome -> ()
                 | _ -> readonly <- false; closed <- false
             | _ -> readonly <- false; closed <- false
     readonly && closed, closed, participants

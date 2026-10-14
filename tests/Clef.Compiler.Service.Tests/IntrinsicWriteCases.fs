@@ -1578,3 +1578,368 @@ type LazyThunkWriteIngressCases() =
             Assert.Contains(failures, fun failure ->
                 failure.Reason.Contains("string-origin relation premises changed", System.StringComparison.Ordinal))
         | Result.Ok _ -> failwith "Changed lazy ingress relations retained the old boundary authority."
+
+module private RuntimeSnapshotWriteFixture =
+    let publish graph =
+        Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+        |> Result.defaultWith (sprintf "%A" >> failwith)
+
+    let authority =
+        IntrinsicWriteFixture.writableAuthority
+            .Replace(
+                "let rodata =",
+                "let stack = { Name = \"stack\"; Kind = \"stack\"; Capacity = 4096; Alignment = 16; Granularity = 16; Growth = \"down\"; Access = \"rw\"; Base = None }\nlet rodata ="
+            )
+            .Replace("Spaces = [| rodata; data |]", "Spaces = [| rodata; data; stack |]")
+
+    let source mutation count =
+        "module RuntimeSnapshotWrite\n[<EntryPoint>]\nlet main _ =\n"
+        + "    let input = [| 195; 169 |]\n    let text = String.fromBytes input\n"
+        + mutation
+        + "    let _ = Sys.write 1 text.Bytes "
+        + count
+        + "\n    0\n"
+
+    let check mutation count =
+        IntrinsicWriteFixture.checkSource authority (source mutation count)
+
+    let admitted mutation =
+        let graph, projection =
+            check mutation "text.Length" |> IntrinsicWriteFixture.graphAndProjection
+
+        let call = Assert.Single projection.IntrinsicWrites.Values
+
+        let domain =
+            graph.Edges
+            |> List.choose (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDomain fact -> Some fact
+                | _ -> None)
+            |> Assert.Single
+
+        let snapshot = Assert.Single domain.StringBorrowSnapshots
+        let copy = Assert.Single domain.StringBorrowCopies
+        let allocation = Assert.Single domain.StringBorrowAllocations
+        Assert.Empty(projection.ByteViews[call.Buffer].StaticOrigins)
+        Assert.Empty(projection.StringExtents[call.Count].StaticOrigins)
+        Assert.Equal(snapshot.Snapshot, copy.Site)
+        Assert.Equal(snapshot.Extent, copy.CountCarrier)
+        Assert.Equal(Some allocation.Site, copy.Allocation)
+        Assert.Equal(Some(ValueRange.bounded 2I 2I), graph.Nodes[call.Count].ValueRange)
+        Assert.Equal(ValueRange.bounded 2I 2I, allocation.CountCarrier.Range)
+
+        Assert.Contains(
+            projection.IntrinsicWriteProofs[call.Site],
+            fun proof -> proof.Ordinal = 1 && proof.Body = ObligationBody.InputBufferBound(2L, 2L)
+        )
+
+        Assert.DoesNotContain(
+            projection.IntrinsicWriteProofs[call.Site],
+            fun proof ->
+                match proof.Body with
+                | ObligationBody.StringBorrowBound _ -> true
+                | _ -> false
+        )
+
+        Assert.Empty(Fidelity.PSG.Integrity.check (publish graph))
+
+        graph, domain, call
+
+type RuntimeSnapshotWriteCases() =
+    [<Fact>]
+    member _.``Native write retains an immutable UTF8 snapshot with an exact local count``() =
+        RuntimeSnapshotWriteFixture.admitted "" |> ignore
+
+    [<Fact>]
+    member _.``A forced ASCII snapshot survives mutation of its original input``() =
+        let source =
+            (RuntimeSnapshotWriteFixture.source "    input[0] <- 67\n" "text.Length")
+                .Replace("[| 195; 169 |]", "[| 65; 66 |]")
+                .Replace("let text = String.fromBytes input", "let text = eager (String.fromBytes input)")
+
+        let graph, projection =
+            IntrinsicWriteFixture.checkSource RuntimeSnapshotWriteFixture.authority source
+            |> IntrinsicWriteFixture.graphAndProjection
+
+        let call = Assert.Single projection.IntrinsicWrites.Values
+
+        let domain =
+            graph.Edges
+            |> List.choose (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDomain fact -> Some fact
+                | _ -> None)
+            |> Assert.Single
+
+        let copy = Assert.Single domain.StringBorrowCopies
+        Assert.True(copy.Allocation.IsSome)
+        Assert.NotEqual(copy.Source, copy.Destination)
+        Assert.Equal(Some(ValueRange.bounded 2I 2I), graph.Nodes[call.Count].ValueRange)
+
+    [<Fact>]
+    member _.``Runtime snapshot aliases retain one exact borrowed descriptor``() =
+        let source =
+            RuntimeSnapshotWriteFixture.source "    let alias = text\n" "alias.Length"
+
+        let graph, projection =
+            IntrinsicWriteFixture.checkSource RuntimeSnapshotWriteFixture.authority (source.Replace("text.Bytes", "alias.Bytes"))
+            |> IntrinsicWriteFixture.graphAndProjection
+
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        Assert.Equal(projection.ByteViews[call.Buffer].ExtentSource, projection.StringExtents[call.Count].ExtentSource)
+
+        Assert.Contains(
+            projection.IntrinsicWriteProofs[call.Site],
+            fun proof -> proof.Ordinal = 1 && proof.Body = ObligationBody.InputBufferBound(2L, 2L)
+        )
+
+        let revision = RuntimeSnapshotWriteFixture.publish graph
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+        let source =
+            Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId projection.ByteViews[call.Buffer].ExtentSource
+
+        Assert.Contains(
+            revision.Emission.Memory.Operations.Values,
+            fun operation ->
+                match operation with
+                | Fidelity.PSG.MemoryWitnessOperation.StringView snapshot ->
+                    snapshot.Site = source
+                    && snapshot.Direction = Fidelity.PSG.MemoryStringViewDirection.FromBytes
+                | _ -> false
+        )
+
+    [<Fact>]
+    member _.``Runtime write refuses a count without the borrowed descriptor relation``() =
+        let result = RuntimeSnapshotWriteFixture.check "" "1"
+
+        match IntrinsicBoundary.project result.Graph with
+        | Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Reason.Contains "count must preserve the exact borrowed string")
+        | Ok _ -> failwith "A runtime byte borrow acquired an unrelated count."
+
+    [<Fact>]
+    member _.``Runtime write refuses an equal count from a different snapshot``() =
+        let result =
+            RuntimeSnapshotWriteFixture.check "    let other = String.fromBytes [| 65; 66 |]\n" "other.Length"
+
+        match IntrinsicBoundary.project result.Graph with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains "same per-invocation string extent")
+        | Ok _ -> failwith "Equal numeric extents substituted for exact snapshot identity."
+
+    [<Fact>]
+    member _.``Runtime write retracts changed allocation evidence with unchanged source nodes``() =
+        let graph, domain, _ = RuntimeSnapshotWriteFixture.admitted ""
+        let allocation = Assert.Single domain.StringBorrowAllocations
+
+        let changedAllocation =
+            { allocation with
+                MaximumCount = allocation.MaximumCount + 1I
+            }
+
+        let changedDomain =
+            { domain with
+                StringBorrowAllocations = [ changedAllocation ]
+            }
+
+        let edges =
+            graph.Edges
+            |> List.map (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDomain _ ->
+                    { edge with
+                        Role = EdgeRole.BoundaryDomain changedDomain
+                    }
+                | _ -> edge)
+
+        let changed = { graph with Edges = edges }
+        Assert.Same(graph.Nodes, changed.Nodes)
+
+        match IntrinsicBoundary.project changed with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains "snapshot copy or lifetime correspondence")
+        | Ok _ -> failwith "Changed runtime allocation evidence retained the old write authority."
+
+    [<Theory>]
+    [<InlineData("snapshot")>]
+    [<InlineData("copy")>]
+    [<InlineData("allocation")>]
+    [<InlineData("all")>]
+    member _.``Runtime write refuses withdrawn storage dependencies`` dependency =
+        let graph, domain, _ = RuntimeSnapshotWriteFixture.admitted ""
+
+        let revised =
+            match dependency with
+            | "snapshot" ->
+                { domain with
+                    StringBorrowSnapshots = []
+                }
+            | "copy" -> { domain with StringBorrowCopies = [] }
+            | "allocation" ->
+                { domain with
+                    StringBorrowAllocations = []
+                }
+            | "all" ->
+                { domain with
+                    StringBorrowSnapshots = []
+                    StringBorrowCopies = []
+                    StringBorrowAllocations = []
+                }
+            | _ -> failwithf "Unknown snapshot dependency: %s" dependency
+
+        let edges =
+            graph.Edges
+            |> List.map (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDomain _ ->
+                    { edge with
+                        Role = EdgeRole.BoundaryDomain revised
+                    }
+                | _ -> edge)
+
+        let changed = { graph with Edges = edges }
+        Assert.Same(graph.Nodes, changed.Nodes)
+
+        match IntrinsicBoundary.project changed with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains "dependency account is incomplete")
+        | Ok _ -> failwith "A withdrawn snapshot dependency retained native write authority."
+
+    [<Fact>]
+    member _.``Unchanged borrow renewal preserves exact logical row membership``() =
+        let graph, _, _ = RuntimeSnapshotWriteFixture.admitted ""
+        let first = Clef.Compiler.Nanopass.StringBorrows.normalize graph
+        let second = Clef.Compiler.Nanopass.StringBorrows.normalize first
+
+        let keys graph =
+            graph.Edges
+            |> List.map (fun edge -> edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target)
+
+        Assert.True(keys first = keys second, "Repeated source-owner renewal duplicated or changed an unchanged logical row.")
+
+    [<Fact>]
+    member _.``Withdrawn borrow evidence remains refused until its source owners renew it``() =
+        let graph, _, call = RuntimeSnapshotWriteFixture.admitted ""
+
+        let edges =
+            graph.Edges
+            |> List.filter (fun edge ->
+                match edge.Role with
+                | EdgeRole.StringByteView _ when edge.Target = call.Buffer -> false
+                | _ -> true)
+
+        let withdrawn = { graph with Edges = edges }
+        Assert.True(IntrinsicBoundary.project withdrawn |> Result.isError)
+        let renewed = Clef.Compiler.Nanopass.StringBorrows.normalize withdrawn
+
+        let established, diagnostics =
+            Clef.Compiler.Nanopass.PremiseEstablishment.normalize renewed
+
+        Assert.Empty diagnostics
+
+        Assert.True(
+            Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project established
+            |> Result.isError
+        )
+
+        Assert.True(
+            Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project established
+            |> Result.isError
+        )
+
+        let ranged, rangeDiagnostics =
+            Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run established.Platform established
+
+        Assert.DoesNotContain(rangeDiagnostics, fun diagnostic -> diagnostic.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error)
+        let numeric = Clef.Compiler.Nanopass.NumericSettlement.normalize ranged
+        let memory = Clef.Compiler.Nanopass.MemorySettlement.normalize numeric
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize memory
+
+        let projection =
+            IntrinsicBoundary.project settled
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+
+        Assert.True(projection.IntrinsicWrites.ContainsKey call.Site)
+
+    [<Theory>]
+    [<InlineData("snapshot", "Emission.Boundary.ByteViews.Snapshot")>]
+    [<InlineData("copy", "Emission.Memory.Operations.StringView.Snapshot")>]
+    [<InlineData("allocation", "Emission.Memory.ArrayCopies.Allocation")>]
+    [<InlineData("unstated-allocation", "Emission.Boundary.ByteViews.SnapshotAllocation")>]
+    [<InlineData("all", "Emission.Boundary.ByteViews.Snapshot")>]
+    [<InlineData("borrow", "Emission.Boundary.IntrinsicWrites.Buffer")>]
+    member _.``Published runtime write refuses withdrawn memory authority``(dependency, part) =
+        let graph, _, call = RuntimeSnapshotWriteFixture.admitted ""
+        let revision = RuntimeSnapshotWriteFixture.publish graph
+        let nodeId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId
+        let view = revision.Emission.Boundary.ByteViews[nodeId call.Buffer]
+        let memory = revision.Emission.Memory
+
+        let snapshot =
+            match memory.Operations[view.ExtentSource] with
+            | Fidelity.PSG.MemoryWitnessOperation.StringView value -> value
+            | other -> failwithf "The admitted runtime descriptor has no StringView: %A" other
+
+        let copy = memory.ArrayCopies[snapshot.Snapshot]
+        let allocation = copy.Allocation.Value
+
+        let revised =
+            match dependency with
+            | "borrow" -> memory
+            | "snapshot" ->
+                { memory with
+                    Operations = memory.Operations.Remove snapshot.Site
+                }
+            | "copy" ->
+                { memory with
+                    ArrayCopies = memory.ArrayCopies.Remove copy.Site
+                }
+            | "allocation" ->
+                { memory with
+                    Operations = memory.Operations.Remove allocation
+                }
+            | "unstated-allocation" ->
+                { memory with
+                    ArrayCopies = memory.ArrayCopies.Add(copy.Site, { copy with Allocation = None })
+                }
+            | "all" ->
+                { memory with
+                    Operations = memory.Operations.Remove(snapshot.Site).Remove(allocation)
+                    ArrayCopies = memory.ArrayCopies.Remove copy.Site
+                }
+            | _ -> failwithf "Unknown published snapshot dependency: %s" dependency
+
+        let boundary =
+            if dependency = "borrow" then
+                { revision.Emission.Boundary with
+                    ByteViews = revision.Emission.Boundary.ByteViews.Remove(nodeId call.Buffer)
+                }
+            else
+                revision.Emission.Boundary
+
+        let changed =
+            { revision with
+                Emission =
+                    { revision.Emission with
+                        Memory = revised
+                        Boundary = boundary
+                    }
+            }
+
+        let violations = Fidelity.PSG.Integrity.check changed
+        Assert.Contains(violations, fun violation -> violation.Part = part)
+
+        if dependency = "unstated-allocation" then
+            Assert.Contains(violations, fun violation -> violation.Part = part && violation.Reason.Contains "a stated allocation")
+
+    [<Fact>]
+    member _.``Constructed comparison does not acquire native write admission requirements``() =
+        let source =
+            (RuntimeSnapshotWriteFixture.source "" "text.Length")
+                .Replace("    let _ = Sys.write 1 text.Bytes text.Length\n    0", "    if text = \"é\" then 0 else 1")
+
+        let graph, projection =
+            IntrinsicWriteFixture.checkSource RuntimeSnapshotWriteFixture.authority source
+            |> IntrinsicWriteFixture.graphAndProjection
+
+        Assert.Empty projection.IntrinsicWrites
+        Assert.NotEmpty projection.ByteViews
+        Assert.Empty(Fidelity.PSG.Integrity.check (RuntimeSnapshotWriteFixture.publish graph))
