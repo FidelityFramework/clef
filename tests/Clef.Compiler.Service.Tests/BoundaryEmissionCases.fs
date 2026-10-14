@@ -14,7 +14,7 @@ type Signedness = Signed | Unsigned
 type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
 type PassBy = Value | Reference
 type CallConv = | CDecl
-type Transfer = | Borrowed
+type Transfer = | Borrowed | Undeclared
 type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
 type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
 """
@@ -124,6 +124,76 @@ type PlatformDescription = { Id: string; Core: TargetCore option }
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BoundaryEmission")>]
 type BoundaryEmissionCases() =
+    [<Theory>]
+    [<InlineData("integer")>]
+    [<InlineData("boolean")>]
+    member _.``Undeclared ownership preserves scalar value boundary admission`` scalarKind =
+        let body =
+            match scalarKind with
+            | "integer" -> BoundaryEmissionFixture.declaration + BoundaryEmissionFixture.descriptor + BoundaryEmissionFixture.entry
+            | "boolean" -> BoundaryEmissionFixture.booleanDeclaration + BoundaryEmissionFixture.booleanEntry
+            | _ -> failwithf "Unknown scalar boundary kind: %s" scalarKind
+        let graph = BoundaryEmissionFixture.checkedGraph (body.Replace("OwnershipTransfer = Borrowed", "OwnershipTransfer = Undeclared"))
+        let projection = BoundaryEmissionFixture.project graph
+        let imported = Assert.Single projection.Imports.Values
+        let call = Assert.Single projection.Calls.Values
+        let expected = if scalarKind = "integer" then BoundaryScalar.Integer(32, true) else BoundaryScalar.Boolean
+        Assert.Equal(Some expected, imported.Result)
+        Assert.Equal(Some expected, call.Result)
+        Assert.All(call.Arguments, fun argument -> Assert.Equal(expected, argument.Abi))
+        Assert.Contains(imported.DeclarationFacts.Values, fun fact -> fact.Text = ["Undeclared"])
+        Assert.True(BoundaryWitness.tryBoundary graph |> Result.isOk)
+
+    [<Theory>]
+    [<InlineData("pointer-parameter")>]
+    [<InlineData("pointer-result")>]
+    [<InlineData("reference-parameter")>]
+    member _.``Undeclared ownership cannot grant a pointer or reference adapter`` shape =
+        let body = BoundaryEmissionFixture.declaration + BoundaryEmissionFixture.descriptor + BoundaryEmissionFixture.entry
+        let revised, reason =
+            match shape with
+            | "pointer-parameter" ->
+                body.Replace("Type = Integer (Signed, 32)", "Type = Pointer 64"),
+                "pointer and aggregate values require a source-settled adapter"
+            | "pointer-result" ->
+                body.Replace("ReturnType = Integer (Signed, 32)", "ReturnType = Pointer 64"),
+                "source-settled adapter beyond the scalar C contract"
+            | "reference-parameter" ->
+                body.Replace("PassBy = Value", "PassBy = Reference"),
+                "the reference parameter 'left' of 'combine' requires a bounded scalar array"
+            | _ -> failwithf "Unknown unsupported boundary shape: %s" shape
+        let result = BoundaryEmissionFixture.check (Some BoundaryEmissionFixture.platform)
+                         (revised.Replace("OwnershipTransfer = Borrowed", "OwnershipTransfer = Undeclared"))
+        let failures = BoundaryEmissionFixture.rejected result.Graph
+        Assert.Contains(failures, fun failure -> failure.Reason.Contains reason)
+        Assert.True(BoundaryWitness.admit result.Graph |> Result.isError)
+
+    [<Fact>]
+    member _.``Changing ownership declaration invalidates evidence without replacing the scalar import``() =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let imported = Assert.Single (BoundaryEmissionFixture.project graph).Imports.Values
+        let _, fields = BoundaryDeclarations.recordOf graph imported.Identity |> Option.get
+        let ownershipId = fields |> List.find (fst >> (=) "OwnershipTransfer") |> snd
+        let declared = BoundaryDeclarations.valueOf graph ownershipId |> Option.get
+        let revised =
+            match declared.Kind with
+            | SemanticKind.UnionCase("Borrowed", _, payload) ->
+                { declared with Kind = SemanticKind.UnionCase("Undeclared", 1, payload) }
+            | SemanticKind.DUConstruct("Borrowed", _, payload, allocated) ->
+                { declared with Kind = SemanticKind.DUConstruct("Undeclared", 1, payload, allocated) }
+            | other -> failwithf "Expected declared ownership case, got %A" other
+        Assert.True(imported.DeclarationFacts.ContainsKey declared.Id)
+        let changed = { graph with Nodes = graph.Nodes.Add(declared.Id, revised) }
+        BoundaryEmissionFixture.rejected changed |> ignore
+        Assert.True(BoundaryWitness.admit changed |> Result.isError)
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed
+        let current = Assert.Single (BoundaryEmissionFixture.project settled).Imports.Values
+        Assert.Equal(imported.Identity, current.Identity)
+        Assert.Equal(imported.Binding, current.Binding)
+        Assert.Equal(imported.DeclarationFacts.Count, current.DeclarationFacts.Count)
+        Assert.NotEqual<BoundaryDeclarationFact>(imported.DeclarationFacts[declared.Id], current.DeclarationFacts[declared.Id])
+        Assert.Equal<string list>(["Undeclared"], current.DeclarationFacts[declared.Id].Text)
+
     [<Theory>]
     [<InlineData("CHandle<unit>")>]
     [<InlineData("option<CHandle<unit>>")>]
