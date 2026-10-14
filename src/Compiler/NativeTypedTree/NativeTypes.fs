@@ -965,6 +965,10 @@ type PlatformContext = {
     /// absent, legacy platform selection uses the binding directory.
     PlatformDescription: string option
 
+    /// Explicit source loading export. Absent selection supplies no imported
+    /// code lifetime, even when the selected target provides libc.
+    PlatformLoading: string option
+
     /// Normalized source identities in the selected platform's dependency
     /// closure. An application's other declarations cannot supply its exports.
     PlatformSourcePaths: Set<string>

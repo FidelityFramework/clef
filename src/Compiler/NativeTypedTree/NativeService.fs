@@ -1315,7 +1315,6 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Clef.Compiler.Nanopass.ProgramInitializationOrder.settleWithAccounts finalGraph
     let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
     tracePhase "lazy-settlement"
-    let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
     let environmentOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins finalGraph
     let knownCallables = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables finalGraph
@@ -1413,7 +1412,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 SequenceCurrentReads = sequences.CurrentReads
                 Pins = PlatformBindings.pins settled
                 DeclarationRootLambdas = Roots.declarationRootLambdas settled
-                FunctionPointers = functionPointers
+                FunctionPointers = Map.empty
                 Mmio = mmio
                 ProgramStorage = ProgramStorageInventory.empty } }
 
@@ -1442,6 +1441,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
+    // Native entry plans consume the boundary owner's admitted declaration,
+    // ABI and loading rows. Settle once after those rows exist, before witness
+    // scope preparation; earlier ordinary representation owners do not read them.
+    let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
+    let finalGraph =
+        let facts = finalGraph.Codata.Value
+        { finalGraph with Codata = lazy { facts with FunctionPointers = functionPointers } }
     let finalGraph, aggregateAccountResiduals =
         if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts finalGraph

@@ -138,6 +138,7 @@ type private Program = {
     Applications: Map<NodeId, CallableOrigins.CallTarget list>
     /// Exact foreign declaration rows are incidence, never behavior inferred from a stub.
     ForeignDeclarations: Map<NodeId, BoundaryDeclaration list>
+    ForeignEntryCalls: Map<NodeId, BoundaryDeclaration * NodeId list * Set<NodeId>>
     ForeignBodies: Set<NodeId>
     ForeignEffectBodies: Set<NodeId>
     ForeignDeclarationFailure: (NodeId * string) option
@@ -1368,6 +1369,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Callees = Map.empty
         Applications = Map.empty
         ForeignDeclarations = Map.empty
+        ForeignEntryCalls = Map.empty
         ForeignBodies = Set.empty
         ForeignEffectBodies = Set.empty
         ForeignDeclarationFailure = None
@@ -1450,6 +1452,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             | SemanticKind.Application (funcId, args) ->
                 let resolved =
                     match resolveCallee reachableNodes candidates poisons funcId args with
+                    | Some (Callee.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = "invoke" }, pointer :: _) as intrinsic
+                        when Clef.Compiler.Baker.Recipes.BoundaryDeclarations.entryFormation graph pointer |> Option.isSome ->
+                        // Imported entries retain the original declaration correspondence.
+                        // Their placeholder is not an ordinary callback invocation body.
+                        intrinsic
                     | Some (Callee.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = "invoke" }, _pointer :: actuals) ->
                         match callableFlow.NativeCalls.TryFind node.Id with
                         | Some native ->
@@ -1686,6 +1693,31 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             let range = graph.Nodes[binding].Range
             binding, sprintf "The integer foreign boundary declaration at %s:%d has no unique current identity row." range.File range.Start.Line)
     let foreignResultRanges = descriptors.ResultRanges |> List.groupBy (fun range -> range.Declaration.Binding) |> Map.ofList
+    let foreignEntryCalls =
+        callees
+        |> Map.toList
+        |> List.choose (fun (call, (callee, arguments)) ->
+            match callee, arguments with
+            | Callee.Intrinsic {
+                                   Module = IntrinsicModule.FnPtr
+                                   Operation = "invoke"
+                               },
+              pointer :: actuals ->
+                Clef.Compiler.Baker.Recipes.BoundaryDeclarations.entryFormation graph pointer
+                |> Option.bind (fun entry ->
+                    let declarations =
+                        foreignDeclarations.Values
+                        |> Seq.collect id
+                        |> Seq.filter (fun declaration -> declaration.Binding = entry.Declaration)
+                        |> Seq.toList
+
+                    match declarations with
+                    | [ declaration ] when declaration.Formals.Length = actuals.Length ->
+                        Some(call, (declaration, actuals, entry.Transport))
+                    | _ -> None)
+            | _ -> None)
+        |> Map.ofList
+
     let foreignAbi = descriptors.Functions |> List.choose (fun abi -> abi.Body |> Option.map (fun body -> body, abi))
                      |> List.groupBy fst |> List.map (fun (body, rows) -> body, rows |> List.map snd) |> Map.ofList
     let inputSeeds =
@@ -1881,6 +1913,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             Callees = callees
             Applications = completeApplications reachableNodes inactiveCalls callArguments callableFlow.Calls
             ForeignDeclarations = foreignDeclarations
+            ForeignEntryCalls = foreignEntryCalls
             ForeignBodies = foreignBodies
             ForeignEffectBodies = foreignEffectBodies
             ForeignDeclarationFailure = foreignDeclarationFailure
@@ -2274,14 +2307,17 @@ let rec private aggregateElement (program: Program) (value: Reading) (visited: S
 
 /// Match existing direct formal/body correspondence, never a C symbol or a new callee walk.
 let private foreignDeclaration (program: Program) call =
-    match program.Callees.TryFind call with
-    | Some (Callee.Direct(formals, body), actuals) when program.ForeignDeclarations.ContainsKey body ->
-        let declarations = program.ForeignDeclarations[body] |> List.filter (fun declaration ->
-            declaration.Formals = (formals |> List.map (fun (_, _, formal) -> formal)))
-        match declarations with
-        | [declaration] when actuals.Length = declaration.Formals.Length -> Some(declaration, actuals)
+    match program.ForeignEntryCalls.TryFind call with
+    | Some(declaration, actuals, _) -> Some(declaration, actuals)
+    | None ->
+        match program.Callees.TryFind call with
+        | Some (Callee.Direct(formals, body), actuals) when program.ForeignDeclarations.ContainsKey body ->
+            let declarations = program.ForeignDeclarations[body] |> List.filter (fun declaration ->
+                declaration.Formals = (formals |> List.map (fun (_, _, formal) -> formal)))
+            match declarations with
+            | [declaration] when actuals.Length = declaration.Formals.Length -> Some(declaration, actuals)
+            | _ -> None
         | _ -> None
-    | _ -> None
 
 let private foreignResultDescriptor (program: Program) (declaration: BoundaryDeclaration) =
     match program.ForeignResultRanges.TryFind declaration.Binding with Some [descriptor] -> Some descriptor | _ -> None
@@ -2310,6 +2346,7 @@ let private foreignRange (program: Program) value call =
 /// enclosures; unresolved calls and untabled intrinsics remain unobservable.
 let private applicationRange (program: Program) (shared: Reading) (value: Reading) (application: NodeId -> ValueRange option) (node: SemanticNode) (fallback: ValueRange) : ValueRange =
     match Map.tryFind node.Id program.Callees with
+    | _ when program.ForeignEntryCalls.ContainsKey node.Id -> foreignRange program value node.Id
     | Some (Callee.Direct(_, body), _) when program.ForeignEffectBodies.Contains body ->
         if program.ForeignBodies.Contains body then foreignRange program value node.Id else fallback
     | Some (Callee.Value(candidates, _), _) when candidates |> List.exists (fun candidate -> program.ForeignEffectBodies.Contains candidate.Body) ->
@@ -3448,6 +3485,7 @@ let foreignResultApplications (graph: SemanticGraph) (facts: RangeContextFacts o
                   Descriptor = descriptor; Abi = abi
                   ResultRange = facts |> Option.bind (fun facts -> facts.Values.TryFind(context, node.Id)) |> Option.defaultValue ValueRange.Unbounded
                   Support = declaration.Path @ declaration.Formals @ [declaration.Body; node.Id] @ actuals @
+                            (program.ForeignEntryCalls.TryFind node.Id |> Option.map (fun (_, _, transport) -> Set.toList transport) |> Option.defaultValue []) @
                             (descriptor |> Option.map _.Participants |> Option.defaultValue []) @
                             (abi |> Option.map (fun abi -> [abi.Node]) |> Option.defaultValue []) @ (reads |> Set.toList |> List.map snd)
                   Reads = reads }))

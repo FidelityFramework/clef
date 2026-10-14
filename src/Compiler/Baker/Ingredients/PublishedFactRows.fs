@@ -146,6 +146,7 @@ and mapBoundaryCall (value: S.BoundaryCall) : Fidelity.PSG.BoundaryCall =
         Site = nodeId value.Site
         Import = nodeId value.Import
         Callee = nodeId value.Callee
+        Entry = (value.Entry |> Option.map (fun x -> nodeId x))
         Arguments = (value.Arguments |> List.map (fun x -> mapBoundaryOperand x))
         ErasedUnitArguments = (value.ErasedUnitArguments |> List.map (fun x -> nodeId x))
         Result = (value.Result |> Option.map (fun x -> mapBoundaryScalar x))
@@ -191,6 +192,8 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         Meets = (value.Meets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
         Declarations = (value.Declarations |> List.map (fun x -> mapBoundaryDeclaration x))
         Imports = (value.Imports |> List.map (fun x -> nodeId x))
+        Loading = (value.Loading |> Option.map (fun x -> mapBoundaryLoading x))
+        Entries = (value.Entries |> List.map (fun x -> nodeId x))
         Calls = (value.Calls |> List.map (fun x -> nodeId x))
         ByteViews = (value.ByteViews |> List.map (fun x -> mapBoundaryByteView x))
         StringExtents = (value.StringExtents |> List.map (fun x -> mapBoundaryStringExtent x))
@@ -217,6 +220,8 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
 and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fidelity.PSG.BoundaryEmissionProjection =
     ({
         Imports = (value.Imports |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryImport v) |> Map.ofSeq)
+        Loading = (value.Loading |> Option.map (fun x -> mapBoundaryLoading x))
+        Entries = (value.Entries |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryEntry v) |> Map.ofSeq)
         ByScope = (value.ByScope |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> nodeId x))) |> Map.ofSeq)
         Calls = (value.Calls |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryCall v) |> Map.ofSeq)
         ByteViews = (value.ByteViews |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryByteView v) |> Map.ofSeq)
@@ -229,6 +234,18 @@ and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fideli
         Links = value.Links
         ResultHypotheses = (value.ResultHypotheses |> List.map (fun x -> mapForeignResultHypothesis x))
     } : Fidelity.PSG.BoundaryEmissionProjection)
+
+and mapBoundaryEntry (value: S.BoundaryEntry) : Fidelity.PSG.BoundaryEntry =
+    ({
+        Formation = nodeId value.Formation
+        Operand = nodeId value.Operand
+        Import = nodeId value.Import
+        Declaration = nodeId value.Declaration
+        Loading = nodeId value.Loading
+        SourceType = mapTypeIdentity value.SourceType
+        Transport = (value.Transport |> Set.map (fun x -> nodeId x))
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryEntry)
 
 and mapBoundaryImport (value: S.BoundaryImport) : Fidelity.PSG.BoundaryImport =
     ({
@@ -246,6 +263,18 @@ and mapBoundaryImport (value: S.BoundaryImport) : Fidelity.PSG.BoundaryImport =
         DeclarationFacts = (value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq)
     } : Fidelity.PSG.BoundaryImport)
 
+and mapBoundaryLoading (value: S.BoundaryLoading) : Fidelity.PSG.BoundaryLoading =
+    ({
+        Identity = nodeId value.Identity
+        Binding = nodeId value.Binding
+        Selector = value.Selector
+        Contract = value.Contract
+        Platform = nodeId value.Platform
+        Core = nodeId value.Core
+        DeclarationFacts = (value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq)
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryLoading)
+
 and mapBoundaryOperand (value: S.BoundaryOperand) : Fidelity.PSG.BoundaryOperand =
     ({
         Actual = nodeId value.Actual
@@ -258,6 +287,7 @@ and mapBoundaryPlatformPremise (value: S.BoundaryPlatformPremise) : Fidelity.PSG
     ({
         Id = value.Id
         Description = value.Description
+        Loading = value.Loading
         LibraryPath = value.LibraryPath
         SourcePaths = value.SourcePaths
         Architecture = value.Architecture
@@ -984,6 +1014,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.OrdinaryBindingDemandPending(a0, a1) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandPending(a0, mapBindingDemandEvidence a1)
     | S.EdgeRole.OrdinaryBindingDemandHistory(a0) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandHistory(mapBindingDemandEvidence a0)
     | S.EdgeRole.FiniteCellRange -> Fidelity.PSG.EdgeRole.FiniteCellRange
+    | S.EdgeRole.BoundaryEntry(a0) -> Fidelity.PSG.EdgeRole.BoundaryEntry(mapBoundaryEntry a0)
 
 and mapEmissionStrategy (value: S.EmissionStrategy) : Fidelity.PSG.EmissionStrategy =
     match value with
@@ -1177,6 +1208,7 @@ and mapFunctionPointerPlan (value: S.FunctionPointerPlan) : Fidelity.PSG.Functio
     match value with
     | S.FunctionPointerPlan.Address(a0, a1) -> Fidelity.PSG.FunctionPointerPlan.Address(a0, nodeId a1)
     | S.FunctionPointerPlan.Invoke(a0, a1, a2, a3) -> Fidelity.PSG.FunctionPointerPlan.Invoke(nodeId a0, (a1 |> List.map (fun x -> nodeId x)), (a2 |> List.map (fun x -> freeze x)), freeze a3)
+    | S.FunctionPointerPlan.ExternAddress(a0) -> Fidelity.PSG.FunctionPointerPlan.ExternAddress(nodeId a0)
 
 and mapHardwareModuleWitness (value: S.HardwareModuleWitness) : Fidelity.PSG.HardwareModuleWitness =
     ({

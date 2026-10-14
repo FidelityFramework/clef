@@ -34,15 +34,16 @@ module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
 module NumericRecipes = Clef.Compiler.Baker.Recipes.NumericRecipes
 module MatchRecipes = Clef.Compiler.Baker.Recipes.MatchRecipes
 
-/// A native callback is a declaration reference, not a closure value. Preserve
-/// its edge for function-pointer settlement instead of eta-expanding it.
+/// A native entry operand is a declaration reference, not a closure value.
+/// Preserve its edge for function-pointer settlement instead of eta-expanding it.
 let private isNativeCallbackArgument (graph: SemanticGraph) (node: SemanticNode) =
     let rec parentUse child parent =
         match SemanticGraph.tryGetNode parent graph with
         | Some { Kind = SemanticKind.TypeAnnotation _; Parent = Some next } -> parentUse parent next
         | Some { Kind = SemanticKind.Application (fn, [arg]) } when arg = child ->
             match SemanticGraph.tryGetNode fn graph with
-            | Some { Kind = SemanticKind.Intrinsic info } -> info.Module = IntrinsicModule.FnPtr && info.Operation = "ofFunction"
+            | Some { Kind = SemanticKind.Intrinsic info } ->
+                info.Module = IntrinsicModule.FnPtr && (info.Operation = "ofFunction" || info.Operation = "ofExtern")
             | _ -> false
         | _ -> false
     node.Parent |> Option.exists (parentUse node.Id)

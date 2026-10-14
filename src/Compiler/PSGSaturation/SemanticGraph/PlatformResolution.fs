@@ -640,7 +640,7 @@ let qualifiedExportName (graph: SemanticGraph) (binding: SemanticNode) : string 
 /// Select a static export without executing calls or taking a mutable
 /// initializer as its value. Quoted exports and immutable aliases preserve
 /// the original record identity used by memory-space and MMIO checks.
-let private explicitDescription (graph: SemanticGraph) (binding: SemanticNode) =
+let private explicitRecord (graph: SemanticGraph) (accept: SemanticNode -> bool) (binding: SemanticNode) =
     let rec follow seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -651,10 +651,12 @@ let private explicitDescription (graph: SemanticGraph) (binding: SemanticNode) =
         | Some { Kind = SemanticKind.VarRef(_, Some value) } -> follow seen value
         | Some node ->
             match node.Kind with
-            | SemanticKind.RecordExpr(fields, _) when isDescriptionType node -> Some(node, fields)
+            | SemanticKind.RecordExpr(fields, _) when accept node -> Some(node, fields)
             | _ -> None
         | None -> None
     follow Set.empty binding.Id
+
+let private explicitDescription graph binding = explicitRecord graph isDescriptionType binding
 
 /// Selection is constrained by the selected package's dependency closure,
 /// independently of the larger compilation's application and catalogue inputs.
@@ -667,7 +669,7 @@ let private inSelectedSources (graph: SemanticGraph) (node: SemanticNode) =
 /// A root inside the closure must not obtain its core, spaces or aliased value
 /// from an unrelated dependency that happened to be loaded first. Preserve
 /// the references; report the undeclared package dependency at its use site.
-let private explicitSourceFindings (graph: SemanticGraph) (root: SemanticNode) =
+let private explicitSourceCensus (graph: SemanticGraph) (root: SemanticNode) =
     let rec visit seen id =
         if Set.contains id seen then seen, [] else
         let seen = Set.add id seen
@@ -687,7 +689,9 @@ let private explicitSourceFindings (graph: SemanticGraph) (root: SemanticNode) =
             |> List.fold (fun (seen, findings) child ->
                 let seen, nested = visit seen child
                 seen, findings @ nested) (seen, findings)
-    visit Set.empty root.Id |> snd
+    visit Set.empty root.Id
+
+let private explicitSourceFindings graph root = explicitSourceCensus graph root |> snd
 
 /// Auxiliary platform declarations (for example C ABI and pin inventory) use
 /// the same source provenance as an explicit root. Legacy unbound graphs keep
@@ -793,6 +797,197 @@ let read (graph: SemanticGraph) : Reading =
 /// The findings are reported once, by PlatformDeclaration at saturation.
 let resolve (graph: SemanticGraph) : DeclaredPlatform option =
     (read graph).Platform
+
+/// A stated process-link assumption, selected independently of the platform
+/// description. The declaration and all of its literal premises stay visible.
+type DeclaredProcessLink =
+    {
+        Node: NodeId
+        Binding: NodeId
+        Selector: string
+        Contract: BAREWire.Platform.ProcessLinkContract
+        Participants: Set<NodeId>
+    }
+
+/// The platform reader is the only owner of the selected loading export. An
+/// unselected catalogue contract supplies no authority to an imported entry.
+let readLoading (graph: SemanticGraph) : Result<DeclaredProcessLink option, DeclarationFinding list> =
+    match graph.Platform |> Option.bind (fun context -> context.PlatformLoading) with
+    | None -> Ok None
+    | Some selector ->
+        let candidates =
+            graph.Nodes.Values
+            |> Seq.filter (fun node -> inSelectedSources graph node && qualifiedExportName graph node = Some selector)
+            |> Seq.toList
+
+        match candidates with
+        | [] ->
+            let path =
+                graph.Platform
+                |> Option.bind (fun context -> context.PlatformLibraryPath)
+                |> Option.defaultValue ""
+
+            Error
+                [
+                    {
+                        Node = NodeId 0
+                        Range = { noRange with File = path }
+                        Defect = DeclarationDefect.Malformed
+                        Message = $"explicit loading export '{selector}' was not found in the selected platform's source dependency closure"
+                    }
+                ]
+        | [ binding ] ->
+            let participants, findings = explicitSourceCensus graph binding
+
+            match findings with
+            | _ :: _ -> Error findings
+            | [] ->
+                match explicitRecord graph (fun node -> typeName node = Some "ProcessLinkContract") binding with
+                | None ->
+                    Error
+                        [
+                            findingAt
+                                binding
+                                DeclarationDefect.Malformed
+                                $"explicit loading export '{selector}' must be an immutable ProcessLinkContract declaration (plain, quoted, or an immutable alias)"
+                        ]
+                | Some(node, fields) ->
+                    let text name =
+                        match fields |> List.filter (fun (field, _) -> field = name) with
+                        | [ (_, id) ] ->
+                            match valuePath graph id with
+                            | Some({
+                                       Kind = SemanticKind.Literal(NativeLiteral.String value)
+                                   },
+                                   path) when
+                                not (System.String.IsNullOrWhiteSpace value)
+                                && (path
+                                    |> List.forall (fun id ->
+                                        graph.Nodes.TryFind id
+                                        |> Option.exists (fun premise ->
+                                            match premise.Kind with
+                                            | SemanticKind.Binding(_, true, _, _) -> false
+                                            | _ -> true)))
+                                ->
+                                Ok value
+                            | _ -> Error name
+                        | _ -> Error name
+
+                    let names =
+                        [
+                            "Identity"
+                            "Version"
+                            "Source"
+                            "Library"
+                            "Runtime"
+                            "Os"
+                            "Arch"
+                            "LoadAt"
+                            "LiveUntil"
+                            "Unloading"
+                            "ExportedLibrary"
+                        ]
+
+                    let values = names |> List.map (fun name -> name, text name)
+
+                    let malformed =
+                        values
+                        |> List.choose (fun (_, value) ->
+                            match value with
+                            | Error name -> Some name
+                            | Ok _ -> None)
+
+                    if not malformed.IsEmpty then
+                        let fields = System.String.Join(", ", malformed)
+
+                        Error
+                            [
+                                findingAt
+                                    node
+                                    DeclarationDefect.Malformed
+                                    $"the selected loading contract requires unique immutable nonempty string fields: {fields}"
+                            ]
+                    else
+                        let values =
+                            values
+                            |> List.choose (fun (name, value) -> value |> Result.toOption |> Option.map (fun value -> name, value))
+                            |> Map.ofList
+
+                        let contract: BAREWire.Platform.ProcessLinkContract =
+                            {
+                                Identity = values["Identity"]
+                                Version = values["Version"]
+                                Source = values["Source"]
+                                Library = values["Library"]
+                                Runtime = values["Runtime"]
+                                Os = values["Os"]
+                                Arch = values["Arch"]
+                                LoadAt = values["LoadAt"]
+                                LiveUntil = values["LiveUntil"]
+                                Unloading = values["Unloading"]
+                                ExportedLibrary = values["ExportedLibrary"]
+                            }
+
+                        let platform = read graph
+
+                        let expected =
+                            contract.Library = "c"
+                            && contract.Runtime = "libc"
+                            && contract.Os = "linux"
+                            && contract.Arch = "x86_64"
+
+                        let policy =
+                            contract.LoadAt = "ProcessStartup"
+                            && contract.LiveUntil = "ProcessTermination"
+                            && contract.Unloading = "Forbidden"
+                            && contract.ExportedLibrary = "Forbidden"
+
+                        let target =
+                            platform.Platform
+                            |> Option.bind _.Core
+                            |> Option.exists (fun core ->
+                                core.Runtime = contract.Runtime
+                                && core.Os = contract.Os
+                                && core.Arch = contract.Arch)
+
+                        if not platform.Findings.IsEmpty then
+                            Error platform.Findings
+                        elif not expected || not policy then
+                            Error
+                                [
+                                    findingAt
+                                        node
+                                        DeclarationDefect.Invalid
+                                        "the loading contract must declare Linux AMD64 libc at process startup until process termination, with unloading and exported-library authority forbidden"
+                                ]
+                        elif not target then
+                            Error
+                                [
+                                    findingAt
+                                        node
+                                        DeclarationDefect.Invalid
+                                        "the loading contract disagrees with the selected source platform's core runtime, OS or architecture"
+                                ]
+                        else
+                            Ok(
+                                Some
+                                    {
+                                        Node = node.Id
+                                        Binding = binding.Id
+                                        Selector = selector
+                                        Contract = contract
+                                        Participants = Set.add node.Id participants
+                                    }
+                            )
+        | bindings ->
+            Error(
+                bindings
+                |> List.map (fun binding ->
+                    findingAt
+                        binding
+                        DeclarationDefect.Ambiguous
+                        $"explicit loading export '{selector}' is ambiguous: {bindings.Length} bindings have that qualified name")
+            )
 
 /// A declared space by name.
 let spaceNamed (name: string) (platform: DeclaredPlatform) : DeclaredSpace option =

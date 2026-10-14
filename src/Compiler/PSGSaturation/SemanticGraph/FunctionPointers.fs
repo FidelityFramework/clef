@@ -40,6 +40,15 @@ let settle (graph: SemanticGraph) : Map<NodeId, FunctionPointerPlan> * Diagnosti
                 match node fn with
                 | Some { Kind = SemanticKind.Intrinsic info } when info.Module = IntrinsicModule.FnPtr ->
                     match info.Operation, args with
+                    | "ofExtern", [_] ->
+                        let entries = graph.Edges |> List.choose (fun edge ->
+                            match edge.Class, edge.Role with
+                            | EdgeClass.Boundary, EdgeRole.BoundaryEntry entry when
+                                entry.Formation = site.Id && edge.Target = site.Id && edge.Sources = Set.toList entry.Participants -> Some entry
+                            | _ -> None)
+                        match entries with
+                        | [_] -> plans <- Map.add site.Id (FunctionPointerPlan.ExternAddress site.Id) plans
+                        | _ -> error site "FnPtr.ofExtern requires one admitted current extern declaration, ABI and explicitly selected process-link loading contract."
                     | "ofFunction", [value] ->
                         match Entries.tryFormation graph site.Id with
                         | Some formation ->
@@ -73,7 +82,8 @@ let settle (graph: SemanticGraph) : Map<NodeId, FunctionPointerPlan> * Diagnosti
                                 plans <- Map.add site.Id (FunctionPointerPlan.Invoke (pointer, arguments, parameters, result)) plans
                             else error site "FnPtr.invoke requires all arguments of a resolved callback signature."
                         | _ -> error site "FnPtr.invoke requires a typed function pointer."
-                    | _ -> error site "This native function-pointer operation is not supported; use FnPtr.ofFunction and a fully applied FnPtr.invoke."
+                    | "fromSymbol", _ -> error site "FnPtr.fromSymbol is retired; use FnPtr.ofExtern with the actual declared extern binding."
+                    | _ -> error site "This native function-pointer operation is not supported; use FnPtr.ofExtern or FnPtr.ofFunction and a fully applied FnPtr.invoke."
                 | _ -> ()
             | _ -> ()
     plans, List.rev errors

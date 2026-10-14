@@ -64,6 +64,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
         else
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
+            let entries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryEntry entry -> Some entry | _ -> None)
             let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
@@ -85,7 +86,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                          | _ -> false))) then None
                     else Some(failure (Some call.Site) call.Participants "The integer result lacks its complete current conditional numeric account and declared behavioral hypothesis."))
             let coverageMembership = coverages |> List.map (fun coverage -> coverage.Site, coverage.Ordinal, coverage.Operand) |> List.sort
-            if (imports |> List.map _.Identity |> List.sort) <> domain.Imports || (calls |> List.map _.Site |> List.sort) <> domain.Calls || expectedCoverage <> coverageMembership then
+            if (imports |> List.map _.Identity |> List.sort) <> domain.Imports || (entries |> List.map _.Formation |> List.sort) <> domain.Entries || (calls |> List.map _.Site |> List.sort) <> domain.Calls || expectedCoverage <> coverageMembership then
                 stale "The boundary domain lost or duplicated an import, call or ordered coverage occurrence."
             else
                 let callsById = calls |> List.map (fun call -> call.Site, call) |> Map.ofList
@@ -123,6 +124,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                      { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = Map.keys domain.Premises |> Seq.toList; Target = domainRow.Target }]
                     @ (domain.Declarations |> List.map Declarations.row)
                     @ (imports |> List.map Ingredients.importRow)
+                    @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
                     @ (calls |> List.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call))
                     @ proofRows
                     @ (domain.ByteViews |> List.collect (fun view -> [Bytes.viewRow view; Bytes.storageRow view; Bytes.rewriteRow view]))
@@ -164,7 +166,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 else
                     let imports = imports |> List.map (fun import -> import.Identity, import) |> Map.ofList
                     let byScope = imports.Values |> Seq.groupBy _.Scope |> Seq.map (fun (scope, imports) -> scope, imports |> Seq.map _.Identity |> Seq.sort |> Seq.toList) |> Map.ofSeq
-                    Ok { Imports = imports; Calls = callsById; ByScope = byScope; ResultHypotheses = domain.ResultHypotheses
+                    Ok { Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
+                         Calls = callsById; ByScope = byScope; ResultHypotheses = domain.ResultHypotheses
                          ByteViews = domain.ByteViews |> List.map (fun view -> view.Site, view) |> Map.ofList
                          StringExtents = domain.StringExtents |> List.map (fun extent -> extent.Site, extent) |> Map.ofList
                          IntrinsicWriteImports = domain.IntrinsicImports |> List.map (fun import -> import.Identity, import) |> Map.ofList

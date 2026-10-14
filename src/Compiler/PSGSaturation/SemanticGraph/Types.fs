@@ -788,6 +788,32 @@ type BoundaryImport = {
 
 type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option }
 
+/// Current source incidence for a separately stated process-link assumption.
+/// Identity/Version/Source belong to Contract, not this revision's node IDs.
+type BoundaryLoading = {
+    Identity: NodeId
+    Binding: NodeId
+    Selector: string
+    Contract: BAREWire.Platform.ProcessLinkContract
+    Platform: NodeId
+    Core: NodeId
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: Set<NodeId>
+}
+
+/// A typed imported entry retains its declaration and current immutable
+/// transport; it owns no closure environment or compiler-image code lifetime.
+type BoundaryEntry = {
+    Formation: NodeId
+    Operand: NodeId
+    Import: NodeId
+    Declaration: NodeId
+    Loading: NodeId
+    SourceType: TypeIdentity
+    Transport: Set<NodeId>
+    Participants: Set<NodeId>
+}
+
 /// The role of one occurrence in a relation over nodes (`Participant`).
 [<RequireQualifiedAccess>]
 type ParticipantRole =
@@ -949,6 +975,7 @@ type BoundaryCall = {
     Site: NodeId
     Import: NodeId
     Callee: NodeId
+    Entry: NodeId option
     Arguments: BoundaryOperand list
     ErasedUnitArguments: NodeId list
     Result: BoundaryScalar option
@@ -981,6 +1008,7 @@ type BoundarySourcePremise = {
 type BoundaryPlatformPremise = {
     Id: string
     Description: string option
+    Loading: string option
     LibraryPath: string option
     SourcePaths: Set<string>
     Architecture: string option
@@ -1460,6 +1488,8 @@ type BoundaryDomain = {
     Declarations: BoundaryDeclaration list
     ResultHypotheses: ForeignResultHypothesis list
     Imports: NodeId list
+    Loading: BoundaryLoading option
+    Entries: NodeId list
     Calls: NodeId list
     ByteViews: BoundaryByteView list
     StringExtents: BoundaryStringExtent list
@@ -1858,6 +1888,7 @@ type EdgeRole =
     /// Complete rooted activation census and typed affine transitions for a
     /// finite program cell. The arithmetic certificate supplies no lifetime.
     | FiniteCellRange
+    | BoundaryEntry of BoundaryEntry
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
@@ -2785,6 +2816,7 @@ type UnionResidence = Arena | Inline
 type FunctionPointerPlan =
     | Address of symbol: string * lambda: NodeId
     | Invoke of pointer: NodeId * arguments: NodeId list * parameters: NativeType list * result: NativeType
+    | ExternAddress of formation: NodeId
 
 /// A quoted source condition's standing at its declaration dependencies.
 type PredicateStatus = Established | Contradicted | Pending
@@ -3113,6 +3145,8 @@ module StorageWitnessProjection =
 
 type BoundaryEmissionProjection = {
     Imports: Map<NodeId, BoundaryImport>
+    Loading: BoundaryLoading option
+    Entries: Map<NodeId, BoundaryEntry>
     ResultHypotheses: ForeignResultHypothesis list
     ByScope: Map<NodeId, NodeId list>
     Calls: Map<NodeId, BoundaryCall>

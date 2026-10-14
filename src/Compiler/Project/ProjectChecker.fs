@@ -91,6 +91,7 @@ module ProjectChecker =
                 EndpointReturns = Map.empty
                 PlatformLibraryPath = platformPath |> Option.orElse (metadata |> Option.map (fun _ -> options.ProjectPath))
                 PlatformDescription = metadata |> Option.bind (fun m -> m.Description)
+                PlatformLoading = metadata |> Option.bind (fun m -> m.Loading)
                 PlatformSourcePaths = platformSources
                 PlatformArchitecture = metadata |> Option.bind (fun m -> m.Arch)
                 PlatformOS = metadata |> Option.bind (fun m -> m.OS)

@@ -2,6 +2,7 @@
 /// First stage of the boundary owner: declaration identity before ordinary demand.
 module Clef.Compiler.Baker.Recipes.BoundaryDeclarations
 
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Ingredients.Obligations
 
@@ -21,22 +22,79 @@ let bindingPath (graph: SemanticGraph) binding =
         | _ -> Error "The external declaration must retain a capture-free source function and its exact structural path."
     follow Set.empty binding
 
-/// This is the only boundary callee identity walk. Other domains consume rows.
-let target (graph: SemanticGraph) id =
+/// Both direct declarations and imported-entry transport use this one source
+/// identity walk. Transport finds a formation; it establishes no ABI or loading.
+type private TargetPurpose =
+    | Declaration
+    | Entry
+
+let private targetWith purpose (graph: SemanticGraph) id =
     let rec follow seen id =
-        if Set.contains id seen then None else
-        let seen = Set.add id seen
-        match graph.Nodes.TryFind id with
-        | Some ({ Kind = SemanticKind.Binding(_, false, _, _); Children = [child] } as node) when not (isExternal node) ->
-            match graph.Nodes.TryFind child |> Option.map _.Kind with
-            | Some (SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ | SemanticKind.Intrinsic _) -> follow seen child
-            | _ -> Some (node, seen)
-        | Some ({ Kind = SemanticKind.Binding _ } as node)
-        | Some ({ Kind = SemanticKind.Intrinsic _ } as node) -> Some (node, seen)
-        | Some { Kind = SemanticKind.TypeAnnotation(inner, _); Children = [child] } when inner = child -> follow seen inner
-        | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> follow seen binding
-        | _ -> None
+        if Set.contains id seen then
+            None
+        else
+            let seen = Set.add id seen
+
+            match graph.Nodes.TryFind id with
+            | Some({
+                       Kind = SemanticKind.Binding(_, false, _, _)
+                       Children = [ child ]
+                   } as node) when not (isExternal node) ->
+                match purpose, graph.Nodes.TryFind child |> Option.map _.Kind with
+                | Entry, Some _ -> follow seen child
+                | Declaration, Some(SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ | SemanticKind.Intrinsic _) -> follow seen child
+                | _ -> Some(node, seen)
+            | Some({ Kind = SemanticKind.Binding _ } as node)
+            | Some({ Kind = SemanticKind.Intrinsic _ } as node) -> Some(node, seen)
+            | Some {
+                       Kind = SemanticKind.TypeAnnotation(inner, _)
+                       Children = [ child ]
+                   } when inner = child -> follow seen inner
+            | Some {
+                       Kind = SemanticKind.VarRef(_, Some binding)
+                   } -> follow seen binding
+            | Some({ Kind = SemanticKind.Application _ } as node) when purpose = Entry -> Some(node, seen)
+            | _ -> None
+
     follow Set.empty id
+
+/// This is the only boundary callee identity walk. Other domains consume rows.
+let target graph id = targetWith Declaration graph id
+
+type EntrySource =
+    {
+        Formation: NodeId
+        Operand: NodeId
+        Declaration: NodeId
+        Transport: Set<NodeId>
+    }
+
+/// Current immutable transport to an actual ofExtern formation. The declared
+/// binding is retained exactly; a coincidentally equal symbol is not a target.
+let entryFormation graph occurrence =
+    match targetWith Entry graph occurrence with
+    | Some(({
+                Kind = SemanticKind.Application(callee, [ operand ])
+            } as formation),
+           transport) ->
+        match target graph callee, target graph operand with
+        | Some({
+                   Kind = SemanticKind.Intrinsic {
+                                                     Module = IntrinsicModule.FnPtr
+                                                     Operation = "ofExtern"
+                                                 }
+               },
+               intrinsicPath),
+          Some(declaration, declarationPath) when isExternal declaration ->
+            Some
+                {
+                    Formation = formation.Id
+                    Operand = operand
+                    Declaration = declaration.Id
+                    Transport = Set.unionMany [ transport; intrinsicPath; declarationPath ]
+                }
+        | _ -> None
+    | _ -> None
 
 let row (declaration: BoundaryDeclaration) =
     { Class = EdgeClass.Boundary; Role = EdgeRole.BoundaryDeclaration declaration; Ordinal = 0

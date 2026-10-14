@@ -186,7 +186,10 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         selected before facts.Curry.PartialApplications |> Map.iter (fun _ row -> add row.TargetBindingId; addMany row.SuppliedArgNodes)
         selected before facts.Curry.SaturatedCalls |> Map.iter (fun _ row -> add row.TargetBindingId; addMany row.AllArgNodes)
         selected before facts.FunctionPointers |> Map.iter (fun _ row ->
-            match row with FunctionPointerPlan.Address(_, lambda) -> add lambda | FunctionPointerPlan.Invoke(pointer, arguments, _, _) -> add pointer; addMany arguments)
+            match row with
+            | FunctionPointerPlan.Address(_, lambda) -> add lambda
+            | FunctionPointerPlan.Invoke(pointer, arguments, _, _) -> add pointer; addMany arguments
+            | FunctionPointerPlan.ExternAddress formation -> add formation)
         if ids <> before then advance ()
     advance ()
     ids
@@ -361,7 +364,8 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
                   EnvironmentFactoryResults = rows storage.EnvironmentFactoryResults
                   EnvironmentResidences = rows storage.EnvironmentResidences
                   ProgramInitializationOrders = rows storage.ProgramInitializationOrders }
-      Boundary = { Imports = imports; ResultHypotheses = resultHypotheses
+      Boundary = { Imports = imports; Loading = if (rows boundary.Entries).IsEmpty then None else boundary.Loading
+                   Entries = rows boundary.Entries; ResultHypotheses = resultHypotheses
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)
                    Calls = rows boundary.Calls; ByteViews = rows boundary.ByteViews; StringExtents = rows boundary.StringExtents
                    IntrinsicWriteImports = rows boundary.IntrinsicWriteImports; IntrinsicWrites = rows boundary.IntrinsicWrites

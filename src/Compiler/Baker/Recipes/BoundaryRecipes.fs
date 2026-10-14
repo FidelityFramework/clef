@@ -197,8 +197,16 @@ let private sourceWidth graph id scalar =
                 "The scalar occurrence's held width disagrees with its selected offered representation."
         return representation.Bits }
 
-let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args path (import: BoundaryImport) = checked' {
-    do! require (site.Children = callee :: args) "The boundary application's ordered operands disagree with its source structural children."
+let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args path (import: BoundaryImport) entry = checked' {
+    let ordered =
+        match entry, site.Kind with
+        | None, _ -> site.Children = callee :: args
+        | Some _, SemanticKind.Application(intrinsic, operands) ->
+            operands = callee :: args && site.Children = intrinsic :: operands &&
+            (target graph intrinsic |> Option.exists (fun (node, _) ->
+                match node.Kind with SemanticKind.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = "invoke" } -> true | _ -> false))
+        | _ -> false
+    do! require ordered "The boundary application's ordered operands disagree with its source structural children."
     let operands, erased =
         match import.Parameters, args with
         | [], [unit] when graph.Nodes.TryFind unit |> Option.exists (fun node -> Types.tryGetNTUKind node.Type = Some NTUKind.NTUunit) -> [], [unit]
@@ -225,7 +233,7 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
             let input = match abi with BoundaryScalar.Integer _ -> site.ValueRange |> Option.defaultValue ValueRange.Unbounded | _ -> scalarRange abi
             return! adaptation graph site.Id site.Id (scalarBits abi) targetBits input }
     let! types = sourceTypes graph (site.Id :: args)
-    return { Site = site.Id; Import = import.Identity; Callee = callee; Arguments = arguments; ErasedUnitArguments = erased
+    return { Site = site.Id; Import = import.Identity; Callee = callee; Entry = entry; Arguments = arguments; ErasedUnitArguments = erased
              Result = import.Result; ResultAdaptation = resultAdaptation
              Participants = Set.unionMany [import.Participants; path; Set.ofList (site.Id :: callee :: args)]
              SourceTypes = types }
@@ -458,33 +466,239 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         do! require (Declarations.runtimeModel core = Some RuntimeModel.Libc) "A reachable C import requires source TargetCore.Runtime libc; startup or project defaults do not establish library availability."
         return () }
     let initialErrors = intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
-    let imports, calls, errors = graph.Nodes |> Map.fold (fun (imports, calls, errors) _ node ->
-        match node.Kind with
-        | SemanticKind.Application(callee, args) when node.IsReachable ->
-            match target graph callee with
-            | Some (binding, path) when BoundaryDeclarations.isExternal binding ->
-                let participants = Set.union path (Set.ofList (node.Id :: args))
-                let result = checked' {
-                    let! library = metadata "FidelityExtern.Library" binding |> needed "FidelityExtern.Library is missing."
-                    let! symbol = metadata "FidelityExtern.Symbol" binding |> needed "FidelityExtern.Symbol is missing."
-                    do! require (not (System.String.IsNullOrWhiteSpace symbol)) "FidelityExtern.Symbol must name an external declaration."
-                    do! runtimeContract
-                    do! require (library = "c") "This C library requires a source-settled link/load contract beyond the admitted libc boundary."
-                    let! import = readImport graph descriptors binding library symbol
-                    // Every import/call cites the complete domain premise,
-                    // including selected-runtime and negative membership facts.
-                    let import = { import with Participants = Set.add anchor.Id import.Participants }
-                    let! call = readCall graph node callee args path import
-                    return import, call }
-                match result with
-                | Ok (import, call) -> Map.add import.Identity import imports, Map.add node.Id call calls, errors
-                | Error reason -> imports, calls, (node.Id, participants, reason) :: errors
-            | Some ({ Kind = SemanticKind.Intrinsic info }, path) when info.Module = IntrinsicModule.Sys ->
-                if info.Operation = "write" then imports, calls, errors else
-                imports, calls, (node.Id, Set.union path (Set.ofList (node.Id :: args)),
-                    $"Intrinsic/system boundary Sys.{info.Operation} requires CCS/Baker intrinsic boundary settlement (Layer 1); its source-owned operand and ABI contract is unsettled, and runtime or startup defaults cannot supply it.") :: errors
-            | _ -> imports, calls, errors
-        | _ -> imports, calls, errors) (Map.empty, Map.empty, initialErrors)
+    let imported binding =
+        checked' {
+            let! library =
+                metadata "FidelityExtern.Library" binding
+                |> needed "FidelityExtern.Library is missing."
+
+            let! symbol =
+                metadata "FidelityExtern.Symbol" binding
+                |> needed "FidelityExtern.Symbol is missing."
+
+            do! require (not (System.String.IsNullOrWhiteSpace symbol)) "FidelityExtern.Symbol must name an external declaration."
+            do! runtimeContract
+            do! require (library = "c") "This C library requires a source-settled link/load contract beyond the admitted libc boundary."
+            let! import = readImport graph descriptors binding library symbol
+
+            return
+                { import with
+                    Participants = Set.add anchor.Id import.Participants
+                }
+        }
+
+    let loading =
+        checked' {
+            let! loading =
+                Declarations.readLoading graph
+                |> Result.mapError (fun findings -> findings |> List.map _.Message |> String.concat "; ")
+
+            let! selected =
+                loading
+                |> needed
+                    "FnPtr.ofExtern requires an explicitly selected source process-link loading contract; TargetCore.Runtime supplies no code lifetime."
+
+            let! platform =
+                runtime.Platform
+                |> needed "The loading contract has no selected source platform."
+
+            let! core =
+                platform.Core
+                |> needed "The loading contract has no selected source target core."
+
+            let! facts =
+                [ selected.Binding; platform.Node; core.Node ]
+                |> List.fold (fun state root ->
+                    state |> Result.bind (fun facts ->
+                        declarationFacts graph root
+                        |> Result.map (fun next -> Map.fold (fun facts id fact -> Map.add id fact facts) facts next))) (Ok Map.empty)
+
+            return
+                {
+                    Identity = selected.Node
+                    Binding = selected.Binding
+                    Selector = selected.Selector
+                    Contract = selected.Contract
+                    Platform = platform.Node
+                    Core = core.Node
+                    DeclarationFacts = facts
+                    Participants =
+                        Set.unionMany
+                            [
+                                selected.Participants
+                                facts |> Map.keys |> Set.ofSeq
+                                Set.ofList [ anchor.Id; platform.Node; core.Node ]
+                            ]
+                }
+                : BoundaryLoading
+        }
+
+    let purposes = Reachability.declarationPurposes graph
+
+    let entryAt (source: BoundaryDeclarations.EntrySource) =
+        checked' {
+            let! formation =
+                graph.Nodes.TryFind source.Formation
+                |> needed "The imported entry formation is absent."
+
+            let! declaration =
+                graph.Nodes.TryFind source.Declaration
+                |> needed "The imported entry's original external declaration is absent."
+
+            let! import = imported declaration
+            let! loading = loading
+
+            let entryPurposes =
+                purposes.TryFind source.Formation |> Option.defaultValue Set.empty
+
+            do!
+                require
+                    (entryPurposes
+                     |> Set.exists (fun (_, purpose) -> purpose = DeclRoot.LibraryExport)
+                     |> not)
+                    "An imported native entry reachable from an exported library interface requires a host loading contract (L3); the process-link contract grants no exported-library authority."
+
+            do!
+                require
+                    (entryPurposes |> Set.exists (fun (_, purpose) -> purpose = DeclRoot.EntryPoint))
+                    "The process-link contract admits imported entries only within a hosted executable entry-point image."
+
+            let payload =
+                match Clef.Compiler.NativeTypedTree.UnionFind.applySubst formation.Type with
+                | NativeType.TApp(constructor, [ signature ]) when constructor.NTUKind = Some NTUKind.NTUfnptr ->
+                    Some(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType signature)
+                | _ -> None
+
+            do!
+                require
+                    (payload = Some(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType declaration.Type))
+                    "The imported entry's complete source signature differs from its original extern declaration."
+
+            let participants =
+                Set.unionMany
+                    [
+                        source.Transport
+                        import.Participants
+                        loading.Participants
+                        Set.ofList [ source.Formation; source.Operand; source.Declaration ]
+                    ]
+
+            return
+                import,
+                loading,
+                {
+                    Formation = source.Formation
+                    Operand = source.Operand
+                    Import = import.Identity
+                    Declaration = source.Declaration
+                    Loading = loading.Identity
+                    SourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType formation.Type
+                    Transport = source.Transport
+                    Participants = participants
+                }
+        }
+
+    let retainEntry (entry: BoundaryEntry) (entries: Map<NodeId, BoundaryEntry>) =
+        let entry =
+            match entries |> Map.tryFind entry.Formation with
+            | None -> entry
+            | Some previous ->
+                { entry with
+                    Transport = Set.union previous.Transport entry.Transport
+                    Participants = Set.union previous.Participants entry.Participants
+                }
+
+        Map.add entry.Formation entry entries
+
+    let imports, calls, entries, errors =
+        graph.Nodes
+        |> Map.fold
+            (fun (imports, calls, entries, errors) _ node ->
+                match node.Kind with
+                | SemanticKind.Application(callee, args) when node.IsReachable ->
+                    match target graph callee with
+                    | Some(binding, path) when BoundaryDeclarations.isExternal binding ->
+                        let participants = Set.union path (Set.ofList (node.Id :: args))
+
+                        let result =
+                            checked' {
+                                let! import = imported binding
+                                let! call = readCall graph node callee args path import None
+                                return import, call
+                            }
+
+                        match result with
+                        | Ok(import, call) -> Map.add import.Identity import imports, Map.add node.Id call calls, entries, errors
+                        | Error reason -> imports, calls, entries, (node.Id, participants, reason) :: errors
+                    | Some({
+                               Kind = SemanticKind.Intrinsic {
+                                                                 Module = IntrinsicModule.FnPtr
+                                                                 Operation = "ofExtern"
+                                                             }
+                           },
+                           _) ->
+                        match
+                            BoundaryDeclarations.entryFormation graph node.Id
+                            |> needed
+                                "FnPtr.ofExtern requires the actual declared extern binding, not a symbol, ordinary function or captured closure."
+                            |> Result.bind entryAt
+                        with
+                        | Ok(import, _, entry) -> Map.add import.Identity import imports, calls, retainEntry entry entries, errors
+                        | Error reason -> imports, calls, entries, (node.Id, Set.ofList (node.Id :: args), reason) :: errors
+                    | Some({
+                               Kind = SemanticKind.Intrinsic {
+                                                                 Module = IntrinsicModule.FnPtr
+                                                                 Operation = "invoke"
+                                                             }
+                           },
+                           path) ->
+                        match args with
+                        | pointer :: actuals ->
+                            match BoundaryDeclarations.entryFormation graph pointer with
+                            | None -> imports, calls, entries, errors
+                            | Some source ->
+                                let result =
+                                    checked' {
+                                        let! import, loading, entry = entryAt source
+
+                                        let! call =
+                                            readCall
+                                                graph
+                                                node
+                                                pointer
+                                                actuals
+                                                (Set.unionMany [ path; source.Transport; loading.Participants ])
+                                                import
+                                                (Some source.Formation)
+
+                                        return import, entry, call
+                                    }
+
+                                match result with
+                                | Ok(import, entry, call) ->
+                                    Map.add import.Identity import imports, Map.add node.Id call calls, retainEntry entry entries, errors
+                                | Error reason ->
+                                    imports,
+                                    calls,
+                                    entries,
+                                    (node.Id, Set.union source.Transport (Set.ofList (node.Id :: args)), reason)
+                                    :: errors
+                        | _ -> imports, calls, entries, errors
+                    | Some({ Kind = SemanticKind.Intrinsic info }, path) when info.Module = IntrinsicModule.Sys ->
+                        if info.Operation = "write" then
+                            imports, calls, entries, errors
+                        else
+                            imports,
+                            calls,
+                            entries,
+                            (node.Id,
+                             Set.union path (Set.ofList (node.Id :: args)),
+                             $"Intrinsic/system boundary Sys.{info.Operation} requires CCS/Baker intrinsic boundary settlement (Layer 1); its source-owned operand and ABI contract is unsettled, and runtime or startup defaults cannot supply it.")
+                            :: errors
+                    | _ -> imports, calls, entries, errors
+                | _ -> imports, calls, entries, errors)
+            (Map.empty, Map.empty, Map.empty, initialErrors)
+
     let errors =
         imports.Values |> Seq.groupBy _.Symbol |> Seq.fold (fun errors (_, declarations) ->
             match Seq.toList declarations with
@@ -549,6 +763,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
+          Loading = if entries.IsEmpty then None else loading |> Result.toOption
+          Entries = Map.keys entries |> Seq.toList
           ByteViews = intrinsic.Views; StringExtents = intrinsic.Extents; IntrinsicDeclarations = intrinsic.Declarations
           StringOriginRelations = originRelations
           StringOriginRoots = if observedOrigins then Some graph.DeclarationRoots else None
@@ -571,6 +787,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 sources anchor.Id
          { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
+        @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)

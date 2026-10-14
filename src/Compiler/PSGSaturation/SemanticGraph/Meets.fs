@@ -34,7 +34,13 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
-type private Ctx = { Graph: SemanticGraph; Word: int option; Curry: CurryInfo; BoundaryResultBits: Map<NodeId, int> }
+type private Ctx = {
+    Graph: SemanticGraph
+    Word: int option
+    Curry: CurryInfo
+    BoundaryResultBits: Map<NodeId, int>
+    ForeignCallAbis: Map<NodeId, PlatformResolution.DeclaredFunction>
+}
 
 let private isWordInteger (kind: NTUKind) : bool =
     match kind with
@@ -158,6 +164,22 @@ let private applicationMeets (ctx: Ctx) (node: SemanticNode) (funcId: NodeId) (a
     match functionNodeOf graph funcId with
     | Some { Kind = SemanticKind.Intrinsic info } ->
         match info.Module, info.Operation, args with
+        | IntrinsicModule.FnPtr, "invoke", _ :: values when ctx.ForeignCallAbis.ContainsKey node.Id ->
+            let abi = ctx.ForeignCallAbis[node.Id]
+            let arguments =
+                if values.Length <> abi.Parameters.Length then [] else
+                List.zip values abi.Parameters |> List.choose (fun (value, (_, parameter)) ->
+                    parameter |> Option.bind (fun parameter -> meetInto graph node.Id value (Some parameter.Bits)))
+            let result =
+                match abi.Return, nodeWidth graph node.Id with
+                | Some result, Some target -> Option.toList (meet graph node.Id node.Id result.Bits target)
+                | _ -> []
+            arguments @ result
+        | IntrinsicModule.FnPtr, "invoke", pointer :: _ when
+            Clef.Compiler.Baker.Recipes.BoundaryDeclarations.entryFormation graph pointer |> Option.isSome ->
+            // Missing ABI correspondence supplies no ordinary callback/word
+            // fallback. Boundary admission retains the located refusal.
+            []
         | IntrinsicModule.FnPtr, "invoke", pointer :: values ->
             let rec parameters ty =
                 match applySubst ty with
@@ -329,7 +351,16 @@ let derive (context: PlatformContext option) (graph: SemanticGraph) (curry: Curr
             |> List.groupBy fst
             |> List.choose (fun (body, declarations) -> match declarations with [_, bits] -> Some(body, bits) | _ -> None)
             |> Map.ofList
-        let ctx = { Graph = graph; Word = wordOf context; Curry = curry; BoundaryResultBits = boundaryResultBits }
+        let foreignCallAbis =
+            match RangeAnalysis.foreignResultApplications graph graph.RangeContextFacts with
+            | Result.Error _ -> Map.empty
+            | Result.Ok applications ->
+                applications |> List.choose (fun application -> application.Abi |> Option.map (fun abi -> application.Application.Call, abi))
+                |> List.groupBy fst
+                |> List.choose (fun (call, candidates) ->
+                    match candidates |> List.map snd |> List.distinct with [abi] -> Some(call, abi) | _ -> None)
+                |> Map.ofList
+        let ctx = { Graph = graph; Word = wordOf context; Curry = curry; BoundaryResultBits = boundaryResultBits; ForeignCallAbis = foreignCallAbis }
         graph.Nodes
         |> Map.toList
         |> List.choose (fun (_, node) ->

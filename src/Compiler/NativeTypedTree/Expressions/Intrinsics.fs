@@ -395,7 +395,7 @@ let private resolveFnPtrOp (op: string) (range: SourceRange) : IntrinsicResoluti
         let ty = NativeType.TFun(fnPtrType, freshF)
         // The callback signature supplies no guarantee about external effects.
         Resolved (mkIntrinsic IntrinsicModule.FnPtr op IntrinsicCategory.Platform fullName, ty)
-    | "ofFunction" ->
+    | "ofFunction" | "ofExtern" ->
         // 'F -> FnPtr<'F>
         let fnPtrType = NativeType.TApp(Types.fnPtrTyCon, [freshF])
         let ty = NativeType.TFun(freshF, fnPtrType)
@@ -404,7 +404,7 @@ let private resolveFnPtrOp (op: string) (range: SourceRange) : IntrinsicResoluti
         // REMOVED: Violates null-safety principle
         UnknownOperation $"FnPtr.{op} has been removed. Use Option<FnPtr<'F>> for nullable function pointers."
     | unknown ->
-        UnknownOperation $"Unknown FnPtr intrinsic: FnPtr.{unknown}. Available: fromSymbol, invoke, ofFunction"
+        UnknownOperation $"Unknown FnPtr intrinsic: FnPtr.{unknown}. Available: ofExtern, invoke, ofFunction; fromSymbol is retired."
 
 /// Resolve Lazy.* operations (PRD-14: Deferred computation with memoization)
 let private resolveLazyOp (op: string) (range: SourceRange) : IntrinsicResolution =

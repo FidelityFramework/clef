@@ -61,6 +61,9 @@ type PlatformSection = {
     /// Fully qualified immutable binding exported by the selected platform's
     /// source dependency closure. Selects one description independently of paths.
     Description: string option
+    /// Explicit source-declared process-link loading assumption. No loading
+    /// authority is inferred from the description or runtime availability.
+    Loading: string option
     /// Keys the section carries that the compiler no longer reads (`word_size`,
     /// retired by CS-7b: width dimensions come from the platform description,
     /// plan L-13). Reported as CCS8205 information, never an error.
@@ -204,18 +207,18 @@ module FidprojLoader =
 
     /// Parses a [platform] section from a TOML document.
     let private parsePlatformSection (doc: TomlDocument) : Result<PlatformSection, string> =
-        let description =
-            match Toml.getValue "platform.description" doc with
+        let bindingName key =
+            match Toml.getValue ("platform." + key) doc with
             | None -> Ok None
             | Some (TomlValue.String name) when
                 not (System.String.IsNullOrWhiteSpace name)
                 && name = name.Trim()
                 && name.Contains '.'
                 && (name.Split('.') |> Array.forall (System.String.IsNullOrWhiteSpace >> not)) -> Ok (Some name)
-            | Some _ -> Error "Expected [platform] description to be a fully qualified binding name"
-        match description with
-        | Error message -> Error message
-        | Ok description ->
+            | Some _ -> Error $"Expected [platform] {key} to be a fully qualified binding name"
+        match bindingName "description", bindingName "loading" with
+        | Error message, _ | _, Error message -> Error message
+        | Ok description, Ok loading ->
         match Toml.getString "platform.runtime_model" doc with
         | None -> Error "Missing required field [platform] runtime_model"
         | Some rmStr ->
@@ -227,6 +230,7 @@ module FidprojLoader =
                     OS = Toml.getString "platform.os" doc
                     Arch = Toml.getString "platform.arch" doc
                     Description = description
+                    Loading = loading
                     UnusedKeys = [ "word_size" ] |> List.filter (fun key -> (Toml.getValue ("platform." + key) doc).IsSome)
                     Substrate = Toml.getString "platform.substrate" doc
                     Vendor = Toml.getString "platform.vendor" doc

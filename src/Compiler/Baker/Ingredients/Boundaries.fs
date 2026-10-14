@@ -12,7 +12,7 @@ let markOwned (node: SemanticNode) = { node with Metadata = node.Metadata.Add("B
 
 let platformPremise (platform: PlatformContext option) =
     platform |> Option.map (fun platform ->
-        { Id = platform.PlatformId; Description = platform.PlatformDescription; LibraryPath = platform.PlatformLibraryPath
+        { Id = platform.PlatformId; Description = platform.PlatformDescription; Loading = platform.PlatformLoading; LibraryPath = platform.PlatformLibraryPath
           SourcePaths = platform.PlatformSourcePaths; Architecture = platform.PlatformArchitecture; OS = platform.PlatformOS
           RuntimeClaim = platform.RuntimeModel; Substrate = platform.SubstrateKind; Dimensions = platform.Dimensions
           Representations = platform.Representations; EndpointReturns = platform.EndpointReturns })
