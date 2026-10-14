@@ -179,6 +179,10 @@ type ForeignReferenceTests() =
 
         let defects = Fidelity.PSG.Integrity.check revision
         Assert.True(defects.IsEmpty, Fidelity.PSG.Integrity.describe defects)
+        let positions = Fidelity.PSG.Integrity.named revision |> List.map fst
+        Assert.Contains("Obligations.Body.ForeignResultCoverage", positions)
+        Assert.Contains("CurrentClaims.Body.ForeignResultCoverage", positions)
+        Assert.DoesNotContain("CurrentClaims.Body", positions)
 
     [<Theory>]
     [<InlineData("quote")>]
@@ -224,9 +228,123 @@ type ForeignReferenceTests() =
         Assert.Contains(
             defects,
             fun defect ->
-                defect.Part = "CurrentClaims.Body"
+                defect.Part = "CurrentClaims.Body.ForeignResultCoverage"
                 && defect.Node = Some unknown
                 && defect.Reason.Contains "is named and is not held"
+        )
+
+    [<Fact>]
+    member _.``Published conditional foreign result cannot supply a runtime callee body``() =
+        let original = ForeignCases.publishedLabs.Value
+        let account = original.Emission.Numeric.ForeignResultUses.Head
+        let quote = account.Application.Hypothesis.Value.Quote
+        let call = original.Emission.Boundary.Calls[account.Application.Call]
+
+        let revision =
+            { original with
+                Emission =
+                    { original.Emission with
+                        Boundary =
+                            { original.Emission.Boundary with
+                                Calls = original.Emission.Boundary.Calls.Add(call.Site, { call with Callee = quote })
+                            }
+                    }
+            }
+
+        Assert.Contains(
+            Fidelity.PSG.Integrity.check revision,
+            fun defect ->
+                defect.Part = "Emission.Boundary.Calls.Callee"
+                && defect.Node = Some quote
+                && defect.Reason.Contains "is named and is not held"
+        )
+
+    [<Fact>]
+    member _.``Published conditional foreign result destination requires its own carrier``() =
+        let original = ForeignCases.publishedLabs.Value
+        let account = original.Emission.Numeric.ForeignResultUses.Head
+        let quote = account.Application.Hypothesis.Value.Quote
+
+        let change (info: Fidelity.PSG.ObligationInfo) =
+            match info.Body with
+            | Fidelity.PSG.ObligationBody.ForeignResultCoverage model when
+                model.Role = Fidelity.PSG.ForeignResultProofRole.AbiNarrowing
+                ->
+                { info with
+                    Body =
+                        Fidelity.PSG.ObligationBody.ForeignResultCoverage
+                            { model with
+                                DestinationDeclaration = Some quote
+                            }
+                }
+            | _ -> info
+
+        let account =
+            { account with
+                Participants =
+                    let changeRows rows =
+                        rows
+                        |> List.map (fun (row: Fidelity.PSG.Participant) ->
+                            if row.Role = Fidelity.PSG.ParticipantRole.ForeignResultDestination then
+                                { row with Node = quote }
+                            else
+                                row)
+
+                    match account.Participants with
+                    | Fidelity.PSG.ParticipantEvidence.Established rows ->
+                        Fidelity.PSG.ParticipantEvidence.Established(changeRows rows)
+                    | Fidelity.PSG.ParticipantEvidence.Pending early ->
+                        Fidelity.PSG.ParticipantEvidence.Pending
+                            { early with
+                                Derived = changeRows early.Derived
+                            }
+            }
+
+        let uses = [ account ]
+
+        let participants =
+            match account.Participants with
+            | Fidelity.PSG.ParticipantEvidence.Established rows -> rows
+            | Fidelity.PSG.ParticipantEvidence.Pending early -> early.Derived
+
+        let sources =
+            account.Claims
+            |> List.fold
+                (fun map (_, citizen) ->
+                    Map.add citizen [ List.map (fun (row: Fidelity.PSG.Participant) -> row.Node) participants ] map)
+                original.ObligationSources
+
+        let revision =
+            { original with
+                Obligations = List.map change original.Obligations
+                CurrentClaims = Map.map (fun _ info -> change info) original.CurrentClaims
+                ObligationSources = sources
+                Emission =
+                    { original.Emission with
+                        Numeric =
+                            { original.Emission.Numeric with
+                                ForeignResultUses = uses
+                            }
+                    }
+                Edges =
+                    original.Edges
+                    |> List.map (fun edge ->
+                        match edge.Role with
+                        | Fidelity.PSG.EdgeRole.NumericDomain domain ->
+                            { edge with
+                                Role = Fidelity.PSG.EdgeRole.NumericDomain { domain with ForeignResultUses = uses }
+                            }
+                        | _ -> edge)
+            }
+
+        let defects = Fidelity.PSG.Integrity.check revision
+
+        Assert.Contains(
+            defects,
+            fun defect ->
+                defect.Part = "Emission.Numeric.ForeignResultUses.Destination"
+                && defect.Node = Some quote
+                && defect.Reason.Contains "own call's selected numeric carrier"
         )
 
     [<Fact>]
