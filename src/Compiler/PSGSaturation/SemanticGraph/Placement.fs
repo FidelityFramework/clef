@@ -887,7 +887,20 @@ let placeProgramSlot (graph: SemanticGraph) id =
                 tc.Name = "option" || tc.Name = "voption" || tc.Name = "Result" || tc.Name = "result" ||
                 (match TypeLayout.baseLayout tc.Layout with TypeLayout.Record | TypeLayout.Union -> true | _ -> false)
             | _ -> false
-        if aggregate then
+        if Types.tryGetNTUKind ty = Some NTUKind.NTUfnptr then
+            // Only source correspondence is needed for inventory. ABI/loading
+            // admission remains the boundary owner's later, single settlement.
+            match node.Kind, Clef.Compiler.Baker.Recipes.BoundaryDeclarations.entryFormation graph id with
+            | SemanticKind.Binding(_, false, false, None), Some entry ->
+                match PlatformResolution.readLoading graph,
+                      PlatformContext.pointerSize context,
+                      PlatformContext.resolveAlign context NTUKind.NTUptr with
+                | Ok(Some _), Ok bytes, Ok alignment when bytes > 0 && alignment > 0 &&
+                                                         (alignment &&& (alignment - 1)) = 0 ->
+                    Ok(ProgramStorageShape.NativeEntry entry.Formation, bytes, alignment)
+                | _ -> Error(ContinuationPlacementError.InvalidPlatform "An imported entry slot requires the explicitly selected Linux AMD64 libc loading contract and Pointer extent/alignment")
+            | _ -> Error(ContinuationPlacementError.UnsupportedField(id, "A native entry program slot requires an immutable non-exported ofExtern initializer"))
+        elif aggregate then
             match PlatformContext.pointerSize context, PlatformContext.resolveAlign context NTUKind.NTUptr with
             | Ok pointer, Ok alignment when pointer > 0 && alignment > 0 && (alignment &&& (alignment - 1)) = 0 &&
                                             pointer <= System.Int32.MaxValue / ViewWords ->

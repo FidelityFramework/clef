@@ -74,8 +74,12 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
                 if not (viewCarrier node.Type) then
                     match Placement.placeProgramSlot graph binding with
                     | Ok(shape, bytes, alignment) ->
+                        let entryInputs =
+                            match shape, Clef.Compiler.Baker.Recipes.BoundaryDeclarations.entryFormation graph binding with
+                            | ProgramStorageShape.NativeEntry formation, Some entry when entry.Formation = formation -> entry.Transport
+                            | _ -> Set.empty
                         add identity shape bytes alignment authority
-                            (Set.ofList (binding :: authority.Initializer.Initializer :: authority.Evidence.Sources))
+                            (Set.union entryInputs (Set.ofList (binding :: authority.Initializer.Initializer :: authority.Evidence.Sources)))
                     | Error reason -> pending identity (sprintf "%A" reason)
             | Some node, _ when node.IsReachable && not (viewCarrier node.Type) ->
                 pending identity "The program binding lacks exact startup and mutable-space authority"

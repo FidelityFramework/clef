@@ -2852,7 +2852,7 @@ type MmioAccessEvidence = {
 }
 
 [<RequireQualifiedAccess>]
-type ProgramStorageShape = Bytes | Scalar of SettledSlot | ValueView of NativeType
+type ProgramStorageShape = Bytes | Scalar of SettledSlot | ValueView of NativeType | NativeEntry of formation: NodeId
 
 /// One source-owned writable object. No linker section, address or pooled
 /// offset is implied: those belong to the selected backend's commitment.
