@@ -478,7 +478,14 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
 
             do! require (not (System.String.IsNullOrWhiteSpace symbol)) "FidelityExtern.Symbol must name an external declaration."
             do! runtimeContract
-            do! require (library = "c") "This C library requires a source-settled link/load contract beyond the admitted libc boundary."
+            do!
+                if library = "c" then Ok() else
+                    Declarations.readLoading graph
+                    |> Result.mapError (fun findings -> findings |> List.map _.Message |> String.concat "; ")
+                    |> Result.bind (fun selected ->
+                        require
+                            (selected |> Option.exists (fun selected -> selected.Contract.Library = library))
+                            "This C library requires its exact explicitly selected source process-link loading contract.")
             let! import = readImport graph descriptors binding library symbol
 
             return
@@ -547,6 +554,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
 
             let! import = imported declaration
             let! loading = loading
+            do! require (import.Library = loading.Contract.Library)
+                    "The imported entry library differs from its explicitly selected process-link loading contract."
 
             let entryPurposes =
                 purposes.TryFind source.Formation |> Option.defaultValue Set.empty
@@ -763,7 +772,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
-          Loading = if entries.IsEmpty then None else loading |> Result.toOption
+          Loading = if entries.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else loading |> Result.toOption
           Entries = Map.keys entries |> Seq.toList
           ByteViews = intrinsic.Views; StringExtents = intrinsic.Extents; IntrinsicDeclarations = intrinsic.Declarations
           StringOriginRelations = originRelations

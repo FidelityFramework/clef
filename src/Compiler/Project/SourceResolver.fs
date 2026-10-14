@@ -84,6 +84,9 @@ module SourceResolver =
                 match load normalizedPath with
                 | Error msg ->
                     Error (DependencyFidprojLoadError (depName, normalizedPath, msg))
+                | Ok depOptions when not depOptions.LinkedArchives.IsEmpty ->
+                    Error (DependencyFidprojLoadError (depName, normalizedPath,
+                        "Dependency archive declarations are unsupported; declare explicit archives in the root project"))
                 | Ok depOptions ->
                     // Active until its children and own sources have been resolved.
                     let newActive = Set.add normalizedPath activePaths

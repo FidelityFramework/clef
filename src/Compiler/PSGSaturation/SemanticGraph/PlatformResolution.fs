@@ -931,8 +931,7 @@ let readLoading (graph: SemanticGraph) : Result<DeclaredProcessLink option, Decl
                         let platform = read graph
 
                         let expected =
-                            contract.Library = "c"
-                            && contract.Runtime = "libc"
+                            contract.Runtime = "libc"
                             && contract.Os = "linux"
                             && contract.Arch = "x86_64"
 
@@ -958,7 +957,7 @@ let readLoading (graph: SemanticGraph) : Result<DeclaredProcessLink option, Decl
                                     findingAt
                                         node
                                         DeclarationDefect.Invalid
-                                        "the loading contract must declare Linux AMD64 libc at process startup until process termination, with unloading and exported-library authority forbidden"
+                                        "the loading contract must declare its library under Linux AMD64 libc at process startup until process termination, with unloading and exported-library authority forbidden"
                                 ]
                         elif not target then
                             Error

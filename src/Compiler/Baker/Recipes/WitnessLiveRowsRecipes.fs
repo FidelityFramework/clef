@@ -364,7 +364,7 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
                   EnvironmentFactoryResults = rows storage.EnvironmentFactoryResults
                   EnvironmentResidences = rows storage.EnvironmentResidences
                   ProgramInitializationOrders = rows storage.ProgramInitializationOrders }
-      Boundary = { Imports = imports; Loading = if (rows boundary.Entries).IsEmpty then None else boundary.Loading
+      Boundary = { Imports = imports; Loading = if (rows boundary.Entries).IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else boundary.Loading
                    Entries = rows boundary.Entries; ResultHypotheses = resultHypotheses
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)
                    Calls = rows boundary.Calls; ByteViews = rows boundary.ByteViews; StringExtents = rows boundary.StringExtents

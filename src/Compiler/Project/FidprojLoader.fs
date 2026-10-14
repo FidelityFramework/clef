@@ -131,6 +131,8 @@ type FidprojOptions = {
     /// Explicit native library identities from [link] libraries.
     /// Project checking includes the declarations of resolved dependencies.
     LinkedLibraries: string list
+    /// Explicit archive paths keyed by an already-declared native library.
+    LinkedArchives: Map<string,string>
     /// Resolved absolute path to Alloy library (if specified).
     AlloyPath: string option
     /// Resolved absolute path to platform binding library (if specified).
@@ -297,6 +299,31 @@ module FidprojLoader =
         | _ ->
             Error $"Dependency '%s{name}' must be a version string or an inline table"
 
+    /// Explicit archives are project input paths, not a native-library search.
+    let private parseLinkedArchives
+        (projectDir: string)
+        (libraries: string list)
+        (doc: TomlDocument)
+        : Result<Map<string, string>, string> =
+        match Toml.getValue "link.archives" doc with
+        | None -> Ok Map.empty
+        | Some(TomlValue.InlineTable archives) ->
+            archives
+            |> Map.toList
+            |> List.fold
+                (fun state (name, value) ->
+                    state
+                    |> Result.bind (fun entries ->
+                        if not (List.contains name libraries) then
+                            Error $"Archive '{name}' must name a declared [link] library"
+                        else
+                            match value with
+                            | TomlValue.String path when not (System.String.IsNullOrWhiteSpace path) ->
+                                Ok(Map.add name (normalizePath (Path.Combine(projectDir, path))) entries)
+                            | _ -> Error $"Archive '{name}' must be a non-empty path string"))
+                (Ok Map.empty)
+        | Some _ -> Error "Expected [link] archives to be a table of library names and path strings"
+
     /// Loads a .fidproj file.
     let internal loadWith (readText: string -> string) (fidprojPath: string): Result<FidprojOptions, string> =
         let absPath = normalizePath fidprojPath
@@ -364,6 +391,10 @@ module FidprojLoader =
                 | Error msg -> Error msg
                 | Ok linkedLibraries ->
 
+                match parseLinkedArchives projectDir linkedLibraries doc with
+                | Error msg -> Error msg
+                | Ok linkedArchives ->
+
                 // Dependencies section
                 let dependenciesResult =
                     match Toml.getTable "dependencies" doc with
@@ -427,6 +458,7 @@ module FidprojLoader =
                     DeploymentMode = deploymentMode
                     Dependencies = dependencies
                     LinkedLibraries = linkedLibraries
+                    LinkedArchives = linkedArchives
                     AlloyPath = alloyPath
                     PlatformPath = platformPath
                     PlatformMetadata = platformMetadata
