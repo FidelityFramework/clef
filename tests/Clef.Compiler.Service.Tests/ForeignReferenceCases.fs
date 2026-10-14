@@ -98,8 +98,137 @@ let invoke (owner: CHandle<Owner>) = borrow owner 2 3 (fun _view -> 7)
 let main _ = 0
 """
 
+    let publishedLabs =
+        lazy
+            (let vocabulary =
+                (vocabulary
+                 + resultVocabulary
+                 + resultContract)
+                    .Replace("native_read", "labs")
+                    .Replace("read", "labs")
+                    .Replace("Integer(Unsigned,32)", "Integer(Signed,64)")
+                    .Replace("Lower=Constant (-1)", "Lower=Constant 0")
+
+             let parse source path =
+                 match parseStringWithDefaults source path with
+                 | ParseSuccess input -> input
+                 | ParseError errors -> failwithf "%A" errors
+
+             let result =
+                 checkParsedInputsWithPlatform
+                     [
+                         parse
+                             (SourcePlatformFixture.authority.Replace(
+                                 "Runtime = \"freestanding\"",
+                                 "Runtime = \"libc\""
+                             ))
+                             "write-authority.clef"
+                         parse
+                             (vocabulary + "\n[<EntryPoint>]\nlet main _ = if labs 5 = 5 then 0 else 1\n")
+                             "foreign.clef"
+                     ]
+                     (Some SourcePlatformFixture.platform)
+
+             DimensionalCases.noErrors result
+
+             let prepared =
+                 Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare result.Graph
+                 |> function
+                     | Ok graph -> graph
+                     | Error errors -> failwithf "%A" errors
+
+             let revision =
+                 Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish prepared
+                 |> function
+                     | Ok revision -> revision
+                     | Error errors -> failwithf "%A" errors
+
+             revision)
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ForeignReferences")>]
 type ForeignReferenceTests() =
+    [<Fact>]
+    member _.``Published conditional foreign result keeps metadata identities without executable bodies``() =
+        let revision = ForeignCases.publishedLabs.Value
+
+        let claims =
+            revision.Obligations
+            |> List.choose (fun info ->
+                match info.Body with
+                | Fidelity.PSG.ObligationBody.ForeignResultCoverage model -> Some model
+                | _ -> None)
+
+        Assert.Equal(2, claims.Length)
+
+        for model in claims do
+            let identities =
+                (model.Application.Hypothesis |> Option.map _.Quote |> Option.toList)
+                @ Option.toList model.Abi
+                @ Option.toList model.DestinationDeclaration
+
+            for identity in identities do
+                let imports = revision.Emission.Boundary.Imports.Values |> Seq.toList
+                Assert.False(revision.Nodes.ContainsKey identity)
+
+                if model.Abi = Some identity then
+                    Assert.Contains(imports, fun row -> row.DeclarationFacts.ContainsKey identity)
+                elif model.DestinationDeclaration = Some identity then
+                    Assert.Equal(Some identity, revision.Emission.Numeric.Values[model.Application.Call].Declaration)
+                else
+                    Assert.Contains(revision.Emission.Boundary.ResultHypotheses, fun row -> row.Quote = identity)
+
+        let defects = Fidelity.PSG.Integrity.check revision
+        Assert.True(defects.IsEmpty, Fidelity.PSG.Integrity.describe defects)
+
+    [<Theory>]
+    [<InlineData("quote")>]
+    [<InlineData("abi")>]
+    [<InlineData("destination")>]
+    member _.``Published conditional foreign result refuses unknown metadata role identity`` role =
+        let original = ForeignCases.publishedLabs.Value
+        let unknown = Fidelity.PSG.NodeId 1000001
+
+        let change (model: Fidelity.PSG.ForeignResultCoverageModel) =
+            match role with
+            | "quote" ->
+                { model with
+                    Application =
+                        { model.Application with
+                            Hypothesis =
+                                model.Application.Hypothesis
+                                |> Option.map (fun hypothesis -> { hypothesis with Quote = unknown })
+                        }
+                }
+            | "abi" -> { model with Abi = Some unknown }
+            | _ ->
+                { model with
+                    DestinationDeclaration = Some unknown
+                }
+
+        let claim (info: Fidelity.PSG.ObligationInfo) =
+            match info.Body with
+            | Fidelity.PSG.ObligationBody.ForeignResultCoverage model ->
+                { info with
+                    Body = Fidelity.PSG.ObligationBody.ForeignResultCoverage(change model)
+                }
+            | _ -> info
+
+        let revision =
+            { original with
+                Obligations = List.map claim original.Obligations
+                CurrentClaims = Map.map (fun _ info -> claim info) original.CurrentClaims
+            }
+
+        let defects = Fidelity.PSG.Integrity.check revision
+
+        Assert.Contains(
+            defects,
+            fun defect ->
+                defect.Part = "CurrentClaims.Body"
+                && defect.Node = Some unknown
+                && defect.Reason.Contains "is named and is not held"
+        )
+
     [<Fact>]
     member _.``Mapped stride retains native output bounds and length retains checked extent bounds``() =
         let context: PlatformContext = {
