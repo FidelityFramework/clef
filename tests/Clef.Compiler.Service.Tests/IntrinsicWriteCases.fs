@@ -347,6 +347,34 @@ type IntrinsicWriteCases() =
             let alteredFlow = { flow with Calls = flow.Calls.Add(result.Id, refused) }
             Assert.Equal(Ok None, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph alteredFlow result.Id result.Id)
         let target = Assert.Single resolved.Targets
+        // A revisited call-result node cannot recursively manufacture an origin.
+        let cyclic = { resolved with Targets = [{ target with Body = result.Id }] }
+        Assert.Equal(Ok None, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph { flow with Calls = flow.Calls.Add(result.Id, cyclic) } result.Id result.Id)
+        // Every possible return must establish a string origin, even when the
+        // first target has complete literal evidence.
+        let nonString = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.Literal(NativeLiteral.Int _) -> true | _ -> false)
+        let mixed = { resolved with Targets = [target; { target with Body = nonString.Id }] }
+        Assert.Equal(Ok None, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph { flow with Calls = flow.Calls.Add(result.Id, mixed) } result.Id result.Id)
+        if shape <> "conditional" then
+            let retained = graph.Edges |> List.filter (fun edge ->
+                edge.Role <> EdgeRole.OrdinaryUnusedFormal && edge.Role <> EdgeRole.OrdinaryUnusedActual)
+            let brokenDemand = { graph with Edges = retained }
+            Assert.NotEqual(graph.Edges.Length, brokenDemand.Edges.Length)
+            let refusal = Assert.Throws<System.InvalidOperationException>(fun () ->
+                Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.read brokenDemand |> ignore)
+            Assert.StartsWith("PSG settlement (OrdinaryDemand) did not settle", refusal.Message)
+            if shape = "literal" then
+                match Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin brokenDemand flow result.Id result.Id with
+                | Ok(Some(_, origins, _)) -> Assert.Equal<Map<NodeId,bigint>>(expected, origins)
+                | other -> failwithf "Independent literal origin was not derived: %A" other
+            else
+                let formalRefusal = Assert.Throws<System.InvalidOperationException>(fun () ->
+                    Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin brokenDemand flow result.Id result.Id |> ignore)
+                Assert.StartsWith("PSG settlement (OrdinaryDemand) did not settle", formalRefusal.Message)
+            // A local observation grants no ledger/projection authority to the
+            // invalid graph. The complete incidence census still refuses it.
+            Assert.True(IntrinsicBoundary.project brokenDemand |> Result.isError)
         let binding =
             let callee = match result.Kind with SemanticKind.Application(callee, _) -> callee | _ -> failwith "Missing call"
             match graph.Nodes[callee].Kind with SemanticKind.VarRef(_, Some binding) -> binding | _ -> failwith "Missing binding"
