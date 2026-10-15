@@ -830,7 +830,11 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
                     let proofs, enrichment, errors = bodies |> List.fold (fun (proofs, enrichment, errors) (ordinal, body) ->
                         let info =
                             { Id = $"intrinsic_write_{NodeId.value node.Id}_{ordinal}"; Kind = "intrinsic-write-proof"; Logic = "QF_LIA"
-                              Statement = "the exact ordered intrinsic write has covered scalars and a count-contained immutable borrow"
+                              Statement =
+                                match body with
+                                | ObligationBody.SnapshotBorrowBound _ ->
+                                    "source-checked snapshot/copy/allocation count correspondence; SMT establishes the finite nonnegative count domain"
+                                | _ -> "the exact ordered intrinsic write has covered scalars and a count-contained immutable borrow"
                               Source = fmtRange node.Range; Refs = []; Body = body }
                         let obligation = obligationNode node enrichId info |> Ingredients.markOwned
                         let proof = { Site = node.Id; Obligation = obligation.Id; Ordinal = ordinal; Body = body; Participants = call.Participants }

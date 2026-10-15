@@ -342,7 +342,7 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
             let address=proof "address" (ObligationBody.IntegerRepresentationCoverage(0I,extent,0I,indexMaximum))
             let value={Site=node.Id;Count=construction.Count.Reference;CountCarrier=count;IndexUnsigned=unsigned
                        Element=slot;ElementBytes=bytes;Alignment=alignment;Residence=MemoryResidence.Stack(scope,space.Node)
-                       MinimumCount=minimum;MaximumCount=maximum;Requirement=requirement
+                       MinimumCount=minimum;MaximumCount=maximum;Requirement=requirement;Construction=construction
                        Participants=participants |> Set.add layout |> Set.add capacity |> Set.add index |> Set.add address}
             admitted<-(node.Id,MemoryWitnessOperation.ArrayAllocation value)::admitted
             enrichment<-Enrichment.combine enrichment own

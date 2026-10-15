@@ -1645,11 +1645,11 @@ module private RuntimeSnapshotWriteFixture =
 
         graph, domain, call
 
-    let dynamicAdmitted () =
+    let dynamicAdmittedWith constructor =
         let source = """module DynamicSnapshotWrite
 let emit flag =
     let n = if flag then 2 else 3
-    let input = Array.create n 65
+    let input = """ + constructor + """
     let text = String.fromBytes input
     let result = Sys.write 1 text.Bytes text.Length
     result
@@ -1668,6 +1668,8 @@ let main _ =
             |> Assert.Single
         graph,domain,call
 
+    let dynamicAdmitted () = dynamicAdmittedWith "Array.create n 65"
+
     let withDomain (graph:SemanticGraph) revised =
         let edges =
             graph.Edges |> List.map (fun edge ->
@@ -1675,6 +1677,172 @@ let main _ =
         {graph with Edges=edges}
 
 type RuntimeSnapshotWriteCases() =
+    [<Fact>]
+    member _.``Runtime snapshot public reader refuses coherent singleton dynamic arm``() =
+        let graph,domain,call = RuntimeSnapshotWriteFixture.admitted ""
+        let revision = RuntimeSnapshotWriteFixture.publish graph
+        let map=Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId
+        let snapshot=Assert.Single domain.StringBorrowSnapshots
+        let copy=Assert.Single domain.StringBorrowCopies
+        let allocation=Assert.Single domain.StringBorrowAllocations
+        let proof=revision.Emission.Boundary.IntrinsicWriteProofs[map call.Site] |> List.filter (fun value -> value.Ordinal=1) |> Assert.Single
+        Assert.Equal(Fidelity.PSG.ObligationBody.InputBufferBound(2L,2L),proof.Body)
+        let body=Fidelity.PSG.ObligationBody.SnapshotBorrowBound(map call.Count,map snapshot.Site,map copy.Site,map allocation.Site,2I,2I)
+        let old=revision.CurrentClaims[proof.Obligation]
+        let changed={old with Body=body}
+        let boundary=revision.Emission.Boundary
+        let proofs=boundary.IntrinsicWriteProofs |> Map.map (fun _ rows ->
+            rows |> List.map (fun row -> if row.Obligation=proof.Obligation then {row with Body=body} else row))
+        let revised=
+            {revision with
+                Obligations=revision.Obligations |> List.map (fun row -> if row=old then changed else row)
+                CurrentClaims=revision.CurrentClaims.Add(proof.Obligation,changed)
+                Emission={revision.Emission with Boundary={boundary with IntrinsicWriteProofs=proofs}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check revised,fun issue ->
+            issue.Part="Emission.Boundary.IntrinsicWriteProofs.SnapshotBorrowBound")
+
+    [<Fact>]
+    member _.``Dynamic zero snapshot publishes allocation and complete zero initialization``() =
+        let graph,domain,call = RuntimeSnapshotWriteFixture.dynamicAdmittedWith "Array.zeroCreate n"
+        let constructions = graph.Edges |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.ArrayAllocationConstruction value -> Some value | _ -> None)
+        let source = constructions |> List.filter (fun value -> value.Default.IsSome) |> Assert.Single
+        let initialization = source.Initialization |> Option.defaultWith (fun () -> failwith "Missing complete zero initialization loop.")
+        match graph.Nodes[source.Default.Value].Kind with
+        | SemanticKind.Literal(NativeLiteral.Int(0L,_))
+        | SemanticKind.Literal(NativeLiteral.UInt(0UL,_)) -> ()
+        | other -> failwithf "Expected exact source zero default, got %A" other
+        let support =
+            Clef.Compiler.Baker.Ingredients.ArrayInitialization.tryInitialization graph source.Site
+            |> Result.defaultWith failwith
+        Assert.Contains(initialization.Loop,support)
+        Assert.Contains(initialization.Write,support)
+        Assert.Equal(Some(ValueRange.bounded 2I 3I),graph.Nodes[call.Count].ValueRange)
+        let snapshot = Assert.Single domain.StringBorrowSnapshots
+        Assert.Contains(graph.Edges,fun edge -> edge.Target=snapshot.Owner && edge.Role=EdgeRole.StringAscii)
+        let revision = RuntimeSnapshotWriteFixture.publish graph
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let allocations =
+            revision.Emission.Memory.Operations.Values
+            |> Seq.choose (function
+                | Fidelity.PSG.MemoryWitnessOperation.ArrayAllocation value -> Some value
+                | _ -> None)
+            |> Seq.toList
+        Assert.Equal(2,allocations.Length)
+        let sourceSite = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId source.Site
+        let sourceAllocation = allocations |> List.filter (fun value -> value.Site=sourceSite) |> Assert.Single
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapArrayAllocationConstruction source,sourceAllocation.Construction)
+        Assert.Equal(2I,sourceAllocation.MinimumCount)
+        Assert.Equal(3I,sourceAllocation.MaximumCount)
+        let writes =
+            revision.Emission.Memory.Operations.Values
+            |> Seq.choose (function
+                | Fidelity.PSG.MemoryWitnessOperation.ArrayAccess value when value.Value.IsSome -> Some value
+                | _ -> None)
+            |> Seq.toList
+        Assert.Contains(writes,fun value ->
+            value.Value=Some(Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId source.Default.Value)
+            && value.Bounds.Requirement.Frontier=Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId initialization.Write
+            && value.Bounds.Requirement.Continuation=value.Site)
+        let borrow = domain.IntrinsicProofs |> List.filter (fun proof -> proof.Site=call.Site && proof.Ordinal=1) |> Assert.Single
+        let info =
+            match graph.Nodes[borrow.Obligation].Kind with
+            | SemanticKind.Obligation info -> info
+            | _ -> failwith "Missing actual snapshot borrow obligation."
+        Assert.Equal("source-checked snapshot/copy/allocation count correspondence; SMT establishes the finite nonnegative count domain",info.Statement)
+        Assert.Contains(info.Statement,Clef.Compiler.Nanopass.ObligationDischarge.ledgerJson [info])
+        match System.Environment.GetEnvironmentVariable "FFI_ZERO_SNAPSHOT_OUTPUT" |> Option.ofObj with
+        | Some output when not(System.String.IsNullOrWhiteSpace output) ->
+            let path = System.IO.Path.GetFullPath output
+            Assert.StartsWith("/home/hhh/repos/clef/artifacts/ffi-reconcile-20261013/dynamic-snapshot/zero-native-prep/",path)
+            Assert.False(System.IO.File.Exists path,"A frozen zero snapshot must not be overwritten.")
+            let limits:Fidelity.PSG.Binary.Limits =
+                {MaxBytes=4*1024*1024;MaxCollectionLength=10000;MaxDepth=128;MaxStringBytes=1024*1024;MaxBigIntegerBytes=4096;MaxValues=1000000}
+            let bytes = Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith (sprintf "%A" >> failwith)
+            let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith (sprintf "%A" >> failwith)
+            let again = Fidelity.PSG.Binary.encode limits copy |> Result.defaultWith (sprintf "%A" >> failwith)
+            Assert.True((bytes=again),"Full zero snapshot codec bytes changed.")
+            System.IO.File.WriteAllBytes(path,bytes)
+            System.IO.File.WriteAllText(path+".facts.txt",sprintf "SOURCE_CONSTRUCTION %A\nSOURCE_INITIALIZATION_SUPPORT %A\nPUBLISHED_ALLOCATIONS %A\nPUBLISHED_WRITES %A\nASCII_OWNER %A\nCOUNT %A\n" source support allocations writes snapshot.Owner call.Count)
+        | _ -> ()
+
+    [<Theory>]
+    [<InlineData("withdrawn")>]
+    [<InlineData("changed")>]
+    member _.``Dynamic zero snapshot refuses a changed retained initialization account`` mutation =
+        let graph,_,_ = RuntimeSnapshotWriteFixture.dynamicAdmittedWith "Array.zeroCreate n"
+        let revise (domain:MemoryDomain) =
+            let operations =
+                domain.Operations |> List.map (fun (site,operation) ->
+                    match operation with
+                    | MemoryWitnessOperation.ArrayAllocation allocation when allocation.Construction.Default.IsSome ->
+                        let construction=allocation.Construction
+                        let initialization =
+                            match mutation,construction.Initialization with
+                            | "withdrawn",Some _ -> None
+                            | "changed",Some value -> Some {value with Write=construction.Default.Value}
+                            | _ -> failwith "Expected one nonempty source zero initialization."
+                        site,MemoryWitnessOperation.ArrayAllocation {allocation with Construction={construction with Initialization=initialization}}
+                    | _ -> site,operation)
+            {domain with Operations=operations}
+        let revised =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.MemoryDomain value -> Some value | _ -> None)
+            |> Assert.Single
+            |> revise
+        let operations=Map.ofList revised.Operations
+        // Keep the two stored operation copies coherent; the original construction remains unchanged.
+        let edges = graph.Edges |> List.map (fun edge ->
+            match edge.Role with
+            | EdgeRole.MemoryDomain _ -> {edge with Role=EdgeRole.MemoryDomain revised}
+            | EdgeRole.MemoryOperation _ -> {edge with Role=EdgeRole.MemoryOperation operations[edge.Target]}
+            | _ -> edge)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project {graph with Edges=edges} with
+        | Error failures ->
+            Assert.Contains(failures,fun failure -> failure.Reason.Contains "allocation witness lost its exact validated construction, count or initialization account")
+        | Ok _ -> failwith "A changed retained initialization account remained current."
+
+    [<Theory>]
+    [<InlineData("default")>]
+    [<InlineData("initialization")>]
+    [<InlineData("write")>]
+    member _.``Dynamic zero snapshot public reader refuses changed initialization evidence`` mutation =
+        let graph,_,_ = RuntimeSnapshotWriteFixture.dynamicAdmittedWith "Array.zeroCreate n"
+        let revision=RuntimeSnapshotWriteFixture.publish graph
+        let memory=revision.Emission.Memory
+        let allocation=
+            memory.Operations.Values
+            |> Seq.choose (function
+                | Fidelity.PSG.MemoryWitnessOperation.ArrayAllocation value when value.Construction.Default.IsSome -> Some value
+                | _ -> None)
+            |> Assert.Single
+        let construction=allocation.Construction
+        let initialization=construction.Initialization |> Option.defaultWith (fun () -> failwith "Missing source zero initialization.")
+        let write=
+            memory.Operations.Values
+            |> Seq.choose (function
+                | Fidelity.PSG.MemoryWitnessOperation.ArrayAccess value when value.Bounds.Requirement.Frontier=initialization.Write -> Some value
+                | _ -> None)
+            |> Assert.Single
+        let replace construction=
+            memory.Operations.Add(allocation.Site,Fidelity.PSG.MemoryWitnessOperation.ArrayAllocation {allocation with Construction=construction})
+        let operations,reason=
+            match mutation with
+            | "default" ->
+                Assert.NotEqual(construction.Default,Some construction.Guard.Zero)
+                replace {construction with Default=Some construction.Guard.Zero},
+                "The initialization construction differs from its exact guarded zero write."
+            | "initialization" ->
+                replace {construction with Initialization=None},
+                "A nonempty zero allocation has no retained initialization construction."
+            | "write" ->
+                memory.Operations.Remove write.Site,
+                "The initialization construction differs from its exact guarded zero write."
+            | _ -> failwith "Unknown public initialization mutation."
+        let revised={revision with Emission={revision.Emission with Memory={memory with Operations=operations}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check revised,fun issue ->
+            issue.Part="Emission.Memory.Operations.ArrayAllocation.Construction" && issue.Reason=reason)
+
     [<Fact>]
     member _.``Dynamic snapshot borrow retains one actual count for both finite extents``() =
         let graph,domain,call = RuntimeSnapshotWriteFixture.dynamicAdmitted ()

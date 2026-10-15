@@ -42,6 +42,19 @@ let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessPr
             )
         elif (domain.Operations |> List.map fst |> List.sort) <> Set.toList domain.Required then
             reject (Some anchor) participants "A required source memory operation is absent or duplicated."
+        elif domain.Operations |> List.exists (fun (_,operation) ->
+            match operation with
+            | MemoryWitnessOperation.ArrayAllocation allocation ->
+                let construction=allocation.Construction
+                (domain.AllocationConstructions |> List.filter (fun value -> value.Site=allocation.Site)) <> [construction] ||
+                construction.Site<>allocation.Site || construction.Count.Reference<>allocation.Count ||
+                allocation.CountCarrier.Site<>allocation.Count ||
+                construction.Guard.Requirement<>allocation.Requirement.Site ||
+                construction.Guard.Predicate<>allocation.Requirement.Condition ||
+                construction.Guard.Frontier<>allocation.Requirement.Frontier ||
+                construction.Guard.Continuation<>allocation.Requirement.Continuation
+            | _ -> false) then
+            reject (Some anchor) participants "The allocation witness lost its exact validated construction, count or initialization account."
         elif (domain.CopyConstructions |> List.map _.Site |> List.filter(Memory.executable graph excluded) |> List.sort) <> (domain.ArrayCopies |> List.map _.Site |> List.sort) then
             reject (Some anchor) participants "A required source array-copy construction has no unique validated copy receipt."
         else

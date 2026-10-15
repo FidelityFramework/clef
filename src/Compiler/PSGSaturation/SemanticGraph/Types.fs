@@ -1524,7 +1524,8 @@ type MemoryArrayLiteralWitness = {
 type MemoryArrayAllocationWitness = {
     Site: NodeId; Count: NodeId; CountCarrier: ScalarCarrier; IndexUnsigned: bool
     Element: SettledSlot; ElementBytes: int; Alignment: int; Residence: MemoryResidence
-    MinimumCount: bigint; MaximumCount: bigint; Requirement: RequirementWitness; Participants: Set<NodeId>
+    MinimumCount: bigint; MaximumCount: bigint; Requirement: RequirementWitness
+    Construction: ArrayAllocationConstruction; Participants: Set<NodeId>
 }
 type ArrayCopyConstruction = {
     Site: NodeId; Source: ArrayBoundOperand; SourceOffset: ArrayBoundOperand

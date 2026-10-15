@@ -1726,6 +1726,7 @@ and mapMemoryArrayAllocationWitness (value: S.MemoryArrayAllocationWitness) : Fi
         MinimumCount = value.MinimumCount
         MaximumCount = value.MaximumCount
         Requirement = mapRequirementWitness value.Requirement
+        Construction = mapArrayAllocationConstruction value.Construction
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.MemoryArrayAllocationWitness)
 
