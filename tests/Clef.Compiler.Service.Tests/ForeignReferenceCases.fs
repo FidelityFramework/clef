@@ -97,22 +97,49 @@ type ResourceDescriptor = { Resource:ResourceProtocol; Hypothesis:ExternalExecut
 """
         + declarations "First" + declarations "Second"
 
-    let resourceGraphFor sources =
+    let declarationCheckFor sources =
         let parse source path =
             match parseStringWithDefaults source path with
             | ParseSuccess input -> input
             | ParseError errors -> failwithf "%A" errors
-        let result =
-            checkParsedInputsWithPlatform
+        checkParsedInputsWithPlatform
                 ([parse (SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")) "write-authority.clef"]
                  @ (sources |> List.map(fun (source,path) -> parse source path))
                  @ [parse "module ResourceDeclarationMain\n[<EntryPoint>]\nlet main _ = 0\n" "resource-main.clef"])
                 (Some SourcePlatformFixture.platform)
+
+    let resourceGraphFor sources =
+        let result=declarationCheckFor sources
         DimensionalCases.noErrors result
         Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare result.Graph
         |> Result.defaultWith (fun errors -> failwithf "%A" errors)
 
     let resourceGraph () = resourceGraphFor [resourceSource,"resource-declarations.clef"]
+
+    // Actual Farscape writable-buffer prototype and quotation (Native.clef),
+    // with this owner's existing local vocabulary fixture. No call roots it.
+    let writableSource =
+        vocabulary.Replace("module Foreign", "module Test.Native").Replace("type Transfer = | Borrowed", "type Transfer = Borrowed | Undeclared")
+        + """
+type ExternalExecutionHypothesis = { Identity:string; Version:string; Source:string }
+type WritableBufferDescriptor = { Binding:string; Parameter:int; CountParameter:int; Hypothesis:ExternalExecutionHypothesis }
+[<FidelityExtern("c", "native_read")>]
+let read (fd: int) (buffer: int array) (count: int) : int = NativeDefault.zeroed ()
+let readDescriptor : Expr<FunctionDescriptor> = <@ {
+    CName = "native_read"
+    Parameters = [|
+        { Name = "fd"; Type = Integer (Signed, 32); PassBy = Value }
+        { Name = "buffer"; Type = Integer (Unsigned, 8); PassBy = Reference }
+        { Name = "count"; Type = Integer (Unsigned, 64); PassBy = Value } |]
+    ReturnType = Integer (Signed, 64); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let readWritableBuffer1Descriptor : Expr<WritableBufferDescriptor> = <@ {
+    Binding = "Test.Native.read"; Parameter = 1; CountParameter = 2
+    Hypothesis = { Identity = "posix.read.borrow"; Version = "2024"; Source = "read-contract.pilot.toml" } } @>
+"""
+    let writableGraph = lazy(resourceGraphFor [writableSource,"writable-declarations.clef"])
+    let publishedWritable = lazy(writableGraph.Value
+        |> Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish
+        |> Result.defaultWith(fun errors -> failwithf "%A" errors))
 
     let resourceApplication body =
         let root =
@@ -237,6 +264,96 @@ let main _ = 0
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ForeignReferences")>]
 type ForeignReferenceTests() =
+    [<Fact>]
+    member _.``Writable buffer generated declaration publishes provenance without call authority``() =
+        let graph=ForeignCases.writableGraph.Value
+        let declaration=Assert.Single (ForeignDeclarations.readDescriptors graph).WritableBuffers
+        Assert.Equal("Test.Native.read",declaration.Contract.Binding)
+        Assert.Equal(1,declaration.Parameter)
+        Assert.Equal(2,declaration.CountParameter)
+        Assert.Equal(3,declaration.Declaration.Formals.Length)
+        let revision=ForeignCases.publishedWritable.Value
+        let row=Assert.Single revision.Emission.Boundary.WritableBufferDeclarations.Values
+        Assert.Equal("posix.read.borrow",row.Contract.Hypothesis.Identity)
+        Assert.Equal("2024",row.Contract.Hypothesis.Version)
+        let scope=row.DeclarationFacts[row.Declaration].Parent |> Option.get
+        let header=revision.SourceReadings.ContextHeaders[scope]
+        Assert.Equal("Test.Native",header.Name)
+        Assert.True(header.Ports.ContainsKey Fidelity.PSG.OccurrencePort.ModuleDeclaration)
+        Assert.Empty revision.Emission.Boundary.Calls
+        let defects=Fidelity.PSG.Integrity.check revision
+        Assert.True(defects.IsEmpty,Fidelity.PSG.Integrity.describe defects)
+        let limits:Fidelity.PSG.Binary.Limits={MaxBytes=8000000;MaxCollectionLength=100000;MaxDepth=128;MaxStringBytes=1000000;MaxBigIntegerBytes=4096;MaxValues=2000000}
+        let bytes=Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith(fun error -> failwithf "%A" error)
+        let copy=Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith(fun error -> failwithf "%A" error)
+        Assert.True(revision.Emission.Boundary.WritableBufferDeclarations=copy.Emission.Boundary.WritableBufferDeclarations)
+
+    [<Theory>]
+    [<InlineData("same-ordinal","distinct in-range native buffer/count ordinals")>]
+    [<InlineData("missing-formal","complete unchanged FunctionDescriptor/formal vector")>]
+    [<InlineData("wide-element","explicit unsigned-8 Reference element contract")>]
+    [<InlineData("readonly","explicit unsigned-8 Reference element contract")>]
+    [<InlineData("wrong-binding","Binding must select one exact qualified extern")>]
+    [<InlineData("empty-version","nonempty versioned hypothesis")>]
+    member _.``Writable buffer declaration source refuses wrong association and missing premise``(shape:string,reason:string) =
+        let original=ForeignCases.writableSource
+        let changed=
+            match shape with
+            | "same-ordinal" -> original.Replace("Parameter = 1; CountParameter = 2","Parameter = 1; CountParameter = 1")
+            | "missing-formal" -> original.Replace("CountParameter = 2","CountParameter = 3")
+            | "wide-element" -> original.Replace("Integer (Unsigned, 8)","Integer (Unsigned, 32)")
+            | "readonly" -> original.Replace("Value | Reference","Value | Reference | ReadOnlyReference").Replace("PassBy = Reference","PassBy = ReadOnlyReference")
+            | "wrong-binding" -> original.Replace("Binding = \"Test.Native.read\"","Binding = \"Test.Native.native_read\"")
+            | "empty-version" -> original.Replace("Version = \"2024\"","Version = \"\"")
+            | _ -> failwith "Unknown writable declaration perturbation"
+        Assert.NotEqual<string>(original,changed)
+        let result=ForeignCases.declarationCheckFor [changed,"writable-declarations.clef"]
+        let reading=ForeignDeclarations.readDescriptors result.Graph
+        Assert.Empty reading.WritableBuffers
+        Assert.Contains(reading.Findings,fun finding -> finding.Message.Contains reason)
+
+    [<Theory>]
+    [<InlineData("formal-order","Ordinals")>]
+    [<InlineData("binding","Contract")>]
+    [<InlineData("version","Contract")>]
+    [<InlineData("byte","Element")>]
+    [<InlineData("withdrawal","Contract")>]
+    [<InlineData("missing-context","Declaration")>]
+    member _.``Writable buffer public replay refuses changed exact declaration facts``(shape:string,part:string) =
+        let revision=ForeignCases.publishedWritable.Value
+        let boundary=revision.Emission.Boundary
+        let original=Assert.Single boundary.WritableBufferDeclarations.Values
+        let row=
+            match shape with
+            | "formal-order" -> {original with Formals=[original.Formals[2];original.Formals[1];original.Formals[0]]}
+            | "binding" -> {original with Contract={original.Contract with Binding="Test.Native.native_read"}}
+            | "version" -> {original with Contract={original.Contract with Hypothesis={original.Contract.Hypothesis with Version="changed"}}}
+            | "byte" ->
+                let key,fact=original.DeclarationFacts |> Map.toList |> List.filter(fun(_,fact)->fact.Form="integer" && fact.Numbers=[8I]) |> Assert.Single
+                {original with DeclarationFacts=original.DeclarationFacts.Add(key,{fact with Numbers=[32I]})}
+            | "withdrawal" -> {original with DeclarationFacts=original.DeclarationFacts.Remove original.Identity}
+            | "missing-context" -> original
+            | _ -> failwith "Unknown writable public perturbation"
+        let changed={revision with Emission={revision.Emission with Boundary={boundary with WritableBufferDeclarations=boundary.WritableBufferDeclarations.Add(row.Identity,row)}}}
+        let changed=
+            if shape="missing-context" then
+                let scope=row.DeclarationFacts[row.Declaration].Parent |> Option.get
+                {changed with SourceReadings={changed.SourceReadings with ContextHeaders=changed.SourceReadings.ContextHeaders.Remove scope}}
+            else changed
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue -> issue.Part="Emission.Boundary.WritableBufferDeclarations."+part)
+
+    [<Fact>]
+    member _.``Writable buffer source currentness retains descriptor absence and version premises``() =
+        let graph=ForeignCases.writableGraph.Value
+        let declaration=Assert.Single (ForeignDeclarations.readDescriptors graph).WritableBuffers
+        let version=graph.Nodes.Values |> Seq.filter(fun node -> node.Kind=SemanticKind.Literal(NativeLiteral.String "2024")) |> Assert.Single
+        let changed=[{graph with Nodes=graph.Nodes.Add(version.Id,{version with Kind=SemanticKind.Literal(NativeLiteral.String "changed")})}
+                     {graph with Nodes=graph.Nodes.Remove declaration.Quote}]
+        for current in changed do
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project current with
+            | Error failures -> Assert.Contains(failures,fun failure -> failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
+            | Ok _ -> failwith "Changed writable descriptor retained the old current boundary account"
+
     [<Fact>]
     member _.``Resource application retains exact finite conversion and cleanup models without discharging them``() =
         let result = ForeignCases.resourceApplication "    match Foreign.mallocFirst 8 with\n    | Some handle -> Foreign.freeFirst handle; 0\n    | None -> 0\n"

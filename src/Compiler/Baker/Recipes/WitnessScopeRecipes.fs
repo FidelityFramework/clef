@@ -114,12 +114,14 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
                         | _ -> ()
             | _ -> ()
 
-    // Resource declaration accounts need their exact module context, without
+    // Boundary declaration accounts need their exact module context, without
     // turning those declarations into executable bodies.
-    let resourceDeclarations =
+    let accountedDeclarations =
         emission |> Option.map (fun rows ->
-            rows.Boundary.ResourceDeclarations.Values
-            |> Seq.collect (fun row -> [row.Acquisition; row.Release]) |> Set.ofSeq)
+            Seq.append
+                (rows.Boundary.ResourceDeclarations.Values |> Seq.collect (fun row -> [row.Acquisition; row.Release]))
+                (rows.Boundary.WritableBufferDeclarations.Values |> Seq.map _.Declaration)
+            |> Set.ofSeq)
         |> Option.defaultValue Set.empty
     // Full-owner membership is inspected conservatively, but inactive members
     // never receive occurrence records or copied prefix/suffix lists. Retain
@@ -131,7 +133,7 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
         match graph.Nodes[id].Kind with
         | SemanticKind.ModuleDef(_, members) ->
             for memberId in members do
-                if bodies.ContainsKey memberId || resourceDeclarations.Contains memberId then requireModule id
+                if bodies.ContainsKey memberId || accountedDeclarations.Contains memberId then requireModule id
                 if modules.Contains memberId then
                     match moduleParents.TryGetValue memberId with
                     | true, parents -> parents.Add id
@@ -157,7 +159,7 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
     let contextNodes = System.Collections.Generic.HashSet<NodeId>(bodies.Keys)
     for id in neededModules do
         match graph.Nodes[id].Kind with
-        | SemanticKind.ModuleDef(_, members) when List.exists resourceDeclarations.Contains members ->
+        | SemanticKind.ModuleDef(_, members) when List.exists accountedDeclarations.Contains members ->
             contextNodes.Add id |> ignore
         | _ -> ()
     let outgoing = System.Collections.Generic.Dictionary<NodeId, ResizeArray<NodeId>>()
@@ -265,7 +267,7 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
             let key = parent, WitnessOccurrencePort.ModuleDeclaration
             match graph.Nodes[parent].Kind with
             | SemanticKind.ModuleDef(_, members)
-                when List.exists resourceDeclarations.Contains members && not (Map.containsKey key current) ->
+                when List.exists accountedDeclarations.Contains members && not (Map.containsKey key current) ->
                 current |> Map.add key
                     { Extent = members.Length; Stamp = portStamp parent WitnessOccurrencePort.ModuleDeclaration members; Positions = Map.empty }
             | _ -> current) selected
@@ -273,7 +275,7 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
         Set.union contextIdentities (Set.ofSeq neededModules) |> Seq.map (fun parent ->
             let name =
                 match graph.Nodes[parent].Kind with
-                | SemanticKind.ModuleDef(_, members) when List.exists resourceDeclarations.Contains members ->
+                | SemanticKind.ModuleDef(_, members) when List.exists accountedDeclarations.Contains members ->
                     match Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.qualifiedModuleName graph parent with
                     | Some name -> name
                     | None ->

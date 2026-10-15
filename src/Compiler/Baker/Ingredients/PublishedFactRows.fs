@@ -239,6 +239,7 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         Platform = (value.Platform |> Option.map (fun x -> mapBoundaryPlatformPremise x))
         Meets = (value.Meets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
         Declarations = (value.Declarations |> List.map (fun x -> mapBoundaryDeclaration x))
+        WritableBufferDeclarations = (value.WritableBufferDeclarations |> List.map (fun x -> nodeId x))
         ResourceDeclarations = (value.ResourceDeclarations |> List.map (fun x -> nodeId x))
         ResourceAccesses = (value.ResourceAccesses |> List.map (fun x -> nodeId x))
         ResourceEvaluationRoots = (value.ResourceEvaluationRoots |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, nodeId t1, nodeId t2))))
@@ -273,6 +274,7 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
 
 and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fidelity.PSG.BoundaryEmissionProjection =
     ({
+        WritableBufferDeclarations = (value.WritableBufferDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryWritableBufferDeclaration v) |> Map.ofSeq)
         ResourceEvidence = (value.ResourceEvidence |> Option.map (fun x -> mapBoundaryResourceEvidence x))
         ResourceDeclarations = (value.ResourceDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceDeclaration v) |> Map.ofSeq)
         ResourceAccesses = (value.ResourceAccesses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceAccess v) |> Map.ofSeq)
@@ -470,6 +472,22 @@ and mapBoundaryStringExtent (value: S.BoundaryStringExtent) : Fidelity.PSG.Bound
         StaticOrigins = (value.StaticOrigins |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
         Participants = mapParticipantEvidence value.Participants
     } : Fidelity.PSG.BoundaryStringExtent)
+
+and mapBoundaryWritableBufferDeclaration (value: S.BoundaryWritableBufferDeclaration) : Fidelity.PSG.BoundaryWritableBufferDeclaration =
+    ({
+        Identity = nodeId value.Identity
+        Declaration = nodeId value.Declaration
+        Body = nodeId value.Body
+        Formals = (value.Formals |> List.map (fun x -> nodeId x))
+        Descriptor = nodeId value.Descriptor
+        Parameter = value.Parameter
+        CountParameter = value.CountParameter
+        BufferFormal = nodeId value.BufferFormal
+        CountFormal = nodeId value.CountFormal
+        Contract = value.Contract
+        DeclarationFacts = (value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq)
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryWritableBufferDeclaration)
 
 and mapByrefKind (value: N.ByrefKind) : Fidelity.PSG.ByrefKind =
     match value with
@@ -1003,6 +1021,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.BoundaryDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryDeclaration(mapBoundaryDeclaration a0)
     | S.EdgeRole.BoundaryDomain(a0) -> Fidelity.PSG.EdgeRole.BoundaryDomain(mapBoundaryDomain a0)
     | S.EdgeRole.BoundaryResourceDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryResourceDeclaration(mapBoundaryResourceDeclaration a0)
+    | S.EdgeRole.BoundaryWritableBufferDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryWritableBufferDeclaration(mapBoundaryWritableBufferDeclaration a0)
     | S.EdgeRole.BoundaryResourceAccess(a0) -> Fidelity.PSG.EdgeRole.BoundaryResourceAccess(mapBoundaryResourceAccess a0)
     | S.EdgeRole.BoundaryImport(a0) -> Fidelity.PSG.EdgeRole.BoundaryImport(mapBoundaryImport a0)
     | S.EdgeRole.BoundaryCall(a0) -> Fidelity.PSG.EdgeRole.BoundaryCall(mapBoundaryCall a0)

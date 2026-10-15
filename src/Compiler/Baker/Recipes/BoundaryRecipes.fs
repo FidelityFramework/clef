@@ -940,6 +940,29 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                           PointerBits = resource.PointerBits; AcquisitionType = resource.AcquisitionType; ResultType = resource.ResultType; HandleType = resource.HandleType
                           Contract = resource.Contract; DeclarationFacts = facts; Participants = Map.keys facts |> Set.ofSeq }
                     Map.add row.Identity row rows,errors) (Map.empty,[])
+    let writableDeclarations, writableErrors =
+        descriptors.WritableBuffers |> List.fold (fun (rows,errors) writable ->
+            let roots=[writable.DescriptorBinding;writable.AbiDescriptorBinding]
+            let observed=roots |> List.fold(fun state root -> state |> Result.bind(fun facts ->
+                declarationFacts graph root |> Result.map(fun current -> Map.fold(fun all id fact -> Map.add id fact all) facts current))) (Ok Map.empty)
+            match observed with
+            | Error reason -> rows,(writable.Node,Set.ofList writable.Participants,reason)::errors
+            | Ok declared ->
+                let declaration=writable.Declaration
+                let support=declaration.Path@declaration.Formals@[declaration.Body]
+                let facts=support |> List.fold(fun (facts:Map<NodeId,BoundaryDeclarationFact>) id ->
+                    match graph.Nodes.TryFind id with
+                    | Some node when not(facts.ContainsKey id) -> Map.add id (Ingredients.premise node).Shape facts
+                    | _ -> facts) declared
+                if support |> List.exists(fun id -> not(facts.ContainsKey id)) then
+                    rows,(writable.Node,Set.ofList support,"A writable buffer declaration lost its exact source declaration support.")::errors
+                else
+                    let row:BoundaryWritableBufferDeclaration =
+                        {Identity=writable.Quote;Declaration=declaration.Binding;Body=declaration.Body;Formals=declaration.Formals
+                         Descriptor=writable.AbiDescriptor;Parameter=writable.Parameter;CountParameter=writable.CountParameter
+                         BufferFormal=writable.BufferFormal;CountFormal=writable.CountFormal;Contract=writable.Contract
+                         DeclarationFacts=facts;Participants=Map.keys facts |> Set.ofSeq}
+                    Map.add row.Identity row rows,errors) (Map.empty,[])
     // Requirements belong to the exact source application, before any native
     // adapter exists. Neither a matching release call nor an unused argument
     // establishes conversion, alias retirement or complete exit coverage.
@@ -972,7 +995,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     | _ -> enrichment,errors
                 | _ -> enrichment,errors
             | _ -> enrichment,errors) (Enrichment.empty,[])
-    let initialErrors = resourceRequirementErrors @ resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
+    let initialErrors = writableErrors @ resourceRequirementErrors @ resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
     let imported binding =
         checked' {
             let! library =
@@ -1790,6 +1813,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Premises = boundaryPremises; Platform = Ingredients.platformPremise graph.Platform; Meets = graph.Codata.Value.Meets
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
+          WritableBufferDeclarations = Map.keys writableDeclarations |> Seq.toList
           ResourceDeclarations = Map.keys resourceDeclarations |> Seq.toList
           ResourceAccesses = Map.keys resourceAccesses |> Seq.toList
           ResourceEvaluationRoots = List.distinct resourceRoots
@@ -1823,6 +1847,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 sources anchor.Id
          { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
         @ (resourceDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
+        @ (writableDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
         @ (resourceAccesses.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site) |> Seq.toList)
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)

@@ -395,7 +395,7 @@ let private emissionRows ids valueIds types metadata (value: WitnessEmissionProj
                   ProgramInitializationOrders = rows storage.ProgramInitializationOrders }
       // Project the issued loading account whenever retained native-entry/callback
       // incidence still needs it; this projection never creates loading authority.
-      Boundary = { ResourceEvidence = boundary.ResourceEvidence; ResourceDeclarations = boundary.ResourceDeclarations; ResourceAccesses = rows boundary.ResourceAccesses; Imports = imports; Loading = if (rows boundary.Entries).IsEmpty && (rows boundary.ClosedEntries).IsEmpty && (rows boundary.CallbackInvocations).IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else boundary.Loading
+      Boundary = { WritableBufferDeclarations = boundary.WritableBufferDeclarations; ResourceEvidence = boundary.ResourceEvidence; ResourceDeclarations = boundary.ResourceDeclarations; ResourceAccesses = rows boundary.ResourceAccesses; Imports = imports; Loading = if (rows boundary.Entries).IsEmpty && (rows boundary.ClosedEntries).IsEmpty && (rows boundary.CallbackInvocations).IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else boundary.Loading
                    Entries = rows boundary.Entries; CallbackInvocations = rows boundary.CallbackInvocations; ClosedEntries = rows boundary.ClosedEntries; ResultHypotheses = resultHypotheses
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)
                    Calls = rows boundary.Calls; ByteViews = rows boundary.ByteViews; StringExtents = rows boundary.StringExtents

@@ -1152,12 +1152,29 @@ type DeclaredResource = {
 }
 
 /// Every boundary declaration in the graph, with every defect found reading them.
+type DeclaredWritableBuffer = {
+    Node: NodeId
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    SourcePath: NodeId list
+    Declaration: BoundaryDeclaration
+    AbiDescriptor: NodeId
+    AbiDescriptorBinding: NodeId
+    Parameter: int
+    CountParameter: int
+    BufferFormal: NodeId
+    CountFormal: NodeId
+    Contract: BAREWire.Descriptors.WritableBufferDescriptor
+    Participants: NodeId list
+}
+
 type Descriptors = {
     Layouts: DeclaredLayout list
     Functions: DeclaredFunction list
     ResultRanges: DeclaredResultRange list
     CallbackInvocations: DeclaredCallbackInvocation list
     Resources: DeclaredResource list
+    WritableBuffers: DeclaredWritableBuffer list
     Findings: DeclarationFinding list
 }
 
@@ -1633,10 +1650,10 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
         | _ -> false
     // Keep the existing single source census. Resolve result contracts from the
     // retained declaration/ABI inventories, never by C symbol or beside-name.
-    let layouts, functionDeclarations, resultDeclarations, invocationDeclarations, resourceDeclarations, externs, findings =
+    let layouts, functionDeclarations, resultDeclarations, invocationDeclarations, resourceDeclarations, writableDeclarations, externs, findings =
         graph.Nodes
         |> Map.toList
-        |> List.fold (fun (layouts, functions, ranges, invocations, resources, externs, findings) (_, node) ->
+        |> List.fold (fun (layouts, functions, ranges, invocations, resources, writable, externs, findings) (_, node) ->
             let externs =
                 if node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol" then
                     qualifiedExportName graph node |> Option.map (fun name -> (name, node.Id) :: externs) |> Option.defaultValue externs
@@ -1648,27 +1665,32 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                     match typeName record with
                     | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
                         let layout, more = readLayout graph record fields
-                        (Option.toList layout @ layouts, functions, ranges, invocations, resources, externs, findings @ more)
+                        (Option.toList layout @ layouts, functions, ranges, invocations, resources, writable, externs, findings @ more)
                     | Some "FunctionDescriptor" ->
                         let target, (f, more) = readFunction graph node name record fields
-                        (layouts, (f |> Option.map (fun f -> target, f, node.Id) |> Option.toList) @ functions, ranges, invocations, resources, externs, findings @ more)
+                        (layouts, (f |> Option.map (fun f -> target, f, node.Id) |> Option.toList) @ functions, ranges, invocations, resources, writable, externs, findings @ more)
                     | Some "ResultRangeDescriptor" ->
-                        (layouts, functions, (node, record, fields, path) :: ranges, invocations, resources, externs, findings)
+                        (layouts, functions, (node, record, fields, path) :: ranges, invocations, resources, writable, externs, findings)
                     | Some "ResourceDescriptor" ->
-                        (layouts, functions, ranges, invocations, (node, record, fields, path) :: resources, externs, findings)
+                        (layouts, functions, ranges, invocations, (node, record, fields, path) :: resources, writable, externs, findings)
+                    | Some "WritableBufferDescriptor" ->
+                        (layouts, functions, ranges, invocations, resources, (node, record, fields, path) :: writable, externs, findings)
                     | Some "CallbackInvocationContract" ->
-                        (layouts, functions, ranges, (node, record, fields, path) :: invocations, resources, externs, findings)
-                    | _ -> (layouts, functions, ranges, invocations, resources, externs, findings)
-                | Some (value, _) when typeName value = Some "ResultRangeDescriptor" ->
-                    (layouts, functions, ranges, invocations, resources, externs, findings @ [findingAt value DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"])
+                        (layouts, functions, ranges, (node, record, fields, path) :: invocations, resources, writable, externs, findings)
+                    | _ -> (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                | Some (value, _) when typeName value = Some "ResultRangeDescriptor" || typeName value = Some "WritableBufferDescriptor" ->
+                    let name=typeName value |> Option.defaultValue "ResultRangeDescriptor"
+                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed ($"a {name} must retain its quoted record declaration")])
                 | _ ->
                     let declared =
                         match node.Type with
-                        | NativeType.TApp(_, [inner]) -> typeName { node with Type = inner } = Some "ResultRangeDescriptor"
-                        | _ -> typeName node = Some "ResultRangeDescriptor"
-                    let more = if declared then [findingAt node DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"] else []
-                    (layouts, functions, ranges, invocations, resources, externs, findings @ more)
-            | _ -> (layouts, functions, ranges, invocations, resources, externs, findings)) ([], [], [], [], [], [], [])
+                        | NativeType.TApp(_, [inner]) -> List.contains (typeName { node with Type = inner }) [Some "ResultRangeDescriptor";Some "WritableBufferDescriptor"]
+                        | _ -> List.contains (typeName node) [Some "ResultRangeDescriptor";Some "WritableBufferDescriptor"]
+                    let name=match node.Type with NativeType.TApp(_, [inner]) -> typeName {node with Type=inner} | _ -> typeName node
+                    let descriptorName=name |> Option.defaultValue "ResultRangeDescriptor"
+                    let more = if declared then [findingAt node DeclarationDefect.Malformed ($"a {descriptorName} must retain its quoted record declaration")] else []
+                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ more)
+            | _ -> (layouts, functions, ranges, invocations, resources, writable, externs, findings)) ([], [], [], [], [], [], [], [])
     // Preserve the exact descriptor binding already visited by this census.
     // This private incidence is not reconstructed from symbols or source names.
     let functions = functionDeclarations |> List.map (fun (target, abi, _) -> target, abi)
@@ -2051,20 +2073,80 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
             | _ -> invalid "requires one exact sibling acquisition, ResourceRelease and nonempty versioned hypothesis."
         | _ -> invalid "requires one immutable sibling quotation and OwnedNullableReturn declaration."
 
+    let readWritable (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredWritableBuffer, DeclarationFinding> =
+        let invalid reason = Error (findingAt node DeclarationDefect.Invalid ("A WritableBufferDescriptor " + reason))
+        let text name fields = field name fields |> Option.bind (stringOf graph) |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+        let immutable ids = ids |> List.forall (fun id ->
+            match graph.Nodes.TryFind id |> Option.map _.Kind with
+            | Some (SemanticKind.Binding(_, true, _, _)) -> false
+            | _ -> true)
+        let quotes = path |> List.filter (fun id -> graph.Nodes.TryFind id |> Option.exists (fun value -> match value.Kind with SemanticKind.Quote _ -> true | _ -> false))
+        match quotes, text "Binding" fields, field "Parameter" fields |> Option.bind (int64Of graph),
+              field "CountParameter" fields |> Option.bind (int64Of graph), field "Hypothesis" fields |> Option.bind (recordOf graph) with
+        | [quote], Some name, Some parameter, Some countParameter, Some(hypothesis, hypothesisFields)
+            when immutable (binding.Id::path) && typeName hypothesis=Some "ExternalExecutionHypothesis" ->
+            match text "Identity" hypothesisFields, text "Version" hypothesisFields, text "Source" hypothesisFields,
+                  externs |> List.filter (fun (candidate,_) -> candidate=name) with
+            | Some identity, Some version, Some source, [_,target] ->
+                let declarations = graph.Edges |> List.choose (fun edge ->
+                    match edge.Class,edge.Role with
+                    | EdgeClass.Boundary,EdgeRole.BoundaryDeclaration declaration when edge.Target=target && declaration.Binding=target -> Some(edge,declaration)
+                    | _ -> None)
+                match declarations, functions |> List.filter (fun (id,_) -> id=target) with
+                | [edge,declaration],[_,abi] when edge.Sources=declaration.Path@declaration.Formals@[declaration.Body] && abi.Body=Some declaration.Body ->
+                    match descriptorBinding target abi.Node, recordOf graph abi.Node with
+                    | Some abiBinding,Some(_,abiFields) when parameter>=0L && countParameter>=0L && parameter<>countParameter &&
+                                                           parameter<int64 declaration.Formals.Length && countParameter<int64 declaration.Formals.Length &&
+                                                           (abi.Parameters |> List.map fst) = declaration.Formals ->
+                        let parameter,countParameter=int parameter,int countParameter
+                        let bufferFormal,countFormal=declaration.Formals[parameter],declaration.Formals[countParameter]
+                        let parameters=field "Parameters" abiFields |> Option.bind (elementsOf graph)
+                        let parameterFields ordinal=parameters |> Option.bind(List.tryItem ordinal) |> Option.bind(recordOf graph) |> Option.map snd
+                        let byteReference = parameterFields parameter |> Option.exists(fun fields ->
+                            (field "Type" fields |> Option.map(readTypeRef graph))=Some(Ok(DeclaredTypeRef.Scalar(BoundaryScalar.Integer(8,false)))) &&
+                            (field "PassBy" fields |> Option.bind(caseOf graph) |> Option.map(fun(_,name,payload)->name,payload))=Some("Reference",None))
+                        let scalarCount=parameterFields countParameter |> Option.exists(fun fields ->
+                            (field "PassBy" fields |> Option.bind(caseOf graph) |> Option.map(fun(_,name,payload)->name,payload))=Some("Value",None) &&
+                            (field "Type" fields |> Option.map(readTypeRef graph) |> Option.exists(function Ok(DeclaredTypeRef.Scalar(BoundaryScalar.Integer _)) -> true | _ -> false)))
+                        let arrayElement=graph.Nodes.TryFind bufferFormal |> Option.exists(fun formal ->
+                            match formal.Type with NativeType.TApp(tc,[element]) when tc.Name="array" || tc.Name="Array" -> Types.isIntegerType element | _ -> false)
+                        let reference=abi.References |> List.exists(fun(formal,element)->formal=bufferFormal && element.Bits=8 && element.Range=ValueRange.unsignedOf 8)
+                        if graph.Nodes.TryFind target |> Option.bind(fun node ->
+                            match node.Metadata.TryFind "FidelityExtern.Symbol" with Some(MetadataValue.String symbol)->Some symbol | _->None) <> Some abi.CName then
+                            invalid "FunctionDescriptor.CName differs from the exact external declaration symbol."
+                        elif not(byteReference && arrayElement && reference) then invalid "requires an explicit unsigned-8 Reference element contract and its exact integer-array formal."
+                        elif not scalarCount then invalid "CountParameter requires its exact by-value integer formal."
+                        else
+                            let paths=(fields@hypothesisFields) |> List.collect(fun(_,id)->valuePath graph id |> Option.map snd |> Option.defaultValue [id])
+                            if not(immutable paths) then invalid "requires immutable descriptor and hypothesis inputs." else
+                            Ok {Node=node.Id;Quote=quote;DescriptorBinding=binding.Id;SourcePath=path;Declaration=declaration
+                                AbiDescriptor=abi.Node;AbiDescriptorBinding=abiBinding;Parameter=parameter;CountParameter=countParameter
+                                BufferFormal=bufferFormal;CountFormal=countFormal
+                                Contract={Binding=name;Parameter=parameter;CountParameter=countParameter;Hypothesis={Identity=identity;Version=version;Source=source}}
+                                Participants=binding.Id::path@paths@edge.Sources@[abi.Node;abiBinding;hypothesis.Id]}
+                    | _ -> invalid "requires distinct in-range native buffer/count ordinals and the complete unchanged FunctionDescriptor/formal vector."
+                | _ -> invalid "requires the exact current source extern declaration and FunctionDescriptor."
+            | _ -> invalid "Binding must select one exact qualified extern with a nonempty versioned hypothesis."
+        | _ -> invalid "requires one immutable quotation with exact Binding, Parameter, CountParameter and Hypothesis."
+
     let results = List.rev resultDeclarations |> List.map readResult
     let ranges = results |> List.choose (function Ok range -> Some range | _ -> None)
     let duplicateFindings = duplicates "result contract" (fun (range: DeclaredResultRange) -> string range.Declaration.Binding) _.Node graph ranges
     let invocationResults = List.rev invocationDeclarations |> List.map readInvocation
     let invocations = invocationResults |> List.choose (function Ok invocation -> Some invocation | _ -> None)
-    let invocationDuplicates = duplicates "callback invocation contract" (fun invocation -> string invocation.Declaration.Binding + ":" + string invocation.Parameter) _.Node graph invocations
+    let invocationDuplicates = duplicates "callback invocation contract" (fun (invocation:DeclaredCallbackInvocation) -> string invocation.Declaration.Binding + ":" + string invocation.Parameter) _.Node graph invocations
     let resourceResults = List.rev resourceDeclarations |> List.map readResource
     let resources = resourceResults |> List.choose (function Ok value -> Some value | _ -> None)
     let resourceDuplicates = duplicates "resource contract" (fun resource -> string resource.Acquisition.Binding) _.Node graph resources
+    let writableResults = List.rev writableDeclarations |> List.map readWritable
+    let writable = writableResults |> List.choose (function Ok value -> Some value | _ -> None)
+    let writableDuplicates = duplicates "writable buffer contract" (fun (value:DeclaredWritableBuffer) -> string value.Declaration.Binding+":"+string value.Parameter) _.Node graph writable
     { Layouts = List.rev layouts; Functions = List.rev functions |> List.map snd; ResultRanges = ranges
-      CallbackInvocations = invocations; Resources = resources
+      CallbackInvocations = invocations; Resources = resources; WritableBuffers = writable
       Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings
                  @ (invocationResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ invocationDuplicates
-                 @ (resourceResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ resourceDuplicates }
+                 @ (resourceResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ resourceDuplicates
+                 @ (writableResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ writableDuplicates }
 
 /// The bounded scalar references a call passes, paired with its actual arrays.
 /// The descriptor supplies the element ABI; the lowering must retain an extent

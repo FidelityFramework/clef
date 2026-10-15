@@ -909,6 +909,22 @@ type BoundaryResourceDeclaration = {
     Participants: Set<NodeId>
 }
 
+/// Declaration provenance only; no writable borrow or foreign effect authority.
+type BoundaryWritableBufferDeclaration = {
+    Identity: NodeId
+    Declaration: NodeId
+    Body: NodeId
+    Formals: NodeId list
+    Descriptor: NodeId
+    Parameter: int
+    CountParameter: int
+    BufferFormal: NodeId
+    CountFormal: NodeId
+    Contract: BAREWire.Descriptors.WritableBufferDescriptor
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: Set<NodeId>
+}
+
 type BoundaryImport = {
     Identity: NodeId
     Binding: NodeId
@@ -1737,6 +1753,7 @@ type BoundaryDomain = {
     Meets: Map<NodeId, Meet list>
     Declarations: BoundaryDeclaration list
     ResultHypotheses: ForeignResultHypothesis list
+    WritableBufferDeclarations: NodeId list
     ResourceDeclarations: NodeId list
     ResourceAccesses: NodeId list
     ResourceEvaluationRoots: (NodeId * NodeId * NodeId) list
@@ -1810,6 +1827,7 @@ type EdgeRole =
     | BoundaryDeclaration of BoundaryDeclaration
     | BoundaryDomain of BoundaryDomain
     | BoundaryResourceDeclaration of BoundaryResourceDeclaration
+    | BoundaryWritableBufferDeclaration of BoundaryWritableBufferDeclaration
     | BoundaryResourceAccess of BoundaryResourceAccess
     | BoundaryImport of BoundaryImport
     | BoundaryCall of BoundaryCall
@@ -3399,6 +3417,7 @@ module StorageWitnessProjection =
 
 type BoundaryEmissionProjection = {
     ResourceEvidence: BoundaryResourceEvidence option
+    WritableBufferDeclarations: Map<NodeId, BoundaryWritableBufferDeclaration>
     ResourceDeclarations: Map<NodeId, BoundaryResourceDeclaration>
     ResourceAccesses: Map<NodeId, BoundaryResourceAccess>
     Imports: Map<NodeId, BoundaryImport>

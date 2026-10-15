@@ -94,6 +94,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                   (domain.StringBorrowAllocations |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAllocation fact)))) then
             stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
         else
+            let writableDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryWritableBufferDeclaration row -> Some row | _ -> None)
             let resourceDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceDeclaration row -> Some row | _ -> None)
             let resourceAccesses = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceAccess row -> Some row | _ -> None)
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
@@ -284,6 +285,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                      { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = Map.keys domain.Premises |> Seq.toList; Target = domainRow.Target }]
                     @ (domain.Declarations |> List.map Declarations.row)
                     @ (resourceDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity))
+                    @ (writableDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity))
                     @ (resourceAccesses |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site))
                     @ (imports |> List.map Ingredients.importRow)
                     @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
@@ -335,6 +337,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     (callbackInvocations |> List.map _.Identity |> List.sort) = List.sort domain.CallbackInvocations &&
                     (closedEntries |> List.map _.Formation |> List.sort) = List.sort domain.ClosedEntries
                 if not proofErrors.IsEmpty then Error (List.rev proofErrors)
+                elif (writableDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.WritableBufferDeclarations then
+                    stale "The source writable buffer declaration account was withdrawn or duplicated."
                 elif (resourceDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.ResourceDeclarations then
                     stale "The source resource declaration account was withdrawn or duplicated."
                 elif not resourceFlowCurrent || not resourceEvidenceCurrent then stale "The complete current resource evaluation relation, original root or scoped source premise incidence changed."
@@ -346,6 +350,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     let imports = imports |> List.map (fun import -> import.Identity, import) |> Map.ofList
                     let byScope = imports.Values |> Seq.groupBy _.Scope |> Seq.map (fun (scope, imports) -> scope, imports |> Seq.map _.Identity |> Seq.sort |> Seq.toList) |> Map.ofSeq
                     Ok { ResourceEvidence = domain.ResourceEvidence
+                         WritableBufferDeclarations = writableDeclarations |> List.map(fun row -> row.Identity,row) |> Map.ofList
                          ResourceDeclarations = resourceDeclarations |> List.map (fun row -> row.Identity,row) |> Map.ofList
                          ResourceAccesses = resourceAccesses |> List.map(fun row->row.Site,row) |> Map.ofList
                          Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
