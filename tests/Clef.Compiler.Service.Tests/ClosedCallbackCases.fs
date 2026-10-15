@@ -50,7 +50,7 @@ let inline listener handler = makeEntry handler
             | _ -> None) |> Set.ofSeq
 
     // This source fixture stipulates a receiving C contract. It executes no C.
-    let receivingGraphWith wrapper =
+    let receivingCheckWith wrapper transform =
         let source =
             """
 module ReceivingCallback
@@ -87,6 +87,8 @@ let main _ =
             else
                 source
 
+        let source = transform source
+
         let parse source path =
             match parseStringWithDefaults source path with
             | ParseSuccess input -> input
@@ -105,6 +107,22 @@ let main _ =
                 ]
                 (Some platform)
 
+        result
+
+    let receivingGraphWith wrapper =
+        let result = receivingCheckWith wrapper id
+        DimensionalCases.noErrors result
+        result.Graph
+
+    let pairSource callback (source: string) =
+        source
+            .Replace("FnPtr<int -> int>", "FnPtr<int -> int -> int>")
+            .Replace("Parameters = [| { Name = \"arg0\"; Type = Integer (Signed, 64); PassBy = Value } |]", "Parameters = [| { Name = \"arg0\"; Type = Integer (Signed, 64); PassBy = Value }; { Name = \"arg1\"; Type = Integer (Signed, 64); PassBy = Value } |]")
+            .Replace("let callback (_unused: int) = 7", callback)
+
+    let receivingPairGraph useSecond =
+        let callback = if useSecond then "let callback (_first: int) (second: int) = second" else "let callback (_first: int) (_second: int) = 7"
+        let result = receivingCheckWith false (pairSource callback)
         DimensionalCases.noErrors result
         result.Graph
 
@@ -481,3 +499,104 @@ let main _ =
                 failure.Part = "Emission.Boundary.Calls.CallbackProjection"
                 && failure.Reason = "The projected callback argument lacks its exact original closed-entry aggregate account."
         )
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Receiving integer pair preserves every ordered native formal and codec``(useSecond: bool) =
+        let graph = ClosedCallbackCases.receivingPairGraph useSecond
+        let receiving = (read graph).Receiving |> Assert.Single
+        let formals = receiving.Signature.Parameters |> List.map fst
+        Assert.Equal(2, formals.Length)
+        for formal, declared in receiving.Signature.Parameters do
+            Assert.Equal(64, declared.Value.Bits)
+            Assert.Equal(Some(ValueRange.twosComplement 64), graph.Nodes[formal].ValueRange)
+        match graph.Nodes[receiving.Lambda].Kind with
+        | SemanticKind.Lambda(parameters, _, captures, _, _) ->
+            Assert.True((parameters |> List.map (fun (_, _, id) -> id)) = formals)
+            Assert.Empty captures
+        | kind -> failwithf "Expected complete two-formal native lambda: %A" kind
+        let uses formal =
+            graph.Nodes.Values |> Seq.exists (fun node ->
+                match node.Kind with SemanticKind.VarRef(_, Some target) -> target = formal | _ -> false)
+        Assert.False(uses formals.Head)
+        Assert.Equal(useSecond, uses formals[1])
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+        | Ok numeric ->
+            for formal in formals do Assert.Equal(ValueRange.twosComplement 64, numeric.Values[formal].Range)
+        | Result.Error failures -> failwithf "Complete incoming pair domains refused: %A" failures
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (fun errors -> failwithf "Pair source publication refused: %A" errors)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let entry = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
+        let invocation = revision.Emission.Boundary.CallbackInvocations[entry.Invocation]
+        Assert.Equal(2, entry.Formals.Length)
+        Assert.Equal(2, entry.ParameterAdaptations.Length)
+        Assert.True(invocation.Signature.Parameters = [Fidelity.PSG.BoundaryScalar.Integer(64, true); Fidelity.PSG.BoundaryScalar.Integer(64, true)])
+        let limits: Fidelity.PSG.Binary.Limits =
+            { MaxBytes = 8 * 1024 * 1024; MaxCollectionLength = 100000; MaxDepth = 128
+              MaxStringBytes = 1024 * 1024; MaxBigIntegerBytes = 4096; MaxValues = 2000000 }
+        let bytes =
+            Fidelity.PSG.Binary.encode limits revision
+            |> Result.defaultWith (fun error -> failwithf "Pair codec refused: %A" error)
+        let copy =
+            Fidelity.PSG.Binary.decode limits bytes
+            |> Result.defaultWith (fun error -> failwithf "Pair codec refused: %A" error)
+        Assert.True(copy.Emission.Boundary.CallbackInvocations = revision.Emission.Boundary.CallbackInvocations)
+        Assert.True(copy.Emission.Boundary.ClosedEntries = revision.Emission.Boundary.ClosedEntries)
+
+    [<Theory>]
+    [<InlineData("missing-formal")>]
+    [<InlineData("arity")>]
+    [<InlineData("order")>]
+    [<InlineData("boolean")>]
+    [<InlineData("empty")>]
+    member _.``Receiving integer pair public account refuses exact withdrawal``(shape: string) =
+        let graph = ClosedCallbackCases.receivingPairGraph false
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (fun errors -> failwithf "Pair source publication refused: %A" errors)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let boundary = revision.Emission.Boundary
+        let entry = boundary.ClosedEntries.Values |> Assert.Single
+        let invocation = boundary.CallbackInvocations[entry.Invocation]
+        let changed, part =
+            match shape with
+            | "missing-formal" ->
+                { boundary with ClosedEntries = boundary.ClosedEntries.Add(entry.Formation, {entry with Formals = entry.Formals.Tail; ParameterAdaptations = entry.ParameterAdaptations.Tail}) }, "Emission.Boundary.ClosedEntries.Declaration"
+            | "order" ->
+                { boundary with ClosedEntries = boundary.ClosedEntries.Add(entry.Formation, {entry with Formals = List.rev entry.Formals; ParameterAdaptations = List.rev entry.ParameterAdaptations}) }, "Emission.Boundary.ClosedEntries.Declaration"
+            | "arity" ->
+                let invocation = { invocation with Signature = { invocation.Signature with Parameters = invocation.Signature.Parameters.Tail } }
+                { boundary with CallbackInvocations = boundary.CallbackInvocations.Add(invocation.Identity, invocation) }, "Emission.Boundary.CallbackInvocations.Signature"
+            | "boolean" ->
+                let parameters = Array.copy invocation.Contract.Signature.Parameters
+                parameters[0] <- { parameters[0] with Type = BAREWire.Descriptors.TypeRef.Bool }
+                let invocation =
+                    { invocation with
+                        Signature = { invocation.Signature with Parameters = Fidelity.PSG.BoundaryScalar.Boolean :: invocation.Signature.Parameters.Tail }
+                        Contract = { invocation.Contract with Signature = { invocation.Contract.Signature with Parameters = parameters } } }
+                { boundary with CallbackInvocations = boundary.CallbackInvocations.Add(invocation.Identity, invocation) }, "Emission.Boundary.CallbackInvocations.Signature"
+            | "empty" ->
+                let invocation =
+                    { invocation with
+                        Signature = { invocation.Signature with Parameters = [] }
+                        Contract = { invocation.Contract with Signature = { invocation.Contract.Signature with Parameters = [||] } } }
+                { boundary with CallbackInvocations = boundary.CallbackInvocations.Add(invocation.Identity, invocation) }, "Emission.Boundary.CallbackInvocations.Signature"
+            | _ -> failwithf "Unknown withdrawal %s" shape
+        let changed = { revision with Emission = { revision.Emission with Boundary = changed } }
+        let reason =
+            if part = "Emission.Boundary.ClosedEntries.Declaration" then
+                "The closed entry differs from its original capture-free implementation, body or complete ordered native formals."
+            else
+                "The callback signature differs from its complete nonempty integer CDecl receiving quotation."
+        Assert.Contains(Fidelity.PSG.Integrity.check changed, fun error -> error.Part = part && error.Reason = reason)
+
+    [<Fact>]
+    member _.``Receiving integer pair refuses source callback with missing native formal``() =
+        let result =
+            ClosedCallbackCases.receivingCheckWith false
+                (ClosedCallbackCases.pairSource "let callback (_first: int) = 7")
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8207" && diagnostic.Message.Contains("declares 2 parameters; the binding takes 1"))
+        Assert.Empty(result.Graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry -> Some entry | _ -> None))

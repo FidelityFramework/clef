@@ -932,9 +932,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
 
             do!
                 require
-                    (parameters.Length = 1
+                    (not parameters.IsEmpty
                      && source.Contract.Signature.CallingConvention = BAREWire.Descriptors.CallConv.CDecl)
-                    "The first closed C entry profile requires one scalar integer native formal and CDecl."
+                    "The closed C entry profile requires nonempty scalar integer native formals and CDecl."
 
             let participants = Set.ofList source.Participants
 
