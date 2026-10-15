@@ -1645,7 +1645,152 @@ module private RuntimeSnapshotWriteFixture =
 
         graph, domain, call
 
+    let dynamicAdmitted () =
+        let source = """module DynamicSnapshotWrite
+let emit flag =
+    let n = if flag then 2 else 3
+    let input = Array.create n 65
+    let text = String.fromBytes input
+    let result = Sys.write 1 text.Bytes text.Length
+    result
+[<EntryPoint>]
+let main _ =
+    let first = emit true
+    let second = emit false
+    if first < 0 then 1 else if second < 0 then 1 else 0
+"""
+        let graph, projection =
+            IntrinsicWriteFixture.checkSource authority source |> IntrinsicWriteFixture.graphAndProjection
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let domain =
+            graph.Edges |> List.choose (fun edge ->
+                match edge.Role with EdgeRole.BoundaryDomain value -> Some value | _ -> None)
+            |> Assert.Single
+        graph,domain,call
+
+    let withDomain (graph:SemanticGraph) revised =
+        let edges =
+            graph.Edges |> List.map (fun edge ->
+                match edge.Role with EdgeRole.BoundaryDomain _ -> {edge with Role=EdgeRole.BoundaryDomain revised} | _ -> edge)
+        {graph with Edges=edges}
+
 type RuntimeSnapshotWriteCases() =
+    [<Fact>]
+    member _.``Dynamic snapshot borrow retains one actual count for both finite extents``() =
+        let graph,domain,call = RuntimeSnapshotWriteFixture.dynamicAdmitted ()
+        let snapshot = Assert.Single domain.StringBorrowSnapshots
+        let copy = Assert.Single domain.StringBorrowCopies
+        let allocation = Assert.Single domain.StringBorrowAllocations
+        Assert.Equal(Some(ValueRange.bounded 2I 3I),graph.Nodes[call.Count].ValueRange)
+        Assert.Equal(ValueRange.bounded 2I 3I,copy.CountCarrier.Range)
+        Assert.Equal(2I,allocation.MinimumCount)
+        Assert.Equal(3I,allocation.MaximumCount)
+        Assert.Equal(copy.CountOperand.Actual,copy.Count)
+        Assert.Equal(copy.CountOperand.Reference,allocation.Count)
+        let proof = domain.IntrinsicProofs |> List.filter (fun proof -> proof.Site=call.Site && proof.Ordinal=1) |> Assert.Single
+        Assert.Equal(ObligationBody.SnapshotBorrowBound(call.Count,snapshot.Site,copy.Site,allocation.Site,2I,3I),proof.Body)
+        Assert.Contains(graph.Edges,fun edge -> edge.Target=snapshot.Owner && edge.Role=EdgeRole.StringAscii)
+        let revision = RuntimeSnapshotWriteFixture.publish graph
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let output = System.Environment.GetEnvironmentVariable "FFI_DYNAMIC_SNAPSHOT_OUTPUT" |> Option.ofObj
+        match output with
+        | Some output when not (System.String.IsNullOrWhiteSpace output) ->
+            let allowed = "/home/hhh/repos/clef/artifacts/ffi-reconcile-20261013/"
+            let path = System.IO.Path.GetFullPath output
+            Assert.StartsWith(allowed,path)
+            Assert.False(System.IO.File.Exists path,"A frozen dynamic snapshot must not be overwritten.")
+            let directory = System.IO.Path.GetDirectoryName path |> Option.ofObj |> Option.defaultWith (fun () -> failwith "Missing snapshot directory")
+            System.IO.Directory.CreateDirectory directory |> ignore
+            let limits:Fidelity.PSG.Binary.Limits =
+                {MaxBytes=4*1024*1024;MaxCollectionLength=10000;MaxDepth=128;MaxStringBytes=1024*1024;MaxBigIntegerBytes=4096;MaxValues=1000000}
+            let bytes = Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith (sprintf "%A" >> failwith)
+            let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith (sprintf "%A" >> failwith)
+            let again = Fidelity.PSG.Binary.encode limits copy |> Result.defaultWith (sprintf "%A" >> failwith)
+            Assert.True((bytes=again),"Full dynamic snapshot codec bytes changed.")
+            System.IO.File.WriteAllBytes(path,bytes)
+        | _ -> ()
+
+    [<Fact>]
+    member _.``Dynamic snapshot borrow refuses an equal range from another count occurrence``() =
+        let graph,domain,call = RuntimeSnapshotWriteFixture.dynamicAdmitted ()
+        let copy = Assert.Single domain.StringBorrowCopies
+        Assert.NotEqual(call.Count,copy.Count)
+        Assert.Equal(graph.Nodes[call.Count].ValueRange,graph.Nodes[copy.Count].ValueRange)
+        let proofs = domain.IntrinsicProofs |> List.map (fun proof ->
+            match proof.Body with
+            | ObligationBody.SnapshotBorrowBound(_,snapshot,copySite,allocation,minimum,maximum) ->
+                {proof with Body=ObligationBody.SnapshotBorrowBound(copy.Count,snapshot,copySite,allocation,minimum,maximum)}
+            | _ -> proof)
+        let changed = RuntimeSnapshotWriteFixture.withDomain graph {domain with IntrinsicProofs=proofs}
+        match IntrinsicBoundary.project changed with
+        | Error failures -> Assert.Contains(failures,fun failure -> failure.Reason.Contains "runtime snapshot borrow proof lost its exact count")
+        | Ok _ -> failwith "Equal ranges substituted another count occurrence into the borrow proof."
+
+    [<Theory>]
+    [<InlineData("copy")>]
+    [<InlineData("allocation")>]
+    member _.``Dynamic snapshot borrow refuses withdrawn storage support`` dependency =
+        let graph,domain,_ = RuntimeSnapshotWriteFixture.dynamicAdmitted ()
+        let revised =
+            match dependency with
+            | "copy" -> {domain with StringBorrowCopies=[]}
+            | "allocation" -> {domain with StringBorrowAllocations=[]}
+            | _ -> failwith "Unknown dynamic snapshot support"
+        match RuntimeSnapshotWriteFixture.withDomain graph revised |> IntrinsicBoundary.project with
+        | Error failures -> Assert.Contains(failures,fun failure -> failure.Reason.Contains "dependency account is incomplete")
+        | Ok _ -> failwith "A dynamic borrow retained withdrawn storage support."
+
+    [<Fact>]
+    member _.``Dynamic snapshot borrow public reader refuses coherent equal range count substitution``() =
+        let graph,_,_ = RuntimeSnapshotWriteFixture.dynamicAdmitted ()
+        let revision = RuntimeSnapshotWriteFixture.publish graph
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let proof =
+            revision.Emission.Boundary.IntrinsicWriteProofs.Values
+            |> Seq.collect id
+            |> Seq.filter (fun proof ->
+                match proof.Body with Fidelity.PSG.ObligationBody.SnapshotBorrowBound _ -> true | _ -> false)
+            |> Assert.Single
+        let count,snapshot,copySite,allocation,minimum,maximum =
+            match proof.Body with
+            | Fidelity.PSG.ObligationBody.SnapshotBorrowBound(a,b,c,d,e,f) -> a,b,c,d,e,f
+            | _ -> failwith "Missing published dynamic borrow claim."
+        let copy = revision.Emission.Memory.ArrayCopies[copySite]
+        Assert.NotEqual(count,copy.Count)
+        Assert.Equal(revision.Emission.Numeric.Values[count].Range,copy.CountCarrier.Range)
+        let body = Fidelity.PSG.ObligationBody.SnapshotBorrowBound(copy.Count,snapshot,copySite,allocation,minimum,maximum)
+        let old = revision.CurrentClaims[proof.Obligation]
+        let changed = {old with Body=body}
+        let boundary = revision.Emission.Boundary
+        // Change all stored claim copies together: only original source incidence refutes this.
+        let proofs = boundary.IntrinsicWriteProofs |> Map.map (fun _ rows ->
+            rows |> List.map (fun row -> if row.Obligation=proof.Obligation then {row with Body=body} else row))
+        let revised =
+            {revision with
+                Obligations=revision.Obligations |> List.map (fun row -> if row=old then changed else row)
+                CurrentClaims=revision.CurrentClaims.Add(proof.Obligation,changed)
+                Emission={revision.Emission with Boundary={boundary with IntrinsicWriteProofs=proofs}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check revised,fun issue ->
+            issue.Part="Emission.Boundary.IntrinsicWriteProofs.SnapshotBorrowBound"
+            && issue.Reason="The runtime borrow claim differs from its exact count, snapshot, copy or bound-operand allocation account.")
+
+    [<Fact>]
+    member _.``Dynamic snapshot borrow invalidates an inverted actual allocation guard``() =
+        let graph,domain,_ = RuntimeSnapshotWriteFixture.dynamicAdmitted ()
+        let allocation = Assert.Single domain.StringBorrowAllocations
+        let condition = graph.Nodes[allocation.Requirement.Condition]
+        let changed =
+            match condition.Kind with
+            | SemanticKind.Application(callee,[left;right]) ->
+                {condition with Kind=SemanticKind.Application(callee,[right;left]);Children=[callee;right;left]}
+            | SemanticKind.IfThenElse(predicate,yes,Some no) ->
+                {condition with Kind=SemanticKind.IfThenElse(predicate,no,Some yes);Children=[predicate;no;yes]}
+            | other -> failwithf "Expected the actual allocation predicate or short-circuit guard, got %A" other
+        let graph = {graph with Nodes=graph.Nodes.Add(condition.Id,changed)}
+        match Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project graph with
+        | Error failures -> Assert.Contains(failures,fun failure -> failure.Reason.Contains "exact memory source, guard, meet or declaration premises changed")
+        | Ok _ -> failwith "An inverted actual allocation guard retained admitted memory authority."
+
     [<Fact>]
     member _.``Native write retains an immutable UTF8 snapshot with an exact local count``() =
         RuntimeSnapshotWriteFixture.admitted "" |> ignore

@@ -38,6 +38,35 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 | [view] when view.StaticOrigins.IsEmpty ->
                     domain.StringBorrowSnapshots |> List.exists (fun snapshot -> snapshot.Site=view.ExtentSource)
                 | _ -> true))
+        let snapshotProofsCurrent =
+            domain.IntrinsicCalls |> List.forall (fun call ->
+                match domain.ByteViews |> List.filter (fun view -> view.Site=call.Buffer) with
+                | [view] when view.StaticOrigins.IsEmpty ->
+                    match domain.StringBorrowSnapshots |> List.filter (fun snapshot -> snapshot.Site=view.ExtentSource),
+                          domain.IntrinsicProofs |> List.filter (fun proof -> proof.Site=call.Site && proof.Ordinal=1),
+                          graph.Nodes.TryFind call.Count |> Option.bind _.ValueRange with
+                    | [snapshot],[proof],Some(ValueRange.Bounded(minimum,maximum)) ->
+                        match domain.StringBorrowCopies |> List.filter (fun copy -> copy.Site=snapshot.Snapshot) with
+                        | [copy] ->
+                            match copy.Allocation |> Option.bind (fun id -> domain.StringBorrowAllocations |> List.tryFind (fun allocation -> allocation.Site=id)) with
+                            | Some allocation ->
+                                snapshot.Extent=copy.CountCarrier && allocation.Count=copy.CountOperand.Reference &&
+                                copy.Count=copy.CountOperand.Actual && copy.CountCarrier.Site=copy.CountOperand.Actual &&
+                                snapshot.Extent.Range=ValueRange.bounded minimum maximum &&
+                                allocation.CountCarrier.Range=ValueRange.bounded minimum maximum &&
+                                allocation.MinimumCount=minimum && allocation.MaximumCount=maximum &&
+                                (match proof.Body with
+                                 | ObligationBody.InputBufferBound(count,capacity) when minimum=maximum ->
+                                     bigint count=minimum && bigint capacity=minimum
+                                 | ObligationBody.SnapshotBorrowBound(count,viewSite,copySite,allocationSite,lo,hi) ->
+                                     minimum<maximum && 0I<=minimum && count=call.Count &&
+                                     viewSite=snapshot.Site && copySite=copy.Site && allocationSite=allocation.Site &&
+                                     lo=minimum && hi=maximum
+                                 | _ -> false)
+                            | None -> false
+                        | _ -> false
+                    | _ -> false
+                | _ -> true)
         let anchorValid = graph.Nodes.TryFind domainRow.Target |> Option.exists (fun node ->
             Ingredients.ownedNode node && match node.Kind with SemanticKind.Literal NativeLiteral.Unit -> true | _ -> false)
         if not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.platformPremise graph.Platform || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
@@ -46,6 +75,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             Error (domain.Failures |> List.map (fun (site, participants, reason) -> failure (Some site) participants reason))
         elif not borrowMembership then
             stale "The source-published snapshot, copy or allocation dependency account is incomplete."
+        elif not snapshotProofsCurrent then
+            stale "The runtime snapshot borrow proof lost its exact count, snapshot, copy, allocation or finite range incidence."
         elif (match domain.StringOriginRelations with
               | Some expected ->
                   StringOrigins.relations graph <> Ok expected || domain.StringOriginRoots <> Some graph.DeclarationRoots

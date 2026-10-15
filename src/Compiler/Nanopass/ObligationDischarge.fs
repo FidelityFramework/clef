@@ -72,6 +72,10 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
         | Error reason -> invalidArg "body" reason
+    | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
+        match Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum with
+        | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
+        | Error reason -> invalidArg "body" reason
     | ObligationBody.ForeignResultCoverage model ->
         match foreignProjection model with
         | Error reason -> invalidArg "body" reason
@@ -498,6 +502,10 @@ let unavailable (obligations: ObligationInfo list) : UnavailableObligation list 
             match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
             | Ok _ -> None
             | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
+        | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
+            match Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum with
+            | Ok _ -> None
+            | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
         | _ -> None)
 
 let trySmtLib (obligations: ObligationInfo list) : Result<string, UnavailableObligation list> =
@@ -580,11 +588,12 @@ let private foreignLedgerFields (model: ForeignResultCoverageModel) =
 let ledgerJson (obligations: ObligationInfo list) : string =
     let hasPending = unavailable obligations |> List.isEmpty |> not
 
-    let hasForeign =
+    let hasConditional =
         obligations
         |> List.exists (fun obligation ->
             match obligation.Body with
-            | ObligationBody.ForeignResultCoverage _ | ObligationBody.ResourceConversion _ | ObligationBody.ResourceCleanup _ -> true
+            | ObligationBody.ForeignResultCoverage _ | ObligationBody.ResourceConversion _ | ObligationBody.ResourceCleanup _
+            | ObligationBody.SnapshotBorrowBound _ -> true
             | _ -> false)
 
     let rows =
@@ -606,7 +615,7 @@ let ledgerJson (obligations: ObligationInfo list) : string =
                 | _ -> []
 
             let readiness =
-                if not hasPending && not hasForeign then
+                if not hasPending && not hasConditional then
                     []
                 else
                     let state, reasons =
@@ -624,6 +633,10 @@ let ledgerJson (obligations: ObligationInfo list) : string =
                             match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
                             | Ok _ -> "ready", []
                             | Error reason -> "pending",[reason]
+                        | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
+                            match Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum with
+                            | Ok _ -> "ready",[]
+                            | Error reason -> "pending",[reason]
                         | _ -> "ready", []
 
                     [ "state", JsonValue.String state; "missingPremises", stringArray reasons ]
@@ -634,7 +647,7 @@ let ledgerJson (obligations: ObligationInfo list) : string =
         [
             "version",
             JsonValue.String(
-                if hasForeign then "1.2"
+                if hasConditional then "1.2"
                 elif hasPending then "1.1"
                 else "1.0"
             )

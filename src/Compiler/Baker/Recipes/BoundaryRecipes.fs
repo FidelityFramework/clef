@@ -766,14 +766,20 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
                         "A runtime string borrow cannot cross its snapshot allocation's lexical activation."
                 do! require (snapshot.Representation=import.ByteRepresentation && allocation.Element=snapshot.Element && allocation.ElementBytes=1)
                         "The runtime string's snapshot and allocation disagree with the native byte carrier."
-                let! countValue =
+                let! minimum,maximum =
                     match countRange with
-                    | ValueRange.Bounded(lo,hi) when lo=hi && 0I<=lo && hi<=bigint System.Int64.MaxValue -> Ok lo
-                    | _ -> Error "A runtime string write requires a singleton complete descriptor count; relational dynamic extent proof remains pending."
+                    | ValueRange.Bounded(lo,hi) when 0I<=lo && lo<=hi && hi<=bigint System.Int64.MaxValue -> Ok(lo,hi)
+                    | _ -> Error "A runtime string write requires its actual finite nonnegative descriptor count range."
                 do! require (snapshot.Extent.Range=countRange && allocation.CountCarrier.Range=countRange &&
-                             allocation.MinimumCount=countValue && allocation.MaximumCount=countValue)
+                             allocation.MinimumCount=minimum && allocation.MaximumCount=maximum)
                         "The runtime write count must equal its exact copied descriptor and allocation extent."
-                return ObligationBody.InputBufferBound(int64 countValue,int64 countValue),
+                do! require (copy.Count=copy.CountOperand.Actual && copy.CountCarrier.Site=copy.CountOperand.Actual &&
+                             allocation.Count=copy.CountOperand.Reference)
+                        "The runtime borrow lost its original copy count operand and allocation reference."
+                let borrowProof =
+                    if minimum=maximum then ObligationBody.InputBufferBound(int64 minimum,int64 minimum)
+                    else ObligationBody.SnapshotBorrowBound(count,snapshot.Site,copy.Site,allocation.Site,minimum,maximum)
+                return borrowProof,
                        Set.union lineage allocation.Participants, snapshots, copies, [allocation] }
         let! platform = Declarations.resolve graph |> needed "Sys.write lost its selected source platform description."
         let! result = platform.Returns |> List.filter (fun bound -> bound.Node = import.ReturnContract && bound.Endpoint = "write" && bound.AtMost = "count") |> unique "Sys.write lost its exact declared signed return bound."

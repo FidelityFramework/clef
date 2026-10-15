@@ -81,6 +81,10 @@ let proofOutcome body =
         | ObligationBody.StringBorrowBound origins ->
             not origins.IsEmpty && origins |> List.forall (fun (count, extent, storage) -> 0I <= count && count = extent && extent < storage)
         | ObligationBody.InputBufferBound(count, allocation) -> 0L<=count && count<=allocation
+        | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
+            // Source readiness only. Actual solver and satisfiable-premise
+            // receipts remain required before backend execution authority.
+            Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum |> Result.isOk
         | _ -> false
     if holds then BoundaryProofOutcome.Proven else BoundaryProofOutcome.Refuted
 

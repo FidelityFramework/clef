@@ -261,7 +261,7 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
         let participants=[read;write] |> List.choose id |> List.fold(fun found (item:MemoryArrayAccessWitness) -> Set.union found item.Participants) participants
         { Site=construction.Site;Source=construction.Source.Actual;SourceOffset=construction.SourceOffset.Actual
           Destination=construction.Destination;DestinationOffset=construction.DestinationOffset.Actual
-          Count=construction.Count.Actual;CountCarrier=actualCount;Allocation=construction.Allocation;Loop=construction.Loop
+          Count=construction.Count.Actual;CountCarrier=actualCount;CountOperand=construction.Count;Allocation=construction.Allocation;Loop=construction.Loop
           Read=read;Write=write;Requirements=requirements;Participants=participants }
     for construction in allocations do
         required<-Set.add construction.Site required

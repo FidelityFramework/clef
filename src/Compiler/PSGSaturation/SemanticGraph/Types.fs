@@ -562,6 +562,9 @@ type ObligationBody =
     | ForeignResultCoverage of ForeignResultCoverageModel
     | ResourceConversion of ResourceConversionModel
     | ResourceCleanup of ResourceCleanupModel
+    /// One dynamic snapshot count is shared by the write, complete copy and
+    /// allocation. Exact source incidence is replayed separately from bounds.
+    | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint
 
 /// The obligation record carried by an Obligation node.
 type ObligationInfo = {
@@ -1534,7 +1537,7 @@ type ArrayCopyConstruction = {
 }
 type MemoryArrayCopyWitness = {
     Site: NodeId; Source: NodeId; SourceOffset: NodeId; Destination: NodeId; DestinationOffset: NodeId
-    Count: NodeId; CountCarrier: ScalarCarrier; Allocation: NodeId option; Loop: NodeId option
+    Count: NodeId; CountCarrier: ScalarCarrier; CountOperand: ArrayBoundOperand; Allocation: NodeId option; Loop: NodeId option
     Read: MemoryArrayAccessWitness option; Write: MemoryArrayAccessWitness option
     Requirements: RequirementWitness list; Participants: Set<NodeId>
 }
