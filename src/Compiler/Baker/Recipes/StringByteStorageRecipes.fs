@@ -18,6 +18,28 @@ module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformRe
 
 type Plan = { Site: SemanticNode; Input: NodeId; Origin: NodeId; Members: NodeId list; Premises: NodeId list; Range: ValueRange; Representation: string; Text: EdgeRole }
 
+/// Applied source evidence only. Physical reference/count/result adapters remain
+/// separate requirements; a declared foreign byte ingress does not establish text.
+type WritableApplication = {
+    Site: NodeId; Callee: NodeId; Arguments: NodeId list
+    Declaration: PlatformResolution.DeclaredWritableBuffer
+    Buffer: NodeId; Count: NodeId; Allocation: NodeId; Capacity: NodeId
+    CountRange: ValueRange; CapacityRange: ValueRange; StorageRange: ValueRange
+    Representation: string; Participants: NodeId list
+}
+type WritableFailure = {
+    Declaration: PlatformResolution.DeclaredWritableBuffer
+    Participants: NodeId list
+    Reason: string
+    CountCoverage: ObligationBody option
+}
+
+type private CheckedBuilder() =
+    member _.Bind(value, next) = Result.bind next value
+    member _.Return(value) = Ok value
+let private checked' = CheckedBuilder()
+let private needed reason = function Some value -> Ok value | None -> Result.Error reason
+
 let private byteRepresentation = Clef.Compiler.Baker.Ingredients.StringBytes.byteRepresentation
 
 let private arrayElement (node: SemanticNode) =
@@ -75,6 +97,7 @@ let private analyze renew (graph: SemanticGraph) =
     let families = origins |> Map.toList |> List.groupBy snd |> List.map (fun (root, entries) -> root, List.map fst entries) |> Map.ofList
     let members root = families[root]
     let roots = origins.Values |> Set.ofSeq
+    let descriptors = PlatformResolution.readDescriptors graph
     let mutable blocked = Set.empty
     let initialization =
         roots |> Seq.map (fun root ->
@@ -85,6 +108,55 @@ let private analyze renew (graph: SemanticGraph) =
                 | Result.Error _ -> blocked <- Set.add root blocked; root, []
             | _ -> root, []) |> Map.ofSeq
     let block id = origins.TryFind id |> Option.iter (fun root -> blocked <- Set.add root blocked)
+    let representation = byteRepresentation graph
+    let writable = nodes.Values |> Seq.choose(fun site ->
+        match site.Kind with
+        | SemanticKind.Application(callee, arguments) ->
+            match BoundaryDeclarations.target graph callee with
+            | Some(binding, path) when BoundaryDeclarations.isExternal binding ->
+                match descriptors.WritableBuffers |> List.filter(fun row -> row.Declaration.Binding=binding.Id) with
+                | [declaration] ->
+                    let observed = checked' {
+                        do! if descriptors.Findings.IsEmpty then Ok() else Result.Error "The writable descriptor census has unresolved findings."
+                        do! if arguments.Length=declaration.Declaration.Formals.Length then Ok() else Result.Error "A writable application requires its complete ordered actual vector."
+                        let! buffer=List.tryItem declaration.Parameter arguments |> needed "The writable buffer actual is absent."
+                        let! count=List.tryItem declaration.CountParameter arguments |> needed "The writable count actual is absent."
+                        let! allocation=origins.TryFind buffer |> needed "The writable buffer requires an exact local zeroCreate allocation and immutable aliases."
+                        let! capacity =
+                            match calls.TryFind allocation, nodes[allocation].Kind with
+                            | Some({Module=IntrinsicModule.Array;Operation="zeroCreate"},[capacity]), _ -> Ok capacity
+                            | _, SemanticKind.ArrayAllocate _ ->
+                                match Clef.Compiler.Baker.Ingredients.ArrayInitialization.tryInitialization graph allocation with
+                                | Ok _ -> graph.Edges |> List.choose(fun edge ->
+                                    match edge.Role with
+                                    | EdgeRole.ArrayAllocationConstruction construction when construction.Site=allocation -> Some construction.Count.Actual
+                                    | _ -> None) |> List.tryExactlyOne |> needed "The writable allocation lost its original zeroCreate count."
+                                | Result.Error reason -> Result.Error reason
+                            | _ -> Result.Error "The first writable profile requires validated zeroCreate byte storage."
+                        let! rep,format=representation |> needed "The writable allocation requires an explicit unsigned-8 storage format."
+                        let range id=sourceFacts.Value.TryFind id |> Option.defaultValue ValueRange.Unbounded
+                        let countRange,capacityRange=range count,range capacity
+                        do! match countRange,capacityRange with
+                            | ValueRange.Bounded(lo,hi),ValueRange.Bounded(capacityLo,capacityHi) when lo<=hi && capacityLo<=capacityHi -> Ok()
+                            | _ -> Result.Error "The writable count domain must be finite, nonnegative and contained in the actual allocation's byte-slot capacity domain."
+                        return {Site=site.Id;Callee=callee;Arguments=arguments;Declaration=declaration;Buffer=buffer;Count=count
+                                Allocation=allocation;Capacity=capacity;CountRange=countRange;CapacityRange=capacityRange
+                                StorageRange=ValueRange.Unbounded;Representation=rep.Name
+                                Participants=List.distinct(site.Id::callee::buffer::count::allocation::capacity::format::(Set.toList path)@arguments@declaration.Participants@initialization[allocation])} }
+                    let observed =
+                        observed |> Result.mapError(fun reason ->
+                            {Declaration=declaration;Participants=List.distinct(site.Id::callee::arguments@(Set.toList path)@declaration.Participants);Reason=reason;CountCoverage=None})
+                        |> Result.bind(fun application ->
+                            match application.CountRange,application.CapacityRange with
+                            | ValueRange.Bounded(lo,hi),ValueRange.Bounded(capacityLo,_) when lo<0I || hi>capacityLo ->
+                                Result.Error {Declaration=declaration;Participants=application.Participants
+                                              Reason="The finite writable count domain is not covered by the actual allocation's byte-slot capacity."
+                                              CountCoverage=Some(ObligationBody.IntegerRepresentationCoverage(lo,hi,0I,capacityLo))}
+                            | _ -> Ok application)
+                    Some(site.Id, observed)
+                | _ -> None
+            | _ -> None
+        | _ -> None) |> Map.ofSeq
     // Every use must be covered, including references that do not occur in
     // Children. A known body is not permission to pass storage through its ABI.
     for node in nodes.Values do
@@ -98,7 +170,10 @@ let private analyze renew (graph: SemanticGraph) =
                     | IntrinsicModule.String, "fromBytes", 1 -> true
                     | _ -> false
                 args |> List.iteri (fun index arg -> if not allowed || index <> 0 then block arg)
-            | None -> directArgs |> List.iter block
+            | None ->
+                match writable.TryFind node.Id with
+                | Some(Ok application) -> directArgs |> List.iteri(fun ordinal actual -> if ordinal<>application.Declaration.Parameter then block actual)
+                | _ -> directArgs |> List.iter block
         | SemanticKind.Binding(_, false, _, _) | SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ | SemanticKind.Sequential _ -> ()
         | SemanticKind.IndexGet _ | SemanticKind.IndexSet _ -> ()
         | SemanticKind.Lambda(_, body, captures, _, _) ->
@@ -120,9 +195,14 @@ let private analyze renew (graph: SemanticGraph) =
         |> Seq.groupBy fst |> Seq.map (fun (root, writes) -> root, writes |> Seq.map snd |> Seq.toList) |> Map.ofSeq
     let stores = roots |> Seq.map (fun root -> root, stores.TryFind root |> Option.defaultValue []) |> Map.ofSeq
     let seeded root =
-        match calls.TryFind root with
-        | Some({ Module = IntrinsicModule.Array; Operation = "zeroCreate" }, [_]) -> ValueRange.point 0I
-        | _ -> ValueRange.Empty
+        let initial =
+            match calls.TryFind root with
+            | Some({ Module = IntrinsicModule.Array; Operation = "zeroCreate" }, [_]) -> ValueRange.point 0I
+            | _ -> ValueRange.Empty
+        writable.Values |> Seq.fold(fun range application ->
+            match application with
+            | Ok application when application.Allocation=root -> ValueRange.join range (ValueRange.bounded 0I 255I)
+            | _ -> range) initial
     let readInput id =
         match nodes.TryFind id with
         | Some { Kind = SemanticKind.IndexGet(input, _) } -> Some input
@@ -180,7 +260,12 @@ let private analyze renew (graph: SemanticGraph) =
         ranges <- next
         rounds <- rounds + 1
     if not stable then ranges <- ranges |> Map.map (fun _ _ -> ValueRange.Unbounded)
-    let representation = byteRepresentation graph
+    let writable = writable |> Map.map(fun _ observed -> observed |> Result.bind(fun application ->
+        let range=ranges[application.Allocation]
+        if ValueRange.contains (ValueRange.bounded 0I 255I) range && ValueRange.isObservable range then
+            Ok {application with StorageRange=range}
+        else Result.Error {Declaration=application.Declaration;Participants=application.Participants;
+                    Reason="The writable allocation's complete local write family is not established within 0..255; narrowing cannot be replaced by masking.";CountCoverage=None}) )
     let rec constantBytes seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -238,7 +323,8 @@ let private analyze renew (graph: SemanticGraph) =
                             values seen (more @ tail) (Option.toList dependency @ dependencies) (item :: nodesRead)
                 let dependencies, valuesRead = values Set.empty (writes |> List.map snd) [] []
                 visitRoots (Set.add current seen) (dependencies @ rest)
-                    (current :: members current @ initialization[current] @ (writes |> List.collect (fun (writer, stored) -> [writer; stored])) @ valuesRead @ accumulated)
+                    (current :: members current @ initialization[current] @ (writes |> List.collect (fun (writer, stored) -> [writer; stored])) @
+                     (writable.Values |> Seq.choose(function Ok application when application.Allocation=current -> Some application.Participants | _ -> None) |> Seq.toList |> List.concat) @ valuesRead @ accumulated)
         visitRoots Set.empty [root] []
     // Several reads can share one owning family. Compute its dependency closure
     // once in this analysis; no persistent temporal schema is introduced here.
@@ -247,6 +333,8 @@ let private analyze renew (graph: SemanticGraph) =
         match premiseCache.TryGetValue root with
         | true, support -> support
         | _ -> let support = collectPremises root in premiseCache.Add(root, support); support
+    let writable = writable |> Map.map(fun _ observed -> observed |> Result.map(fun application ->
+        {application with Participants=List.distinct(application.Participants@premises application.Allocation)}))
     let sites =
         nodes.Values |> Seq.choose (fun node ->
             match calls.TryFind node.Id with
@@ -255,10 +343,14 @@ let private analyze renew (graph: SemanticGraph) =
                     edge.Role = EdgeRole.StringByteSnapshot && (match edge.Sources with [_; copy] -> copy = input | _ -> false))) -> Some(node, input)
             | _ -> None)
         |> Seq.toList
-    nodes, origins, members, blocked, ranges, representation, validText, premises, sites, readInput
+    nodes, origins, members, blocked, ranges, representation, validText, premises, sites, readInput, writable
+
+let writableApplications graph =
+    let _,_,_,_,_,_,_,_,_,_,applications=analyze true graph
+    applications
 
 let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list =
-    let nodes, origins, members, blocked, ranges, representation, validText, premises, sites, readInput = analyze false graph
+    let nodes, origins, members, blocked, ranges, representation, validText, premises, sites, readInput, writable = analyze false graph
     let plans, diagnostics = sites |> List.fold (fun (plans, diagnostics) (site, input) ->
         match origins.TryFind input, representation with
         | Some root, Some(rep, declaration) when not (blocked.Contains root) ->
@@ -272,7 +364,9 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
             else plans, diagnostic site [input; root] "every stored integer must be proved within 0..255." :: diagnostics
         | _, None -> plans, diagnostic site [input] "the platform must offer an unsigned 8-bit representation." :: diagnostics
         | _ -> plans, diagnostic site [input] "the array must have a closed allocation and known writes; an unknown origin or escaping alias is not admitted." :: diagnostics) ([], [])
-    let admitted = plans |> List.collect (fun plan -> plan.Premises |> List.choose (fun id -> origins.TryFind id)) |> Set.ofList
+    let admitted = Set.union
+                       (plans |> List.collect (fun plan -> plan.Premises |> List.choose (fun id -> origins.TryFind id)) |> Set.ofList)
+                       (writable.Values |> Seq.choose(function Ok application -> Some application.Allocation | _ -> None) |> Set.ofSeq)
     let reads = nodes.Values |> Seq.choose (fun node ->
         readInput node.Id |> Option.bind (fun input -> origins.TryFind input |> Option.bind (fun root ->
             if admitted.Contains root then Some(node, input, root) else None))) |> Seq.toList
@@ -291,7 +385,7 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
 let establishScalarRanges (graph: SemanticGraph) : Hyperedge list * Hyperedge list * Diagnostic list =
     let markers = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.StringByteRead)
     if markers.IsEmpty then [], [], [] else
-    let nodes, origins, _, blocked, ranges, representation, _, premises, _, readInput = analyze true graph
+    let nodes, origins, _, blocked, ranges, representation, _, premises, _, readInput, _ = analyze true graph
     let bounds = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.StringByteRange _ -> true | _ -> false)
                  |> List.groupBy _.Target |> Map.ofList
     let missing = "The scalar range of this array read lacks its complete current allocation and write premises."

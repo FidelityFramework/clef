@@ -940,6 +940,55 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                           PointerBits = resource.PointerBits; AcquisitionType = resource.AcquisitionType; ResultType = resource.ResultType; HandleType = resource.HandleType
                           Contract = resource.Contract; DeclarationFacts = facts; Participants = Map.keys facts |> Set.ofSeq }
                     Map.add row.Identity row rows,errors) (Map.empty,[])
+    // The source effect account is useful before a physical reference adapter
+    // exists. Its coverage citizens constrain exact ordered actuals and current
+    // descriptor premises; an adapter requirement remains explicitly Pending.
+    let writableRequirements, writableRequirementErrors =
+        StringByteStorageRecipes.writableApplications graph
+        |> Map.fold(fun (enrichment,errors) site observed ->
+            let node=graph.Nodes[site]
+            let anchor (declaration:Declarations.DeclaredWritableBuffer) role =
+                // Current source anchor, not a numeric citizen identity or a
+                // cross-revision/reuse key. Premises and proposition remain separate.
+                let owners=List.unfold(fun (parent,seen) ->
+                    parent |> Option.filter(fun id -> not(Set.contains id seen)) |> Option.bind(fun id ->
+                        graph.Nodes.TryFind id |> Option.map(fun owner -> owner,(owner.Parent,Set.add id seen)))) (node.Parent,Set.empty)
+                           |> List.choose(fun owner -> match owner.Kind with SemanticKind.Binding(name,_,_,_) | SemanticKind.ModuleDef(name,_) -> Some name | _ -> None)
+                           |> List.rev
+                let segments=owners@[declaration.Contract.Binding;fmtRange node.Range;role]
+                let address=segments |> List.map(fun value -> string value.Length+":"+value) |> String.concat ""
+                "foreign_writable_"+System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes address)
+            let refs (declaration:Declarations.DeclaredWritableBuffer) =
+                [declaration.Contract.Hypothesis.Identity;declaration.Contract.Hypothesis.Version;declaration.Contract.Hypothesis.Source]
+            let pending declaration participants reason =
+                let info={Id=anchor declaration "adapter";Kind="foreign-writable-buffer-adapter";Logic="QF_LIA"
+                          Statement="A declared writable byte application requires its exact source storage/count coverage and a separately settled native reference adapter."
+                          Source=fmtRange node.Range;Refs=refs declaration;Body=ObligationBody.Pending [reason]}
+                let citizen=obligationNode node enrichId info |> Ingredients.markOwned
+                Enrichment.combine enrichment {NewNodes=[citizen];Annotated=[];NewEdges=[constrains participants citizen]},errors
+            let coverage declaration participants role body =
+                let info={Id=anchor declaration role;Kind="foreign-writable-buffer-"+role;Logic="QF_LIA"
+                          Statement=(if role="storage" then "The complete inferred local-store and declared foreign-ingress value domain fits the explicitly offered unsigned-8 representation."
+                                     else "The inferred count domain is contained in the original allocation's byte-slot capacity; exact source incidence is a separate premise, not a solver pointer claim.")
+                          Source=fmtRange node.Range;Refs=refs declaration;Body=body}
+                let citizen=obligationNode node enrichId info |> Ingredients.markOwned
+                {NewNodes=[citizen];Annotated=[];NewEdges=[constrains participants citizen]}
+            match observed with
+            | Error failure ->
+                let current,errors=pending failure.Declaration failure.Participants failure.Reason
+                let bound=failure.CountCoverage |> Option.map(coverage failure.Declaration failure.Participants "count") |> Option.defaultValue Enrichment.empty
+                Enrichment.combine current bound,errors
+            | Ok application ->
+                let bodies =
+                    match application.CountRange,application.CapacityRange,application.StorageRange with
+                    | ValueRange.Bounded(lo,hi),ValueRange.Bounded(capacityLo,_),ValueRange.Bounded(storageLo,storageHi) ->
+                        ["count",ObligationBody.IntegerRepresentationCoverage(lo,hi,0I,capacityLo)
+                         "storage",ObligationBody.IntegerRepresentationCoverage(storageLo,storageHi,0I,255I)]
+                    | _ -> ["count",ObligationBody.Pending ["The exact writable count/storage source domains are not established."]]
+                let covered=bodies |> List.fold(fun current (role,body) ->
+                    Enrichment.combine current (coverage application.Declaration application.Participants role body)) Enrichment.empty
+                let current,errors=pending application.Declaration application.Participants "The source byte/count account is established; native writable reference/count/result adapters remain unestablished."
+                Enrichment.combine current covered,errors) (Enrichment.empty,[])
     let writableDeclarations, writableErrors =
         descriptors.WritableBuffers |> List.fold (fun (rows,errors) writable ->
             let roots=[writable.DescriptorBinding;writable.AbiDescriptorBinding]
@@ -995,7 +1044,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     | _ -> enrichment,errors
                 | _ -> enrichment,errors
             | _ -> enrichment,errors) (Enrichment.empty,[])
-    let initialErrors = writableErrors @ resourceRequirementErrors @ resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
+    let initialErrors = writableRequirementErrors @ writableErrors @ resourceRequirementErrors @ resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
     let imported binding =
         checked' {
             let! library =
@@ -1856,8 +1905,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
-    Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
+    Enrichment.combine writableRequirements (Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
         (Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment)
+    )
 
 let elaborate graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore graph)

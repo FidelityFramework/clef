@@ -141,14 +141,14 @@ let readWritableBuffer1Descriptor : Expr<WritableBufferDescriptor> = <@ {
         |> Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish
         |> Result.defaultWith(fun errors -> failwithf "%A" errors))
 
-    let resourceApplication body =
+    let applicationFor source moduleName body =
         let root =
             System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/resource-application-tests", System.Guid.NewGuid().ToString("N")))
         System.IO.Directory.CreateDirectory root |> ignore
         let write (name:string) (text:string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root,name),text)
         write "authority.clef" (SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\""))
-        write "resource.clef" resourceSource
-        write "main.clef" ("module ResourceApplicationMain\n[<EntryPoint>]\nlet main _ =\n" + body)
+        write "resource.clef" source
+        write "main.clef" ("module "+moduleName+"\n[<EntryPoint>]\nlet main _ =\n" + body)
         write "resource.fidproj" """
 [package]
 name="ResourceApplicationRequirement"
@@ -169,6 +169,29 @@ libraries=["c"]
 """
         Clef.Compiler.Project.ProjectChecker.checkProject (System.IO.Path.Combine(root,"resource.fidproj"))
         |> Result.defaultWith(fun error -> failwithf "%A" error)
+
+    let resourceApplication body = applicationFor resourceSource "ResourceApplicationMain" body
+    let writableApplication body = applicationFor writableSource "WritableApplicationMain" body
+
+    let writableProof expected (info:ObligationInfo) =
+        let query=Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib [info]
+                  |> Result.defaultWith(fun unavailable -> failwithf "A concrete writable coverage body was unavailable: %A" unavailable)
+        let start=System.Diagnostics.ProcessStartInfo("cvc5",UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true)
+        start.ArgumentList.Add "--lang=smt2"
+        use child=System.Diagnostics.Process.Start start
+        child.StandardInput.Write query
+        child.StandardInput.Close()
+        let output,error=child.StandardOutput.ReadToEndAsync(),child.StandardError.ReadToEndAsync()
+        child.WaitForExit()
+        let directory=System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__,"../../artifacts/writable-buffer-proof-tests"))
+        System.IO.Directory.CreateDirectory directory |> ignore
+        let path=System.IO.Path.Combine(directory,System.Guid.NewGuid().ToString("N")+".smt2")
+        System.IO.File.WriteAllText(path,query)
+        let digest=System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes query) |> System.Convert.ToHexString
+        printfn "WRITABLE_PROOF body=%A query=%s sha256=%s solver=%s" info.Body path digest (output.Result.Trim())
+        Assert.Equal(0,child.ExitCode)
+        Assert.True(error.Result="",error.Result)
+        Assert.Equal(expected,output.Result.Trim())
 
     let resourceRequirements (graph:SemanticGraph) =
         graph.Nodes.Values |> Seq.choose(fun node ->
@@ -295,6 +318,9 @@ type ForeignReferenceTests() =
     [<InlineData("readonly","explicit unsigned-8 Reference element contract")>]
     [<InlineData("wrong-binding","Binding must select one exact qualified extern")>]
     [<InlineData("empty-version","nonempty versioned hypothesis")>]
+    [<InlineData("reference-count","CountParameter requires")>]
+    [<InlineData("boolean-count","CountParameter requires")>]
+    [<InlineData("cname","FunctionDescriptor.CName differs")>]
     member _.``Writable buffer declaration source refuses wrong association and missing premise``(shape:string,reason:string) =
         let original=ForeignCases.writableSource
         let changed=
@@ -305,6 +331,9 @@ type ForeignReferenceTests() =
             | "readonly" -> original.Replace("Value | Reference","Value | Reference | ReadOnlyReference").Replace("PassBy = Reference","PassBy = ReadOnlyReference")
             | "wrong-binding" -> original.Replace("Binding = \"Test.Native.read\"","Binding = \"Test.Native.native_read\"")
             | "empty-version" -> original.Replace("Version = \"2024\"","Version = \"\"")
+            | "reference-count" -> original.Replace("(count: int)","(count: int array)").Replace("Name = \"count\"; Type = Integer (Unsigned, 64); PassBy = Value","Name = \"count\"; Type = Integer (Unsigned, 8); PassBy = Reference")
+            | "boolean-count" -> original.Replace("| Void","| Void | Bool").Replace("(count: int)","(count: bool)").Replace("Type = Integer (Unsigned, 64)","Type = Bool")
+            | "cname" -> original.Replace("CName = \"native_read\"","CName = \"different_symbol\"")
             | _ -> failwith "Unknown writable declaration perturbation"
         Assert.NotEqual<string>(original,changed)
         let result=ForeignCases.declarationCheckFor [changed,"writable-declarations.clef"]
@@ -319,6 +348,8 @@ type ForeignReferenceTests() =
     [<InlineData("byte","Element")>]
     [<InlineData("withdrawal","Contract")>]
     [<InlineData("missing-context","Declaration")>]
+    [<InlineData("reference-count","Count")>]
+    [<InlineData("boolean-count","Count")>]
     member _.``Writable buffer public replay refuses changed exact declaration facts``(shape:string,part:string) =
         let revision=ForeignCases.publishedWritable.Value
         let boundary=revision.Emission.Boundary
@@ -333,6 +364,13 @@ type ForeignReferenceTests() =
                 {original with DeclarationFacts=original.DeclarationFacts.Add(key,{fact with Numbers=[32I]})}
             | "withdrawal" -> {original with DeclarationFacts=original.DeclarationFacts.Remove original.Identity}
             | "missing-context" -> original
+            | "reference-count" | "boolean-count" ->
+                let fields id = let fact=original.DeclarationFacts[id] in List.zip fact.Text fact.References |> Map.ofList
+                let parameters=original.DeclarationFacts[(fields original.Descriptor)["Parameters"]].References
+                let parameter=fields parameters[original.CountParameter]
+                let key=parameter[if shape="reference-count" then "PassBy" else "Type"]
+                let fact=original.DeclarationFacts[key]
+                {original with DeclarationFacts=original.DeclarationFacts.Add(key,{fact with Text=[if shape="reference-count" then "Reference" else "Bool"];References=[];Children=[]})}
             | _ -> failwith "Unknown writable public perturbation"
         let changed={revision with Emission={revision.Emission with Boundary={boundary with WritableBufferDeclarations=boundary.WritableBufferDeclarations.Add(row.Identity,row)}}}
         let changed=
@@ -353,6 +391,118 @@ type ForeignReferenceTests() =
             match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project current with
             | Error failures -> Assert.Contains(failures,fun failure -> failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
             | Ok _ -> failwith "Changed writable descriptor retained the old current boundary account"
+
+    [<Fact>]
+    member _.``Writable effect retains byte ingress alias range and exact bound citizens while native stays pending``() =
+        let result=ForeignCases.writableApplication "    let buffer = Array.zeroCreate 4\n    let alias = buffer\n    let readResult = Test.Native.read 0 alias 3\n    if readResult < 0 then alias[0] else alias[0]\n"
+        let graph=result.CheckResult.Graph
+        let application=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd
+        let application=application |> Result.defaultWith(fun failure -> failwith failure.Reason)
+        Assert.Equal(ValueRange.bounded 0I 255I,application.StorageRange)
+        Assert.Equal(ValueRange.point 3I,application.CountRange)
+        Assert.Equal(ValueRange.point 4I,application.CapacityRange)
+        let claims=graph.Nodes.Values |> Seq.choose(fun node -> match node.Kind with SemanticKind.Obligation info when info.Kind.StartsWith "foreign-writable-buffer-" -> Some(node.Id,info) | _ -> None) |> Seq.toList
+        Assert.Equal(3,claims.Length)
+        Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-count" && info.Body=ObligationBody.IntegerRepresentationCoverage(3I,3I,0I,4I))
+        Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-storage" && info.Body=ObligationBody.IntegerRepresentationCoverage(0I,255I,0I,255I))
+        Assert.Contains(claims,fun(_,info)->match info.Body with ObligationBody.Pending reasons -> reasons |> List.exists(fun reason->reason.Contains "native writable") | _ -> false)
+        for id,info in claims do
+            Assert.StartsWith("foreign_writable_",info.Id)
+            let anchor=System.Convert.FromHexString(info.Id.Substring("foreign_writable_".Length)) |> System.Text.Encoding.UTF8.GetString
+            Assert.Contains("Test.Native.read",anchor)
+            Assert.Contains("WritableApplicationMain",anchor)
+            Assert.Contains("posix.read.borrow",info.Refs)
+            match info.Body with ObligationBody.IntegerRepresentationCoverage _ -> ForeignCases.writableProof "unsat" info | _ -> ()
+            let sources=ForeignCases.resourceRequirementSupport graph id
+            for required in application.Participants do Assert.Contains(required,sources)
+        let reads=graph.Nodes.Values |> Seq.filter(fun node -> match node.Kind with SemanticKind.IndexGet(input,_) -> input<>application.Allocation | _ -> false) |> Seq.toList
+        Assert.Contains(reads,fun node->node.ValueRange=Some(ValueRange.bounded 0I 255I))
+        Assert.True(Clef.Compiler.Project.ProjectChecker.hasErrors result,"Physical writable adapters are still refused.")
+
+    [<Theory>]
+    [<InlineData("unknown-count")>]
+    [<InlineData("oversize")>]
+    member _.``Writable effect missing finite count remains visible Pending with descriptor support``(shape:string) =
+        let source=if shape="unknown-count" then "    let buffer = Array.zeroCreate 4\n    let mutable n = 0\n    while n >= 0 do\n        n <- n + 1\n    Test.Native.read 0 buffer n\n" else "    let buffer = Array.zeroCreate 4\n    Test.Native.read 0 buffer 5\n"
+        let result=ForeignCases.writableApplication source
+        let graph=result.CheckResult.Graph
+        let site,application=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single
+        let failure=match application with Error failure -> failure | Ok _ -> failwith "Missing count coverage was admitted"
+        Assert.Contains("count domain",failure.Reason)
+        let claims=graph.Nodes.Values |> Seq.choose(fun node -> match node.Kind with SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-adapter" -> Some(node.Id,info) | _ -> None) |> Seq.toList
+        let id,info=Assert.Single claims
+        match info.Body with ObligationBody.Pending reasons -> Assert.Contains(reasons,fun reason->reason.Contains "count domain") | _ -> failwith "Missing count became a finite claim"
+        let support=ForeignCases.resourceRequirementSupport graph id
+        Assert.Contains(site,support)
+        Assert.Contains(failure.Declaration.Quote,support)
+        Assert.Contains(failure.Declaration.CountFormal,support)
+        let bounds=graph.Nodes.Values |> Seq.choose(fun node -> match node.Kind with SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-count" -> Some info | _ -> None) |> Seq.toList
+        if shape="unknown-count" then Assert.Empty bounds else
+            let bound=Assert.Single bounds
+            Assert.Equal(ObligationBody.IntegerRepresentationCoverage(5I,5I,0I,4I),bound.Body)
+            Assert.Equal(BoundaryProofOutcome.Refuted,Clef.Compiler.Baker.Ingredients.StringBytes.proofOutcome bound.Body)
+            ForeignCases.writableProof "sat" bound
+
+    [<Fact>]
+    member _.``Writable effect old zero does not establish postcall ASCII``() =
+        let result=ForeignCases.writableApplication "    let buffer = Array.zeroCreate 4\n    let alias = buffer\n    let readResult = Test.Native.read 0 alias 3\n    let text = String.fromBytes alias\n    if readResult < 0 then String.length text else String.length text\n"
+        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->message.Contains "text must be proved ASCII")
+
+    [<Fact>]
+    member _.``Writable effect fresh postcall read is not the immutable precall zero read``() =
+        let result=ForeignCases.writableApplication "    let buffer = Array.zeroCreate 4\n    let alias = buffer\n    let before = alias[0]\n    if before = 0 then\n        let readResult = Test.Native.read 0 alias 3\n        if readResult < 0 then alias[0] else alias[0]\n    else 0\n"
+        let graph=result.CheckResult.Graph
+        let application=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd
+        let application=application |> Result.defaultWith(fun failure -> failwith failure.Reason)
+        Assert.Equal(ValueRange.bounded 0I 255I,application.StorageRange)
+        let reads=graph.Nodes.Values |> Seq.filter(fun node -> match node.Kind with SemanticKind.IndexGet _ -> true | _ -> false) |> Seq.toList
+        let latest=reads |> List.filter(fun node -> node.Range.Start.Line>7)
+        Assert.NotEmpty latest
+        Assert.All(latest,fun node->Assert.Equal(Some(ValueRange.bounded 0I 255I),node.ValueRange))
+
+    [<Theory>]
+    [<InlineData("version")>]
+    [<InlineData("quotation")>]
+    [<InlineData("count")>]
+    member _.``Writable effect old applied account refuses changed hypothesis quote or count``(shape:string) =
+        let result=ForeignCases.writableApplication "    let buffer = Array.zeroCreate 4\n    Test.Native.read 0 buffer 3\n"
+        let graph=result.CheckResult.Graph
+        let site,observed=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single
+        let application=observed |> Result.defaultWith(fun failure -> failwith failure.Reason)
+        let changed=
+            match shape with
+            | "quotation" -> {graph with Nodes=graph.Nodes.Remove application.Declaration.Quote}
+            | "version" ->
+                let node=graph.Nodes.Values |> Seq.filter(fun node->node.Kind=SemanticKind.Literal(NativeLiteral.String "2024")) |> Assert.Single
+                {graph with Nodes=graph.Nodes.Add(node.Id,{node with Kind=SemanticKind.Literal(NativeLiteral.String "next")})}
+            | "count" ->
+                let node=graph.Nodes[application.Count]
+                let kind=match node.Kind with SemanticKind.Literal(NativeLiteral.Int(_,kind)) -> kind | other -> failwithf "Expected exact literal actual: %A" other
+                {graph with Nodes=graph.Nodes.Add(node.Id,{node with Kind=SemanticKind.Literal(NativeLiteral.Int(4L,kind))})}
+            | _ -> failwith "Unknown writable application change"
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Error failures -> Assert.Contains(failures,fun failure->failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
+        | Ok _ -> failwithf "Old applied account at %A survived changed source evidence" site
+
+    [<Fact>]
+    member _.``Writable effect storage citizen retains complete local writer value and alias support``() =
+        let result=ForeignCases.writableApplication "    let buffer = Array.zeroCreate 4\n    let alias = buffer\n    alias[0] <- 65\n    let readResult = Test.Native.read 0 alias 3\n    if readResult < 0 then alias[0] else alias[0]\n"
+        let graph=result.CheckResult.Graph
+        let application=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd
+        let application=application |> Result.defaultWith(fun failure -> failwith failure.Reason)
+        let writer=graph.Nodes.Values |> Seq.filter(fun node -> node.IsReachable && (match node.Kind with SemanticKind.IndexSet(_,_,value) -> graph.Nodes.TryFind value |> Option.exists(fun node->match node.Kind with SemanticKind.Literal(NativeLiteral.Int(65L,_)) -> true | _ -> false) | _ -> false)) |> Assert.Single
+        let buffer,value=match writer.Kind with SemanticKind.IndexSet(buffer,_,value)->buffer,value | _ -> failwith "Expected original writer"
+        let citizen=graph.Nodes.Values |> Seq.filter(fun node -> match node.Kind with SemanticKind.Obligation info -> info.Kind="foreign-writable-buffer-storage" | _ -> false) |> Assert.Single
+        let support=ForeignCases.resourceRequirementSupport graph citizen.Id
+        for required in [writer.Id;buffer;value;application.Buffer] do
+            Assert.Contains(required,application.Participants)
+            Assert.Contains(required,support)
+        let stored=graph.Nodes[value]
+        let kind=match stored.Kind with SemanticKind.Literal(NativeLiteral.Int(_,kind))->kind | _ -> failwith "Expected source integer"
+        let changed={graph with Nodes=graph.Nodes.Add(value,{stored with Kind=SemanticKind.Literal(NativeLiteral.Int(256L,kind))})}
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Error failures -> Assert.Contains(failures,fun failure->failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
+        | Ok _ -> failwith "Changed local writer retained old writable storage authority"
 
     [<Fact>]
     member _.``Resource application retains exact finite conversion and cleanup models without discharging them``() =
