@@ -654,7 +654,31 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         let! core = platform.Core |> needed "A reachable C import requires a declared TargetCore.Runtime."
         do! require (Declarations.runtimeModel core = Some RuntimeModel.Libc) "A reachable C import requires source TargetCore.Runtime libc; startup or project defaults do not establish library availability."
         return () }
-    let initialErrors = intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
+    // Declaration accounts are source observations, not resource/conversion proofs.
+    let resourceDeclarations, resourceErrors =
+        descriptors.Resources |> List.fold (fun (rows, errors) resource ->
+            let roots = [resource.DescriptorBinding;resource.AcquisitionDescriptorBinding;resource.ReleaseDescriptorBinding]
+            let observed = roots |> List.fold (fun state root -> state |> Result.bind (fun facts ->
+                declarationFacts graph root |> Result.map (fun current -> Map.fold (fun all id value -> Map.add id value all) facts current))) (Ok Map.empty)
+            match observed with
+            | Error reason -> rows,(resource.Node,Set.ofList resource.Participants,reason)::errors
+            | Ok declared ->
+                let support = resource.Acquisition.Path @ resource.Acquisition.Formals @ [resource.Acquisition.Body] @ resource.Release.Path @ resource.Release.Formals @ [resource.Release.Body]
+                let facts = support |> List.fold (fun facts id ->
+                    match graph.Nodes.TryFind id with
+                    | Some node when not (Map.containsKey id facts) -> Map.add id (Ingredients.premise node).Shape facts
+                    | _ -> facts) declared
+                if support |> List.exists (fun id -> not (facts.ContainsKey id)) then
+                    rows,(resource.Node,Set.ofList support,"A resource declaration lost its exact source declaration support.")::errors
+                else
+                    let row: BoundaryResourceDeclaration =
+                        { Identity = resource.Quote; Acquisition = resource.Acquisition.Binding; AcquisitionBody = resource.Acquisition.Body
+                          AcquisitionDescriptor = resource.AcquisitionDescriptor; Release = resource.Release.Binding; ReleaseBody = resource.Release.Body
+                          ReleaseDescriptor = resource.ReleaseDescriptor; ReleaseFormal = resource.ReleaseFormal; ReleaseOrdinal = 0
+                          PointerBits = resource.PointerBits; AcquisitionType = resource.AcquisitionType; ResultType = resource.ResultType; HandleType = resource.HandleType
+                          Contract = resource.Contract; DeclarationFacts = facts; Participants = Map.keys facts |> Set.ofSeq }
+                    Map.add row.Identity row rows,errors) (Map.empty,[])
+    let initialErrors = resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
     let imported binding =
         checked' {
             let! library =
@@ -1324,6 +1348,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         { Premises = Ingredients.premises graph; Platform = Ingredients.platformPremise graph.Platform; Meets = graph.Codata.Value.Meets
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
+          ResourceDeclarations = Map.keys resourceDeclarations |> Seq.toList
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
           // Native entries and callback accounts require their selected source loading
           // even when every import is libc; ordinary direct libc calls keep no account.
@@ -1352,6 +1377,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let rows =
         [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 sources anchor.Id
          { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
+        @ (resourceDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (callbackInvocations.Values |> Seq.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity) |> Seq.toList)

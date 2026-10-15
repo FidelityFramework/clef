@@ -63,6 +63,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                   (domain.StringBorrowAllocations |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAllocation fact)))) then
             stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
         else
+            let resourceDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceDeclaration row -> Some row | _ -> None)
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
             let entries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryEntry entry -> Some entry | _ -> None)
             let callbackInvocations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCallbackInvocation invocation -> Some invocation | _ -> None)
@@ -144,6 +145,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 (Map.keys domain.Premises |> Seq.toList) domainRow.Target
                      { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = Map.keys domain.Premises |> Seq.toList; Target = domainRow.Target }]
                     @ (domain.Declarations |> List.map Declarations.row)
+                    @ (resourceDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity))
                     @ (imports |> List.map Ingredients.importRow)
                     @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
                     @ (callbackInvocations |> List.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity))
@@ -187,13 +189,16 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     (callbackInvocations |> List.map _.Identity |> List.sort) = List.sort domain.CallbackInvocations &&
                     (closedEntries |> List.map _.Formation |> List.sort) = List.sort domain.ClosedEntries
                 if not proofErrors.IsEmpty then Error (List.rev proofErrors)
+                elif (resourceDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.ResourceDeclarations then
+                    stale "The source resource declaration account was withdrawn or duplicated."
                 elif not callbackMembership then stale "The closed native callback or receiving invocation account was withdrawn or duplicated."
                 elif expectedIntrinsicProofs <> actualIntrinsicProofs then stale "The intrinsic boundary lost or duplicated an ordered proof occurrence."
                 elif not completeMembership || not (subtract actual expected) then stale "The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent."
                 else
                     let imports = imports |> List.map (fun import -> import.Identity, import) |> Map.ofList
                     let byScope = imports.Values |> Seq.groupBy _.Scope |> Seq.map (fun (scope, imports) -> scope, imports |> Seq.map _.Identity |> Seq.sort |> Seq.toList) |> Map.ofSeq
-                    Ok { Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
+                    Ok { ResourceDeclarations = resourceDeclarations |> List.map (fun row -> row.Identity,row) |> Map.ofList
+                         Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
                          Calls = callsById; ByScope = byScope; ResultHypotheses = domain.ResultHypotheses
                          CallbackInvocations = callbackInvocations |> List.map (fun invocation -> invocation.Identity, invocation) |> Map.ofList
                          ClosedEntries = closedEntries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList

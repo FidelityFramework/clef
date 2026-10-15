@@ -237,6 +237,7 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         Platform = (value.Platform |> Option.map (fun x -> mapBoundaryPlatformPremise x))
         Meets = (value.Meets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
         Declarations = (value.Declarations |> List.map (fun x -> mapBoundaryDeclaration x))
+        ResourceDeclarations = (value.ResourceDeclarations |> List.map (fun x -> nodeId x))
         Imports = (value.Imports |> List.map (fun x -> nodeId x))
         Loading = (value.Loading |> Option.map (fun x -> mapBoundaryLoading x))
         Entries = (value.Entries |> List.map (fun x -> nodeId x))
@@ -267,6 +268,7 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
 
 and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fidelity.PSG.BoundaryEmissionProjection =
     ({
+        ResourceDeclarations = (value.ResourceDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceDeclaration v) |> Map.ofSeq)
         Imports = (value.Imports |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryImport v) |> Map.ofSeq)
         Loading = (value.Loading |> Option.map (fun x -> mapBoundaryLoading x))
         Entries = (value.Entries |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryEntry v) |> Map.ofSeq)
@@ -353,6 +355,26 @@ and mapBoundaryProofOutcome (value: S.BoundaryProofOutcome) : Fidelity.PSG.Bound
     match value with
     | S.BoundaryProofOutcome.Proven -> Fidelity.PSG.BoundaryProofOutcome.Proven
     | S.BoundaryProofOutcome.Refuted -> Fidelity.PSG.BoundaryProofOutcome.Refuted
+
+and mapBoundaryResourceDeclaration (value: S.BoundaryResourceDeclaration) : Fidelity.PSG.BoundaryResourceDeclaration =
+    ({
+        Identity = nodeId value.Identity
+        Acquisition = nodeId value.Acquisition
+        AcquisitionBody = nodeId value.AcquisitionBody
+        AcquisitionDescriptor = nodeId value.AcquisitionDescriptor
+        Release = nodeId value.Release
+        ReleaseBody = nodeId value.ReleaseBody
+        ReleaseDescriptor = nodeId value.ReleaseDescriptor
+        ReleaseFormal = nodeId value.ReleaseFormal
+        ReleaseOrdinal = value.ReleaseOrdinal
+        PointerBits = value.PointerBits
+        AcquisitionType = mapTypeIdentity value.AcquisitionType
+        ResultType = mapTypeIdentity value.ResultType
+        HandleType = mapTypeIdentity value.HandleType
+        Contract = value.Contract
+        DeclarationFacts = (value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq)
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryResourceDeclaration)
 
 and mapBoundaryScalar (value: S.BoundaryScalar) : Fidelity.PSG.BoundaryScalar =
     match value with
@@ -913,6 +935,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.SpatialProof(a0) -> Fidelity.PSG.EdgeRole.SpatialProof(mapSpatialProof a0)
     | S.EdgeRole.BoundaryDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryDeclaration(mapBoundaryDeclaration a0)
     | S.EdgeRole.BoundaryDomain(a0) -> Fidelity.PSG.EdgeRole.BoundaryDomain(mapBoundaryDomain a0)
+    | S.EdgeRole.BoundaryResourceDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryResourceDeclaration(mapBoundaryResourceDeclaration a0)
     | S.EdgeRole.BoundaryImport(a0) -> Fidelity.PSG.EdgeRole.BoundaryImport(mapBoundaryImport a0)
     | S.EdgeRole.BoundaryCall(a0) -> Fidelity.PSG.EdgeRole.BoundaryCall(mapBoundaryCall a0)
     | S.EdgeRole.BoundaryOperand(a0) -> Fidelity.PSG.EdgeRole.BoundaryOperand(mapBoundaryOperand a0)

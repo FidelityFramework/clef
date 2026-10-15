@@ -604,17 +604,18 @@ let private readLegacy (graph: SemanticGraph) : Reading =
         let platform, findings = readPlatform graph node fields
         { Platform = platform; Findings = findings @ ambiguous }
 
-/// Canonical module-level export identity, including namespaces (which have
-/// no ModuleDef wrapper). The module map retains every file in a namespace.
-let qualifiedExportName (graph: SemanticGraph) (binding: SemanticNode) : string option =
-    let combine (prefix: string) (name: string) =
-        if prefix = "" || name = prefix || name.StartsWith(prefix + ".", System.StringComparison.Ordinal) then name
-        else prefix + "." + name
-    let declaredPrefix id =
-        graph.Modules
-        |> Map.toList
-        |> List.tryPick (fun (path, nodes) ->
-            if List.contains id nodes then Some (String.concat "." path) else None)
+let private combineQualifiedName (prefix: string) (name: string) =
+    if prefix = "" || name = prefix || name.StartsWith(prefix + ".", System.StringComparison.Ordinal) then name
+    else prefix + "." + name
+
+let private declaredPrefix (graph: SemanticGraph) id =
+    graph.Modules
+    |> Map.toList
+    |> List.tryPick (fun (path, nodes) ->
+        if List.contains id nodes then Some (String.concat "." path) else None)
+
+/// Canonical source module identity. Namespace prefixes have no ModuleDef wrapper.
+let qualifiedModuleName (graph: SemanticGraph) id : string option =
     let rec modulePrefix seen id =
         if Set.contains id seen then None else
         match SemanticGraph.tryGetNode id graph with
@@ -624,17 +625,21 @@ let qualifiedExportName (graph: SemanticGraph) (binding: SemanticNode) : string 
                 let prefix =
                     match node.Parent with
                     | Some parent -> modulePrefix (Set.add id seen) parent
-                    | None -> declaredPrefix id
-                prefix |> Option.map (fun prefix -> combine prefix name)
+                    | None -> declaredPrefix graph id
+                prefix |> Option.map (fun prefix -> combineQualifiedName prefix name)
             | _ -> None
         | None -> None
+    modulePrefix Set.empty id
+
+/// Canonical module-level export identity, using the same module-name owner.
+let qualifiedExportName (graph: SemanticGraph) (binding: SemanticNode) : string option =
     match binding.Kind with
     | SemanticKind.Binding(name, _, _, _) ->
         let prefix =
             match binding.Parent with
-            | Some parent -> modulePrefix Set.empty parent
-            | None -> declaredPrefix binding.Id
-        prefix |> Option.map (fun prefix -> combine prefix name)
+            | Some parent -> qualifiedModuleName graph parent
+            | None -> declaredPrefix graph binding.Id
+        prefix |> Option.map (fun prefix -> combineQualifiedName prefix name)
     | _ -> None
 
 /// Select a static export without executing calls or taking a mutable
@@ -1124,12 +1129,35 @@ type DeclaredCallbackInvocation = {
     Participants: NodeId list
 }
 
+/// Exact source resource declaration only. This grants no acquisition,
+/// nullable-word conversion, cleanup, alias retirement or execution authority.
+type DeclaredResource = {
+    Node: NodeId
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    SourcePath: NodeId list
+    Acquisition: BoundaryDeclaration
+    AcquisitionDescriptor: NodeId
+    AcquisitionDescriptorBinding: NodeId
+    Release: BoundaryDeclaration
+    ReleaseDescriptor: NodeId
+    ReleaseDescriptorBinding: NodeId
+    ReleaseFormal: NodeId
+    PointerBits: int
+    AcquisitionType: TypeIdentity
+    ResultType: TypeIdentity
+    HandleType: TypeIdentity
+    Contract: BAREWire.Descriptors.ResourceDescriptor
+    Participants: NodeId list
+}
+
 /// Every boundary declaration in the graph, with every defect found reading them.
 type Descriptors = {
     Layouts: DeclaredLayout list
     Functions: DeclaredFunction list
     ResultRanges: DeclaredResultRange list
     CallbackInvocations: DeclaredCallbackInvocation list
+    Resources: DeclaredResource list
     Findings: DeclarationFinding list
 }
 
@@ -1403,16 +1431,19 @@ let lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : ((string * Nati
 
 /// The extern `<name>` beside the descriptor `<name>Descriptor`: a binding of that name with
 /// the same parent carrying `FidelityExtern.Library`.
-let private externBeside (graph: SemanticGraph) (descriptor: SemanticNode) (bindingName: string) : SemanticNode option =
-    if not (bindingName.EndsWith "Descriptor") then None
+let private externBesideWithSuffix (suffix: string) (graph: SemanticGraph) (descriptor: SemanticNode) (bindingName: string) : SemanticNode option =
+    if not (bindingName.EndsWith suffix) then None
     else
-        let name = bindingName.Substring(0, bindingName.Length - "Descriptor".Length)
+        let name = bindingName.Substring(0, bindingName.Length - suffix.Length)
         graph.Nodes
         |> Map.toList
         |> List.tryPick (fun (_, node) ->
             match node.Kind with
             | SemanticKind.Binding (n, _, _, _) when n = name && node.Parent = descriptor.Parent && Map.containsKey "FidelityExtern.Library" node.Metadata -> Some node
             | _ -> None)
+
+let private externBeside graph descriptor bindingName =
+    externBesideWithSuffix "Descriptor" graph descriptor bindingName
 
 /// One parameter/result reader for named imports and symbol-free native entries.
 let private readSignatureForBinding
@@ -1601,10 +1632,10 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
         | _ -> false
     // Keep the existing single source census. Resolve result contracts from the
     // retained declaration/ABI inventories, never by C symbol or beside-name.
-    let layouts, functions, resultDeclarations, invocationDeclarations, externs, findings =
+    let layouts, functionDeclarations, resultDeclarations, invocationDeclarations, resourceDeclarations, externs, findings =
         graph.Nodes
         |> Map.toList
-        |> List.fold (fun (layouts, functions, ranges, invocations, externs, findings) (_, node) ->
+        |> List.fold (fun (layouts, functions, ranges, invocations, resources, externs, findings) (_, node) ->
             let externs =
                 if node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol" then
                     qualifiedExportName graph node |> Option.map (fun name -> (name, node.Id) :: externs) |> Option.defaultValue externs
@@ -1616,25 +1647,34 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                     match typeName record with
                     | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
                         let layout, more = readLayout graph record fields
-                        (Option.toList layout @ layouts, functions, ranges, invocations, externs, findings @ more)
+                        (Option.toList layout @ layouts, functions, ranges, invocations, resources, externs, findings @ more)
                     | Some "FunctionDescriptor" ->
                         let target, (f, more) = readFunction graph node name record fields
-                        (layouts, (f |> Option.map (fun f -> target, f) |> Option.toList) @ functions, ranges, invocations, externs, findings @ more)
+                        (layouts, (f |> Option.map (fun f -> target, f, node.Id) |> Option.toList) @ functions, ranges, invocations, resources, externs, findings @ more)
                     | Some "ResultRangeDescriptor" ->
-                        (layouts, functions, (node, record, fields, path) :: ranges, invocations, externs, findings)
+                        (layouts, functions, (node, record, fields, path) :: ranges, invocations, resources, externs, findings)
+                    | Some "ResourceDescriptor" ->
+                        (layouts, functions, ranges, invocations, (node, record, fields, path) :: resources, externs, findings)
                     | Some "CallbackInvocationContract" ->
-                        (layouts, functions, ranges, (node, record, fields, path) :: invocations, externs, findings)
-                    | _ -> (layouts, functions, ranges, invocations, externs, findings)
+                        (layouts, functions, ranges, (node, record, fields, path) :: invocations, resources, externs, findings)
+                    | _ -> (layouts, functions, ranges, invocations, resources, externs, findings)
                 | Some (value, _) when typeName value = Some "ResultRangeDescriptor" ->
-                    (layouts, functions, ranges, invocations, externs, findings @ [findingAt value DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"])
+                    (layouts, functions, ranges, invocations, resources, externs, findings @ [findingAt value DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"])
                 | _ ->
                     let declared =
                         match node.Type with
                         | NativeType.TApp(_, [inner]) -> typeName { node with Type = inner } = Some "ResultRangeDescriptor"
                         | _ -> typeName node = Some "ResultRangeDescriptor"
                     let more = if declared then [findingAt node DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"] else []
-                    (layouts, functions, ranges, invocations, externs, findings @ more)
-            | _ -> (layouts, functions, ranges, invocations, externs, findings)) ([], [], [], [], [], [])
+                    (layouts, functions, ranges, invocations, resources, externs, findings @ more)
+            | _ -> (layouts, functions, ranges, invocations, resources, externs, findings)) ([], [], [], [], [], [], [])
+    // Preserve the exact descriptor binding already visited by this census.
+    // This private incidence is not reconstructed from symbols or source names.
+    let functions = functionDeclarations |> List.map (fun (target, abi, _) -> target, abi)
+    let descriptorBinding target descriptor =
+        functionDeclarations
+        |> List.choose (fun (current, abi, binding) -> if current = target && abi.Node = descriptor then Some binding else None)
+        |> function [binding] -> Some binding | _ -> None
     let readResult (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredResultRange, DeclarationFinding> =
         let malformed reason = Error (findingAt node DeclarationDefect.Malformed ("a ResultRangeDescriptor " + reason))
         let invalid reason = Error (findingAt node DeclarationDefect.Invalid ("a ResultRangeDescriptor " + reason))
@@ -1930,16 +1970,100 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
             | _ -> invalid "requires nonempty literal external hypothesis Identity, Version and Source."
         | _ -> invalid "requires one immutable quote, exact Binding/Parameter/Signature/Hypothesis and Scope."
 
+    let readResource (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredResource, DeclarationFinding> =
+        let invalid reason = Error (findingAt node DeclarationDefect.Invalid ("A ResourceDescriptor " + reason))
+        let immutable ids = ids |> List.forall (fun id ->
+            match graph.Nodes.TryFind id |> Option.map _.Kind with
+            | Some (SemanticKind.Binding(_, true, _, _)) -> false
+            | _ -> true)
+        let declaration target =
+            let rows = graph.Edges |> List.choose (fun edge ->
+                match edge.Class, edge.Role with
+                | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration value when value.Binding = target && edge.Target = target -> Some(edge,value)
+                | _ -> None)
+            match rows, functions |> List.filter (fun (id,_) -> id = target) with
+            | [edge,value], [_,abi] when edge.Sources = value.Path @ value.Formals @ [value.Body] && abi.Body = Some value.Body -> Some(value,abi)
+            | _ -> None
+        let pointerType id = readTypeRef graph id |> function Ok (DeclaredTypeRef.Pointer bits) -> Some bits | _ -> None
+        let rawPointerReturn (abi: DeclaredFunction) = recordOf graph abi.Node |> Option.bind (fun (_,fields) -> field "ReturnType" fields |> Option.bind pointerType)
+        let cdecl (abi: DeclaredFunction) = recordOf graph abi.Node |> Option.exists (fun (_,fields) -> field "CallingConvention" fields |> Option.bind (caseOf graph) |> Option.exists (fun (_,name,payload) -> name="CDecl" && payload.IsNone))
+        let quotes = path |> List.filter (fun id -> match graph.Nodes.TryFind id |> Option.map _.Kind with Some (SemanticKind.Quote _) -> true | _ -> false)
+        let companion =
+            match binding.Kind with
+            | SemanticKind.Binding(name, false, _, _) -> externBesideWithSuffix "ResourceDescriptor" graph binding name
+            | _ -> None
+        match quotes, companion, field "Resource" fields |> Option.bind (caseOf graph), field "Hypothesis" fields |> Option.bind (recordOf graph) with
+        | [quote], Some acquisition, Some (_, "OwnedNullableReturn", Some releaseId), Some (hypothesisNode,hypothesisFields)
+            when immutable (binding.Id :: path) && typeName hypothesisNode = Some "ExternalExecutionHypothesis" ->
+            let text key = field key hypothesisFields |> Option.bind (stringOf graph) |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+            match recordOf graph releaseId, text "Identity", text "Version", text "Source", declaration acquisition.Id with
+            | Some (releaseNode,releaseFields), Some identity, Some version, Some source, Some(acquired,acquireAbi)
+                when typeName releaseNode = Some "ResourceRelease" ->
+                let releaseName = field "Binding" releaseFields |> Option.bind (stringOf graph)
+                let ordinal = field "Parameter" releaseFields |> Option.bind (int64Of graph)
+                match releaseName, ordinal with
+                | Some name, Some 0L ->
+                    match externs |> List.filter (fun (candidate,_) -> candidate = name) with
+                    | [_,releasedId] ->
+                        match declaration releasedId, lambdaOfBinding graph acquisition.Id, lambdaOfBinding graph releasedId with
+                        | Some(released,releaseAbi), Some(_,acquireBody), Some([_,handleTy,formal],releaseBody) ->
+                            let returnType = graph.Nodes.TryFind acquireBody |> Option.map _.Type
+                            let handle =
+                                returnType |> Option.bind (fun ty ->
+                                    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+                                    | NativeType.TApp(tc,[inner]) when tc.Name = "option" ->
+                                        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst inner with
+                                        | NativeType.TApp(_,[_]) when Types.tryGetNTUKind inner = Some NTUKind.NTUptr -> Some inner
+                                        | _ -> None
+                                    | _ -> None)
+                            let releaseSignature = recordOf graph releaseAbi.Node |> Option.bind (fun (_,fields) ->
+                                match field "ReturnType" fields |> Option.map (readTypeRef graph), field "Parameters" fields |> Option.bind (elementsOf graph) with
+                                | Some (Ok DeclaredTypeRef.Void), Some [parameter] ->
+                                    recordOf graph parameter |> Option.bind (fun (_,fields) ->
+                                        match field "PassBy" fields |> Option.bind (caseOf graph), field "Type" fields |> Option.bind pointerType with
+                                        | Some(_,"Value",None), Some bits -> Some bits
+                                        | _ -> None)
+                                | _ -> None)
+                            match handle, returnType, rawPointerReturn acquireAbi, releaseSignature, descriptorBinding acquisition.Id acquireAbi.Node, descriptorBinding releasedId releaseAbi.Node with
+                            | Some handle, Some resultTy, Some bits, Some releaseBits, Some acquisitionDescriptorBinding, Some releaseDescriptorBinding
+                                when bits > 0 && bits = releaseBits && cdecl acquireAbi && cdecl releaseAbi && released.Formals = [formal] && released.Body = releaseBody && acquired.Body = acquireBody &&
+                                     Clef.Compiler.NativeTypedTree.TypeIdentities.ofType handle = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType handleTy &&
+                                     acquireAbi.References.IsEmpty && acquireAbi.PointerReferences.IsEmpty && acquireAbi.RecordReferences.IsEmpty &&
+                                     releaseAbi.References.IsEmpty && releaseAbi.PointerReferences.IsEmpty && releaseAbi.RecordReferences.IsEmpty ->
+                                let inputs = (fields @ releaseFields @ hypothesisFields) |> List.map snd
+                                let paths = inputs |> List.collect (fun id -> valuePath graph id |> Option.map snd |> Option.defaultValue [id])
+                                if not (immutable paths) then invalid "requires immutable resource and hypothesis inputs." else
+                                let contract: BAREWire.Descriptors.ResourceDescriptor =
+                                    { Resource = BAREWire.Descriptors.ResourceProtocol.OwnedNullableReturn { Binding = name; Parameter = 0 }
+                                      Hypothesis = { Identity = identity; Version = version; Source = source } }
+                                Ok { Node = node.Id; Quote = quote; DescriptorBinding = binding.Id; SourcePath = path
+                                     Acquisition = acquired; AcquisitionDescriptor = acquireAbi.Node; AcquisitionDescriptorBinding = acquisitionDescriptorBinding
+                                     Release = released; ReleaseDescriptor = releaseAbi.Node; ReleaseDescriptorBinding = releaseDescriptorBinding
+                                     ReleaseFormal = formal; PointerBits = bits; AcquisitionType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType acquisition.Type
+                                     ResultType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType resultTy; HandleType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType handle
+                                     Contract = contract; Participants = binding.Id :: path @ paths @ [releaseNode.Id;hypothesisNode.Id;acquireAbi.Node;releaseAbi.Node]
+                                                                        @ acquired.Path @ acquired.Formals @ [acquired.Body] @ released.Path @ [formal;released.Body] }
+                            | _ -> invalid "requires matching nullable CHandle return and unary nonnullable same-handle raw-Void release with identical declared pointer widths."
+                        | _ -> invalid "requires exact acquisition/release declaration bodies and one release formal."
+                    | _ -> invalid "Release.Binding must name one exact fully qualified external declaration."
+                | _ -> invalid "OwnedNullableReturn requires release native Parameter zero."
+            | _ -> invalid "requires one exact sibling acquisition, ResourceRelease and nonempty versioned hypothesis."
+        | _ -> invalid "requires one immutable sibling quotation and OwnedNullableReturn declaration."
+
     let results = List.rev resultDeclarations |> List.map readResult
     let ranges = results |> List.choose (function Ok range -> Some range | _ -> None)
     let duplicateFindings = duplicates "result contract" (fun (range: DeclaredResultRange) -> string range.Declaration.Binding) _.Node graph ranges
     let invocationResults = List.rev invocationDeclarations |> List.map readInvocation
     let invocations = invocationResults |> List.choose (function Ok invocation -> Some invocation | _ -> None)
     let invocationDuplicates = duplicates "callback invocation contract" (fun invocation -> string invocation.Declaration.Binding + ":" + string invocation.Parameter) _.Node graph invocations
+    let resourceResults = List.rev resourceDeclarations |> List.map readResource
+    let resources = resourceResults |> List.choose (function Ok value -> Some value | _ -> None)
+    let resourceDuplicates = duplicates "resource contract" (fun resource -> string resource.Acquisition.Binding) _.Node graph resources
     { Layouts = List.rev layouts; Functions = List.rev functions |> List.map snd; ResultRanges = ranges
-      CallbackInvocations = invocations
+      CallbackInvocations = invocations; Resources = resources
       Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings
-                 @ (invocationResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ invocationDuplicates }
+                 @ (invocationResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ invocationDuplicates
+                 @ (resourceResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ resourceDuplicates }
 
 /// The bounded scalar references a call passes, paired with its actual arrays.
 /// The descriptor supplies the element ABI; the lowering must retain an extent

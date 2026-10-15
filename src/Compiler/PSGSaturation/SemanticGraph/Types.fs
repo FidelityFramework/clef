@@ -777,6 +777,27 @@ type BoundaryDeclarationFact = {
     SourceType: TypeIdentity
 }
 
+/// A source-declared resource protocol only. This row grants no nullable-word
+/// conversion, acquisition, cleanup, alias retirement or execution authority.
+type BoundaryResourceDeclaration = {
+    Identity: NodeId
+    Acquisition: NodeId
+    AcquisitionBody: NodeId
+    AcquisitionDescriptor: NodeId
+    Release: NodeId
+    ReleaseBody: NodeId
+    ReleaseDescriptor: NodeId
+    ReleaseFormal: NodeId
+    ReleaseOrdinal: int
+    PointerBits: int
+    AcquisitionType: TypeIdentity
+    ResultType: TypeIdentity
+    HandleType: TypeIdentity
+    Contract: BAREWire.Descriptors.ResourceDescriptor
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: Set<NodeId>
+}
+
 type BoundaryImport = {
     Identity: NodeId
     Binding: NodeId
@@ -1543,6 +1564,7 @@ type BoundaryDomain = {
     Meets: Map<NodeId, Meet list>
     Declarations: BoundaryDeclaration list
     ResultHypotheses: ForeignResultHypothesis list
+    ResourceDeclarations: NodeId list
     Imports: NodeId list
     Loading: BoundaryLoading option
     Entries: NodeId list
@@ -1611,6 +1633,7 @@ type EdgeRole =
     | SpatialProof of SpatialProof
     | BoundaryDeclaration of BoundaryDeclaration
     | BoundaryDomain of BoundaryDomain
+    | BoundaryResourceDeclaration of BoundaryResourceDeclaration
     | BoundaryImport of BoundaryImport
     | BoundaryCall of BoundaryCall
     | BoundaryOperand of BoundaryOperand
@@ -3198,6 +3221,7 @@ module StorageWitnessProjection =
     }
 
 type BoundaryEmissionProjection = {
+    ResourceDeclarations: Map<NodeId, BoundaryResourceDeclaration>
     Imports: Map<NodeId, BoundaryImport>
     Loading: BoundaryLoading option
     Entries: Map<NodeId, BoundaryEntry>

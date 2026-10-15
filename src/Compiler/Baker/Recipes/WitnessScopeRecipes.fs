@@ -114,9 +114,16 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
                         | _ -> ()
             | _ -> ()
 
+    // Resource declaration accounts need their exact module context, without
+    // turning those declarations into executable bodies.
+    let resourceDeclarations =
+        emission |> Option.map (fun rows ->
+            rows.Boundary.ResourceDeclarations.Values
+            |> Seq.collect (fun row -> [row.Acquisition; row.Release]) |> Set.ofSeq)
+        |> Option.defaultValue Set.empty
     // Full-owner membership is inspected conservatively, but inactive members
     // never receive occurrence records or copied prefix/suffix lists. Retain
-    // only module ancestors of an actual live declaration as context headers.
+    // module ancestors of live or explicitly accounted resource declarations.
     let moduleParents = System.Collections.Generic.Dictionary<NodeId, ResizeArray<NodeId>>()
     let pendingModules = System.Collections.Generic.Queue<NodeId>()
     let requireModule id = if neededModules.Add id then pendingModules.Enqueue id
@@ -124,7 +131,7 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
         match graph.Nodes[id].Kind with
         | SemanticKind.ModuleDef(_, members) ->
             for memberId in members do
-                if bodies.ContainsKey memberId then requireModule id
+                if bodies.ContainsKey memberId || resourceDeclarations.Contains memberId then requireModule id
                 if modules.Contains memberId then
                     match moduleParents.TryGetValue memberId with
                     | true, parents -> parents.Add id
@@ -148,6 +155,11 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
     // ports separately preserves aliases and repeated child identities at
     // different original ordinals.
     let contextNodes = System.Collections.Generic.HashSet<NodeId>(bodies.Keys)
+    for id in neededModules do
+        match graph.Nodes[id].Kind with
+        | SemanticKind.ModuleDef(_, members) when List.exists resourceDeclarations.Contains members ->
+            contextNodes.Add id |> ignore
+        | _ -> ()
     let outgoing = System.Collections.Generic.Dictionary<NodeId, ResizeArray<NodeId>>()
     for pair in incoming do
         contextNodes.Add pair.Key |> ignore
@@ -241,17 +253,32 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
             references @ Option.toList node.Parent @ (node.Metadata.Values |> Seq.collect metadataIdentities |> Seq.toList))
         |> Set.ofSeq |> fun ids -> Set.difference ids (bodies.Keys |> Set.ofSeq)
     let ports =
-        incoming |> Seq.collect (fun pair -> pair.Value |> Seq.map (fun row -> pair.Key, row))
-        |> Seq.groupBy (fun (_, row) -> row.Parent, row.Port)
-        |> Seq.map (fun (key, rows) ->
-            let rows = Seq.toList rows
-            let _, first = List.head rows
-            key, { Extent = first.Extent; Stamp = first.Stamp
-                   Positions = rows |> List.map (fun (child, row) -> row.Ordinal, child) |> Map.ofList }) |> Map.ofSeq
+        let selected =
+            incoming |> Seq.collect (fun pair -> pair.Value |> Seq.map (fun row -> pair.Key, row))
+            |> Seq.groupBy (fun (_, row) -> row.Parent, row.Port)
+            |> Seq.map (fun (key, rows) ->
+                let rows = Seq.toList rows
+                let _, first = List.head rows
+                key, { Extent = first.Extent; Stamp = first.Stamp
+                       Positions = rows |> List.map (fun (child, row) -> row.Ordinal, child) |> Map.ofList }) |> Map.ofSeq
+        neededModules |> Seq.fold (fun current parent ->
+            let key = parent, WitnessOccurrencePort.ModuleDeclaration
+            match graph.Nodes[parent].Kind with
+            | SemanticKind.ModuleDef(_, members)
+                when List.exists resourceDeclarations.Contains members && not (Map.containsKey key current) ->
+                current |> Map.add key
+                    { Extent = members.Length; Stamp = portStamp parent WitnessOccurrencePort.ModuleDeclaration members; Positions = Map.empty }
+            | _ -> current) selected
     let headers =
         Set.union contextIdentities (Set.ofSeq neededModules) |> Seq.map (fun parent ->
             let name =
                 match graph.Nodes[parent].Kind with
+                | SemanticKind.ModuleDef(_, members) when List.exists resourceDeclarations.Contains members ->
+                    match Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.qualifiedModuleName graph parent with
+                    | Some name -> name
+                    | None ->
+                        fail (Some parent) [parent] "A resource declaration context has no canonical source module identity."
+                        ""
                 | SemanticKind.ModuleDef(name, _) -> name
                 | _ ->
                     fail (Some parent) [parent] "A body-free context parent is not a source module container."

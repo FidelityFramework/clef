@@ -68,6 +68,57 @@ let readRange: Expr<ResultRangeDescriptor> = <@ {
         Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.foreignResultApplications graph facts
         |> function Ok rows -> rows | Error (site, reason) -> failwithf "%A: %s" site reason
 
+    // Explicit test-stated resource hypotheses. The declarations share a
+    // phantom carrier and C symbols, while their source bodies stay distinct.
+    let resourceSource =
+        let declarations suffix =
+            let template = """
+[<FidelityExtern("c", "malloc")>]
+let malloc@SUFFIX@ (size:int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let malloc@SUFFIX@Descriptor: Expr<FunctionDescriptor> = <@ {
+    CName="malloc"; Parameters=[| {Name="size";Type=Integer(Unsigned,64);PassBy=Value} |]
+    ReturnType=Pointer 64; CallingConvention=CDecl; OwnershipTransfer=Undeclared } @>
+let malloc@SUFFIX@ResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource=OwnedNullableReturn ({Binding="Foreign.free@SUFFIX@";Parameter=0})
+    Hypothesis={Identity="fixture-owned-@SUFFIX@";Version="1";Source="explicit resource test premise"} } @>
+[<FidelityExtern("c", "free")>]
+let free@SUFFIX@ (handle:CHandle<unit>) : unit = NativeDefault.zeroed ()
+let free@SUFFIX@Descriptor: Expr<FunctionDescriptor> = <@ {
+    CName="free"; Parameters=[| {Name="handle";Type=Pointer 64;PassBy=Value} |]
+    ReturnType=Void; CallingConvention=CDecl; OwnershipTransfer=Undeclared } @>
+"""
+            template.Replace("@SUFFIX@", suffix)
+        vocabulary.Replace("type Transfer = | Borrowed", "type Transfer = Borrowed | Undeclared")
+        + """
+type ExternalExecutionHypothesis = { Identity:string; Version:string; Source:string }
+type ResourceRelease = { Binding:string; Parameter:int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource:ResourceProtocol; Hypothesis:ExternalExecutionHypothesis }
+"""
+        + declarations "First" + declarations "Second"
+
+    let resourceGraphFor sources =
+        let parse source path =
+            match parseStringWithDefaults source path with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "%A" errors
+        let result =
+            checkParsedInputsWithPlatform
+                ([parse (SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")) "write-authority.clef"]
+                 @ (sources |> List.map(fun (source,path) -> parse source path))
+                 @ [parse "module ResourceDeclarationMain\n[<EntryPoint>]\nlet main _ = 0\n" "resource-main.clef"])
+                (Some SourcePlatformFixture.platform)
+        DimensionalCases.noErrors result
+        Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare result.Graph
+        |> Result.defaultWith (fun errors -> failwithf "%A" errors)
+
+    let resourceGraph () = resourceGraphFor [resourceSource,"resource-declarations.clef"]
+
+    let publishedResources =
+        lazy (resourceGraph ()
+              |> Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish
+              |> Result.defaultWith (fun errors -> failwithf "%A" errors))
+
     let mapped = """
 type Owner = private | OpaqueOwner
 type Pixel = private | OpaquePixel
@@ -148,8 +199,131 @@ let main _ = 0
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ForeignReferences")>]
 type ForeignReferenceTests() =
     [<Fact>]
+    member _.``Resource declaration replay separates actual qualified scopes with identical module leaves``() =
+        let source ns =
+            let body = ForeignCases.resourceSource.Split('\n') |> Array.skip 1
+            "namespace " + ns + "\n\nmodule Foreign =\n"
+            + (body |> Array.map(fun line -> "    " + line) |> String.concat "\n")
+                  .Replace("Binding=\"Foreign.", "Binding=\"" + ns + ".Foreign.")
+        let graph = ForeignCases.resourceGraphFor [source "Alpha","alpha.clef";source "Beta","beta.clef"]
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith(fun errors -> failwithf "%A" errors)
+        let defects = Fidelity.PSG.Integrity.check revision
+        Assert.True(defects.IsEmpty,Fidelity.PSG.Integrity.describe defects)
+        let declarations = (ForeignDeclarations.readDescriptors graph).Resources
+        Assert.Equal(4,declarations.Length)
+        let first = declarations |> List.find(fun row -> row.Contract.Resource = BAREWire.Descriptors.ResourceProtocol.OwnedNullableReturn {Binding="Alpha.Foreign.freeFirst";Parameter=0})
+        let second = declarations |> List.find(fun row -> row.Contract.Resource = BAREWire.Descriptors.ResourceProtocol.OwnedNullableReturn {Binding="Beta.Foreign.freeFirst";Parameter=0})
+        for declaration in [first;second] do
+            let releaseName = ForeignDeclarations.qualifiedExportName graph graph.Nodes[declaration.Release.Binding] |> Option.get
+            let row = revision.Emission.Boundary.ResourceDeclarations[Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId declaration.Quote]
+            let scope = row.DeclarationFacts[row.Release].Parent |> Option.get
+            let header = revision.SourceReadings.ContextHeaders[scope]
+            Assert.Equal(releaseName,header.Name+".freeFirst")
+            Assert.Contains(header.Name,["Alpha.Foreign";"Beta.Foreign"])
+        let boundary = revision.Emission.Boundary
+        let first = boundary.ResourceDeclarations[Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId first.Quote]
+        let second = boundary.ResourceDeclarations[Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId second.Quote]
+        Assert.Equal(first.HandleType,second.HandleType)
+        let facts = Map.fold(fun current id value -> Map.add id value current) first.DeclarationFacts second.DeclarationFacts
+        let swapped = {first with Release=second.Release;ReleaseBody=second.ReleaseBody;ReleaseDescriptor=second.ReleaseDescriptor;ReleaseFormal=second.ReleaseFormal;DeclarationFacts=facts;Participants=facts.Keys |> Set.ofSeq}
+        let changed = {revision with Emission={revision.Emission with Boundary={boundary with ResourceDeclarations=boundary.ResourceDeclarations.Add(first.Identity,swapped)}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue ->
+            issue.Part="Emission.Boundary.ResourceDeclarations.Context" &&
+            issue.Reason="The resource declaration lacks its exact current module context or qualified release binding.")
+
+    [<Fact>]
+    member _.``Resource declaration replay retains exact metadata contexts and twins without executable bodies``() =
+        let revision = ForeignCases.publishedResources.Value
+        let rows = revision.Emission.Boundary.ResourceDeclarations.Values |> Seq.toList
+        Assert.Equal(2, rows.Length)
+        Assert.Equal(2, rows |> List.map _.Acquisition |> List.distinct |> List.length)
+        Assert.Equal(2, rows |> List.map _.Release |> List.distinct |> List.length)
+        Assert.True(rows[0].HandleType=rows[1].HandleType && rows[0].ResultType=rows[1].ResultType)
+        for row in rows do
+            for declaration in [row.Acquisition;row.Release] do
+                Assert.False(revision.Nodes.ContainsKey declaration)
+                let scope = row.DeclarationFacts[declaration].Parent |> Option.get
+                let header = revision.SourceReadings.ContextHeaders[scope]
+                Assert.Equal("Foreign", header.Name)
+                let port = header.Ports[Fidelity.PSG.OccurrencePort.ModuleDeclaration]
+                Assert.True(port.Extent>0 && not(System.String.IsNullOrWhiteSpace port.Stamp))
+                Assert.DoesNotContain(declaration, port.Positions.Values)
+        let defects = Fidelity.PSG.Integrity.check revision
+        Assert.True(defects.IsEmpty, Fidelity.PSG.Integrity.describe defects)
+        let limits: Fidelity.PSG.Binary.Limits =
+            { MaxBytes=8*1024*1024;MaxCollectionLength=10000;MaxDepth=128;MaxStringBytes=1024*1024;MaxBigIntegerBytes=4096;MaxValues=2000000 }
+        let bytes = Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith (fun error -> failwithf "%A" error)
+        let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith (fun error -> failwithf "%A" error)
+        Assert.True(copy.Emission.Boundary.ResourceDeclarations=revision.Emission.Boundary.ResourceDeclarations)
+
+    [<Theory>]
+    [<InlineData("missing-wrapper", "Declaration")>]
+    [<InlineData("wrong-sibling", "Declaration")>]
+    [<InlineData("wrong-formal", "Incidence")>]
+    [<InlineData("wrong-acquisition-body", "Incidence")>]
+    [<InlineData("wrong-release-body", "Incidence")>]
+    [<InlineData("missing-context", "Context")>]
+    [<InlineData("same-leaf-wrong-module", "Context")>]
+    member _.``Resource declaration replay refuses same-typed substituted identities and missing support``(shape:string, part:string) =
+        let revision = ForeignCases.publishedResources.Value
+        let boundary = revision.Emission.Boundary
+        let first,second = match boundary.ResourceDeclarations.Values |> Seq.toList with [first;second] -> first,second | _ -> failwith "Expected resource twins."
+        let union = Map.fold (fun all id fact -> Map.add id fact all) first.DeclarationFacts second.DeclarationFacts
+        let supported (row:Fidelity.PSG.BoundaryResourceDeclaration) facts = {row with DeclarationFacts=facts;Participants=facts.Keys |> Set.ofSeq}
+        let replace row = {revision with Emission={revision.Emission with Boundary={boundary with ResourceDeclarations=boundary.ResourceDeclarations.Add(first.Identity,row)}}}
+        let changed =
+            match shape with
+            | "missing-wrapper" -> supported first (first.DeclarationFacts.Remove(first.DeclarationFacts[first.ReleaseDescriptor].Parent |> Option.get)) |> replace
+            | "wrong-sibling" -> supported {first with Acquisition=second.Acquisition;AcquisitionBody=second.AcquisitionBody;AcquisitionDescriptor=second.AcquisitionDescriptor;AcquisitionType=second.AcquisitionType} union |> replace
+            | "wrong-formal" -> supported {first with ReleaseFormal=second.ReleaseFormal} union |> replace
+            | "wrong-acquisition-body" -> supported {first with AcquisitionBody=second.AcquisitionBody} union |> replace
+            | "wrong-release-body" -> supported {first with ReleaseBody=second.ReleaseBody} union |> replace
+            | "missing-context" ->
+                let scope=first.DeclarationFacts[first.Release].Parent |> Option.get
+                {revision with SourceReadings={revision.SourceReadings with ContextHeaders=revision.SourceReadings.ContextHeaders.Remove scope}}
+            | "same-leaf-wrong-module" ->
+                let scope=first.DeclarationFacts[first.Release].Parent |> Option.get
+                let header=revision.SourceReadings.ContextHeaders[scope]
+                {revision with SourceReadings={revision.SourceReadings with ContextHeaders=revision.SourceReadings.ContextHeaders.Add(scope,{header with Name="Other.Namespace"})}}
+            | _ -> failwithf "Unknown resource shape %s" shape
+        let reason =
+            match part with
+            | "Declaration" -> "The resource account differs from its exact sibling acquisition or release declaration."
+            | "Incidence" -> "The resource declaration differs from its exact original acquisition/release body or ordinal-zero release formal."
+            | "Context" -> "The resource declaration lacks its exact current module context or qualified release binding."
+            | _ -> failwithf "Unknown resource refusal part %s" part
+        Assert.Contains(Fidelity.PSG.Integrity.check changed, fun issue -> issue.Part="Emission.Boundary.ResourceDeclarations."+part && issue.Reason=reason)
+
+    [<Fact>]
+    member _.``Resource declaration replay refuses changed hypothesis and withdrawn source account``() =
+        let graph = ForeignCases.resourceGraph ()
+        let declaration = (ForeignDeclarations.readDescriptors graph).Resources.Head
+        let _,fields = ForeignDeclarations.recordOf graph declaration.Node |> Option.get
+        let _,hypothesis = ForeignDeclarations.field "Hypothesis" fields |> Option.bind (ForeignDeclarations.recordOf graph) |> Option.get
+        let literal,_ = ForeignDeclarations.field "Version" hypothesis |> Option.bind (ForeignDeclarations.valuePath graph) |> Option.get
+        let changed = {graph with Nodes=graph.Nodes.Add(literal.Id,{literal with Kind=SemanticKind.Literal(NativeLiteral.String "changed-after-issue")})}
+        let expected = "BoundaryEmission: A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph."
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason=expected)
+        | Ok _ -> failwith "Changed resource hypothesis retained an old account."
+        let withdrawn =
+            { graph with
+                Edges =
+                    graph.Edges
+                    |> List.filter(fun edge ->
+                        match edge.Role with
+                        | EdgeRole.BoundaryResourceDeclaration row when row.Identity=declaration.Quote -> false
+                        | _ -> true) }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project withdrawn with
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason="BoundaryEmission: The source resource declaration account was withdrawn or duplicated.")
+        | Ok _ -> failwith "Withdrawing a resource declaration retained an old account."
+
+    [<Fact>]
     member _.``Published conditional foreign result keeps metadata identities without executable bodies``() =
         let revision = ForeignCases.publishedLabs.Value
+        Assert.Empty(revision.Emission.Boundary.ResourceDeclarations)
 
         let claims =
             revision.Obligations
