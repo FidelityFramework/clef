@@ -11,6 +11,17 @@ let private selected ids (rows: Map<NodeId, 'row>) = rows |> Map.filter (fun id 
 let private selectedSet ids values = Set.intersect ids values
 let private storageIdentity = function ProgramStorageIdentity.Allocation id | ProgramStorageIdentity.BindingSlot id -> id
 
+/// A selected optional anchor is declaration metadata until the existing
+/// demand account also supplies an executable occurrence or binding use.
+let private metadataDeclarations (emission: WitnessEmissionProjection) (scope: WitnessLiveScopePlan) =
+    let demanded = Set.union (scope.Occurrences.Keys |> Set.ofSeq) (scope.BindingUses.Values |> Seq.map _.Binding |> Set.ofSeq)
+    let anchors = emission.Boundary.CallbackInvocations.Values |> Seq.choose(fun row ->
+        match row.Extent with BoundaryCallbackExtent.ProcessExit(anchor,_) -> anchor | _ -> None) |> Set.ofSeq
+    emission.Boundary.Imports.Values |> Seq.filter(fun row ->
+        anchors.Contains row.Binding && not(List.exists demanded.Contains row.DeclarationPath) &&
+        not(emission.Boundary.Calls.Values |> Seq.exists(fun call -> call.Import=row.Identity)))
+    |> Seq.collect _.DeclarationPath |> Set.ofSeq
+
 let private branches ids (value: CallableBranchAuthority) =
     { value with Observations = selected ids value.Observations
                  CarrierUses = selectedSet ids value.CarrierUses
@@ -29,6 +40,7 @@ let private programStorage ids (value: ProgramStorageInventory) =
 /// identities that are not executable nodes. Owner-wide support inventories
 /// remain complete fields in their selected rows; they do not authorize bodies.
 let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope: WitnessLiveScopePlan) =
+    let metadata = metadataDeclarations emission scope
     let mutable ids =
         scope.Occurrences.Keys |> Set.ofSeq
         |> Set.union (scope.BindingUses.Values |> Seq.map _.Binding |> Set.ofSeq)
@@ -101,36 +113,37 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
     let facts = graph.Codata.Value
     let rec advance () =
         let before = ids
+        let callableIds = Set.difference before metadata
         selected before emission.Ordinary.Parameters |> Map.iter (fun _ row -> addMany row)
         selected before emission.Ordinary.Calls |> Map.iter (fun _ row -> add row.Implementation; addMany row.Actuals)
-        selected before emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
-        selected before emission.Callable.Contracts |> Map.iter (fun _ row -> contract row)
-        selected before emission.Callable.AggregateSlots |> Map.iter (fun _ row -> aggregateSlot row)
-        selected before emission.Callable.AggregateValues |> Map.iter (fun _ rows -> List.iter aggregateValue rows)
-        selected before emission.Callable.AggregateDependencies |> Map.iter (fun _ row -> aggregateAccount row)
-        selected before emission.Callable.Joins |> Map.iter (fun _ row -> join row)
-        selected before emission.Callable.Flows |> Map.iter (fun _ row -> flow row)
-        selected before emission.Callable.MutableStorage |> Map.iter (fun _ row ->
+        selected callableIds emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
+        selected callableIds emission.Callable.Contracts |> Map.iter (fun _ row -> contract row)
+        selected callableIds emission.Callable.AggregateSlots |> Map.iter (fun _ row -> aggregateSlot row)
+        selected callableIds emission.Callable.AggregateValues |> Map.iter (fun _ rows -> List.iter aggregateValue rows)
+        selected callableIds emission.Callable.AggregateDependencies |> Map.iter (fun _ row -> aggregateAccount row)
+        selected callableIds emission.Callable.Joins |> Map.iter (fun _ row -> join row)
+        selected callableIds emission.Callable.Flows |> Map.iter (fun _ row -> flow row)
+        selected callableIds emission.Callable.MutableStorage |> Map.iter (fun _ row ->
             add row.Binding
             let write (value: MutableCallableWrite) = add value.Site; add value.Destination; add value.Value
             write row.Initializer; List.iter write row.Writes; addMany row.Reads; addMany row.Alternatives
             List.iter carrier row.AlternativeCarriers; addMany row.Captures; addMany row.Borrows)
-        selected before emission.Callable.SignatureData |> Map.iter (fun _ row -> addMany row)
-        selected before emission.Callable.ValueShapes |> Map.iter (fun _ row -> shape row)
-        selected before emission.Callable.Calls |> Map.iter (fun _ row ->
+        selected callableIds emission.Callable.SignatureData |> Map.iter (fun _ row -> addMany row)
+        selected callableIds emission.Callable.ValueShapes |> Map.iter (fun _ row -> shape row)
+        selected callableIds emission.Callable.Calls |> Map.iter (fun _ row ->
             add row.Implementation; parameters row.Parameters; addMany row.Arguments; add row.Result; addMany row.SignatureData)
-        selected before emission.Callable.Transports |> Map.iter (fun _ row -> addMany row)
-        selected before emission.Callable.Declarations |> Map.iter (fun _ row ->
+        selected callableIds emission.Callable.Transports |> Map.iter (fun _ row -> addMany row)
+        selected callableIds emission.Callable.Declarations |> Map.iter (fun _ row ->
             add row.Lookup; add row.Implementation; parameters row.Parameters; add row.Result
             row.Captures |> List.iter (fun capture -> addOptional capture.SourceNodeId))
-        selected before emission.Callable.Symbols |> Map.iter (fun _ row ->
+        selected callableIds emission.Callable.Symbols |> Map.iter (fun _ row ->
             match row with
             | CallableSymbolName.LocalBinding(id, _) | CallableSymbolName.Anonymous id -> add id
             | _ -> ())
-        selected before emission.Callable.DirectCallees |> Map.iter (fun _ row -> add row)
-        selected before emission.Callable.AliasTargets |> Map.iter (fun _ row -> add row)
-        selected before emission.Callable.Arguments |> Map.iter (fun _ row -> row.Keys |> addMany)
-        selected before emission.Callable.ProgramInstances |> Map.iter (fun _ row -> carrier row.Carrier; addOptional row.Allocation)
+        selected callableIds emission.Callable.DirectCallees |> Map.iter (fun _ row -> add row)
+        selected callableIds emission.Callable.AliasTargets |> Map.iter (fun _ row -> add row)
+        selected callableIds emission.Callable.Arguments |> Map.iter (fun _ row -> row.Keys |> addMany)
+        selected callableIds emission.Callable.ProgramInstances |> Map.iter (fun _ row -> carrier row.Carrier; addOptional row.Allocation)
         selected before emission.Storage.Lazies |> Map.iter (fun _ row ->
             add row.Layout.Owner; add row.Layout.Thunk; add row.Layout.Formal
             add row.Layout.Computed; add row.Layout.Cached; slots row.Layout.Slots; add row.ThunkBody)
@@ -159,7 +172,11 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
                 add value.Actual; add value.Formal
                 match value.Abi with BoundaryScalar.Entry invocation -> add invocation | _ -> ()))
         selected before emission.Boundary.CallbackInvocations |> Map.iter (fun _ row ->
-            add row.Import; add row.Formal; add row.Scope; addMany row.Participants)
+            add row.Import; add row.Formal; add row.Scope; addMany row.Participants
+            match row.Extent with
+            | BoundaryCallbackExtent.ProcessExit(Some anchor,_) ->
+                emission.Boundary.Imports.Values |> Seq.filter(fun imported -> imported.Binding=anchor) |> Seq.iter(fun imported -> add imported.Identity)
+            | _ -> ())
         selected before emission.Boundary.ClosedEntries |> Map.iter (fun _ row ->
             add row.Operand; add row.Declaration; add row.Implementation; addMany row.Formals; add row.Body
             add row.Lifetime.Module; add row.Lifetime.Binding; add row.Lifetime.Implementation
@@ -207,6 +224,7 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
 /// alone is not a value consumer: imports and spatial plans carry those facts
 /// in their own typed accounts. Follow only the selected value contracts here.
 let private valueFacts (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope: WitnessLiveScopePlan) ids =
+    let callableIds = Set.difference ids (metadataDeclarations emission scope)
     let mutable values =
         scope.Occurrences |> Map.toSeq |> Seq.choose (fun (id, occurrence) ->
             match occurrence.Body.Kind with
@@ -238,24 +256,24 @@ let private valueFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         row.Tag |> Option.iter (fun tag -> Option.iter add tag.TagRead; Option.iter add tag.Payload)
     selected ids emission.Ordinary.Parameters |> Map.iter (fun _ formals -> addMany formals)
     selected ids emission.Ordinary.Calls |> Map.iter (fun _ call -> addMany call.Actuals)
-    selected ids emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
-    selected ids emission.Callable.AggregateValues |> Map.iter (fun _ rows -> List.iter aggregateValue rows)
-    selected ids emission.Callable.AggregateDependencies |> Map.iter (fun _ account ->
+    selected callableIds emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
+    selected callableIds emission.Callable.AggregateValues |> Map.iter (fun _ rows -> List.iter aggregateValue rows)
+    selected callableIds emission.Callable.AggregateDependencies |> Map.iter (fun _ account ->
         List.iter aggregateValue account.Values; List.iter carrier account.Carriers)
-    selected ids emission.Callable.SignatureData |> Map.iter (fun _ data -> addMany data)
-    selected ids emission.Callable.Declarations |> Map.iter (fun _ row ->
+    selected callableIds emission.Callable.SignatureData |> Map.iter (fun _ data -> addMany data)
+    selected callableIds emission.Callable.Declarations |> Map.iter (fun _ row ->
         parameters row.Parameters; add row.Result
         row.Captures |> List.iter (fun capture -> Option.iter add capture.SourceNodeId))
-    selected ids emission.Callable.Calls |> Map.iter (fun _ row ->
+    selected callableIds emission.Callable.Calls |> Map.iter (fun _ row ->
         parameters row.Parameters; add row.Result; addMany row.Arguments; addMany row.SignatureData)
-    selected ids emission.Callable.Arguments |> Map.iter (fun _ row -> addMany row.Keys)
-    selected ids emission.Callable.Transports |> Map.iter (fun _ row -> addMany row)
-    selected ids emission.Callable.ProgramInstances |> Map.iter (fun _ row -> carrier row.Carrier)
-    selected ids emission.Callable.Joins |> Map.iter (fun _ row -> add row.Storage; add row.Read; addMany row.Alternatives)
-    selected ids emission.Callable.Flows |> Map.iter (fun _ row ->
+    selected callableIds emission.Callable.Arguments |> Map.iter (fun _ row -> addMany row.Keys)
+    selected callableIds emission.Callable.Transports |> Map.iter (fun _ row -> addMany row)
+    selected callableIds emission.Callable.ProgramInstances |> Map.iter (fun _ row -> carrier row.Carrier)
+    selected callableIds emission.Callable.Joins |> Map.iter (fun _ row -> add row.Storage; add row.Read; addMany row.Alternatives)
+    selected callableIds emission.Callable.Flows |> Map.iter (fun _ row ->
         addMany row.Alternatives
         row.Calls |> List.iter (fun call -> addMany call.Parameters; addMany call.Arguments; add call.Result))
-    selected ids emission.Callable.MutableStorage |> Map.iter (fun _ row ->
+    selected callableIds emission.Callable.MutableStorage |> Map.iter (fun _ row ->
         let write (value: MutableCallableWrite) = add value.Site; add value.Destination; add value.Value
         add row.Binding; write row.Initializer; List.iter write row.Writes; addMany row.Reads
         List.iter carrier row.AlternativeCarriers; addMany row.Captures; addMany row.Borrows)
@@ -313,13 +331,16 @@ let private closeTypes (graph: SemanticGraph) ids valueIds (emission: WitnessEmi
             }))
     Seq.fold visit Set.empty identities
 
-let private emissionRows ids valueIds types (value: WitnessEmissionProjection) : WitnessEmissionProjection =
+let private emissionRows ids valueIds types metadata (value: WitnessEmissionProjection) : WitnessEmissionProjection =
     let rows table = selected ids table
     let values entries = selectedSet ids entries
     let valueRows table = selected valueIds table
-    let valueSet entries = selectedSet valueIds entries
     let typeRows table = table |> Map.filter (fun key _ -> Set.contains key types)
     let callables = value.Callable
+    let callableRows table = selected (Set.difference ids metadata) table
+    let callableValueRows table = selected (Set.difference valueIds metadata) table
+    let callableValues entries = selectedSet (Set.difference ids metadata) entries
+    let callableValueSet entries = selectedSet (Set.difference valueIds metadata) entries
     let storage = value.Storage
     let boundary = value.Boundary
     let numeric = value.Numeric
@@ -345,21 +366,21 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
                        (proof.Calls |> Set.exists ids.Contains)) }
       Callable = {
         Branches = branches ids callables.Branches
-        Contracts = rows callables.Contracts
-        Carriers = rows callables.Carriers; Joins = rows callables.Joins; Flows = rows callables.Flows
-        AggregateSlots = rows callables.AggregateSlots; AggregateValues = rows callables.AggregateValues
-        AggregateDependencies = rows callables.AggregateDependencies
-        MutableStorage = rows callables.MutableStorage; ValueShapes = valueRows callables.ValueShapes
-        SignatureData = rows callables.SignatureData; Calls = rows callables.Calls; Transports = rows callables.Transports
-        Declarations = rows callables.Declarations; Symbols = rows callables.Symbols
-        IntrinsicAliases = values callables.IntrinsicAliases; DirectCallees = rows callables.DirectCallees
-        ForeignCalls = values callables.ForeignCalls; MutableRetentions = values callables.MutableRetentions
-        ProgramInstances = rows callables.ProgramInstances; VoidCallbacks = values callables.VoidCallbacks
-        VoidPointers = values callables.VoidPointers; NativeEntries = rows callables.NativeEntries
-        FunctionBindings = values callables.FunctionBindings; DefinitionOnlyBindings = values callables.DefinitionOnlyBindings
-        DefinitionOnlyLambdas = values callables.DefinitionOnlyLambdas; Arguments = rows callables.Arguments
-        AliasTargets = valueRows callables.AliasTargets; TakesEnvironment = values callables.TakesEnvironment
-        UnitNodes = valueSet callables.UnitNodes; ClosedData = valueSet callables.ClosedData; Supports = valueRows callables.Supports }
+        Contracts = callableRows callables.Contracts
+        Carriers = callableRows callables.Carriers; Joins = callableRows callables.Joins; Flows = callableRows callables.Flows
+        AggregateSlots = callableRows callables.AggregateSlots; AggregateValues = callableRows callables.AggregateValues
+        AggregateDependencies = callableRows callables.AggregateDependencies
+        MutableStorage = callableRows callables.MutableStorage; ValueShapes = callableValueRows callables.ValueShapes
+        SignatureData = callableRows callables.SignatureData; Calls = callableRows callables.Calls; Transports = callableRows callables.Transports
+        Declarations = callableRows callables.Declarations; Symbols = callableRows callables.Symbols
+        IntrinsicAliases = callableValues callables.IntrinsicAliases; DirectCallees = callableRows callables.DirectCallees
+        ForeignCalls = callableValues callables.ForeignCalls; MutableRetentions = callableValues callables.MutableRetentions
+        ProgramInstances = callableRows callables.ProgramInstances; VoidCallbacks = callableValues callables.VoidCallbacks
+        VoidPointers = callableValues callables.VoidPointers; NativeEntries = callableRows callables.NativeEntries
+        FunctionBindings = callableValues callables.FunctionBindings; DefinitionOnlyBindings = callableValues callables.DefinitionOnlyBindings
+        DefinitionOnlyLambdas = callableValues callables.DefinitionOnlyLambdas; Arguments = callableRows callables.Arguments
+        AliasTargets = callableValueRows callables.AliasTargets; TakesEnvironment = callableValues callables.TakesEnvironment
+        UnitNodes = callableValueSet callables.UnitNodes; ClosedData = callableValueSet callables.ClosedData; Supports = callableValueRows callables.Supports }
       Storage = { Lazies = rows storage.Lazies; LazyOccurrences = rows storage.LazyOccurrences
                   LazyValues = values storage.LazyValues; DefinitionOnlyThunks = values storage.DefinitionOnlyThunks
                   LazyPrograms = rows storage.LazyPrograms; Sequences = rows storage.Sequences; SequenceCopies = rows storage.SequenceCopies
@@ -398,7 +419,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope:
     let valueIds = valueFacts graph emission scope ids
     let ids = Set.union ids valueIds
     let types = closeTypes graph ids valueIds emission
-    let selectedEmission = emissionRows ids valueIds types emission
+    let selectedEmission = emissionRows ids valueIds types (metadataDeclarations emission scope) emission
     let rows table = selected ids table
     let values entries = selectedSet ids entries
     let facts = graph.Codata.Value

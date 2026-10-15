@@ -167,7 +167,7 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
                             graph.Nodes.TryFind citizen |> Option.exists (fun node ->
                                 Numeric.owned node &&
                                 (match node.Kind with
-                                 | SemanticKind.Obligation info -> info.Kind = "foreign-result-coverage" && info.Body = ObligationBody.ForeignResultCoverage model
+                                 | SemanticKind.Obligation info -> info.Kind = "foreign-result-coverage" && info.Body = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.foreignResultBody model
                                  | _ -> false))) account.Claims models) applications domain.ForeignResultUses
             let proofRows = proofs |> List.collect (fun (carrier, id, body) -> body |> Option.toList |> List.collect (Numeric.proofRows carrier id))
             let expected = Numeric.domainRow anchor domain :: Numeric.domainRewrite anchor domain :: (domain.Values |> List.map Numeric.carrierRow) @ proofRows

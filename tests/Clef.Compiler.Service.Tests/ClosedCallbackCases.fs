@@ -144,18 +144,32 @@ let main _ =
         DimensionalCases.noErrors result
         result.Graph
 
-    let receivingZeroCheckWith signature callback =
-        receivingCheckWith true (fun source ->
-            source
+    let zeroSource signature callback (source: string) =
+        source
                 .Replace("FnPtr<int -> int>", "FnPtr<" + signature + ">")
                 .Replace("type EntrySignature =", "type CallbackDescriptor = { Record: string; Field: string; Signature: FunctionDescriptor }\ntype EntrySignature =")
                 .Replace("let receiveRecord (callback: NativeRecord)", "let legacyEntry: Expr<CallbackDescriptor> = <@ { Record = \"NativeRecord\"; Field = \"Handler\"; Signature = { CName = \"callback\"; Parameters = [||]; ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } } @>\nlet receiveRecord (callback: NativeRecord)")
                 .Replace("Parameters = [| { Name = \"arg0\"; Type = Integer (Signed, 64); PassBy = Value } |]", "Parameters = [||]")
                 .Replace("ReturnType = Integer (Signed, 64); CallingConvention", "ReturnType = Void; CallingConvention")
-                .Replace("let callback (_unused: int) = 7", callback))
+                .Replace("let callback (_unused: int) = 7", callback)
+
+    let receivingZeroCheckWith signature callback =
+        receivingCheckWith true (zeroSource signature callback)
 
     let receivingZeroCheck callback =
         receivingZeroCheckWith "unit -> unit" callback
+
+    let receivingProcessCheckWith transform =
+        receivingCheckWith true (fun source ->
+            (zeroSource "unit -> unit" "let callback (u: unit) : unit = u" source)
+                .Replace("type ScopedCallbackDescriptor = { Binding: string; Parameter: string }",
+                         "type ScopedCallbackDescriptor = { Binding: string; Parameter: string }\ntype ProcessExitCallbackDescriptor = { Binding: string; Parameter: string; ExitBinding: string option; SuccessStatus: int }")
+                .Replace("let private receive (callback: FnPtr<unit -> unit>) : unit", "let private receive (callback: FnPtr<unit -> unit>) : int")
+                .Replace("ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>\nlet scope:",
+                         "ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>\nlet scope:")
+                .Replace("let scope: Expr<ScopedCallbackDescriptor> = <@ { Binding = \"ReceivingCallback.receive\"; Parameter = \"callback\" } @>",
+                         "let scope: Expr<ProcessExitCallbackDescriptor> = <@ { Binding = \"ReceivingCallback.receive\"; Parameter = \"callback\"; ExitBinding = None; SuccessStatus = 0 } @>")
+            |> transform)
 
     let receivingGraph () = receivingGraphWith false
     let receivingWrapperGraph () = receivingGraphWith true
@@ -1040,3 +1054,165 @@ let main _ =
                 "A zero-argument void callback requires its exact sole source unit formal and current unit representation."
 
         Assert.Contains(Fidelity.PSG.Integrity.check changed, fun issue -> issue.Part = part && issue.Reason = reason)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Process exit extent retains distinct equal registration contexts without synchronous retirement``(anchor: bool) =
+        let result =
+            ClosedCallbackCases.receivingProcessCheckWith (fun source ->
+                let source = source.Replace("    receiveRecord { Handler = FnPtr.ofFunction callback }", "    let entry = { Handler = FnPtr.ofFunction callback }\n    receiveRecord entry\n    receiveRecord entry")
+                if anchor then
+                    source
+                        .Replace("ExitBinding = None", "ExitBinding = Some \"ReceivingCallback.finish\"")
+                        .Replace("let callback (u: unit)", "[<FidelityExtern(\"c\", \"normal_exit\")>]\nlet finish (status: int) : unit = NativeDefault.zeroed ()\nlet finishDescriptor: Expr<FunctionDescriptor> = <@ { CName = \"normal_exit\"; Parameters = [| { Name = \"status\"; Type = Integer (Signed, 32); PassBy = Value } |]; ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>\nlet callback (u: unit)")
+                else source)
+        DimensionalCases.noErrors result
+        let scoped = Clef.Compiler.PSGSaturation.SemanticGraph.ScopedDeclarations.read result.Graph
+        let activation = scoped.Activations.Values |> Seq.filter(fun row -> match row.Extent with BoundaryCallbackExtent.ProcessExit _ -> true | _ -> false) |> Assert.Single
+        Assert.DoesNotContain(activation.Parameter, scoped.Parameters)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph
+            |> Result.defaultWith (fun errors -> failwithf "%A" errors)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let entry = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
+        let invocation = revision.Emission.Boundary.CallbackInvocations[entry.Invocation]
+        match invocation.Extent with
+        | Fidelity.PSG.BoundaryCallbackExtent.ProcessExit(selected, status) ->
+            Assert.Equal(anchor, selected.IsSome)
+            Assert.Equal(0, status)
+        | _ -> failwith "A retained registration was classified as synchronous."
+        Assert.Equal(2, entry.Registrations.Count)
+        let uses = entry.Registrations.Values |> Seq.toList
+        Assert.NotEqual<Fidelity.PSG.NodeId list>(uses[0].Context, uses[1].Context)
+        Assert.Equal(uses[0].Call, uses[1].Call)
+        for use' in uses do
+            Assert.Equal(use'.Call, use'.Result)
+            Assert.Equal(entry.Formation, use'.Formation)
+            Assert.True(Set.isSubset (Set.ofList use'.Context) use'.Participants)
+        let numeric = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project result.Graph |> Result.defaultWith(fun errors -> failwithf "%A" errors)
+        for use' in numeric.ForeignResultUses do
+            Assert.True(use'.Application.Hypothesis.IsNone)
+            Assert.Equal<ForeignResultProofRole list>([ForeignResultProofRole.AbiNarrowing], List.map fst use'.Claims)
+            for _,claim in use'.Claims do
+                match result.Graph.Nodes[claim].Kind with
+                | SemanticKind.Obligation {Body=ObligationBody.IntegerRepresentationCoverage(lo,hi,minimum,maximum)} ->
+                    Assert.Equal(-2147483648I,lo)
+                    Assert.Equal(2147483647I,hi)
+                    Assert.True(minimum<=lo && hi<=maximum)
+                | _ -> failwith "Full ABI ingress lost its explicit width embedding obligation."
+        let limits: Fidelity.PSG.Binary.Limits =
+            { MaxBytes=8*1024*1024; MaxCollectionLength=100000; MaxDepth=128; MaxStringBytes=1024*1024; MaxBigIntegerBytes=4096; MaxValues=2000000 }
+        let bytes = Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith(fun error -> failwithf "%A" error)
+        let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith(fun error -> failwithf "%A" error)
+        Assert.Equal(revision.Emission.Boundary, copy.Emission.Boundary)
+
+    [<Theory>]
+    [<InlineData("status")>]
+    [<InlineData("census")>]
+    [<InlineData("result")>]
+    [<InlineData("support")>]
+    member _.``Process exit public replay refuses changed registration premises``(shape: string) =
+        let result = ClosedCallbackCases.receivingProcessCheckWith id
+        DimensionalCases.noErrors result
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph
+            |> Result.defaultWith(fun errors -> failwithf "%A" errors)
+        let boundary = revision.Emission.Boundary
+        let entry = boundary.ClosedEntries.Values |> Assert.Single
+        let invocation = boundary.CallbackInvocations[entry.Invocation]
+        let changed, suffix, reason =
+            if shape="status" then
+                let invocation = { invocation with Extent=Fidelity.PSG.BoundaryCallbackExtent.ProcessExit(None, 1) }
+                { boundary with CallbackInvocations=boundary.CallbackInvocations.Add(invocation.Identity, invocation) },
+                "CallbackInvocations.ProcessExitDeclaration",
+                "The process-exit extent differs from its exact immutable status and selected optional anchor declaration."
+            else
+                let registrations =
+                    if shape="census" then Map.empty else
+                    entry.Registrations |> Map.map(fun _ use' ->
+                        if shape="result" then { use' with Result=entry.Formation }
+                        else { use' with Participants=Set.empty })
+                let entry={entry with Registrations=registrations}
+                let suffix, reason =
+                    if shape="census" then "Registrations", "The process-exit registration census differs from its current call and per-application result contexts."
+                    elif shape="result" then "RegistrationResult", "The registration differs from its exact receiving application, original formation or signed32 result."
+                    else "RegistrationParticipants", "The registration lost its current caller/context dependency support."
+                {boundary with ClosedEntries=boundary.ClosedEntries.Add(entry.Formation,entry)}, "ClosedEntries."+suffix, reason
+        let changed={ revision with Emission={revision.Emission with Boundary=changed} }
+        Assert.Contains(Fidelity.PSG.Integrity.check changed, fun issue -> issue.Part="Emission.Boundary."+suffix && issue.Reason=reason)
+
+    [<Theory>]
+    [<InlineData("ExitBinding = None", "ExitBinding = Some \"ReceivingCallback.absent\"", "ProcessExitCallbackDescriptor ExitBinding must resolve one current immutable declaration.")>]
+    [<InlineData("SuccessStatus = 0", "SuccessStatus = 2147483648", "ProcessExitCallbackDescriptor requires signed32 SuccessStatus and an explicit optional ExitBinding.")>]
+    member _.``Process exit source refuses malformed exact declaration premises``(before: string, after: string, reason: string) =
+        let result=ClosedCallbackCases.receivingProcessCheckWith(fun source -> source.Replace(before,after))
+        let declarations=Clef.Compiler.PSGSaturation.SemanticGraph.ScopedDeclarations.read result.Graph
+        Assert.Contains(declarations.Findings, fun finding -> finding.Message=reason)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``ABI ingress does not manufacture missing behavioral or ABI support``(missingAbi: bool) =
+        let result=ClosedCallbackCases.receivingProcessCheckWith id
+        DimensionalCases.noErrors result
+        let graph=result.Graph
+        let numeric=Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph |> Result.defaultWith(fun errors -> failwithf "%A" errors)
+        let evidence=
+            Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.foreignResultApplications graph graph.RangeContextFacts
+            |> Result.defaultWith(fun error -> failwithf "%A" error)
+            |> List.head
+        let changed=
+            if missingAbi then {evidence with Abi=None}
+            else {evidence with ResultRange=ValueRange.point 0I}
+        let models=Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.foreignResultModels graph (numeric.Values.Values |> Seq.toList) changed
+        Assert.Equal<ForeignResultProofRole list>([ForeignResultProofRole.LogicalCoverage;ForeignResultProofRole.AbiNarrowing],List.map fst models)
+        for _,model in models do
+            match Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.foreignResultBody model with
+            | ObligationBody.ForeignResultCoverage pending -> Assert.True(pending.Application.Hypothesis.IsNone)
+            | _ -> failwith "Absent ABI or behavioral narrowing was replaced with an ingress coverage proof."
+
+    [<Theory>]
+    [<InlineData(true,32)>]
+    [<InlineData(false,32)>]
+    [<InlineData(true,64)>]
+    [<InlineData(false,64)>]
+    member _.``Complete declared integer ABI ingress preserves signedness width and embedding without behavior``(signed: bool, bits: int) =
+        let sign=if signed then "Signed" else "Unsigned"
+        let result=ClosedCallbackCases.receivingProcessCheckWith(fun source ->
+            source
+                .Replace("let scope: Expr<ProcessExitCallbackDescriptor> = <@ { Binding = \"ReceivingCallback.receive\"; Parameter = \"callback\"; ExitBinding = None; SuccessStatus = 0 } @>",
+                         "let scope: Expr<ScopedCallbackDescriptor> = <@ { Binding = \"ReceivingCallback.receive\"; Parameter = \"callback\" } @>")
+                .Replace("ReturnType = Integer (Signed, 32);", $"ReturnType = Integer ({sign}, {bits});"))
+        DimensionalCases.noErrors result
+        let graph=result.Graph
+        let numeric=Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph |> Result.defaultWith(fun errors -> failwithf "%A" errors)
+        let expected=if signed then ValueRange.twosComplement bits else ValueRange.unsignedOf bits
+        for use' in numeric.ForeignResultUses do
+            Assert.True(use'.Application.Hypothesis.IsNone)
+            Assert.Equal(expected,numeric.Values[use'.Application.Call].Range)
+            Assert.Equal<ForeignResultProofRole list>([ForeignResultProofRole.AbiNarrowing],List.map fst use'.Claims)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun errors -> failwithf "%A" errors)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``ABI ingress refuses withdrawn declaration or selected target support``(withdrawTarget: bool) =
+        let result=ClosedCallbackCases.receivingProcessCheckWith id
+        DimensionalCases.noErrors result
+        let graph=result.Graph
+        let changed=
+            if withdrawTarget then {graph with Platform=None} else
+            let evidence=Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.foreignResultApplications graph graph.RangeContextFacts |> Result.defaultWith(fun error -> failwithf "%A" error) |> List.head
+            let abi=evidence.Abi |> Option.defaultWith(fun () -> failwith "The source ABI premise is absent.")
+            let node=graph.Nodes[abi.Node]
+            match node.Kind with
+            | SemanticKind.RecordExpr(fields,copy) ->
+                let fields=fields |> List.filter(fun (name,_) -> name<>"ReturnType")
+                {graph with Nodes=graph.Nodes.Add(node.Id,{node with Kind=SemanticKind.RecordExpr(fields,copy);Children=Option.toList copy @ List.map snd fields})}
+            | _ -> failwith "The actual ABI descriptor did not retain its source record."
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project changed with
+        | Result.Error failures ->
+            Assert.Contains(failures,fun failure -> failure.Reason="NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required.")
+        | Ok _ -> failwith "A changed declared ABI or target retained its old ingress width proof."

@@ -2338,7 +2338,12 @@ let private foreignRange (program: Program) value call =
     | None -> ValueRange.Unbounded
     | Some(declaration, actuals) ->
         match foreignResultDescriptor program declaration with
-        | None -> ValueRange.Unbounded
+        | None ->
+            // This is the ingress value domain of the exact declared ABI,
+            // not a behavioral relation or a promise of registration success.
+            match program.ForeignAbi.TryFind declaration.Body with
+            | Some [abi] -> abi.Return |> Option.map _.Range |> Option.defaultValue ValueRange.Unbounded
+            | _ -> ValueRange.Unbounded
         | Some descriptor ->
             let endpoint = function
                 | ForeignResultBound.Constant value -> ValueRange.point value

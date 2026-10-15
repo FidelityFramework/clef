@@ -184,6 +184,22 @@ type ForeignReferenceTests() =
         Assert.Contains("CurrentClaims.Body.ForeignResultCoverage", positions)
         Assert.DoesNotContain("CurrentClaims.Body", positions)
 
+        let limits: Fidelity.PSG.Binary.Limits =
+            { MaxBytes = 4 * 1024 * 1024; MaxCollectionLength = 10000; MaxDepth = 128
+              MaxStringBytes = 1024 * 1024; MaxBigIntegerBytes = 4096; MaxValues = 1000000 }
+        let roundTrip current =
+            let bytes = Fidelity.PSG.Binary.encode limits current |> Result.defaultWith (fun error -> failwithf "%A" error)
+            let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith (fun error -> failwithf "%A" error)
+            Assert.True(current.Emission.Numeric.ForeignResultUses = copy.Emission.Numeric.ForeignResultUses)
+            Assert.True(current.CurrentClaims = copy.CurrentClaims)
+        roundTrip revision
+        let call = revision.Emission.Boundary.Calls[revision.Emission.Numeric.ForeignResultUses.Head.Application.Call]
+        let withdrawn =
+            { revision with Emission = { revision.Emission with Boundary = { revision.Emission.Boundary with Imports = revision.Emission.Boundary.Imports.Remove call.Import } } }
+        Assert.Contains(Fidelity.PSG.Integrity.check withdrawn, fun issue ->
+            issue.Part = "Emission.Numeric.ForeignResultUses.Abi"
+            && issue.Reason = "A conditional ABI premise lacks its own call's imported declaration fact.")
+
     [<Theory>]
     [<InlineData("quote")>]
     [<InlineData("abi")>]
@@ -689,7 +705,7 @@ let main args =
         )
 
     [<Fact>]
-    member _.``Missing foreign result contract remains unbounded despite a concrete return ABI``() =
+    member _.``Missing foreign result behavior retains only its complete declared ABI domain``() =
         let graph =
             ForeignCases.resultGraph
                 ""
@@ -706,11 +722,11 @@ let main _ = if read 4 = 0 then 0 else 1
             fun row ->
                 Assert.True(row.Application.Hypothesis.IsNone)
                 Assert.True(row.Abi.IsSome)
-                Assert.Equal(ValueRange.Unbounded, row.ResultRange)
+                Assert.Equal(ValueRange.Bounded(-(1I <<< 63), (1I <<< 63) - 1I), row.ResultRange)
         )
 
     [<Fact>]
-    member _.``Foreign result contract refuses to substitute ABI bounds for an unknown actual``() =
+    member _.``Foreign result contract consumes the complete declared ABI domain of an unknown actual``() =
         let graph =
             ForeignCases.resultGraph
                 ForeignCases.resultContract
@@ -732,8 +748,10 @@ let main _ = if read (unknown ()) = 0 then 0 else 1
         Assert.All(
             rows,
             fun row ->
-                Assert.Equal(ValueRange.Unbounded, row.Application.Arguments.Head.Enclosure)
-                Assert.Equal(ValueRange.Unbounded, row.ResultRange)
+                Assert.True(row.Application.Hypothesis.IsSome)
+                Assert.True(row.Abi.IsSome)
+                Assert.Equal(ValueRange.Bounded(0I, (1I <<< 32) - 1I), row.Application.Arguments.Head.Enclosure)
+                Assert.Equal(ValueRange.Bounded(-1I, (1I <<< 32) - 1I), row.ResultRange)
         )
 
     [<Theory>]
@@ -787,7 +805,7 @@ let main _ = if read 4 = 0 then 0 else 1
         Assert.Contains(reading.Findings, fun finding -> finding.Message.Contains reason && finding.Range.File = "foreign.clef")
 
     [<Fact>]
-    member _.``Duplicate foreign result contracts retain their source census and refuse range authority``() =
+    member _.``Duplicate foreign result contracts refuse behavior authority while retaining declared ABI domain``() =
         let graph =
             ForeignCases.resultGraph
                 (ForeignCases.resultContract
@@ -807,7 +825,8 @@ let main _ = if read 4 = 0 then 0 else 1
             rows,
             fun row ->
                 Assert.True(row.Descriptor.IsNone)
-                Assert.Equal(ValueRange.Unbounded, row.ResultRange)
+                Assert.True(row.Application.Hypothesis.IsNone)
+                Assert.Equal(ValueRange.Bounded(-(1I <<< 63), (1I <<< 63) - 1I), row.ResultRange)
         )
 
     [<Fact>]

@@ -267,7 +267,7 @@ let elementsOf (graph: SemanticGraph) (id: NodeId) : NodeId list option =
 /// yields `Some None`, anything else `None`. A case is a UnionCase node until
 /// Baker saturation and the DUConstruct it is decomposed into after it; the
 /// declaration is read from the saturated graph, so both are followed.
-let private optionOf (graph: SemanticGraph) (id: NodeId) : NodeId option option =
+let optionOf (graph: SemanticGraph) (id: NodeId) : NodeId option option =
     match valueOf graph id with
     | Some ({ Kind = SemanticKind.UnionCase ("Some", _, Some payload) } : SemanticNode)
     | Some ({ Kind = SemanticKind.DUConstruct ("Some", _, Some payload, _) } : SemanticNode) -> Some (Some payload)
@@ -1862,7 +1862,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                             | [ scopeBinding ] ->
                                 match List.tryLast scopeBinding.Children |> Option.bind (valuePath graph) with
                                 | Some(scopeNode, scopePath) when
-                                    typeName scopeNode = Some "ScopedCallbackDescriptor"
+                                    (typeName scopeNode = Some "ScopedCallbackDescriptor" || typeName scopeNode = Some "ProcessExitCallbackDescriptor")
                                     && immutable (scopeBinding.Id :: scopePath)
                                     ->
                                     match quoted scopePath with

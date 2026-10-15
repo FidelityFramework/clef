@@ -90,7 +90,14 @@ let analyze (graph: SemanticGraph) : Reading =
                     let formals = call.Targets |> List.map (fun target -> List.tryItem ordinal target.Parameters |> Option.map (fun (_, _, formal) -> formal))
                     if formals |> List.exists Option.isNone then None else Some(List.choose id formals))
             direct |> Option.orElseWith viaCalls
-            |> Option.filter (fun formals -> not formals.IsEmpty && formals |> List.forall scoped.Value.Parameters.Contains)
+            |> Option.filter (fun formals ->
+                not formals.IsEmpty && formals |> List.forall(fun formal ->
+                    scoped.Value.Parameters.Contains formal &&
+                    not (declared.Value.Activations.Values |> Seq.exists(fun declaration ->
+                        declaration.Parameter = formal &&
+                        match declaration.Extent with
+                        | BoundaryCallbackExtent.ProcessExit _ -> true
+                        | BoundaryCallbackExtent.DuringCall -> false))))
         let accounted =
             ordinary |> List.choose (fun (implementation, arity) ->
                 let aliases = nodes |> Map.toList |> List.choose (fun (id, node) ->

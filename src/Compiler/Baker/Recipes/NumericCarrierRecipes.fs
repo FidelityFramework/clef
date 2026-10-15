@@ -154,8 +154,24 @@ let foreignResultModels (graph: SemanticGraph) (values: ScalarCarrier list) (evi
             AbiRange = abiRange
         }
 
-    [ ForeignResultProofRole.LogicalCoverage; ForeignResultProofRole.AbiNarrowing ]
+    // A complete ABI ingress needs its width/embedding claim, but supplies no
+    // behavioral relation to project. Narrower requests retain MissingBehavior.
+    let completeIngress =
+        application.Hypothesis.IsNone && abi.IsSome &&
+        (match abiRange,capacity with ValueRange.Bounded _,ValueRange.Bounded _ -> true | _ -> false) &&
+        evidence.ResultRange=abiRange && ValueRange.contains capacity abiRange
+    (if completeIngress then [ForeignResultProofRole.AbiNarrowing]
+     else [ ForeignResultProofRole.LogicalCoverage; ForeignResultProofRole.AbiNarrowing ])
     |> List.map (fun role -> role, model role)
+
+/// The existing coverage algebra checks complete ABI-to-logical embedding.
+/// A behavioral/refined result still uses the conditional foreign relation.
+let foreignResultBody (model: ForeignResultCoverageModel) =
+    match model.Application.Hypothesis, model.Role, model.Abi, model.AbiRange, model.Destination with
+    | None, ForeignResultProofRole.AbiNarrowing, Some _, ValueRange.Bounded(lo,hi), ValueRange.Bounded(minimum,maximum)
+        when model.ResultRange=model.AbiRange && ValueRange.contains model.Destination model.AbiRange ->
+        ObligationBody.IntegerRepresentationCoverage(lo,hi,minimum,maximum)
+    | _ -> ObligationBody.ForeignResultCoverage model
 
 let foreignResultParticipants (application: ForeignResultApplication) (models: (ForeignResultProofRole * ForeignResultCoverageModel) list) =
     let participant role ordinal node =
@@ -178,14 +194,14 @@ let foreignResultParticipants (application: ForeignResultApplication) (models: (
     @ (application.Arguments
        |> List.map (fun argument -> participant ParticipantRole.ForeignResultActual argument.Index argument.Node))
     @ (models
-       |> List.mapi (fun ordinal (_, model) ->
+       |> List.collect (fun (role, model) ->
+           let ordinal = if role=ForeignResultProofRole.LogicalCoverage then 0 else 1
            (model.Abi
             |> Option.map (participant ParticipantRole.ForeignResultAbi ordinal)
             |> Option.toList)
            @ (model.DestinationDeclaration
               |> Option.map (participant ParticipantRole.ForeignResultDestination ordinal)
-              |> Option.toList))
-       |> List.concat)
+              |> Option.toList)))
 
 let private foreignClaims graph enrichId (values: ScalarCarrier list) rangeFacts =
     match RangeAnalysis.foreignResultApplications graph rangeFacts with
@@ -216,7 +232,7 @@ let private foreignClaims graph enrichId (values: ScalarCarrier list) rangeFacts
                                             "the foreign result is representable at the selected Clef destination width"
                                     Source = fmtRange graph.Nodes[application.Call].Range
                                     Refs = []
-                                    Body = ObligationBody.ForeignResultCoverage model
+                                    Body = foreignResultBody model
                                 }
                             |> Numeric.markOwned
 
@@ -544,6 +560,9 @@ let elaborate graph = elaborateWithRangeReview false false false None None graph
 let completeness (graph: SemanticGraph) : (NodeId * string) list =
     let required, indices = requiredSites graph
     let foreignApplications = RangeAnalysis.foreignResultApplications graph graph.RangeContextFacts
+    let values =
+        graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.NumericDomain domain -> Some domain.Values | _ -> None)
+        |> function [values] -> values | _ -> []
 
     let expected =
         (required
@@ -570,8 +589,8 @@ let completeness (graph: SemanticGraph) : (NodeId * string) list =
            |> List.map (fun (node, _) -> node.Id, indexId node, "numeric-index-coverage"))
         @ (match foreignApplications with
            | Ok applications -> applications |> List.collect (fun evidence ->
-               [ForeignResultProofRole.LogicalCoverage; ForeignResultProofRole.AbiNarrowing]
-               |> List.map (fun role -> evidence.Application.Call, foreignClaimId graph evidence.Application role, "foreign-result-coverage"))
+               foreignResultModels graph values evidence
+               |> List.map (fun (role,_) -> evidence.Application.Call, foreignClaimId graph evidence.Application role, "foreign-result-coverage"))
            | Error _ -> [])
 
     let numericKind kind =

@@ -155,6 +155,11 @@ and mapBoundaryCall (value: S.BoundaryCall) : Fidelity.PSG.BoundaryCall =
         SourceTypes = (value.SourceTypes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapTypeIdentity v) |> Map.ofSeq)
     } : Fidelity.PSG.BoundaryCall)
 
+and mapBoundaryCallbackExtent (value: S.BoundaryCallbackExtent) : Fidelity.PSG.BoundaryCallbackExtent =
+    match value with
+    | S.BoundaryCallbackExtent.DuringCall -> Fidelity.PSG.BoundaryCallbackExtent.DuringCall
+    | S.BoundaryCallbackExtent.ProcessExit(a0, a1) -> Fidelity.PSG.BoundaryCallbackExtent.ProcessExit((a0 |> Option.map (fun x -> nodeId x)), a1)
+
 and mapBoundaryCallbackInvocation (value: S.BoundaryCallbackInvocation) : Fidelity.PSG.BoundaryCallbackInvocation =
     ({
         Identity = nodeId value.Identity
@@ -164,8 +169,20 @@ and mapBoundaryCallbackInvocation (value: S.BoundaryCallbackInvocation) : Fideli
         Scope = nodeId value.Scope
         Contract = value.Contract
         Signature = mapNativeEntrySignature value.Signature
+        Extent = mapBoundaryCallbackExtent value.Extent
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.BoundaryCallbackInvocation)
+
+and mapBoundaryCallbackRegistration (value: S.BoundaryCallbackRegistration) : Fidelity.PSG.BoundaryCallbackRegistration =
+    ({
+        Call = nodeId value.Call
+        Parameter = value.Parameter
+        Formation = nodeId value.Formation
+        Invocation = nodeId value.Invocation
+        Result = nodeId value.Result
+        Context = (value.Context |> List.map (fun x -> nodeId x))
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryCallbackRegistration)
 
 and mapBoundaryClosedEntry (value: S.BoundaryClosedEntry) : Fidelity.PSG.BoundaryClosedEntry =
     ({
@@ -179,6 +196,7 @@ and mapBoundaryClosedEntry (value: S.BoundaryClosedEntry) : Fidelity.PSG.Boundar
         Invocation = nodeId value.Invocation
         ParameterAdaptations = (value.ParameterAdaptations |> List.map (fun x -> (x |> Option.map (fun x -> mapMeet x))))
         ResultAdaptation = (value.ResultAdaptation |> Option.map (fun x -> mapMeet x))
+        Registrations = (value.Registrations |> Map.toSeq |> Seq.map (fun (k, v) -> (let (t0, t1, t2) = k in (nodeId t0, t1, (t2 |> List.map (fun x -> nodeId x)))), mapBoundaryCallbackRegistration v) |> Map.ofSeq)
         Transport = (value.Transport |> Set.map (fun x -> nodeId x))
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.BoundaryClosedEntry)

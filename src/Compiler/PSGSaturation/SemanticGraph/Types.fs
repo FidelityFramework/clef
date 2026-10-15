@@ -827,6 +827,21 @@ type NativeEntrySignature = {
     CallingConvention: string
 }
 
+[<RequireQualifiedAccess>]
+type BoundaryCallbackExtent =
+    | DuringCall
+    | ProcessExit of ExitBinding: NodeId option * SuccessStatus: int
+
+type BoundaryCallbackRegistration = {
+    Call: NodeId
+    Parameter: int
+    Formation: NodeId
+    Invocation: NodeId
+    Result: NodeId
+    Context: NodeId list
+    Participants: Set<NodeId>
+}
+
 type BoundaryCallbackInvocation = {
     Identity: NodeId
     Import: NodeId
@@ -835,6 +850,7 @@ type BoundaryCallbackInvocation = {
     Scope: NodeId
     Contract: BAREWire.Descriptors.CallbackInvocationContract
     Signature: NativeEntrySignature
+    Extent: BoundaryCallbackExtent
     Participants: Set<NodeId>
 }
 
@@ -849,6 +865,7 @@ type BoundaryClosedEntry = {
     Invocation: NodeId
     ParameterAdaptations: Meet option list
     ResultAdaptation: Meet option
+    Registrations: Map<NodeId * int * NodeId list, BoundaryCallbackRegistration>
     Transport: Set<NodeId>
     Participants: Set<NodeId>
 }

@@ -85,6 +85,10 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                         Some account.Application.Declaration = declaration &&
                         (match account.Application.Hypothesis, sourceHypotheses with
                          | Some hypothesis, [current] -> hypothesis = current
+                         // The numeric owner has already validated complete ABI
+                         // ingress and its retained width-embedding claim. This
+                         // supplies no behavioral refinement or success fact.
+                         | None, [] -> List.map fst account.Claims = [ForeignResultProofRole.AbiNarrowing]
                          | _ -> false))) then None
                     else Some(failure (Some call.Site) call.Participants "The integer result lacks its complete current conditional numeric account and declared behavioral hypothesis."))
             let projectedCallbackErrors =

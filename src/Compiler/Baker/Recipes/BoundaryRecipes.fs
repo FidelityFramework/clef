@@ -37,36 +37,39 @@ let private target = BoundaryDeclarations.target
 
 /// Retain the exact source descriptor structure and referenced declaration
 /// values. Parent/module nodes are participants, not recursively traversed.
+let private declarationFact (node: SemanticNode) =
+    let fact form text numbers references =
+        Ok { Form = form; Text = text; Numbers = numbers; References = references
+             Children = node.Children; Parent = node.Parent
+             SourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type }
+    match node.Kind with
+    | SemanticKind.RecordExpr(fields, copy) -> fact "record" (List.map fst fields) [] (List.map snd fields @ Option.toList copy)
+    | SemanticKind.ArrayExpr values -> fact "array" [] [] values
+    | SemanticKind.TupleExpr values -> fact "tuple" [] [] values
+    | SemanticKind.UnionCase(name, index, value) -> fact "case" [name] [bigint index] (Option.toList value)
+    | SemanticKind.DUConstruct(name, index, value, _) -> fact "settled-case" [name] [bigint index] (Option.toList value)
+    | SemanticKind.Literal(NativeLiteral.String text) -> fact "string" [text] [] []
+    | SemanticKind.Literal(NativeLiteral.Int(value, kind)) -> fact "integer" [string kind] [bigint value] []
+    | SemanticKind.Literal(NativeLiteral.UInt(value, kind)) -> fact "unsigned-integer" [string kind] [bigint value] []
+    | SemanticKind.Literal(NativeLiteral.Bool value) -> fact "boolean" [] [if value then 1I else 0I] []
+    | SemanticKind.Literal NativeLiteral.Unit -> fact "unit" [] [] []
+    | SemanticKind.VarRef(name, binding) -> fact "reference" [name] [] (Option.toList binding)
+    | SemanticKind.Binding(name, mutable', recursive', _) -> fact "binding" [name] [if mutable' then 1I else 0I; if recursive' then 1I else 0I] node.Children
+    | SemanticKind.Lambda(parameters, _, [], _, _) ->
+        fact "declaration-lambda" (parameters |> List.map(fun (name,_,_) -> name)) [] node.Children
+    | SemanticKind.TypeAnnotation(inner, _) -> fact "annotation" [] [] [inner]
+    | SemanticKind.Quote(inner, _) -> fact "quotation" [] [] [inner]
+    | SemanticKind.Application(callee, arguments) -> fact "application" [] [] (callee :: arguments)
+    | SemanticKind.Intrinsic info -> fact "intrinsic" [string info.Module; info.Operation] [] []
+    | _ -> Error $"Descriptor participant {NodeId.value node.Id} has no immutable boundary declaration premise."
+
 let private declarationFacts (graph: SemanticGraph) root =
-    let shape (node: SemanticNode) =
-        let fact form text numbers references =
-            Ok { Form = form; Text = text; Numbers = numbers; References = references
-                 Children = node.Children; Parent = node.Parent
-                 SourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type }
-        match node.Kind with
-        | SemanticKind.RecordExpr(fields, copy) -> fact "record" (List.map fst fields) [] (List.map snd fields @ Option.toList copy)
-        | SemanticKind.ArrayExpr values -> fact "array" [] [] values
-        | SemanticKind.TupleExpr values -> fact "tuple" [] [] values
-        | SemanticKind.UnionCase(name, index, value) -> fact "case" [name] [bigint index] (Option.toList value)
-        | SemanticKind.DUConstruct(name, index, value, _) -> fact "settled-case" [name] [bigint index] (Option.toList value)
-        | SemanticKind.Literal(NativeLiteral.String text) -> fact "string" [text] [] []
-        | SemanticKind.Literal(NativeLiteral.Int(value, kind)) -> fact "integer" [string kind] [bigint value] []
-        | SemanticKind.Literal(NativeLiteral.UInt(value, kind)) -> fact "unsigned-integer" [string kind] [bigint value] []
-        | SemanticKind.Literal(NativeLiteral.Bool value) -> fact "boolean" [] [if value then 1I else 0I] []
-        | SemanticKind.Literal NativeLiteral.Unit -> fact "unit" [] [] []
-        | SemanticKind.VarRef(name, binding) -> fact "reference" [name] [] (Option.toList binding)
-        | SemanticKind.Binding(name, mutable', recursive', _) -> fact "binding" [name] [if mutable' then 1I else 0I; if recursive' then 1I else 0I] node.Children
-        | SemanticKind.TypeAnnotation(inner, _) -> fact "annotation" [] [] [inner]
-        | SemanticKind.Quote(inner, _) -> fact "quotation" [] [] [inner]
-        | SemanticKind.Application(callee, arguments) -> fact "application" [] [] (callee :: arguments)
-        | SemanticKind.Intrinsic info -> fact "intrinsic" [string info.Module; info.Operation] [] []
-        | _ -> Error $"Descriptor participant {NodeId.value node.Id} has no immutable boundary declaration premise."
     let rec visit facts id =
         if Map.containsKey id facts then Ok facts else
         match graph.Nodes.TryFind id with
         | None -> Error $"Descriptor participant {NodeId.value id} is absent from the source graph."
         | Some node -> checked' {
-            let! value = shape node
+            let! value = declarationFact node
             let next = value.References @ value.Children
             return! List.fold (fun state child -> state |> Result.bind (fun facts -> visit facts child)) (Ok (Map.add id value facts)) next }
     visit Map.empty root
@@ -313,6 +316,13 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                         |> Result.map (fun next -> Map.fold (fun facts id fact -> Map.add id fact facts) facts next)))
                 (Ok Map.empty)
 
+        // The original immutable binding's name/parent are declaration facts,
+        // even when an optional anchor has no executable source occurrence.
+        let! original = declarationPath |> List.map(fun id ->
+            graph.Nodes.TryFind id |> needed "The original external declaration path was withdrawn."
+            |> Result.bind declarationFact |> Result.map(fun fact -> id,fact)) |> collect
+        let facts = original |> List.fold(fun facts (id,fact) -> Map.add id fact facts) facts
+
         let participants =
             Set.unionMany
                 [
@@ -321,7 +331,7 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                     Set.ofList (scope :: body :: retainedFormals @ declarationPath)
                 ]
 
-        let! types = sourceTypes graph (body :: retainedFormals)
+        let! types = sourceTypes graph (declarationPath @ (body :: retainedFormals))
 
         return
             {
@@ -890,6 +900,27 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let callbacks = CallbackDeclarations.read graph
     let scoped = ScopedDeclarations.read graph
 
+    // An optional anchor is a selected declaration premise, never an invocation
+    // or a source-wide noreturn fact. Preserve it even when it has no call site.
+    let imports, errors =
+        scoped.Activations.Values |> Seq.fold(fun (imports, errors) activation ->
+            match activation.Extent with
+            | BoundaryCallbackExtent.ProcessExit(Some anchor, _) ->
+                let admitted = checked' {
+                    let! binding = graph.Nodes.TryFind anchor |> needed "The normal-exit anchor declaration was withdrawn."
+                    do! require (BoundaryDeclarations.isExternal binding &&
+                                 (graph.Nodes.TryFind activation.Binding |> Option.exists(fun receiver -> receiver.Parent=binding.Parent)))
+                            "The normal-exit anchor must be an exact extern selected beside its registration declaration."
+                    let! imported = imported binding
+                    do! require (imported.Result.IsNone && imported.CallingConvention="CDecl" &&
+                                 (imported.Parameters |> List.map snd)=[BoundaryScalar.Integer(32,true)])
+                            "The selected normal-exit anchor requires its signed32 status and void CDecl ABI."
+                    return imported }
+                match admitted with
+                | Ok anchor -> Map.add anchor.Identity anchor imports, errors
+                | Error reason -> imports, (activation.Scope,activation.Participants,reason)::errors
+            | _ -> imports, errors) (imports, errors)
+
     let numeric =
         lazy
             (NumericPublication.project graph
@@ -905,16 +936,14 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 | [ source ] -> Ok source
                 | _ -> Error "The receiving invocation quote no longer matches its exact import."
 
+            let! activation = scoped.Activations.TryFind source.ScopeBinding
+                              |> needed "The receiving invocation lost its current source activation declaration."
             do!
                 require
-                    (scoped.Findings.IsEmpty
-                     && scoped.Parameters.Contains source.Formal
-                     && (scoped.Participants.TryFind source.Formal
-                         |> Option.exists (fun participants ->
-                             participants.Contains source.ScopeBinding
-                             && participants.Contains source.Scope
-                             && participants.Contains source.Declaration.Binding)))
-                    "The receiving invocation requires its exact current scoped activation declaration and native formal."
+                    (scoped.Findings.IsEmpty && activation.Scope=source.Scope && activation.Parameter=source.Formal &&
+                     activation.Binding=source.Declaration.Binding &&
+                     Set.isSubset (Set.ofList [source.ScopeBinding;source.Scope;source.Declaration.Binding]) activation.Participants)
+                    "The receiving invocation requires its exact current activation declaration and native formal."
 
             let integer =
                 function
@@ -939,7 +968,14 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                      && source.Contract.Signature.CallingConvention = BAREWire.Descriptors.CallConv.CDecl)
                     "The closed C entry profile requires scalar integer native formals or exact zero-argument void, and CDecl."
 
-            let participants = Set.ofList source.Participants
+            do!
+                match activation.Extent with
+                | BoundaryCallbackExtent.DuringCall ->
+                    require (scoped.Parameters.Contains source.Formal) "A during-call declaration lost its synchronous parameter."
+                | BoundaryCallbackExtent.ProcessExit _ ->
+                    require (parameters.IsEmpty && result.IsNone && import.Result=Some(BoundaryScalar.Integer(32,true)))
+                        "A process-exit callback requires exact zero-argument void and a signed32 registration result."
+            let participants = Set.union (Set.ofList source.Participants) activation.Participants
 
             return source, ({
                 Identity = source.Quote
@@ -949,6 +985,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 Scope = source.Scope
                 Contract = source.Contract
                 Signature = { Parameters = parameters; Result = result; CallingConvention = "CDecl" }
+                Extent = activation.Extent
                 Participants = participants
             }: BoundaryCallbackInvocation)
         }
@@ -1055,7 +1092,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                          | _ -> false))
                     "The closed entry lost its existing source-owned code lifetime or complete native formal convention."
 
-            let! _ = numeric.Value
+            let! numericProjection = numeric.Value
 
             let currentCarrier id =
                 match
@@ -1140,6 +1177,32 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                         Set.singleton contract.Identity
                     ]
 
+            let! registrations =
+                match invocation.Extent with
+                | BoundaryCallbackExtent.DuringCall -> Ok Map.empty
+                | BoundaryCallbackExtent.ProcessExit _ ->
+                    checked' {
+                        let contexts = numericProjection.ForeignResultUses |> List.filter(fun sourceUse ->
+                            sourceUse.Application.Call=call.Site && sourceUse.Application.Declaration=import.Binding)
+                        do! require (not contexts.IsEmpty) "A process-exit registration lost its current per-application result context."
+                        let! rows = contexts |> List.map(fun sourceUse -> checked' {
+                            let context=sourceUse.Application.Context
+                            let! support =
+                                match sourceUse.Participants with
+                                | ParticipantEvidence.Established rows -> Ok(rows |> List.map(fun row -> row.Node) |> Set.ofList)
+                                | ParticipantEvidence.Pending _ -> Error "A process-exit registration has pending source application support."
+                            return (call.Site,source.Parameter,context),
+                            { Call=call.Site; Parameter=source.Parameter; Formation=formation.Formation; Invocation=invocation.Identity
+                              Result=call.Site; Context=context
+                              // Call/import retain their own nested declaration
+                              // premises; this use holds their exact identities
+                              // and the complete issued application support.
+                              Participants=Set.unionMany [participants;support;Set.ofList (import.Identity::context)] } }) |> collect
+                        do! require (rows |> List.map fst |> List.distinct |> List.length = rows.Length)
+                                "A process-exit registration has duplicate source application contexts."
+                        return Map.ofList rows
+                    }
+
             return
                 invocation,
                 ({
@@ -1153,8 +1216,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     Invocation = identity
                     ParameterAdaptations = if unitParameterOmission then [None] else parameterAdaptations
                     ResultAdaptation = resultAdaptation
+                    Registrations = registrations
                     Transport = transport
-                    Participants = participants
+                    Participants = Set.union participants (registrations.Values |> Seq.map _.Participants |> Set.unionMany)
                 }
                 : BoundaryClosedEntry)
         }
@@ -1183,6 +1247,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                         { entry with
                                             Transport = Set.union previous.Transport entry.Transport
                                             Participants = Set.union previous.Participants entry.Participants
+                                            Registrations = Map.fold (fun rows key value -> Map.add key value rows) previous.Registrations entry.Registrations
                                         }
 
                                     Map.add invocation.Identity invocation invocations, Map.add entry.Formation entry entries, errors
