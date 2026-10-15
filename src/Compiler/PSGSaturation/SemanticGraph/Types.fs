@@ -344,6 +344,138 @@ type ForeignResultCoverageModel = {
     DestinationIdentity: string option
 }
 
+/// Ports identify actual local source incidences, never runtime addresses.
+[<RequireQualifiedAccess>]
+type EvaluationPort =
+    | Entry
+    | OperandEntry of int
+    | OperandExit of int
+    | Ready
+    | Exit
+    | FailureExit
+
+[<RequireQualifiedAccess>]
+type EvaluationTransfer =
+    | Continue
+    | WhenTrue
+    | WhenFalse
+    | Resume
+    /// The original shallow CaseElimination selects its actual ordinal.
+    | WhenCase of int
+    | WhenOtherCases of int list
+
+[<RequireQualifiedAccess>]
+type EvaluationAccess = Value | Storage
+
+[<RequireQualifiedAccess>]
+type EvaluationResidual =
+    | MissingOperand | InvalidShape | MatchSelection | ExceptionFlow
+    | CollectionIteration | CountedIteration | Delegation
+
+/// A conversion alternative over opaque native results. Origin labels are
+/// static source identities, never native pointer bits.
+type ResourceConversionArm = {
+    NativeNonNull: bool
+    CaseOrdinal: int
+    PayloadOrigin: NodeId option
+}
+
+type ResourceConversionModel = {
+    Acquisition: NodeId
+    Declaration: NodeId
+    Import: NodeId
+    OptionType: TypeIdentity
+    HandleType: TypeIdentity
+    Core: NodeId
+    PointerBits: int
+    SelectedPointerBits: int
+    HandleBytes: int
+    HandleAlignment: int
+    TagBits: int
+    TagBytes: int
+    NoneCase: int
+    SomeCase: int
+    CaseCount: int
+    PayloadOffset: int
+    OptionBytes: int
+    OptionAlignment: int
+    Arms: ResourceConversionArm list
+}
+
+/// Observations of the existing evaluation owner's rows, not another flow
+/// producer. Their complete ordered census is a current boundary premise.
+[<RequireQualifiedAccess>]
+type ResourceEvaluationRole =
+    | Root
+    | Operand of EvaluationAccess
+    | Flow of EvaluationPort * EvaluationPort * EvaluationTransfer
+    | Pending of EvaluationResidual
+
+type ResourceEvaluationRelation = {
+    Role: ResourceEvaluationRole
+    Ordinal: int
+    Sources: NodeId list
+    Target: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type ResourceFlowEvent =
+    | Acquisition
+    | OptionAlias of source: NodeId
+    | HandleAlias of source: NodeId
+    | Payload of source: NodeId
+    | Release of actual: NodeId * declaration: NodeId
+
+type ResourceFlowPoint = {
+    Label: int
+    Site: NodeId
+    /// Original operand ordinals distinguish repeated demands of one node.
+    Context: int list
+    Port: EvaluationPort
+    Event: ResourceFlowEvent option
+}
+
+[<RequireQualifiedAccess>]
+type ResourceFlowConnection = Local | OperandEntry | OperandExit
+
+type ResourceFlowEdge = {
+    From: int
+    To: int
+    Relation: int
+    Connection: ResourceFlowConnection
+    Transfer: EvaluationTransfer
+}
+
+type ResourceFlowCaseArm = {
+    Ordinal: int option
+    Body: NodeId
+    BooleanResult: bool option
+}
+
+type ResourceFlowCase = {
+    Site: NodeId
+    Subject: NodeId
+    Domain: int list
+    Arms: ResourceFlowCaseArm list
+}
+
+/// One arbitrary path through the complete finite source contract. Unknown
+/// feasibility/cycles are Pending; these stored events are not host pass flags.
+type ResourceCleanupModel = {
+    Acquisition: NodeId
+    Declaration: NodeId
+    Release: NodeId
+    Conversion: NodeId
+    ConversionModel: ResourceConversionModel
+    Entry: int
+    Points: ResourceFlowPoint list
+    Relations: ResourceEvaluationRelation list
+    Edges: ResourceFlowEdge list
+    Cases: ResourceFlowCase list
+    LiteralGuards: (NodeId * bool) list
+    Exits: int list
+}
+
 [<RequireQualifiedAccess>]
 type ObligationBody =
     /// Baker retained the obligation, but cannot supply its complete premises.
@@ -428,6 +560,8 @@ type ObligationBody =
     /// current typed stores and actual memoization-instance activation counts.
     | FiniteAdditiveEffects of initial: bigint * contributions: (bigint * bigint) list * lower: bigint * upper: bigint
     | ForeignResultCoverage of ForeignResultCoverageModel
+    | ResourceConversion of ResourceConversionModel
+    | ResourceCleanup of ResourceCleanupModel
 
 /// The obligation record carried by an Obligation node.
 type ObligationInfo = {
@@ -615,29 +749,6 @@ and MemberKind =
 // elaboration. Nothing may construct an edge whose source set is open; that is
 // what keeps the obligations these edges will carry quantifier-free.
 
-/// Ports of a local evaluation contract. Operand indices identify incidences
-/// within the target node, not runtime states or new semantic node identities.
-[<RequireQualifiedAccess>]
-type EvaluationPort =
-    | Entry
-    | OperandEntry of int
-    | OperandExit of int
-    | Ready
-    | Exit
-
-[<RequireQualifiedAccess>]
-type EvaluationTransfer =
-    | Continue
-    | WhenTrue
-    | WhenFalse
-    | Resume
-
-/// A value demand does not re-execute a referenced declaration's initializer.
-[<RequireQualifiedAccess>]
-type EvaluationAccess =
-    | Value
-    | Storage
-
 /// Explicit demand is conditional on activation of this exact frontier.
 /// These cases do not mark an enclosing deferred computation as a root.
 [<RequireQualifiedAccess>]
@@ -646,18 +757,6 @@ type EagerFrontier =
     | Actual
     | Component
     | Expression
-
-/// Explicitly unsettled local contracts; these are not source diagnostics or
-/// permission for a witness to reconstruct missing control semantics.
-[<RequireQualifiedAccess>]
-type EvaluationResidual =
-    | MissingOperand
-    | InvalidShape
-    | MatchSelection
-    | ExceptionFlow
-    | CollectionIteration
-    | CountedIteration
-    | Delegation
 
 /// How an edge participates in the graph's projections.
 [<RequireQualifiedAccess>]
@@ -688,7 +787,13 @@ type ProgramImageCodeLifetime = {
 }
 
 [<RequireQualifiedAccess>]
-type BoundaryScalar = Integer of bits: int * signed: bool | Boolean | Entry of invocation: NodeId
+type BoundaryScalar =
+    | Integer of bits: int * signed: bool
+    | Boolean
+    | Entry of invocation: NodeId
+    /// Exact resource declaration owns the opaque native ABI and nullability.
+    /// This is neither a source integer nor permission to expose an address.
+    | ResourceHandle of declaration: NodeId * nullable: bool
 
 /// A physical slot settled by the source numeric/layout owner.
 [<RequireQualifiedAccess>]
@@ -701,6 +806,9 @@ type SettledSlot =
     | Pointer of words: int
     | Unit
     | Opaque of what: string
+    /// Nonnull, nonspatial logical handle. Alignment is settled independently
+    /// from the selected target layout; width does not imply alignment.
+    | CHandle of handleType: TypeIdentity * bits: int * alignment: int
 
 type SettledField = { Name: string; Slot: SettledSlot; Offset: int option; Size: int option; Align: int option }
 
@@ -1048,6 +1156,54 @@ type IntrinsicWriteProof = {
     Participants: Set<NodeId>
 }
 
+/// Native result ordinal zero is converted indivisibly into the enclosing
+/// call's logical Option result. No intermediate source pointer is introduced.
+type BoundaryResourceAcquisition = {
+    Declaration: NodeId
+    Tag: SettledSlot
+    NoneCase: int
+    SomeCase: int
+    Conversion: NodeId
+    Cleanup: NodeId
+}
+
+/// The enclosing call owns the exact unary actual/formal vector. Cleanup is
+/// the original acquisition's alias/exit obligation, not a new release promise.
+type BoundaryResourceRelease = {
+    Declaration: NodeId
+    Acquisition: NodeId
+    Cleanup: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type BoundaryResourceUse =
+    | AcquireNullable of BoundaryResourceAcquisition
+    | ReleaseOwned of BoundaryResourceRelease
+
+[<RequireQualifiedAccess>]
+type BoundaryResourceAccessKind = OptionTag | OptionPayload | ImmutableAlias
+
+type BoundaryResourceSelection = {
+    Decision: NodeId
+    Scrutinee: NodeId
+    Arm: int
+    CaseOrdinal: int option
+    Guard: (NodeId * bool) option
+}
+
+/// Per-read lineage, distinct from call incidence. Selection records actual
+/// source guard polarity; it does not define true as the Some alternative.
+type BoundaryResourceAccess = {
+    Site: NodeId
+    Source: NodeId
+    Acquisition: NodeId
+    Declaration: NodeId
+    Kind: BoundaryResourceAccessKind
+    Selection: BoundaryResourceSelection list
+    Cleanup: NodeId
+    Participants: Set<NodeId>
+}
+
 type BoundaryCall = {
     Site: NodeId
     Import: NodeId
@@ -1057,6 +1213,7 @@ type BoundaryCall = {
     ErasedUnitArguments: NodeId list
     Result: BoundaryScalar option
     ResultAdaptation: Meet option
+    Resource: BoundaryResourceUse option
     Participants: Set<NodeId>
     SourceTypes: Map<NodeId, TypeIdentity>
 }
@@ -1078,6 +1235,17 @@ type BoundarySourcePremise = {
     HasExtern: bool
     /// The boundary owner only reads these closed scalar metadata forms.
     Metadata: Map<string, string list * bigint list * NodeId list * TypeIdentity option>
+}
+
+/// Scoped projection of original boundary/evaluation facts, independent of
+/// resource proof bodies. It grants no new source or execution authority.
+type BoundaryResourceEvidence = {
+    Platform: NodeId
+    Core: NodeId
+    Premises: Map<NodeId, BoundarySourcePremise>
+    Roots: (NodeId * NodeId * NodeId) list
+    Relations: ResourceEvaluationRelation list
+    Accesses: NodeId list
 }
 
 /// Only source-selection and numeric facts consulted by boundary rules. The
@@ -1559,12 +1727,16 @@ type StringOriginRelation = {
 }
 
 type BoundaryDomain = {
+    ResourceEvidence: BoundaryResourceEvidence option
     Premises: Map<NodeId, BoundarySourcePremise>
     Platform: BoundaryPlatformPremise option
     Meets: Map<NodeId, Meet list>
     Declarations: BoundaryDeclaration list
     ResultHypotheses: ForeignResultHypothesis list
     ResourceDeclarations: NodeId list
+    ResourceAccesses: NodeId list
+    ResourceEvaluationRoots: (NodeId * NodeId * NodeId) list
+    ResourceEvaluationRelations: ResourceEvaluationRelation list
     Imports: NodeId list
     Loading: BoundaryLoading option
     Entries: NodeId list
@@ -1634,6 +1806,7 @@ type EdgeRole =
     | BoundaryDeclaration of BoundaryDeclaration
     | BoundaryDomain of BoundaryDomain
     | BoundaryResourceDeclaration of BoundaryResourceDeclaration
+    | BoundaryResourceAccess of BoundaryResourceAccess
     | BoundaryImport of BoundaryImport
     | BoundaryCall of BoundaryCall
     | BoundaryOperand of BoundaryOperand
@@ -3221,7 +3394,9 @@ module StorageWitnessProjection =
     }
 
 type BoundaryEmissionProjection = {
+    ResourceEvidence: BoundaryResourceEvidence option
     ResourceDeclarations: Map<NodeId, BoundaryResourceDeclaration>
+    ResourceAccesses: Map<NodeId, BoundaryResourceAccess>
     Imports: Map<NodeId, BoundaryImport>
     Loading: BoundaryLoading option
     Entries: Map<NodeId, BoundaryEntry>

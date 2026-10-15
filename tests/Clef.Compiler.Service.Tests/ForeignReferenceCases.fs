@@ -238,7 +238,7 @@ let main _ = 0
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ForeignReferences")>]
 type ForeignReferenceTests() =
     [<Fact>]
-    member _.``Resource application requirements stay pending in the source ledger without native admission``() =
+    member _.``Resource application retains exact finite conversion and cleanup models without discharging them``() =
         let result = ForeignCases.resourceApplication "    match Foreign.mallocFirst 8 with\n    | Some handle -> Foreign.freeFirst handle; 0\n    | None -> 0\n"
         let graph = result.CheckResult.Graph
         let requirements = ForeignCases.resourceRequirements graph
@@ -247,10 +247,30 @@ type ForeignReferenceTests() =
         let resource = (ForeignDeclarations.readDescriptors graph).Resources |> List.find(fun row -> row.Contract.Hypothesis.Identity="fixture-owned-First")
         let selected = (ForeignDeclarations.read graph).Platform |> Option.get
         for id,info in requirements do
-            Assert.Equal("",info.Logic)
+            Assert.Equal("QF_LIA",info.Logic)
             match info.Body with
-            | ObligationBody.Pending reasons -> Assert.Single reasons |> ignore
-            | other -> failwithf "An unmet resource requirement acquired proof authority: %A" other
+            | ObligationBody.ResourceConversion model ->
+                Assert.Equal(resource.Quote,model.Declaration)
+                Assert.Equal(resource.PointerBits,model.SelectedPointerBits)
+                Assert.Equal<bool list>([false;true],model.Arms |> List.map _.NativeNonNull)
+                Assert.Equal(None,model.Arms.Head.PayloadOrigin)
+                Assert.Equal(Some model.Acquisition,model.Arms.Tail.Head.PayloadOrigin)
+            | ObligationBody.ResourceCleanup model ->
+                Assert.Equal(resource.Release.Binding,model.Release)
+                let conversionId,conversion = requirements |> List.pick(fun (id,info)->
+                    match info.Body with ObligationBody.ResourceConversion value -> Some(id,value) | _ -> None)
+                Assert.Equal(conversionId,model.Conversion)
+                Assert.Equal(conversion,model.ConversionModel)
+                Assert.NotEmpty(model.Relations)
+                Assert.Contains(model.Points,fun point->point.Port=EvaluationPort.FailureExit)
+                Assert.Contains(model.Points,fun point->point.Port=EvaluationPort.Exit && point.Event=Some ResourceFlowEvent.Acquisition)
+                let sharedSubject = model.Cases |> List.groupBy _.Subject |> List.find(fun (_,cases)->cases.Length>1) |> fst
+                let contexts = model.Points |> List.filter(fun point->point.Site=sharedSubject && point.Port=EvaluationPort.Entry) |> List.map _.Context |> List.distinct
+                Assert.True(contexts.Length>1,"Shared Option subjects must retain their distinct operand-demand contexts.")
+            | other -> failwithf "The finite resource account was not authored: %A" other
+            Assert.Contains(resource.Contract.Hypothesis.Identity,String.concat "\n" info.Refs)
+            Assert.Contains(resource.Contract.Hypothesis.Version,String.concat "\n" info.Refs)
+            Assert.Contains(resource.Contract.Hypothesis.Source,String.concat "\n" info.Refs)
             let support = ForeignCases.resourceRequirementSupport graph id
             for required in [resource.Quote;resource.Acquisition.Binding;resource.Release.Binding;resource.ReleaseFormal;selected.Node;selected.Core.Value.Node] do
                 Assert.Contains(required,support)
@@ -259,19 +279,33 @@ type ForeignReferenceTests() =
         for _,info in requirements do
             Assert.Contains(info.Kind,ledger)
             let row = Clef.Compiler.Nanopass.ObligationDischarge.ledgerJson [info]
-            Assert.Contains("\"state\": \"pending\"",row)
-            Assert.Contains("\"missingPremises\"",row)
-            match info.Body with
-            | ObligationBody.Pending reasons -> for reason in reasons do Assert.Contains(reason,row)
-            | _ -> failwith "The exact ledger row lost its pending resource requirement."
+            Assert.DoesNotContain("\"state\": \"pending\"",row)
         match dispatch.Query with
-        | Error unavailable ->
-            for id,_ in requirements do Assert.Contains(unavailable,fun (site,_) -> site=id)
-        | Ok query -> failwithf "Pending conversion/cleanup exported a solver query: %s" query
-        Assert.DoesNotContain(graph.Edges,fun edge -> match edge.Role with EdgeRole.BoundaryCall _ -> true | _ -> false)
+        | Error unavailable -> failwithf "A finite resource model was not materialized: %A" unavailable
+        | Ok query -> for _,info in requirements do Assert.Contains(info.Id,query)
+        Assert.True(Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent graph graph.RangeContextFacts.Value)
+        let resources=(ForeignDeclarations.readDescriptors graph).Resources
+        let foreignImplementations=resources |> List.collect(fun row->[List.last row.Acquisition.Path;List.last row.Release.Path]) |> Set.ofList
+        Assert.DoesNotContain(graph.Codata.Value.CallableContracts.Values,fun contract ->
+            contract.Kind=CallableKind.OrdinaryFlatClosure &&
+            (contract.Participants |> List.exists(fun participant->participant.Role=ParticipantRole.CallableImplementation && foreignImplementations.Contains participant.Node)))
         match Clef.Compiler.Project.ProjectChecker.publish result with
-        | Error reason -> Assert.Contains("source-settled adapter beyond the scalar C contract",reason)
-        | Ok _ -> failwith "Pending requirements granted an executable/public witness."
+        | Error reason -> failwithf "A complete source resource model could not publish: %s" reason
+        | Ok revision -> Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``Resource handle tuple containment refuses before cleanup authority``() =
+        let result=ForeignCases.resourceApplication "    match Foreign.mallocFirst 8 with\n    | Some handle ->\n        let boxed = (handle, 1)\n        let (_, value) = boxed\n        Foreign.freeFirst handle\n        value\n    | None -> 0\n"
+        Assert.True(Clef.Compiler.Project.ProjectChecker.hasErrors result)
+        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->
+            message.Contains("A resource Option or handle cannot enter a tuple, record, collection, storage, or unsupported value consumer.",System.StringComparison.Ordinal))
+
+    [<Fact>]
+    member _.``Ordinary handle callable is refused by local resource flow rather than foreign stub identity``() =
+        let result=ForeignCases.resourceApplication "    let ordinary handle = 0\n    match Foreign.mallocFirst 8 with\n    | Some handle -> ordinary handle\n    | None -> 0\n"
+        Assert.True(Clef.Compiler.Project.ProjectChecker.hasErrors result)
+        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->
+            message.Contains("Interprocedural resource use is outside the admitted local profile.",System.StringComparison.Ordinal))
 
     [<Theory>]
     [<InlineData("mallocFirst")>]

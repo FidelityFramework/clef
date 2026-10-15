@@ -64,6 +64,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
         else
             let resourceDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceDeclaration row -> Some row | _ -> None)
+            let resourceAccesses = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceAccess row -> Some row | _ -> None)
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
             let entries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryEntry entry -> Some entry | _ -> None)
             let callbackInvocations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCallbackInvocation invocation -> Some invocation | _ -> None)
@@ -71,8 +72,114 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
-                (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
-                (call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ -> false | _ -> true) |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
+                (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
+                (call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ | BoundaryScalar.ResourceHandle _ -> false | _ -> true) |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
+            let resourceOwners=domain.ResourceEvaluationRoots |> List.map(fun (owner,_,_)->owner) |> Set.ofList
+            let currentRelations=graph.Edges |> List.choose(fun edge ->
+                if edge.Class<>EdgeClass.Evaluation || not(edge.Sources |> List.tryHead |> Option.exists resourceOwners.Contains) then None else
+                let role=match edge.Role with
+                         | EdgeRole.EvaluationRoot -> Some ResourceEvaluationRole.Root
+                         | EdgeRole.EvaluationOperand access -> Some(ResourceEvaluationRole.Operand access)
+                         | EdgeRole.EvaluationFlow(source,target,transfer) -> Some(ResourceEvaluationRole.Flow(source,target,transfer))
+                         | EdgeRole.EvaluationPending reason -> Some(ResourceEvaluationRole.Pending reason)
+                         | _ -> None
+                role |> Option.map(fun role->{Role=role;Ordinal=edge.Ordinal;Sources=edge.Sources;Target=edge.Target}:ResourceEvaluationRelation))
+            let resourceFlowCurrent =
+                List.sort currentRelations=List.sort domain.ResourceEvaluationRelations &&
+                (domain.ResourceEvaluationRoots |> List.forall(fun (owner,implementation,body)->
+                    match graph.Nodes.TryFind owner,graph.Nodes.TryFind implementation with
+                    | Some {Kind=SemanticKind.Binding(_,false,_,_);Children=[actual]},Some {Kind=SemanticKind.Lambda(_,actualBody,[],_,_)} -> actual=implementation && actualBody=body
+                    | _ -> false))
+            let resourceEvidenceCurrent =
+                match domain.ResourceEvidence with
+                | None -> domain.ResourceEvaluationRoots.IsEmpty && domain.ResourceEvaluationRelations.IsEmpty && domain.ResourceAccesses.IsEmpty
+                | Some evidence ->
+                    evidence.Roots=List.distinct domain.ResourceEvaluationRoots && evidence.Relations=domain.ResourceEvaluationRelations && evidence.Accesses=domain.ResourceAccesses &&
+                    evidence.Premises.ContainsKey evidence.Platform && evidence.Premises.ContainsKey evidence.Core &&
+                    (evidence.Premises |> Map.forall(fun id premise->domain.Premises.TryFind id=Some premise))
+            let claim role site citizen =
+                graph.Nodes.TryFind citizen |> Option.bind(fun node ->
+                    match node.Kind with
+                    | SemanticKind.Obligation info when Ingredients.ownedNode node && info.Kind=role &&
+                        (graph.Nodes.TryFind site |> Option.bind(Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId role))=Some info.Id -> Some info
+                    | _ -> None)
+            let conversionAt site citizen =
+                claim "foreign-resource-nullable-conversion" site citizen |> Option.bind(fun info ->
+                    match info.Body with ObligationBody.ResourceConversion model -> Some model | _ -> None)
+            let cleanupAt site citizen =
+                claim "foreign-resource-cleanup" site citizen |> Option.bind(fun info ->
+                    match info.Body with ObligationBody.ResourceCleanup model -> Some model | _ -> None)
+            let exactSupport site citizen (resource:BoundaryResourceDeclaration) (cleanup:ResourceCleanupModel) =
+                let support=Set.union resource.Participants (cleanup.Relations |> List.collect(fun row->row.Target::row.Sources) |> Set.ofList)
+                match graph.Edges |> List.filter(fun edge->edge.Target=citizen && edge.Role=EdgeRole.Constrains) with
+                | [edge] -> edge.Sources |> List.tryHead = Some site && (Set.ofList edge.Sources).IsSupersetOf support
+                | _ -> false
+            let casesCurrent (cleanup:ResourceCleanupModel) =
+                let expected=cleanup.Relations |> List.map _.Target |> List.distinct |> List.choose(fun site->
+                    match graph.Nodes.TryFind site with
+                    | Some {Kind=SemanticKind.CaseElimination(subject,arms)} ->
+                        Some {Site=site;Subject=subject;Domain=[cleanup.ConversionModel.NoneCase;cleanup.ConversionModel.SomeCase]
+                              Arms=arms |> List.map(fun arm->
+                                {Ordinal=match arm.Pattern with Pattern.Union(_,ordinal,_,_)->Some ordinal | _->None
+                                 Body=arm.Body;BooleanResult=match graph.Nodes.TryFind arm.Body with Some {Kind=SemanticKind.Literal(NativeLiteral.Bool value)}->Some value | _->None})}
+                    | _->None)
+                List.sort expected=List.sort cleanup.Cases
+            let resourceErrors=calls |> List.choose(fun call ->
+                let valid =
+                    match call.Resource with
+                    | Some(BoundaryResourceUse.AcquireNullable account) ->
+                        match resourceDeclarations |> List.filter(fun row->row.Identity=account.Declaration),conversionAt call.Site account.Conversion,cleanupAt call.Site account.Cleanup with
+                        | [resource],Some conversion,Some cleanup ->
+                            conversion.Acquisition=call.Site && conversion.Declaration=resource.Identity && conversion.Import=call.Import &&
+                            conversion.OptionType=resource.ResultType && conversion.HandleType=resource.HandleType && conversion.PointerBits=resource.PointerBits &&
+                            cleanup.Acquisition=call.Site && cleanup.Declaration=resource.Identity && cleanup.Release=resource.Release &&
+                            cleanup.Conversion=account.Conversion && cleanup.ConversionModel=conversion &&
+                            (match cleanup.Relations |> List.filter(fun row->row.Role=ResourceEvaluationRole.Root) with
+                             | [{Sources=[owner;_]}] ->
+                                 List.sort cleanup.Relations=List.sort(currentRelations |> List.filter(fun row->row.Sources |> List.tryHead=Some owner))
+                             | _->false) && casesCurrent cleanup &&
+                            exactSupport call.Site account.Conversion resource cleanup && exactSupport call.Site account.Cleanup resource cleanup &&
+                            (imports |> List.exists(fun row->row.Identity=call.Import && row.Binding=resource.Acquisition)) &&
+                            (graph.Nodes.TryFind call.Site |> Option.exists(fun node->node.Children=call.Callee::(call.Arguments |> List.map _.Actual)))
+                        | _ -> false
+                    | Some(BoundaryResourceUse.ReleaseOwned account) ->
+                        match cleanupAt account.Acquisition account.Cleanup with
+                        | Some cleanup ->
+                            cleanup.Declaration=account.Declaration &&
+                            (cleanup.Points |> List.exists(fun point->
+                                point.Site=call.Site && point.Port=EvaluationPort.Exit &&
+                                (match point.Event,call.Arguments,imports |> List.tryFind(fun row->row.Identity=call.Import) with
+                                 | Some(ResourceFlowEvent.Release(actual,binding)),[operand],Some import -> actual=operand.Actual && binding=import.Binding
+                                 | _ -> false)))
+                        | _ -> false
+                    | None -> not((call.Result |> Option.toList)@(call.Arguments |> List.map _.Abi) |> List.exists(function BoundaryScalar.ResourceHandle _->true|_->false))
+                if valid then None else Some(failure (Some call.Site) call.Participants "The resource call lost its exact current conversion, cleanup or original declaration/operand account."))
+            let resourceAccessErrors=resourceAccesses |> List.choose(fun access->
+                let valid =
+                    match cleanupAt access.Acquisition access.Cleanup,resourceDeclarations |> List.tryFind(fun row->row.Identity=access.Declaration),graph.Nodes.TryFind access.Site with
+                    | Some cleanup,Some resource,Some node when cleanup.Acquisition=access.Acquisition && cleanup.Declaration=access.Declaration ->
+                        let sourceType=graph.Nodes.TryFind access.Source |> Option.map(fun node->Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type)
+                        let siteType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type
+                        let incidence =
+                            match access.Kind,node.Kind,node.Children with
+                            | BoundaryResourceAccessKind.OptionTag,SemanticKind.CaseElimination(subject,_),_ -> subject=access.Source && sourceType=Some resource.ResultType
+                            | BoundaryResourceAccessKind.OptionTag,SemanticKind.DUGetTag(subject,_),_ -> subject=access.Source && sourceType=Some resource.ResultType
+                            | BoundaryResourceAccessKind.OptionPayload,SemanticKind.DUEliminate(subject,ordinal,"Some",_),_ ->
+                                subject=access.Source && ordinal=cleanup.ConversionModel.SomeCase && sourceType=Some resource.ResultType && siteType=resource.HandleType
+                            | BoundaryResourceAccessKind.ImmutableAlias,SemanticKind.VarRef(_,Some binding),_ -> binding=access.Source && sourceType=Some siteType
+                            | BoundaryResourceAccessKind.ImmutableAlias,SemanticKind.Binding(_,false,false,_),[initializer] -> initializer=access.Source && sourceType=Some siteType
+                            | BoundaryResourceAccessKind.ImmutableAlias,SemanticKind.TypeAnnotation(inner,_),[actual] -> inner=access.Source && inner=actual && sourceType=Some siteType
+                            | _->false
+                        let selections=access.Selection |> List.forall(fun selection->
+                            match graph.Nodes.TryFind selection.Decision with
+                            | Some {Kind=SemanticKind.CaseElimination(subject,arms)} when subject=selection.Scrutinee && selection.Arm>=0 && selection.Arm<arms.Length ->
+                                let arm=arms[selection.Arm]
+                                (match arm.Pattern with Pattern.Union(_,ordinal,_,_)->Some ordinal | _->None)=selection.CaseOrdinal && arm.Guard=None && selection.Guard=None
+                            | _->false)
+                        incidence && selections && (siteType=resource.HandleType || access.Kind=BoundaryResourceAccessKind.OptionTag || siteType=resource.ResultType) &&
+                        access.Participants.Contains access.Site && access.Participants.Contains access.Source && access.Participants.Contains access.Cleanup
+                    | _->false
+                if valid then None else Some(failure (Some access.Site) access.Participants "A resource read lost its exact original Option case, payload or immutable alias incidence."))
             let foreignResultErrors =
                 let integerCalls = calls |> List.filter (fun call -> match call.Result with Some(BoundaryScalar.Integer _) -> true | _ -> false)
                 if integerCalls.IsEmpty then [] else
@@ -146,6 +253,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                      { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = Map.keys domain.Premises |> Seq.toList; Target = domainRow.Target }]
                     @ (domain.Declarations |> List.map Declarations.row)
                     @ (resourceDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity))
+                    @ (resourceAccesses |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site))
                     @ (imports |> List.map Ingredients.importRow)
                     @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
                     @ (callbackInvocations |> List.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity))
@@ -160,7 +268,14 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     @ (domain.IntrinsicImports |> List.map Bytes.importRow)
                     @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
                     @ (domain.IntrinsicProofs |> List.collect Bytes.proofRows)
+                let resourceClaims =
+                    calls |> List.collect(fun call->
+                        match call.Resource with
+                        | Some(BoundaryResourceUse.AcquireNullable account)->[account.Conversion;account.Cleanup]
+                        | _->[]) |> Set.ofList
                 let ownedTargets = Set.add domainRow.Target ((coverages |> List.map _.Obligation) @ (domain.IntrinsicProofs |> List.map _.Obligation) |> Set.ofList)
+                let expected=expected @ (graph.Edges |> List.filter(fun edge->resourceClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
+                let ownedTargets=Set.union ownedTargets resourceClaims
                 let completeMembership = Set.union participants ownedTargets = (Map.keys graph.Nodes |> Set.ofSeq)
                 let actual = graph.Edges |> List.filter (fun edge ->
                     edge.Class = EdgeClass.Boundary ||
@@ -182,7 +297,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                             | edge :: tail when key edge = key expected -> Some (List.rev prefix @ tail)
                             | edge :: tail -> remove (edge :: prefix) tail
                         match remove [] remaining with Some remaining -> subtract remaining rest | None -> false
-                let proofErrors = projectedCallbackErrors @ foreignResultErrors @ intrinsicProofErrors @ proofErrors
+                let proofErrors = resourceAccessErrors @ resourceErrors @ projectedCallbackErrors @ foreignResultErrors @ intrinsicProofErrors @ proofErrors
                 let expectedIntrinsicProofs = domain.IntrinsicCalls |> List.collect (fun call -> [-1;0;1;2] |> List.map (fun ordinal -> call.Site, ordinal)) |> List.sort
                 let actualIntrinsicProofs = domain.IntrinsicProofs |> List.map (fun proof -> proof.Site, proof.Ordinal) |> List.sort
                 let callbackMembership =
@@ -191,13 +306,17 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 if not proofErrors.IsEmpty then Error (List.rev proofErrors)
                 elif (resourceDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.ResourceDeclarations then
                     stale "The source resource declaration account was withdrawn or duplicated."
+                elif not resourceFlowCurrent || not resourceEvidenceCurrent then stale "The complete current resource evaluation relation, original root or scoped source premise incidence changed."
+                elif (resourceAccesses |> List.map _.Site |> List.sort)<>List.sort domain.ResourceAccesses then stale "The resource read or immutable alias account was withdrawn or duplicated."
                 elif not callbackMembership then stale "The closed native callback or receiving invocation account was withdrawn or duplicated."
                 elif expectedIntrinsicProofs <> actualIntrinsicProofs then stale "The intrinsic boundary lost or duplicated an ordered proof occurrence."
                 elif not completeMembership || not (subtract actual expected) then stale "The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent."
                 else
                     let imports = imports |> List.map (fun import -> import.Identity, import) |> Map.ofList
                     let byScope = imports.Values |> Seq.groupBy _.Scope |> Seq.map (fun (scope, imports) -> scope, imports |> Seq.map _.Identity |> Seq.sort |> Seq.toList) |> Map.ofSeq
-                    Ok { ResourceDeclarations = resourceDeclarations |> List.map (fun row -> row.Identity,row) |> Map.ofList
+                    Ok { ResourceEvidence = domain.ResourceEvidence
+                         ResourceDeclarations = resourceDeclarations |> List.map (fun row -> row.Identity,row) |> Map.ofList
+                         ResourceAccesses = resourceAccesses |> List.map(fun row->row.Site,row) |> Map.ofList
                          Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
                          Calls = callsById; ByScope = byScope; ResultHypotheses = domain.ResultHypotheses
                          CallbackInvocations = callbackInvocations |> List.map (fun invocation -> invocation.Identity, invocation) |> Map.ofList

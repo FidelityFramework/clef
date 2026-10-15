@@ -151,6 +151,7 @@ and mapBoundaryCall (value: S.BoundaryCall) : Fidelity.PSG.BoundaryCall =
         ErasedUnitArguments = (value.ErasedUnitArguments |> List.map (fun x -> nodeId x))
         Result = (value.Result |> Option.map (fun x -> mapBoundaryScalar x))
         ResultAdaptation = (value.ResultAdaptation |> Option.map (fun x -> mapMeet x))
+        Resource = (value.Resource |> Option.map (fun x -> mapBoundaryResourceUse x))
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
         SourceTypes = (value.SourceTypes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapTypeIdentity v) |> Map.ofSeq)
     } : Fidelity.PSG.BoundaryCall)
@@ -233,11 +234,15 @@ and mapBoundaryDeclarationFact (value: S.BoundaryDeclarationFact) : Fidelity.PSG
 
 and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
     ({
+        ResourceEvidence = (value.ResourceEvidence |> Option.map (fun x -> mapBoundaryResourceEvidence x))
         Premises = (value.Premises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
         Platform = (value.Platform |> Option.map (fun x -> mapBoundaryPlatformPremise x))
         Meets = (value.Meets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
         Declarations = (value.Declarations |> List.map (fun x -> mapBoundaryDeclaration x))
         ResourceDeclarations = (value.ResourceDeclarations |> List.map (fun x -> nodeId x))
+        ResourceAccesses = (value.ResourceAccesses |> List.map (fun x -> nodeId x))
+        ResourceEvaluationRoots = (value.ResourceEvaluationRoots |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, nodeId t1, nodeId t2))))
+        ResourceEvaluationRelations = (value.ResourceEvaluationRelations |> List.map (fun x -> mapResourceEvaluationRelation x))
         Imports = (value.Imports |> List.map (fun x -> nodeId x))
         Loading = (value.Loading |> Option.map (fun x -> mapBoundaryLoading x))
         Entries = (value.Entries |> List.map (fun x -> nodeId x))
@@ -268,7 +273,9 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
 
 and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fidelity.PSG.BoundaryEmissionProjection =
     ({
+        ResourceEvidence = (value.ResourceEvidence |> Option.map (fun x -> mapBoundaryResourceEvidence x))
         ResourceDeclarations = (value.ResourceDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceDeclaration v) |> Map.ofSeq)
+        ResourceAccesses = (value.ResourceAccesses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceAccess v) |> Map.ofSeq)
         Imports = (value.Imports |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryImport v) |> Map.ofSeq)
         Loading = (value.Loading |> Option.map (fun x -> mapBoundaryLoading x))
         Entries = (value.Entries |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryEntry v) |> Map.ofSeq)
@@ -356,6 +363,34 @@ and mapBoundaryProofOutcome (value: S.BoundaryProofOutcome) : Fidelity.PSG.Bound
     | S.BoundaryProofOutcome.Proven -> Fidelity.PSG.BoundaryProofOutcome.Proven
     | S.BoundaryProofOutcome.Refuted -> Fidelity.PSG.BoundaryProofOutcome.Refuted
 
+and mapBoundaryResourceAccess (value: S.BoundaryResourceAccess) : Fidelity.PSG.BoundaryResourceAccess =
+    ({
+        Site = nodeId value.Site
+        Source = nodeId value.Source
+        Acquisition = nodeId value.Acquisition
+        Declaration = nodeId value.Declaration
+        Kind = mapBoundaryResourceAccessKind value.Kind
+        Selection = (value.Selection |> List.map (fun x -> mapBoundaryResourceSelection x))
+        Cleanup = nodeId value.Cleanup
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryResourceAccess)
+
+and mapBoundaryResourceAccessKind (value: S.BoundaryResourceAccessKind) : Fidelity.PSG.BoundaryResourceAccessKind =
+    match value with
+    | S.BoundaryResourceAccessKind.OptionTag -> Fidelity.PSG.BoundaryResourceAccessKind.OptionTag
+    | S.BoundaryResourceAccessKind.OptionPayload -> Fidelity.PSG.BoundaryResourceAccessKind.OptionPayload
+    | S.BoundaryResourceAccessKind.ImmutableAlias -> Fidelity.PSG.BoundaryResourceAccessKind.ImmutableAlias
+
+and mapBoundaryResourceAcquisition (value: S.BoundaryResourceAcquisition) : Fidelity.PSG.BoundaryResourceAcquisition =
+    ({
+        Declaration = nodeId value.Declaration
+        Tag = mapSettledSlot value.Tag
+        NoneCase = value.NoneCase
+        SomeCase = value.SomeCase
+        Conversion = nodeId value.Conversion
+        Cleanup = nodeId value.Cleanup
+    } : Fidelity.PSG.BoundaryResourceAcquisition)
+
 and mapBoundaryResourceDeclaration (value: S.BoundaryResourceDeclaration) : Fidelity.PSG.BoundaryResourceDeclaration =
     ({
         Identity = nodeId value.Identity
@@ -376,11 +411,43 @@ and mapBoundaryResourceDeclaration (value: S.BoundaryResourceDeclaration) : Fide
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.BoundaryResourceDeclaration)
 
+and mapBoundaryResourceEvidence (value: S.BoundaryResourceEvidence) : Fidelity.PSG.BoundaryResourceEvidence =
+    ({
+        Platform = nodeId value.Platform
+        Core = nodeId value.Core
+        Premises = (value.Premises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
+        Roots = (value.Roots |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, nodeId t1, nodeId t2))))
+        Relations = (value.Relations |> List.map (fun x -> mapResourceEvaluationRelation x))
+        Accesses = (value.Accesses |> List.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryResourceEvidence)
+
+and mapBoundaryResourceRelease (value: S.BoundaryResourceRelease) : Fidelity.PSG.BoundaryResourceRelease =
+    ({
+        Declaration = nodeId value.Declaration
+        Acquisition = nodeId value.Acquisition
+        Cleanup = nodeId value.Cleanup
+    } : Fidelity.PSG.BoundaryResourceRelease)
+
+and mapBoundaryResourceSelection (value: S.BoundaryResourceSelection) : Fidelity.PSG.BoundaryResourceSelection =
+    ({
+        Decision = nodeId value.Decision
+        Scrutinee = nodeId value.Scrutinee
+        Arm = value.Arm
+        CaseOrdinal = value.CaseOrdinal
+        Guard = (value.Guard |> Option.map (fun x -> (let (t0, t1) = x in (nodeId t0, t1))))
+    } : Fidelity.PSG.BoundaryResourceSelection)
+
+and mapBoundaryResourceUse (value: S.BoundaryResourceUse) : Fidelity.PSG.BoundaryResourceUse =
+    match value with
+    | S.BoundaryResourceUse.AcquireNullable(a0) -> Fidelity.PSG.BoundaryResourceUse.AcquireNullable(mapBoundaryResourceAcquisition a0)
+    | S.BoundaryResourceUse.ReleaseOwned(a0) -> Fidelity.PSG.BoundaryResourceUse.ReleaseOwned(mapBoundaryResourceRelease a0)
+
 and mapBoundaryScalar (value: S.BoundaryScalar) : Fidelity.PSG.BoundaryScalar =
     match value with
     | S.BoundaryScalar.Integer(a0, a1) -> Fidelity.PSG.BoundaryScalar.Integer(a0, a1)
     | S.BoundaryScalar.Boolean -> Fidelity.PSG.BoundaryScalar.Boolean
     | S.BoundaryScalar.Entry(a0) -> Fidelity.PSG.BoundaryScalar.Entry(nodeId a0)
+    | S.BoundaryScalar.ResourceHandle(a0, a1) -> Fidelity.PSG.BoundaryScalar.ResourceHandle(nodeId a0, a1)
 
 and mapBoundarySourcePremise (value: S.BoundarySourcePremise) : Fidelity.PSG.BoundarySourcePremise =
     ({
@@ -936,6 +1003,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.BoundaryDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryDeclaration(mapBoundaryDeclaration a0)
     | S.EdgeRole.BoundaryDomain(a0) -> Fidelity.PSG.EdgeRole.BoundaryDomain(mapBoundaryDomain a0)
     | S.EdgeRole.BoundaryResourceDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryResourceDeclaration(mapBoundaryResourceDeclaration a0)
+    | S.EdgeRole.BoundaryResourceAccess(a0) -> Fidelity.PSG.EdgeRole.BoundaryResourceAccess(mapBoundaryResourceAccess a0)
     | S.EdgeRole.BoundaryImport(a0) -> Fidelity.PSG.EdgeRole.BoundaryImport(mapBoundaryImport a0)
     | S.EdgeRole.BoundaryCall(a0) -> Fidelity.PSG.EdgeRole.BoundaryCall(mapBoundaryCall a0)
     | S.EdgeRole.BoundaryOperand(a0) -> Fidelity.PSG.EdgeRole.BoundaryOperand(mapBoundaryOperand a0)
@@ -1163,6 +1231,7 @@ and mapEvaluationPort (value: S.EvaluationPort) : Fidelity.PSG.EvaluationPort =
     | S.EvaluationPort.OperandExit(a0) -> Fidelity.PSG.EvaluationPort.OperandExit(a0)
     | S.EvaluationPort.Ready -> Fidelity.PSG.EvaluationPort.Ready
     | S.EvaluationPort.Exit -> Fidelity.PSG.EvaluationPort.Exit
+    | S.EvaluationPort.FailureExit -> Fidelity.PSG.EvaluationPort.FailureExit
 
 and mapEvaluationResidual (value: S.EvaluationResidual) : Fidelity.PSG.EvaluationResidual =
     match value with
@@ -1180,6 +1249,8 @@ and mapEvaluationTransfer (value: S.EvaluationTransfer) : Fidelity.PSG.Evaluatio
     | S.EvaluationTransfer.WhenTrue -> Fidelity.PSG.EvaluationTransfer.WhenTrue
     | S.EvaluationTransfer.WhenFalse -> Fidelity.PSG.EvaluationTransfer.WhenFalse
     | S.EvaluationTransfer.Resume -> Fidelity.PSG.EvaluationTransfer.Resume
+    | S.EvaluationTransfer.WhenCase(a0) -> Fidelity.PSG.EvaluationTransfer.WhenCase(a0)
+    | S.EvaluationTransfer.WhenOtherCases(a0) -> Fidelity.PSG.EvaluationTransfer.WhenOtherCases(a0)
 
 and mapExactRational (value: N.ExactRational) : Fidelity.PSG.ExactRational =
     ({
@@ -2127,6 +2198,8 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.FiniteLinearRecurrence(a0) -> Fidelity.PSG.ObligationBody.FiniteLinearRecurrence(mapFiniteLinearRecurrenceModel a0)
     | S.ObligationBody.FiniteAdditiveEffects(a0, a1, a2, a3) -> Fidelity.PSG.ObligationBody.FiniteAdditiveEffects(a0, a1, a2, a3)
     | S.ObligationBody.ForeignResultCoverage(a0) -> Fidelity.PSG.ObligationBody.ForeignResultCoverage(mapForeignResultCoverageModel a0)
+    | S.ObligationBody.ResourceConversion(a0) -> Fidelity.PSG.ObligationBody.ResourceConversion(mapResourceConversionModel a0)
+    | S.ObligationBody.ResourceCleanup(a0) -> Fidelity.PSG.ObligationBody.ResourceCleanup(mapResourceCleanupModel a0)
 
 and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
     ({
@@ -2439,6 +2512,114 @@ and mapResetConstraint (value: S.ResetConstraint) : Fidelity.PSG.ResetConstraint
         ActiveHigh = value.ActiveHigh
     } : Fidelity.PSG.ResetConstraint)
 
+and mapResourceCleanupModel (value: S.ResourceCleanupModel) : Fidelity.PSG.ResourceCleanupModel =
+    ({
+        Acquisition = nodeId value.Acquisition
+        Declaration = nodeId value.Declaration
+        Release = nodeId value.Release
+        Conversion = nodeId value.Conversion
+        ConversionModel = mapResourceConversionModel value.ConversionModel
+        Entry = value.Entry
+        Points = (value.Points |> List.map (fun x -> mapResourceFlowPoint x))
+        Relations = (value.Relations |> List.map (fun x -> mapResourceEvaluationRelation x))
+        Edges = (value.Edges |> List.map (fun x -> mapResourceFlowEdge x))
+        Cases = (value.Cases |> List.map (fun x -> mapResourceFlowCase x))
+        LiteralGuards = (value.LiteralGuards |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, t1))))
+        Exits = value.Exits
+    } : Fidelity.PSG.ResourceCleanupModel)
+
+and mapResourceConversionArm (value: S.ResourceConversionArm) : Fidelity.PSG.ResourceConversionArm =
+    ({
+        NativeNonNull = value.NativeNonNull
+        CaseOrdinal = value.CaseOrdinal
+        PayloadOrigin = (value.PayloadOrigin |> Option.map (fun x -> nodeId x))
+    } : Fidelity.PSG.ResourceConversionArm)
+
+and mapResourceConversionModel (value: S.ResourceConversionModel) : Fidelity.PSG.ResourceConversionModel =
+    ({
+        Acquisition = nodeId value.Acquisition
+        Declaration = nodeId value.Declaration
+        Import = nodeId value.Import
+        OptionType = mapTypeIdentity value.OptionType
+        HandleType = mapTypeIdentity value.HandleType
+        Core = nodeId value.Core
+        PointerBits = value.PointerBits
+        SelectedPointerBits = value.SelectedPointerBits
+        HandleBytes = value.HandleBytes
+        HandleAlignment = value.HandleAlignment
+        TagBits = value.TagBits
+        TagBytes = value.TagBytes
+        NoneCase = value.NoneCase
+        SomeCase = value.SomeCase
+        CaseCount = value.CaseCount
+        PayloadOffset = value.PayloadOffset
+        OptionBytes = value.OptionBytes
+        OptionAlignment = value.OptionAlignment
+        Arms = (value.Arms |> List.map (fun x -> mapResourceConversionArm x))
+    } : Fidelity.PSG.ResourceConversionModel)
+
+and mapResourceEvaluationRelation (value: S.ResourceEvaluationRelation) : Fidelity.PSG.ResourceEvaluationRelation =
+    ({
+        Role = mapResourceEvaluationRole value.Role
+        Ordinal = value.Ordinal
+        Sources = (value.Sources |> List.map (fun x -> nodeId x))
+        Target = nodeId value.Target
+    } : Fidelity.PSG.ResourceEvaluationRelation)
+
+and mapResourceEvaluationRole (value: S.ResourceEvaluationRole) : Fidelity.PSG.ResourceEvaluationRole =
+    match value with
+    | S.ResourceEvaluationRole.Root -> Fidelity.PSG.ResourceEvaluationRole.Root
+    | S.ResourceEvaluationRole.Operand(a0) -> Fidelity.PSG.ResourceEvaluationRole.Operand(mapEvaluationAccess a0)
+    | S.ResourceEvaluationRole.Flow(a0, a1, a2) -> Fidelity.PSG.ResourceEvaluationRole.Flow(mapEvaluationPort a0, mapEvaluationPort a1, mapEvaluationTransfer a2)
+    | S.ResourceEvaluationRole.Pending(a0) -> Fidelity.PSG.ResourceEvaluationRole.Pending(mapEvaluationResidual a0)
+
+and mapResourceFlowCase (value: S.ResourceFlowCase) : Fidelity.PSG.ResourceFlowCase =
+    ({
+        Site = nodeId value.Site
+        Subject = nodeId value.Subject
+        Domain = value.Domain
+        Arms = (value.Arms |> List.map (fun x -> mapResourceFlowCaseArm x))
+    } : Fidelity.PSG.ResourceFlowCase)
+
+and mapResourceFlowCaseArm (value: S.ResourceFlowCaseArm) : Fidelity.PSG.ResourceFlowCaseArm =
+    ({
+        Ordinal = value.Ordinal
+        Body = nodeId value.Body
+        BooleanResult = value.BooleanResult
+    } : Fidelity.PSG.ResourceFlowCaseArm)
+
+and mapResourceFlowConnection (value: S.ResourceFlowConnection) : Fidelity.PSG.ResourceFlowConnection =
+    match value with
+    | S.ResourceFlowConnection.Local -> Fidelity.PSG.ResourceFlowConnection.Local
+    | S.ResourceFlowConnection.OperandEntry -> Fidelity.PSG.ResourceFlowConnection.OperandEntry
+    | S.ResourceFlowConnection.OperandExit -> Fidelity.PSG.ResourceFlowConnection.OperandExit
+
+and mapResourceFlowEdge (value: S.ResourceFlowEdge) : Fidelity.PSG.ResourceFlowEdge =
+    ({
+        From = value.From
+        To = value.To
+        Relation = value.Relation
+        Connection = mapResourceFlowConnection value.Connection
+        Transfer = mapEvaluationTransfer value.Transfer
+    } : Fidelity.PSG.ResourceFlowEdge)
+
+and mapResourceFlowEvent (value: S.ResourceFlowEvent) : Fidelity.PSG.ResourceFlowEvent =
+    match value with
+    | S.ResourceFlowEvent.Acquisition -> Fidelity.PSG.ResourceFlowEvent.Acquisition
+    | S.ResourceFlowEvent.OptionAlias(a0) -> Fidelity.PSG.ResourceFlowEvent.OptionAlias(nodeId a0)
+    | S.ResourceFlowEvent.HandleAlias(a0) -> Fidelity.PSG.ResourceFlowEvent.HandleAlias(nodeId a0)
+    | S.ResourceFlowEvent.Payload(a0) -> Fidelity.PSG.ResourceFlowEvent.Payload(nodeId a0)
+    | S.ResourceFlowEvent.Release(a0, a1) -> Fidelity.PSG.ResourceFlowEvent.Release(nodeId a0, nodeId a1)
+
+and mapResourceFlowPoint (value: S.ResourceFlowPoint) : Fidelity.PSG.ResourceFlowPoint =
+    ({
+        Label = value.Label
+        Site = nodeId value.Site
+        Context = value.Context
+        Port = mapEvaluationPort value.Port
+        Event = (value.Event |> Option.map (fun x -> mapResourceFlowEvent x))
+    } : Fidelity.PSG.ResourceFlowPoint)
+
 and mapReturnBound (value: N.ReturnBound) : Fidelity.PSG.ReturnBound =
     ({
         Floor = value.Floor
@@ -2647,6 +2828,7 @@ and mapSettledSlot (value: S.SettledSlot) : Fidelity.PSG.SettledSlot =
     | S.SettledSlot.Pointer(a0) -> Fidelity.PSG.SettledSlot.Pointer(a0)
     | S.SettledSlot.Unit -> Fidelity.PSG.SettledSlot.Unit
     | S.SettledSlot.Opaque(a0) -> Fidelity.PSG.SettledSlot.Opaque(a0)
+    | S.SettledSlot.CHandle(a0, a1, a2) -> Fidelity.PSG.SettledSlot.CHandle(mapTypeIdentity a0, a1, a2)
 
 and mapSourceBindingClass (value: S.WitnessBindingClass) : Fidelity.PSG.SourceBindingClass =
     match value with

@@ -1232,6 +1232,7 @@ let scalarRange = function
     | BoundaryScalar.Integer(bits, true) -> bits, ValueRange.twosComplement bits
     | BoundaryScalar.Integer(bits, false) -> bits, ValueRange.unsignedOf bits
     | BoundaryScalar.Entry _ -> invalidOp "An entry declaration has no scalar integer range."
+    | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle has no scalar integer range."
 
 let private numericType = function
     | DeclaredTypeRef.Scalar scalar -> Some (scalarRange scalar)

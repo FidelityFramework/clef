@@ -434,6 +434,8 @@
     <Compile Include="Nanopass\BindingDemand.fs" />
     <Compile Include="Nanopass\StringBorrows.fs" />
     <Compile Include="Nanopass\StringComparisons.fs" />
+    <!-- Pure generated source/public mapping is needed by canonical resource proof transcription. -->
+    <Compile Include="Baker\Ingredients\PublishedFactRows.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->
@@ -509,7 +511,6 @@
     <Compile Include="Baker\Recipes\WitnessScopeRecipes.fs" />
     <Compile Include="Baker\Recipes\WitnessForeignDemandRecipes.fs" />
     <Compile Include="Baker\Recipes\WitnessLiveRowsRecipes.fs" />
-    <Compile Include="Baker\Ingredients\PublishedFactRows.fs" />
     <Compile Include="Baker\Recipes\WitnessPublishedRowsRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessEmission.fs" />
     <!-- Publication: the one place a graph leaves CCS, as a Fidelity.PSG revision -->

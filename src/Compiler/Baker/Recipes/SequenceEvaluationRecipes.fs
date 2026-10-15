@@ -39,7 +39,14 @@ let private local (graph: SemanticGraph) resident owner generator (node: Semanti
     | SemanticKind.Application (callee, args) -> eager (callee :: args)
     // The false path terminates the activation; only successful requirements
     // return to the following source operation. Never treat one as a value.
-    | SemanticKind.Require(condition, _) -> eager [condition]
+    | SemanticKind.Require(condition, _) ->
+        withOperands [condition] (fun operands ->
+            let link = E.flow owner node.Id operands
+            demands operands @
+                [link EvaluationPort.Entry (EvaluationPort.OperandEntry 0) EvaluationTransfer.Continue
+                 link (EvaluationPort.OperandExit 0) EvaluationPort.Ready EvaluationTransfer.WhenTrue
+                 link (EvaluationPort.OperandExit 0) EvaluationPort.FailureExit EvaluationTransfer.WhenFalse
+                 link EvaluationPort.Ready EvaluationPort.Exit EvaluationTransfer.Continue], [condition])
     | SemanticKind.ClosureValue(_, environment) | SemanticKind.LazyValue(_, environment) -> eager [environment]
     | SemanticKind.EnvironmentReference value | SemanticKind.LazyEnvironmentReference value -> eager [value]
     | SemanticKind.EnvironmentRead(environment, _) | SemanticKind.EnvironmentBorrow(environment, _)
@@ -126,7 +133,40 @@ let private local (graph: SemanticGraph) resident owner generator (node: Semanti
     | SemanticKind.NamedIndexedPropertySet (value, _, index, assigned) -> eager [value; index; assigned]
     | SemanticKind.InterpolatedString parts ->
         parts |> List.choose (function InterpolatedPart.ExprPart id -> Some id | _ -> None) |> eager
-    | SemanticKind.Match _ | SemanticKind.CaseElimination _ -> pending EvaluationResidual.MatchSelection []
+    | SemanticKind.CaseElimination(subject, arms) ->
+        let declared = graph.Nodes.TryFind subject |> Option.bind (fun value -> Clef.Compiler.Baker.Ingredients.Options.cases value.Type)
+        let clauses = arms |> List.mapi (fun index arm ->
+            if arm.Guard.IsSome || not arm.Bindings.IsEmpty then None else
+            match arm.Pattern, declared with
+            | Pattern.Union(name, ordinal, payload, unionType), Some cases
+                when graph.Nodes.TryFind subject |> Option.exists (fun value ->
+                    Clef.Compiler.NativeTypedTree.TypeIdentities.ofType value.Type = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType unionType) ->
+                cases |> List.tryFind (fun (actualOrdinal, actualName, actualPayload) ->
+                    ordinal = actualOrdinal && name = actualName &&
+                    (match payload, actualPayload with None, None | Some Pattern.Wildcard, Some _ -> true | _ -> false))
+                |> Option.map (fun _ -> Some ordinal, arm.Body)
+            | Pattern.Wildcard, Some _ when index = arms.Length - 1 -> Some(None, arm.Body)
+            | _ -> None)
+        if arms.IsEmpty || clauses |> List.exists Option.isNone then pending EvaluationResidual.MatchSelection [subject]
+        else
+            let clauses = clauses |> List.choose id
+            let ordinals = clauses |> List.choose fst
+            if ordinals.Length <> (List.distinct ordinals).Length then pending EvaluationResidual.InvalidShape [subject]
+            else
+                let ids = subject :: (clauses |> List.map snd)
+                withOperands ids (fun operands ->
+                    let link = E.flow owner node.Id operands
+                    let branches = clauses |> List.mapi (fun index (ordinal, _) ->
+                        let transfer = ordinal |> Option.map EvaluationTransfer.WhenCase |> Option.defaultValue (EvaluationTransfer.WhenOtherCases ordinals)
+                        [link (EvaluationPort.OperandExit 0) (EvaluationPort.OperandEntry(index + 1)) transfer
+                         link (EvaluationPort.OperandExit(index + 1)) EvaluationPort.Ready EvaluationTransfer.Continue]) |> List.concat
+                    let failure =
+                        if clauses |> List.exists (fst >> Option.isNone) then []
+                        else [link (EvaluationPort.OperandExit 0) EvaluationPort.FailureExit (EvaluationTransfer.WhenOtherCases ordinals)]
+                    demands operands @
+                        [link EvaluationPort.Entry (EvaluationPort.OperandEntry 0) EvaluationTransfer.Continue]
+                        @ branches @ failure @ [link EvaluationPort.Ready EvaluationPort.Exit EvaluationTransfer.Continue], ids)
+    | SemanticKind.Match _ -> pending EvaluationResidual.MatchSelection []
     | SemanticKind.TryWith _ | SemanticKind.TryFinally _ -> pending EvaluationResidual.ExceptionFlow []
     | SemanticKind.ForEach _ -> pending EvaluationResidual.CollectionIteration []
     | SemanticKind.ForLoop _ -> pending EvaluationResidual.CountedIteration []
@@ -159,6 +199,16 @@ let private forRoot (graph: SemanticGraph) resident owner generator body =
 /// correspondence; off-spine source support is not executable reachability.
 let forRetainedRoot (graph: SemanticGraph) owner generator body : Enrichment =
     forRoot graph graph.Nodes.ContainsKey owner generator body
+
+/// Ordinary callable roots use the same compositional fact owner. This is not
+/// a sequence/generator classification, and inactive operands remain pending.
+let forOrdinaryRoot (graph: SemanticGraph) owner implementation body : Enrichment =
+    match graph.Nodes.TryFind owner, graph.Nodes.TryFind implementation with
+    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [actual] },
+      Some { Kind = SemanticKind.Lambda(_, actualBody, [], _, _); IsReachable = true }
+        when actual = implementation && actualBody = body ->
+        forRoot graph (fun id -> graph.Nodes.TryFind id |> Option.exists _.IsReachable) owner implementation body
+    | _ -> { Enrichment.empty with NewEdges = [E.pending owner owner EvaluationResidual.InvalidShape [implementation; body]] }
 
 let forOwner (graph: SemanticGraph) (owner: SemanticNode) : Enrichment =
     match owner.Kind with

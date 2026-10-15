@@ -87,11 +87,13 @@ let private scalarRange = function
     | BoundaryScalar.Integer(bits, true) -> ValueRange.twosComplement bits
     | BoundaryScalar.Integer(bits, false) -> ValueRange.unsignedOf bits
     | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric range."
+    | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle has no scalar numeric range."
 
 let private scalarBits = function
     | BoundaryScalar.Boolean -> 1
     | BoundaryScalar.Integer(bits, _) -> bits
     | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric width."
+    | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle requires its exact resource conversion account."
 
 let private supportedType scalar ty =
     match scalar, Types.tryGetNTUKind ty with
@@ -110,7 +112,8 @@ let private sourceTypes (graph: SemanticGraph) ids =
 
 let private bindingPath = BoundaryDeclarations.bindingPath
 
-let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descriptors) (binding: SemanticNode) library symbol =
+let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descriptors)
+                       (resources: Map<NodeId, BoundaryResourceDeclaration>) (binding: SemanticNode) library symbol =
     checked' {
         let! scope =
             binding.Parent |> needed "The external binding has no source module owner."
@@ -220,6 +223,13 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
 
                         return formal, BoundaryScalar.Entry invocation.Quote
                     | Error reason -> return! Error reason
+                    | _ when resources.Values |> Seq.exists (fun row -> row.Release = binding.Id && row.ReleaseDescriptor = descriptor.Node && row.ReleaseFormal = formal && row.ReleaseOrdinal = ordinal) ->
+                        let! resource =
+                            resources.Values |> Seq.filter (fun row -> row.Release = binding.Id && row.ReleaseDescriptor = descriptor.Node)
+                            |> Seq.toList |> function [row] -> Ok row | _ -> Error "The release declaration has ambiguous resource ownership."
+                        do! require (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType formalNode.Type = resource.HandleType)
+                                "The exact release formal no longer has its declared opaque handle identity."
+                        return formal, BoundaryScalar.ResourceHandle(resource.Identity, false)
                     | _ ->
                         let! declared =
                             declared
@@ -261,7 +271,11 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         let! returnId =
             field "ReturnType" fields |> needed "The FunctionDescriptor has no ReturnType."
 
-        let! result = typeRef graph returnId
+        let! result =
+            match resources.Values |> Seq.filter (fun row -> row.Acquisition = binding.Id && row.AcquisitionDescriptor = descriptor.Node) |> Seq.toList with
+            | [resource] -> Ok(Some(BoundaryScalar.ResourceHandle(resource.Identity, true)))
+            | [] -> typeRef graph returnId
+            | _ -> Error "The acquisition declaration has ambiguous resource ownership."
 
         let! bodyNode =
             graph.Nodes.TryFind body
@@ -270,6 +284,8 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         do!
             require
                 (match result with
+                 | Some(BoundaryScalar.ResourceHandle(identity, true)) ->
+                     resources.TryFind identity |> Option.exists (fun row -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType bodyNode.Type = row.ResultType)
                  | Some scalar -> supportedType scalar bodyNode.Type
                  | None -> Types.tryGetNTUKind bodyNode.Type = Some NTUKind.NTUunit)
                 "The binding result's source kind disagrees with its declared boundary result."
@@ -374,6 +390,7 @@ let private sourceWidth graph id scalar =
     match scalar with
     | BoundaryScalar.Boolean -> Ok 1
     | BoundaryScalar.Entry _ -> Error "Native entry arguments require their declared code signature, not a numeric width."
+    | BoundaryScalar.ResourceHandle _ -> Error "An opaque resource handle has no source numeric width."
     | BoundaryScalar.Integer _ -> checked' {
         let! representation = RangeAnalysis.selectedRepresentation graph id |> needed "The scalar occurrence has no source-selected offered integer representation."
         do! require (NumericRepresentation.isOffered representation && (representation.Family = "int" || representation.Family = "uint"))
@@ -382,7 +399,11 @@ let private sourceWidth graph id scalar =
                 "The scalar occurrence's held width disagrees with its selected offered representation."
         return representation.Bits }
 
-let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args path (import: BoundaryImport) entry = checked' {
+let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args path (import: BoundaryImport)
+                     (entry:NodeId option) (resource:BoundaryResourceUse option) = checked' {
+    let resourceAbi = (import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false)
+    do! require (not resourceAbi || (resource.IsSome && entry.IsNone))
+            "A resource-bearing call requires its exact direct acquisition/conversion or release/cleanup account; scalar and indirect calls grant no such authority."
     let ordered =
         match entry, site.Kind with
         | None, _ -> site.Children = callee :: args
@@ -400,12 +421,12 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
     let! arguments =
         List.zip operands import.Parameters |> List.map (fun (actual, (formal, abi)) -> checked' {
             let! node = graph.Nodes.TryFind actual |> needed "An actual boundary argument is absent from the source graph."
-            do! require (supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
+            do! require (match abi with BoundaryScalar.ResourceHandle _ -> resource.IsSome | _ -> supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
             do! require (import.SourceTypes.TryFind formal = Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type))
                     "The actual boundary argument does not retain its formal's native kind and dimension identity."
             let! meet =
                 match abi with
-                | BoundaryScalar.Entry _ -> Ok None
+                | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ -> Ok None
                 | _ -> checked' {
                     let! range = match abi with BoundaryScalar.Boolean -> Ok ValueRange.boolean | _ -> node.ValueRange |> needed "The actual scalar argument lacks an established source range."
                     let! sourceBits = sourceWidth graph actual abi
@@ -416,6 +437,7 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
         | None -> checked' {
             do! require (Types.tryGetNTUKind site.Type = Some NTUKind.NTUunit) "A void foreign call cannot publish a non-unit source result."
             return None }
+        | Some(BoundaryScalar.ResourceHandle _) -> Ok None
         | Some abi -> checked' {
             do! require (supportedType abi site.Type) "The call result's source kind disagrees with its boundary declaration."
             let! targetBits = sourceWidth graph site.Id abi
@@ -423,9 +445,239 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
             return! adaptation graph site.Id site.Id (scalarBits abi) targetBits input }
     let! types = sourceTypes graph (site.Id :: args)
     return { Site = site.Id; Import = import.Identity; Callee = callee; Entry = entry; Arguments = arguments; ErasedUnitArguments = erased
-             Result = import.Result; ResultAdaptation = resultAdaptation
+             Result = import.Result; ResultAdaptation = resultAdaptation; Resource = resource
              Participants = Set.unionMany [import.Participants; path; Set.ofList (site.Id :: callee :: args)]
              SourceTypes = types }
+}
+
+/// Compose the existing evaluation owner's finite relations. Source syntax is
+/// consulted only to bind the recorded event/read/case incidence; it does not
+/// discover a second control-flow graph.
+let private resourceFlow (graph: SemanticGraph) (resource: BoundaryResourceDeclaration)
+                         (conversion: ResourceConversionModel) (conversionClaim:NodeId) (cleanupClaim:NodeId) = checked' {
+    let! implementation = MemoryAccessRecipes.nearestLambda graph conversion.Acquisition
+                          |> needed "Resource cleanup requires one exact ordinary callable activation."
+    let! lambda = graph.Nodes.TryFind implementation |> needed "The resource activation was withdrawn."
+    let! owner, body =
+        match lambda.Kind, lambda.Parent with
+        | SemanticKind.Lambda(_, body, [], _, _), Some owner -> Ok(owner, body)
+        | _ -> Error "Resource handles cannot cross captured or unknown callable frames."
+    let expected = SequenceEvaluationRecipes.forOrdinaryRoot graph owner implementation body
+    let evaluation =
+        { Enrichment.empty with
+            NewEdges = graph.Edges |> List.filter (fun edge ->
+                edge.Class = EdgeClass.Evaluation && List.tryHead edge.Sources = Some owner) }
+    let incidence (edge:Hyperedge) = edge.Class,edge.Role,edge.Ordinal,edge.Sources,edge.Target
+    do! require (List.map incidence evaluation.NewEdges = List.map incidence expected.NewEdges)
+            "Resource cleanup requires the current pre-numeric ordinary evaluation census."
+    let! relations = evaluation.NewEdges |> List.map (fun edge ->
+        let role =
+            match edge.Role with
+            | EdgeRole.EvaluationRoot -> Some ResourceEvaluationRole.Root
+            | EdgeRole.EvaluationOperand access -> Some(ResourceEvaluationRole.Operand access)
+            | EdgeRole.EvaluationFlow(fromPort, toPort, transfer) -> Some(ResourceEvaluationRole.Flow(fromPort, toPort, transfer))
+            | EdgeRole.EvaluationPending reason -> Some(ResourceEvaluationRole.Pending reason)
+            | _ -> None
+        role |> needed "Resource cleanup does not admit captured evaluation operands."
+        |> Result.map (fun role -> { Role=role; Ordinal=edge.Ordinal; Sources=edge.Sources; Target=edge.Target }:ResourceEvaluationRelation)) |> collect
+    do! require (relations |> List.forall (fun relation ->
+        match relation.Role with ResourceEvaluationRole.Pending _ | ResourceEvaluationRole.Operand EvaluationAccess.Storage -> false | _ -> true)) "Resource cleanup has an unresolved evaluation relation or mutable storage flow."
+    let operands site =
+        relations |> List.choose (fun row ->
+            match row.Role, row.Sources with
+            | ResourceEvaluationRole.Operand EvaluationAccess.Value, [actualOwner; value] when actualOwner=owner && row.Target=site -> Some(row.Ordinal,value)
+            | _ -> None) |> List.sortBy fst
+    let siteIds = relations |> List.map _.Target |> Set.ofList
+    let identity id = graph.Nodes.TryFind id |> Option.map (fun node -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type)
+    let forwarded (node:SemanticNode) =
+        match node.Kind,node.Children with
+        | SemanticKind.VarRef(_,Some binding),_ -> Some binding
+        | SemanticKind.Binding(_,false,false,_),[initializer] -> Some initializer
+        | SemanticKind.TypeAnnotation(inner,_),[actual] when actual=inner -> Some inner
+        | _ -> None
+    // A monotone lineage fold over the finite evaluation census; no recursive
+    // callee/body walk or name-based resource supplier completion.
+    let optionSites,handleSites =
+        (Set.singleton conversion.Acquisition,Set.empty,true)
+        |> Seq.unfold(fun (optionSites,handleSites,changed) ->
+            if not changed then None else
+            let optionNext,handleNext =
+                siteIds |> Set.fold (fun (options:Set<NodeId>,handles:Set<NodeId>) id ->
+                    let node=graph.Nodes[id]
+                    match identity id,forwarded node,node.Kind with
+                    | Some ty,Some source,_ when ty=resource.ResultType && options.Contains source -> options.Add id,handles
+                    | Some ty,Some source,_ when ty=resource.HandleType && handles.Contains source -> options,handles.Add id
+                    | Some ty,_,SemanticKind.DUEliminate(source,ordinal,name,_) when ty=resource.HandleType && ordinal=conversion.SomeCase && name="Some" && options.Contains source -> options,handles.Add id
+                    | _ -> options,handles) (optionSites,handleSites)
+            Some((optionNext,handleNext),(optionNext,handleNext,optionNext<>optionSites || handleNext<>handleSites)))
+        |> Seq.last
+    do! require (siteIds |> Set.forall (fun id ->
+        match identity id with
+        | Some ty when ty=resource.ResultType -> optionSites.Contains id
+        | Some ty when ty=resource.HandleType -> handleSites.Contains id
+        | _ -> true)) "Resource handle lineage is ambiguous, merged or crosses an unsupported frame."
+    do! require (identity body<>Some resource.ResultType && identity body<>Some resource.HandleType) "Resource Option or handle values cannot escape through a callable result."
+    let! cases = siteIds |> Set.toList |> List.choose (fun id ->
+        match graph.Nodes[id].Kind with
+        | SemanticKind.CaseElimination(subject,arms) -> Some(checked' {
+            do! require (optionSites.Contains subject) "Resource cleanup cannot settle an unrelated or uncorrelated case guard."
+            let! arms = arms |> List.map (fun arm -> checked' {
+                do! require (arm.Guard.IsNone && arm.Bindings.IsEmpty) "A resource case requires the existing shallow guard-free arm account."
+                let! ordinal = match arm.Pattern with
+                               | Pattern.Union(_,ordinal,_,_) -> Ok(Some ordinal)
+                               | Pattern.Wildcard -> Ok None
+                               | _ -> Error "A resource case pattern is outside the exact Option profile."
+                let result=match graph.Nodes.TryFind arm.Body with Some {Kind=SemanticKind.Literal(NativeLiteral.Bool value)} -> Some value | _ -> None
+                return { Ordinal=ordinal; Body=arm.Body; BooleanResult=result }:ResourceFlowCaseArm }) |> collect
+            return {Site=id;Subject=subject;Domain=[conversion.NoneCase;conversion.SomeCase];Arms=arms}:ResourceFlowCase })
+        | _ -> None) |> collect
+    let caseMap = cases |> List.map (fun row -> row.Site,row) |> Map.ofList
+    let literals = siteIds |> Set.toList |> List.choose (fun id ->
+        match graph.Nodes[id].Kind with SemanticKind.Literal(NativeLiteral.Bool value) -> Some(id,value) | _ -> None)
+    let knownGuard id =
+        literals |> List.exists(fst>>(=)id) ||
+        (caseMap.TryFind id |> Option.exists(fun row->row.Arms |> List.forall(fun arm->arm.BooleanResult.IsSome)))
+    do! require (relations |> List.forall(fun row->
+        match row.Role with
+        | ResourceEvaluationRole.Flow(_,_,EvaluationTransfer.WhenTrue)
+        | ResourceEvaluationRole.Flow(_,_,EvaluationTransfer.WhenFalse) ->
+            operands row.Target |> List.tryFind(fst>>(=)0) |> Option.exists(snd>>knownGuard)
+        | ResourceEvaluationRole.Flow(_,_,EvaluationTransfer.Resume) -> false
+        | _ -> true)) "Resource cleanup has unknown or uncorrelated guard feasibility."
+    let declaredReleases=(Declarations.readDescriptors graph).Resources |> List.map(fun row->row.Release.Binding) |> Set.ofList
+    let! releaseSites =
+        siteIds |> Set.toList |> List.choose (fun id ->
+            match graph.Nodes[id].Kind with
+            | SemanticKind.Application(callee,args) when id<>conversion.Acquisition -> Some(checked' {
+                let! binding,_ = target graph callee |> needed "A resource path contains an unresolved call."
+                let! actual = match args with [actual] when handleSites.Contains actual -> Ok actual | _ -> Error "A resource path permits only its explicit unary handle release call."
+                do! require (BoundaryDeclarations.isExternal binding) "Interprocedural resource use is outside the admitted local profile."
+                do! require (declaredReleases.Contains binding.Id) "A handle can be passed only to an exact current declared resource release."
+                return id,(actual,binding.Id) })
+            | _ -> None) |> collect |> Result.map Map.ofList
+    let contained =
+        relations
+        |> List.forall (fun row ->
+            match row.Role, row.Sources with
+            | ResourceEvaluationRole.Operand EvaluationAccess.Value, [ _; actual ] when
+                optionSites.Contains actual || handleSites.Contains actual
+                ->
+                let parent = graph.Nodes[row.Target]
+
+                match parent.Kind with
+                | SemanticKind.Sequential _ -> true
+                | SemanticKind.CaseElimination(subject, _) -> subject = actual && optionSites.Contains actual
+                | SemanticKind.DUEliminate(subject, ordinal, _, _) ->
+                    subject = actual && optionSites.Contains actual && ordinal = conversion.SomeCase
+                | SemanticKind.Application _ ->
+                    releaseSites.TryFind row.Target
+                    |> Option.exists (fun (operand, _) -> operand = actual && handleSites.Contains actual)
+                | _ ->
+                    forwarded parent = Some actual
+                    && (optionSites.Contains parent.Id || handleSites.Contains parent.Id)
+            | _ -> true)
+
+    do!
+        require
+            contained
+            "A resource Option or handle cannot enter a tuple, record, collection, storage, or unsupported value consumer."
+
+    let event site =
+        let node=graph.Nodes[site]
+        if site=conversion.Acquisition then Some ResourceFlowEvent.Acquisition
+        elif releaseSites.ContainsKey site then let actual,release=releaseSites[site] in Some(ResourceFlowEvent.Release(actual,release))
+        elif handleSites.Contains site then
+            match node.Kind,forwarded node with
+            | SemanticKind.DUEliminate(source,_,_,_),_ -> Some(ResourceFlowEvent.Payload source)
+            | _,Some source -> Some(ResourceFlowEvent.HandleAlias source)
+            | _ -> None
+        elif optionSites.Contains site then forwarded node |> Option.map ResourceFlowEvent.OptionAlias
+        else None
+    // Expand original operand incidences, retaining the ordinal context of
+    // each demand. Sharing a subject never joins its separate evaluations.
+    let initialExpansion=Ok([],[body,[],Set.empty])
+    let! occurrences =
+        initialExpansion |> Seq.unfold(fun state ->
+            match state with
+            | Error _ | Ok(_,[]) -> None
+            | Ok(seen,(site,context,ancestors)::rest) ->
+                let next =
+                    if List.length seen>=4096 then Error "Resource evaluation exceeds the bounded finite occurrence profile."
+                    elif Set.contains site ancestors then Error "Resource cleanup requires acyclic evaluation."
+                    else
+                        let children=operands site |> List.map (fun (ordinal,child) -> child,context@[ordinal],Set.add site ancestors)
+                        Ok((site,context)::seen,children@rest)
+                Some(next,next))
+        |> Seq.tryLast |> Option.defaultValue initialExpansion |> Result.map(fun (seen,_)->List.rev seen)
+    let! rawEdges = occurrences |> List.collect (fun (site,context) ->
+        relations |> List.mapi (fun index row -> index,row) |> List.choose (fun (index,row) ->
+            if row.Target<>site then None else
+            match row.Role,row.Sources with
+            | ResourceEvaluationRole.Flow(fromPort,toPort,transfer),_ ->
+                Some(Ok[((site,context,fromPort),(site,context,toPort),index,ResourceFlowConnection.Local,transfer)])
+            | ResourceEvaluationRole.Operand EvaluationAccess.Value,[_;child] ->
+                Some(Ok[((site,context,EvaluationPort.OperandEntry row.Ordinal),(child,context@[row.Ordinal],EvaluationPort.Entry),index,ResourceFlowConnection.OperandEntry,EvaluationTransfer.Continue)
+                        ((child,context@[row.Ordinal],EvaluationPort.Exit),(site,context,EvaluationPort.OperandExit row.Ordinal),index,ResourceFlowConnection.OperandExit,EvaluationTransfer.Continue)])
+            | ResourceEvaluationRole.Root,_ -> None
+            | _ -> Some(Error "Resource evaluation has an unexpanded relation."))) |> collect |> Result.map List.concat
+    let pointKeys = rawEdges |> List.collect(fun (source,target,_,_,_)->[source;target]) |> Set.ofList
+    let initialCounts = pointKeys |> Set.toList |> List.map(fun key -> key,rawEdges |> List.filter(fun (_,target,_,_,_)->target=key) |> List.length) |> Map.ofList
+    let initialRank=Ok([],initialCounts,initialCounts |> Map.toList |> List.choose(fun (key,count)->if count=0 then Some key else None))
+    let! ranked =
+        initialRank |> Seq.unfold(fun state ->
+            match state with
+            | Error _ | Ok(_,_,[]) -> None
+            | Ok(ranked,counts,key::rest) ->
+                let counts=counts.Remove key
+                let counts,ready =
+                    rawEdges |> List.filter(fun (source,_,_,_,_)->source=key)
+                    |> List.fold(fun ((counts:Map<NodeId * int list * EvaluationPort,int>),ready) (_,target,_,_,_) ->
+                        match counts.TryFind target with
+                        | Some count -> let next=count-1 in counts.Add(target,next),(if next=0 then target::ready else ready)
+                        | None -> counts,ready) (counts,rest)
+                let next=Ok(key::ranked,counts,ready)
+                Some(next,next))
+        |> Seq.tryLast |> Option.defaultValue initialRank
+        |> Result.bind(fun (ranked,counts,_)->
+            if counts.IsEmpty then Ok(List.rev ranked)
+            else Error "Resource evaluation contains a cycle or an incomplete operand expansion.")
+    let labels=ranked |> List.mapi(fun index key->key,index) |> Map.ofList
+    let points=ranked |> List.mapi(fun label (site,context,port)->
+        {Label=label;Site=site;Context=context;Port=port;Event=if port=EvaluationPort.Exit then event site else None}:ResourceFlowPoint)
+    let edges=rawEdges |> List.map(fun (source,target,relation,connection,transfer)->
+        {From=labels[source];To=labels[target];Relation=relation;Connection=connection;Transfer=transfer}:ResourceFlowEdge)
+    let exits=points |> List.choose(fun point ->
+        if point.Port=EvaluationPort.FailureExit || (point.Site=body && point.Context.IsEmpty && point.Port=EvaluationPort.Exit) then Some point.Label else None)
+    let model:ResourceCleanupModel =
+        {Acquisition=conversion.Acquisition;Declaration=resource.Identity;Release=resource.Release;Conversion=conversionClaim
+         ConversionModel=conversion;Entry=labels[body,[],EvaluationPort.Entry];Points=points;Relations=relations;Edges=edges
+         Cases=cases;LiteralGuards=literals;Exits=exits}
+    let support=Set.union resource.Participants (Set.ofList (conversionClaim::cleanupClaim::owner::implementation::body::(relations |> List.collect(fun row->row.Target::row.Sources))))
+    let selections context =
+        context |> List.mapi(fun index ordinal ->
+            let parentContext=context |> List.take index
+            occurrences |> List.tryFind(fun (_,actual)->actual=parentContext)
+            |> Option.bind(fun (site,_)->caseMap.TryFind site)
+            |> Option.bind(fun case->
+                if ordinal>0 && ordinal<=case.Arms.Length then
+                    let arm=case.Arms[ordinal-1]
+                    Some {Decision=case.Site;Scrutinee=case.Subject;Arm=ordinal-1;CaseOrdinal=arm.Ordinal;Guard=None}
+                else None)) |> List.choose id
+    let! accesses = siteIds |> Set.toList |> List.choose(fun site ->
+        let node=graph.Nodes[site]
+        let access =
+            match node.Kind,event site with
+            | SemanticKind.CaseElimination(subject,_),_ when optionSites.Contains subject -> Some(subject,BoundaryResourceAccessKind.OptionTag,false)
+            | SemanticKind.DUEliminate(source,_,_,_),Some(ResourceFlowEvent.Payload _) -> Some(source,BoundaryResourceAccessKind.OptionPayload,true)
+            | _,Some(ResourceFlowEvent.OptionAlias source) -> Some(source,BoundaryResourceAccessKind.ImmutableAlias,false)
+            | _,Some(ResourceFlowEvent.HandleAlias source) -> Some(source,BoundaryResourceAccessKind.ImmutableAlias,true)
+            | _ -> None
+        access |> Option.map(fun (source,kind,handle) -> checked' {
+            let paths=occurrences |> List.filter(fst>>(=)site) |> List.map(snd>>selections) |> List.distinct
+            do! require (not handle || paths.Length=1) "A handle read has ambiguous case-selection lineage."
+            return {Site=site;Source=source;Acquisition=conversion.Acquisition;Declaration=resource.Identity;Kind=kind
+                    Selection=(if handle then paths.Head else []);Cleanup=cleanupClaim;Participants=Set.add site (Set.add source support)}:BoundaryResourceAccess })) |> collect
+    return model,accesses,Enrichment.empty,(owner,implementation,body),support,releaseSites
 }
 
 type private IntrinsicDomain = {
@@ -731,7 +983,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                         require
                             (selected |> Option.exists (fun selected -> selected.Contract.Library = library))
                             "This C library requires its exact explicitly selected source process-link loading contract.")
-            let! import = readImport graph descriptors binding library symbol
+            let! import = readImport graph descriptors resourceDeclarations binding library symbol
 
             return
                 { import with
@@ -798,6 +1050,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 |> needed "The imported entry's original external declaration is absent."
 
             let! import = imported declaration
+            do! require (not ((import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false)))
+                    "A resource-bearing ABI cannot form an indirect native entry without per-invocation conversion and cleanup lineage."
             let! loading = loading
             do! require (import.Library = loading.Contract.Library)
                     "The imported entry library differs from its explicitly selected process-link loading contract."
@@ -877,12 +1131,15 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                         let result =
                             checked' {
                                 let! import = imported binding
-                                let! call = readCall graph node callee args path import None
-                                return import, call
+                                if (import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false) then
+                                    return import, None
+                                else
+                                    let! call = readCall graph node callee args path import None None
+                                    return import, Some call
                             }
 
                         match result with
-                        | Ok(import, call) -> Map.add import.Identity import imports, Map.add node.Id call calls, entries, errors
+                        | Ok(import, call) -> Map.add import.Identity import imports, (call |> Option.map (fun call -> Map.add node.Id call calls) |> Option.defaultValue calls), entries, errors
                         | Error reason -> imports, calls, entries, (node.Id, participants, reason) :: errors
                     | Some({
                                Kind = SemanticKind.Intrinsic {
@@ -924,6 +1181,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                                 (Set.unionMany [ path; source.Transport; loading.Participants ])
                                                 import
                                                 (Some source.Formation)
+                                                None
 
                                         return import, entry, call
                                     }
@@ -952,6 +1210,93 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     | _ -> imports, calls, entries, errors
                 | _ -> imports, calls, entries, errors)
             (Map.empty, Map.empty, Map.empty, initialErrors)
+
+    // Requirements retain their original source claim IDs. A typed body is
+    // issued only from actual current conversion/layout and complete finite
+    // evaluation evidence; issuing it is not a discharge or execution permit.
+    let claimAt site role =
+        resourceRequirements.NewNodes |> List.filter(fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind=role ->
+                resourceRequirements.NewEdges |> List.exists(fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=node.Id && edge.Sources |> List.tryHead = Some site)
+            | _ -> false)
+        |> function [node] -> Ok node | _ -> Error "A resource application lost its unique source-issued requirement citizen."
+    let refine (requirement:SemanticNode) body (support:Set<NodeId>) refs (enrichment:Enrichment) =
+        let nodes=enrichment.NewNodes |> List.map(fun node ->
+            if node.Id<>requirement.Id then node else
+            match node.Kind with
+            | SemanticKind.Obligation info -> {node with Kind=SemanticKind.Obligation {info with Body=body;Logic="QF_LIA";Refs=refs}}
+            | _ -> node)
+        let edges=enrichment.NewEdges |> List.map(fun edge ->
+            if edge.Target=requirement.Id then {edge with Sources=List.distinct(edge.Sources@Set.toList support)} else edge)
+        {enrichment with NewNodes=nodes;NewEdges=edges}
+    let imports,calls,resourceAccesses,resourceRoots,resourceRelations,resourceEvaluation,resourceRequirements,errors =
+        graph.Nodes |> Map.fold(fun ((imports:Map<NodeId,BoundaryImport>),(calls:Map<NodeId,BoundaryCall>),(accesses:Map<NodeId,BoundaryResourceAccess>),roots,relations,evaluation,requirements,errors) _ site ->
+            match site.Kind with
+            | SemanticKind.Application(callee,arguments) when site.IsReachable ->
+                match target graph callee with
+                | Some(binding,path) ->
+                    match resourceDeclarations.Values |> Seq.filter(fun row->row.Acquisition=binding.Id) |> Seq.toList with
+                    | [resource] ->
+                        let result=checked' {
+                            let! import=imports.TryFind resource.AcquisitionDescriptor |> needed "Resource conversion requires its exact current import."
+                            let! conversionClaim=claimAt site.Id "foreign-resource-nullable-conversion"
+                            let! cleanupClaim=claimAt site.Id "foreign-resource-cleanup"
+                            let! platform=runtime.Platform |> needed "Resource conversion has no selected source platform."
+                            let! core=platform.Core |> needed "Resource conversion has no selected target declaration."
+                            let! selectedBits=graph.Platform |> needed "Resource conversion has no established target layout."
+                                              |> Result.bind(fun platform->PlatformContext.tryWidth platform "Pointer")
+                            let! handle=Placement.handleSlot graph resource.HandleType
+                            let! handleBits,handleAlignment =
+                                match handle with
+                                | SettledSlot.CHandle(ty,bits,alignment) when ty=resource.HandleType -> Ok(bits,alignment)
+                                | _ -> Error "Resource conversion lacks its dedicated nonspatial handle slot."
+                            let! tag,noneCase,someCase=Placement.optionDiscriminant graph site.Type
+                            let! tagBits=match tag with SettledSlot.Integer(bits,_) -> Ok bits | _ -> Error "Resource Option has no established integer discriminant."
+                            let! offset,bytes,alignment =
+                                match graph.Layouts.Value.TryFind resource.ResultType with
+                                | Some(SettledLayout.Union([("None",None);("Some",Some payload)],Some offset,Some bytes,Some alignment)) when payload=handle -> Ok(offset,bytes,alignment)
+                                | _ -> Error "Resource conversion lost its original complete Option placement."
+                            do! require (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType site.Type=resource.ResultType)
+                                    "The exact acquisition result no longer has its declared logical Option identity."
+                            let conversion:ResourceConversionModel =
+                                {Acquisition=site.Id;Declaration=resource.Identity;Import=import.Identity;OptionType=resource.ResultType;HandleType=resource.HandleType
+                                 Core=core.Node;PointerBits=resource.PointerBits;SelectedPointerBits=selectedBits;HandleBytes=handleBits/8;HandleAlignment=handleAlignment
+                                 TagBits=tagBits;TagBytes=tagBits/8;NoneCase=noneCase;SomeCase=someCase;CaseCount=2
+                                 PayloadOffset=offset;OptionBytes=bytes;OptionAlignment=alignment
+                                 Arms=[{NativeNonNull=false;CaseOrdinal=noneCase;PayloadOrigin=None}
+                                       {NativeNonNull=true;CaseOrdinal=someCase;PayloadOrigin=Some site.Id}]}
+                            let! cleanup,accessRows,flow,root,support,releaseSites=resourceFlow graph resource conversion conversionClaim.Id cleanupClaim.Id
+                            let resourceUse=BoundaryResourceUse.AcquireNullable
+                                                {Declaration=resource.Identity;Tag=tag;NoneCase=noneCase;SomeCase=someCase;Conversion=conversionClaim.Id;Cleanup=cleanupClaim.Id}
+                            let! acquisitionCall=readCall graph site callee arguments path import None (Some resourceUse)
+                            let! releaseCalls=releaseSites |> Map.toList |> List.map(fun (releaseSite,(_,releaseBinding))->checked' {
+                                let! releaseNode=graph.Nodes.TryFind releaseSite |> needed "The release call was withdrawn."
+                                let! releaseCallee,actuals=match releaseNode.Kind with SemanticKind.Application(callee,args)->Ok(callee,args) | _->Error "The release event is not an application."
+                                let! releaseImport=imports.Values |> Seq.filter(fun row->row.Binding=releaseBinding) |> Seq.toList
+                                                   |> function [row]->Ok row | _->Error "The explicit release lost its exact native import."
+                                let! _,releasePath=target graph releaseCallee |> needed "The explicit release lost its actual declaration transport."
+                                let resourceUse=BoundaryResourceUse.ReleaseOwned {Declaration=resource.Identity;Acquisition=site.Id;Cleanup=cleanupClaim.Id}
+                                return! readCall graph releaseNode releaseCallee actuals releasePath releaseImport None (Some resourceUse) }) |> collect
+                            let support=Set.union support (Set.ofList [platform.Node;core.Node;site.Id;import.Identity])
+                            let hypothesis=resource.Contract.Hypothesis
+                            let refs=[sprintf "external-execution-hypothesis identity=%s version=%s source=%s" hypothesis.Identity hypothesis.Version hypothesis.Source]
+                            let conversionSupport=support.Remove(conversionClaim.Id).Remove(cleanupClaim.Id)
+                            let cleanupSupport=support.Remove cleanupClaim.Id
+                            let requirements=requirements |> refine conversionClaim (ObligationBody.ResourceConversion conversion) conversionSupport refs
+                                                          |> refine cleanupClaim (ObligationBody.ResourceCleanup cleanup) cleanupSupport refs
+                            return acquisitionCall,releaseCalls,accessRows,flow,root,support,requirements,cleanup.Relations }
+                        match result with
+                        | Ok(acquisition,releases,accessRows,flow,root,support,requirements,currentRelations) ->
+                            let acquisition={acquisition with Participants=Set.union acquisition.Participants support}
+                            let calls=(acquisition::releases) |> List.fold(fun (calls:Map<NodeId,BoundaryCall>) call->calls.Add(call.Site,{call with Participants=Set.union call.Participants support})) calls
+                            imports,calls,(accessRows |> List.fold(fun rows row->rows.Add(row.Site,row)) accesses),root::roots,
+                            List.distinct(relations@currentRelations),Enrichment.combine evaluation flow,requirements,errors
+                        | Error reason -> imports,calls,accesses,roots,relations,evaluation,requirements,(site.Id,Set.add site.Id resource.Participants,reason)::errors
+                    | _ -> imports,calls,accesses,roots,relations,evaluation,requirements,errors
+                | _ -> imports,calls,accesses,roots,relations,evaluation,requirements,errors
+            | _ -> imports,calls,accesses,roots,relations,evaluation,requirements,errors)
+            (imports,calls,Map.empty,[],[],Enrichment.empty,resourceRequirements,errors)
 
     let callbacks = CallbackDeclarations.read graph
     let scoped = ScopedDeclarations.read graph
@@ -1347,13 +1692,13 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let proofs, errors = calls |> Map.fold (fun (enrichment, errors) _ call ->
         let argumentRanges = call.Arguments |> List.mapi (fun ordinal operand ->
             match operand.Abi with
-            | BoundaryScalar.Entry _ -> None
+            | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ -> None
             | _ ->
                 let input = match operand.Abi with BoundaryScalar.Boolean -> ValueRange.boolean | _ -> graph.Nodes[operand.Actual].ValueRange |> Option.defaultValue ValueRange.Unbounded
                 Some(ordinal, operand.Actual, input, scalarRange operand.Abi)) |> List.choose id
         // Integer result narrowing belongs to Numeric's conditional foreign
         // account. The C carrier is an ABI premise, not a behavioral enclosure.
-        let resultRange = call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ -> false | _ -> true) |> List.map (fun abi ->
+        let resultRange = call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ | BoundaryScalar.ResourceHandle _ -> false | _ -> true) |> List.map (fun abi ->
             let destination =
                 match abi with
                 | BoundaryScalar.Boolean -> ValueRange.boolean
@@ -1376,11 +1721,69 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         match StringOrigins.relations graph with
         | Ok relations -> Some relations, errors
         | Error reason -> None, (anchor.Id, Map.keys graph.Nodes |> Set.ofSeq, reason) :: errors
+    let boundaryPremises=Ingredients.premises graph
+    let resourceEvidence,errors =
+        if resourceRoots.IsEmpty then None,errors else
+        let retained=checked' {
+            let! platform=runtime.Platform |> needed "Resource source evidence has no exact selected platform."
+            let! core=platform.Core |> needed "Resource source evidence has no exact selected core."
+            let! targetFacts=[platform.Node;core.Node] |> List.map(declarationFacts graph) |> collect
+            let targetIds=targetFacts |> List.collect(Map.keys>>Seq.toList) |> Set.ofList
+            let accessIds=resourceAccesses.Values |> Seq.map _.Participants |> Set.unionMany
+            let callIds=calls.Values |> Seq.filter(fun call->call.Resource.IsSome) |> Seq.map _.Participants |> Set.unionMany
+            let ids=Set.unionMany [targetIds;accessIds;callIds]
+            // Retain exact metadata incidence named by the held source rows.
+            // This is one finite projection, not transitive body discovery:
+            // lexical declarations, original lambda formals, and context
+            // wrappers remain metadata rather than executable body roots.
+            let metadataIds =
+                ids
+                |> Set.toList
+                |> List.collect (fun id ->
+                    match boundaryPremises.TryFind id with
+                    | None -> []
+                    | Some premise ->
+                        let shape = premise.Shape
+
+                        let members =
+                            match shape.Form, shape.Numbers with
+                            | "module", _ -> List.take (shape.References.Length - shape.Children.Length) shape.References
+                            | "lambda", arity :: _ when arity >= 0I && arity <= bigint shape.References.Length ->
+                                List.take (int arity) shape.References
+                            | _ -> []
+
+                        let context =
+                            shape.Parent
+                            |> Option.filter (fun parent ->
+                                match graph.Nodes.TryFind parent with
+                                | Some {
+                                           Kind = SemanticKind.Binding _ | SemanticKind.ModuleDef _
+                                       } -> true
+                                | _ -> false)
+                            |> Option.toList
+
+                        members @ context)
+                |> Set.ofList
+
+            let ids = Set.union ids metadataIds
+
+            let owned=resourceRequirements.NewNodes |> List.map _.Id |> Set.ofList |> Set.add anchor.Id
+            do! require (ids |> Set.forall(fun id->boundaryPremises.ContainsKey id || owned.Contains id))
+                        "A resource source premise was withdrawn before publication."
+            return {Platform=platform.Node;Core=core.Node;Premises=boundaryPremises |> Map.filter(fun id _->ids.Contains id)
+                    Roots=List.distinct resourceRoots;Relations=resourceRelations;Accesses=Map.keys resourceAccesses |> Seq.toList}:BoundaryResourceEvidence }
+        match retained with
+        | Ok evidence -> Some evidence,errors
+        | Error reason -> None,(anchor.Id,Set.singleton anchor.Id,reason)::errors
     let domain =
-        { Premises = Ingredients.premises graph; Platform = Ingredients.platformPremise graph.Platform; Meets = graph.Codata.Value.Meets
+        { ResourceEvidence = resourceEvidence
+          Premises = boundaryPremises; Platform = Ingredients.platformPremise graph.Platform; Meets = graph.Codata.Value.Meets
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
           ResourceDeclarations = Map.keys resourceDeclarations |> Seq.toList
+          ResourceAccesses = Map.keys resourceAccesses |> Seq.toList
+          ResourceEvaluationRoots = List.distinct resourceRoots
+          ResourceEvaluationRelations = resourceRelations
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
           // Native entries and callback accounts require their selected source loading
           // even when every import is libc; ordinary direct libc calls keep no account.
@@ -1410,6 +1813,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 sources anchor.Id
          { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
         @ (resourceDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
+        @ (resourceAccesses.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site) |> Seq.toList)
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (callbackInvocations.Values |> Seq.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity) |> Seq.toList)
@@ -1417,7 +1821,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
-    Enrichment.combine resourceRequirements
+    Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
         (Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment)
 
 let elaborate graph =

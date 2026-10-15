@@ -106,6 +106,32 @@ type Signature = {
 
 let signature (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
               (carrier: CallableCarrier) =
+    // A foreign declaration's source lambda is its typed placeholder, not an
+    // ordinary Clef implementation. Reuse the declaration owner's exact path;
+    // a representable handle parameter does not turn that stub into a closure.
+    let foreignDeclaration =
+        graph.Edges
+        |> List.exists (fun edge ->
+            match edge.Role with
+            | EdgeRole.BoundaryDeclaration declaration when
+                edge.Target = declaration.Binding
+                && declaration.Implementation = carrier.Implementation
+                && declaration.Body = carrier.Result
+                && declaration.Formals = (carrier.Parameters |> List.map (fun (_, _, formal) -> formal))
+                ->
+                match
+                    graph.Nodes.TryFind declaration.Binding,
+                    Clef.Compiler.Baker.Recipes.BoundaryDeclarations.bindingPath graph declaration.Binding
+                with
+                | Some binding, Ok(path, formals, body) ->
+                    Clef.Compiler.Baker.Recipes.BoundaryDeclarations.isExternal binding
+                    && path = declaration.Path
+                    && body = declaration.Body
+                    && List.last path = declaration.Implementation
+                    && (formals |> List.map (fun (_, _, formal) -> formal)) = declaration.Formals
+                | _ -> false
+            | _ -> false)
+
     let environment =
         match carrier.Environment with
         | None -> Some None
@@ -115,9 +141,15 @@ let signature (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
                 layout.Implementation = carrier.Implementation && layout.Formal = environment.Formal)
             |> Option.map (fun layout -> Some layout.Bytes)
     let domain =
-        graph.Edges |> List.choose (fun edge ->
-            match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None)
-        |> function [domain] -> Some domain | _ -> None
+        graph.Edges
+        |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.NumericDomain domain -> Some domain
+            | _ -> None)
+        |> function
+            | [ domain ] when not (carrier.Kind = CallableKind.OrdinaryFlatClosure && foreignDeclaration) -> Some domain
+            | _ -> None
+
     let representations = domain |> Option.bind (fun domain ->
         let selected =
             carrier.Parameters |> List.indexed

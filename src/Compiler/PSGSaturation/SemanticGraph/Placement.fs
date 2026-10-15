@@ -59,7 +59,12 @@ type private Placer = {
     /// reachable construction of a tuple of that type; a position nothing constructs is Empty.
     TupleRanges: Map<TypeIdentity, ValueRange list>
     PayloadRanges: Map<TypeIdentity * int, ValueRange * Set<NodeId>>
+    ResourceHandles: Set<TypeIdentity>
 }
+
+let private resourceHandles graph =
+    (PlatformResolution.readDescriptors graph).Resources
+    |> List.map _.HandleType |> Set.ofList
 
 /// The rendered key of a type (as `ElementRanges` keys an element type).
 let private keyOf (ty: NativeType) : TypeIdentity = ofType ty
@@ -165,31 +170,36 @@ let private slotOfKind (p: Placer) (range: ValueRange) (kind: NTUKind) : Settled
 /// The slot of a value of the given type; `range` is the settled range of the field or position.
 let rec private slotOf (p: Placer) (range: ValueRange) (ty: NativeType) : SettledSlot =
     let ty = applySubst ty
-    match ty with
-    | NativeType.TVar _ -> SettledSlot.Opaque (sprintf "the unresolved type variable %s" (formatType ty))
-    | NativeType.TForall (_, body) -> slotOf p range body
-    | NativeType.TFun _ -> SettledSlot.Opaque "A callable aggregate field requires its source-settled component protocol (CCS8410)."
-    | NativeType.TTuple _ | NativeType.TAnon _ | NativeType.TUnion _
-    | NativeType.TLazy _ | NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> SettledSlot.Pointer ViewWords
-    | NativeType.TNativePtr _ | NativeType.TByref _ | NativeType.TList _ | NativeType.TMap _ | NativeType.TSet _ -> SettledSlot.Pointer HandleWords
-    | NativeType.TMeasure _ | NativeType.TError _ -> SettledSlot.Opaque (formatType ty)
-    | NativeType.TNum _ | NativeType.TApp _ ->
-        match Types.tryGetNTUKind ty with
-        | Some kind -> slotOfKind p range kind
-        | None ->
-            match ty with
-            | NativeType.TApp (tycon, _) ->
-                match aggregateOf p.Graph ty with
-                | Some _ -> SettledSlot.Pointer ViewWords
-                | None ->
-                    // a handle or a compound of words, by the layout family the type declares
-                    match TypeLayout.baseLayout tycon.Layout with
-                    | TypeLayout.PlatformWord -> SettledSlot.Pointer HandleWords
-                    | TypeLayout.FatPointer -> SettledSlot.Pointer 2
-                    | TypeLayout.NTUCompound n -> SettledSlot.Pointer n
-                    | TypeLayout.Record | TypeLayout.Union -> SettledSlot.Pointer ViewWords
-                    | _ -> SettledSlot.Opaque (formatType ty)
-            | _ -> SettledSlot.Opaque (formatType ty)
+    if p.ResourceHandles.Contains(keyOf ty) then
+        match p.PointerBytes with
+        | Some bytes when bytes > 0 -> SettledSlot.CHandle(keyOf ty, bytes * 8, bytes)
+        | _ -> SettledSlot.Opaque "A resource handle has no selected interior word-storage layout."
+    else
+        match ty with
+        | NativeType.TVar _ -> SettledSlot.Opaque (sprintf "the unresolved type variable %s" (formatType ty))
+        | NativeType.TForall (_, body) -> slotOf p range body
+        | NativeType.TFun _ -> SettledSlot.Opaque "A callable aggregate field requires its source-settled component protocol (CCS8410)."
+        | NativeType.TTuple _ | NativeType.TAnon _ | NativeType.TUnion _
+        | NativeType.TLazy _ | NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> SettledSlot.Pointer ViewWords
+        | NativeType.TNativePtr _ | NativeType.TByref _ | NativeType.TList _ | NativeType.TMap _ | NativeType.TSet _ -> SettledSlot.Pointer HandleWords
+        | NativeType.TMeasure _ | NativeType.TError _ -> SettledSlot.Opaque (formatType ty)
+        | NativeType.TNum _ | NativeType.TApp _ ->
+            match Types.tryGetNTUKind ty with
+            | Some kind -> slotOfKind p range kind
+            | None ->
+                match ty with
+                | NativeType.TApp (tycon, _) ->
+                    match aggregateOf p.Graph ty with
+                    | Some _ -> SettledSlot.Pointer ViewWords
+                    | None ->
+                        // a handle or a compound of words, by the layout family the type declares
+                        match TypeLayout.baseLayout tycon.Layout with
+                        | TypeLayout.PlatformWord -> SettledSlot.Pointer HandleWords
+                        | TypeLayout.FatPointer -> SettledSlot.Pointer 2
+                        | TypeLayout.NTUCompound n -> SettledSlot.Pointer n
+                        | TypeLayout.Record | TypeLayout.Union -> SettledSlot.Pointer ViewWords
+                        | _ -> SettledSlot.Opaque (formatType ty)
+                | _ -> SettledSlot.Opaque (formatType ty)
 
 /// The size and alignment of a slot on a core, in bytes: an integer's representation, a
 /// pointer-sized field's words at the declared Pointer width (alignment one word), a bool one
@@ -205,12 +215,24 @@ let private extentOf (p: Placer) (slot: SettledSlot) : (int * int) option =
     | _, SettledSlot.Unit -> Some (4, 4)
     | _, SettledSlot.Real bits -> let b = max 1 ((bits + 7) / 8) in Some (b, b)
     | Some ptr, SettledSlot.Pointer words -> Some (words * ptr, ptr)
+    | _, SettledSlot.CHandle(_, bits, alignment) when bits > 0 && bits % 8 = 0 && alignment > 0 ->
+        Some(bits / 8, alignment)
+    | _, SettledSlot.CHandle _ -> None
 
 /// Source memory recipes reuse the established placement extent rule.
 let extentOfSlot (graph: SemanticGraph) (slot: SettledSlot) =
     let pointerBytes = graph.Platform |> Option.bind (fun context -> PlatformContext.pointerSize context |> Result.toOption)
     extentOf { Boundaries = Map.empty; Graph = graph; Context = graph.Platform
-               PointerBytes = pointerBytes; TupleRanges = Map.empty; PayloadRanges = Map.empty } slot
+               PointerBytes = pointerBytes; TupleRanges = Map.empty; PayloadRanges = Map.empty
+               ResourceHandles = Set.empty } slot
+
+/// The established interior word-storage policy, not native pointee geometry
+/// or a C ABI alignment claim. The opaque handle retains a distinct slot.
+let handleSlot (graph: SemanticGraph) handleType =
+    match extentOfSlot graph (SettledSlot.Pointer HandleWords) with
+    | Some(bytes, alignment) when bytes > 0 && alignment > 0 ->
+        Ok(SettledSlot.CHandle(handleType, bytes * 8, alignment))
+    | _ -> Error "An opaque CHandle requires the selected source interior word-storage layout."
 
 /// Physical data for one declared callable component. The complete aggregate
 /// layout remains the containing record/union's responsibility. Offsets and
@@ -350,6 +372,8 @@ let private tile (p: Placer) (fields: (string * SettledSlot) list) : SettledLayo
 /// A union has one byte of tag at zero, followed by storage aligned for every
 /// declared payload. The whole extent includes tail padding at that alignment.
 /// A case with several fields carries them as one tuple payload.
+let private unionTagLayout = SettledSlot.Integer(8, None), 1
+
 let private union (p: Placer) (cases: (string * SettledSlot option) list) : SettledLayout =
     let payloads = cases |> List.choose snd
     let extents = payloads |> List.map (extentOf p)
@@ -358,8 +382,18 @@ let private union (p: Placer) (cases: (string * SettledSlot option) list) : Sett
         let extents = extents |> List.choose id
         let widest = extents |> List.map fst |> List.fold max 0
         let alignment = extents |> List.map snd |> List.fold max 1
-        let offset = alignUp 1 alignment
+        let offset = alignUp (snd unionTagLayout) alignment
         SettledLayout.Union (cases, Some offset, Some (alignUp (offset + widest) alignment), Some alignment)
+
+/// Source Option identity/case order and the exact discriminant layout policy.
+/// Consumers cannot recover these facts from a foreign null representation.
+let optionDiscriminant (graph: SemanticGraph) ty =
+    match Clef.Compiler.Baker.Ingredients.Options.cases ty, graph.Layouts.Value.TryFind(keyOf ty) with
+    | Some [(noneCase, noneName, None);(someCase, someName, Some _)],
+      Some(SettledLayout.Union([(actualNone, None);(actualSome, Some _)], Some _, Some _, Some _))
+        when actualNone = noneName && actualSome = someName ->
+        Ok(fst unionTagLayout, noneCase, someCase)
+    | _ -> Error "A resource Option requires its exact source cases and established discriminant placement."
 
 /// The range a field or position of the bare integer kind holds; Empty where nothing constructs it.
 let private fieldRange (p: Placer) (typeName: NominalTypeIdentity) (field: string) : ValueRange =
@@ -581,6 +615,7 @@ let settle (context: PlatformContext option) (graph: SemanticGraph) : SemanticGr
             |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption)
         TupleRanges = tupleRanges
         PayloadRanges = payloadRanges graph
+        ResourceHandles = resourceHandles graph
     }
     let aggregates =
         reachable
@@ -733,7 +768,8 @@ let private placeContinuationFields (graph: SemanticGraph)
         Error (ContinuationPlacementError.InvalidPlatform "Pointer width must declare a positive whole number of bytes")
     | Ok bits ->
     let placer = { Boundaries = Map.empty; Graph = graph; Context = Some context
-                   PointerBytes = Some (bits / 8); TupleRanges = Map.empty; PayloadRanges = Map.empty }
+                   PointerBytes = Some (bits / 8); TupleRanges = Map.empty; PayloadRanges = Map.empty
+                   ResourceHandles = resourceHandles graph }
     let extent id slot alignmentKind =
         match extentOf placer slot, PlatformContext.resolveAlign context alignmentKind with
         | Some (bytes, _), Ok align when bytes > 0 && align > 0 && (align &&& (align - 1)) = 0 ->
@@ -1000,6 +1036,7 @@ let closures (context: PlatformContext option) (graph: SemanticGraph) : Map<Node
             PointerBytes = context |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption)
             TupleRanges = Map.empty
             PayloadRanges = Map.empty
+            ResourceHandles = resourceHandles graph
         }
         let lazyThunks = LazyContracts.instances graph |> Map.toSeq |> Seq.map (fun (_, instance) -> instance.Thunk) |> Set.ofSeq
         graph.Nodes

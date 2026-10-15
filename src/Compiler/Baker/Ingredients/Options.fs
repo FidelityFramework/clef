@@ -14,6 +14,17 @@ open Clef.Compiler.Baker.Ingredients.Primitives
 
 let typeOf innerType = NativeType.TApp(Types.optionTyCon, [innerType])
 
+let private noneOrdinal = 0
+let private someOrdinal = 1
+
+/// The same canonical source cases used by construction and elimination.
+/// This says nothing about the foreign representation of null.
+let cases ty =
+    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+    | NativeType.TApp(constructor, [inner]) when constructor = Types.optionTyCon ->
+        Some [noneOrdinal, "None", None; someOrdinal, "Some", Some inner]
+    | _ -> None
+
 let caseTest optionNodeId innerType caseIndex =
     saturation {
         let! tag = duGetTag optionNodeId (typeOf innerType)
@@ -32,10 +43,10 @@ let caseTest optionNodeId innerType caseIndex =
         return! compareEq tag expected Types.intType
     }
 
-let hasValue optionNodeId innerType = caseTest optionNodeId innerType 1
+let hasValue optionNodeId innerType = caseTest optionNodeId innerType someOrdinal
 
-let value optionNodeId innerType = duEliminate optionNodeId "Some" 1 innerType
+let value optionNodeId innerType = duEliminate optionNodeId "Some" someOrdinal innerType
 
-let some valueNodeId innerType = duConstruct "Some" 1 (Some valueNodeId) None (typeOf innerType)
+let some valueNodeId innerType = duConstruct "Some" someOrdinal (Some valueNodeId) None (typeOf innerType)
 
-let none innerType = duConstruct "None" 0 None None (typeOf innerType)
+let none innerType = duConstruct "None" noneOrdinal None None (typeOf innerType)
