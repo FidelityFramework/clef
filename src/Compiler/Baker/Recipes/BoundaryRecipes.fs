@@ -964,21 +964,29 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                      && (call.Arguments |> List.tryItem source.Parameter) = Some operand)
                     "The receiving callback actual differs from its original native formal and ordinal."
 
-            let! formation =
-                Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph operand.Actual
-                |> needed "A receiving callback requires direct current FnPtr.ofFunction of a capture-free immutable module declaration."
-
             let! evidence =
                 match
                     callbacks.Receiving
                     |> List.filter (fun evidence ->
                         evidence.Call = call.Site
                         && evidence.Operand = operand.Actual
-                        && evidence.Address = formation.Formation
                         && evidence.Invocation.Quote = identity)
                 with
                 | [ evidence ] -> Ok evidence
                 | _ -> Error "The receiving callback lost its exact current call, source entry and signature association."
+
+            let! formation =
+                Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph evidence.Address
+                |> needed "A receiving callback requires current FnPtr.ofFunction of a capture-free immutable module declaration."
+
+            do!
+                match Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph operand.Actual with
+                | Some direct when direct.Formation = formation.Formation -> Ok ()
+                | _ ->
+                    match PlatformResolution.valuePath graph operand.Actual with
+                    | Some({ Kind = SemanticKind.FieldGet _; Id = projection }, _) ->
+                        Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.nativeProjection graph projection formation.Formation
+                    | _ -> Error "The receiving callback lost its exact immutable formation or admitted record projection."
 
             let! originalOperand =
                 match graph.Nodes.TryFind formation.Formation with

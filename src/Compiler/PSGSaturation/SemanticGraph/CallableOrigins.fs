@@ -734,6 +734,12 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
                     | _ -> None)
             | _ -> None)
         |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
+    // A declared foreign body is a source placeholder, not an ordinary
+    // call-target result dependency. Its declaration remains in the callee path.
+    let foreignBodies =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration.Body | _ -> None)
+        |> Set.ofList
     let rawDependencies id =
         match nodes.TryFind id with
         | None -> []
@@ -747,7 +753,8 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
                     [callee] @ arguments @
                     (calls.TryFind id |> Option.toList |> List.collect (fun call ->
                         call.Targets |> List.collect (fun target ->
-                            [target.Lambda] @ (target.Parameters |> List.map (fun (_, _, formal) -> formal)) @ [target.Body])))
+                            [target.Lambda] @ (target.Parameters |> List.map (fun (_, _, formal) -> formal)) @
+                            (if foreignBodies.Contains target.Body then [] else [target.Body]))))
                 | _ -> transportInputs.TryFind id |> Option.defaultValue node.Children
             let writes =
                 match shape node.Type with

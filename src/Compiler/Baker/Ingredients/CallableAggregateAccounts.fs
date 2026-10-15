@@ -156,3 +156,36 @@ let current (graph: SemanticGraph) (occurrence: NodeId) =
         author graph occurrence |> Result.bind (fun actual ->
             if held = actual then Ok held
             else Error "Callable aggregate source support changed after its dependency account was authored (CCS8414).")
+
+
+/// Validate a receiving projection against its existing complete aggregate
+/// account. This does not discover a formation or grant a native signature.
+let nativeProjection (graph: SemanticGraph) occurrence formation =
+    current graph occurrence |> Result.bind (fun account ->
+        let projections = account.Values |> List.filter (fun row ->
+            row.Occurrence = occurrence && row.Operation = CallableAggregateOperation.Project)
+        match projections with
+        | [projection] ->
+            match projection.FormationInputs with
+            | [construction; actual] ->
+                let suppliers = account.Values |> List.filter (fun row ->
+                    row.Occurrence = construction && row.Slot = projection.Slot &&
+                    row.Operation = CallableAggregateOperation.Construct)
+                match suppliers with
+                | [supplier] when supplier.Value = Some actual &&
+                                  List.tryLast supplier.FormationInputs = Some actual &&
+                                  supplier.Alternatives = projection.Alternatives ->
+                    match projection.Alternatives, account.Slots |> List.filter (fun slot -> slot.Identity = projection.Slot) with
+                    | [alternative], [slot] when alternative.Formation = formation &&
+                                               slot.Path.Length = 1 &&
+                                               (match slot.Path.Head with CallableAggregatePathStep.RecordField _ -> true | _ -> false) ->
+                        match account.Carriers |> List.filter (fun carrier -> carrier.Occurrence = actual), slot.Contract with
+                        | [carrier], Ok contract when alternative.Carrier = actual && carrier.Kind = CallableKind.NativeEntry &&
+                                                      carrier.Formation = formation && alternative.Contract = contract &&
+                                                      carrier.Contract = Ok contract && Identity.ofType carrier.SourceType = slot.SourceType &&
+                                                      carrier.Environment.IsNone && carrier.EnvironmentValue.IsNone -> Ok ()
+                        | _ -> Error "The receiving projection differs from its exact current native carrier and contract."
+                    | _ -> Error "The receiving projection does not select its original native formation and record slot."
+                | _ -> Error "The receiving projection has no exact admitted supplying construction."
+            | _ -> Error "The receiving projection lost its exact supplying construction and actual callable input."
+        | _ -> Error "The receiving callback has no unique current callable projection row.")

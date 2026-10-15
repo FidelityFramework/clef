@@ -165,6 +165,7 @@ let private readUncached (graph: SemanticGraph) : Reading =
         | _ -> ()
     let descriptors = readDescriptors graph
     let mutable receiving = []
+    let aggregateOrigins = lazy (CallableOrigins.resolve graph)
 
     for call in graph.Nodes.Values do
         match call.Kind with
@@ -178,7 +179,28 @@ let private readUncached (graph: SemanticGraph) : Reading =
                     then
                         let actual = actuals[invocation.Parameter]
 
-                        match valuePath graph actual with
+                        let source =
+                            valuePath graph actual
+                            |> Option.bind (fun (node, path) ->
+                                match node.Kind with
+                                | SemanticKind.FieldGet _ ->
+                                    let origins = aggregateOrigins.Value
+                                    Clef.Compiler.Baker.Ingredients.CallableAggregateProjections.read origins node.Id
+                                    |> Option.bind (fun projection ->
+                                        match projection.Path, projection.Inputs, origins.Aggregates.TryFind projection.Aggregate with
+                                        | [CallableAggregatePathStep.RecordField _], [input], Some aggregate when
+                                            aggregate.AbsentOrigins.IsEmpty && aggregate.UnknownOrigins.IsEmpty &&
+                                            aggregate.Alternatives.Length = 1 &&
+                                            (aggregate.Alternatives.Head.Slots |> List.filter (fun slot -> slot.Path = projection.Path)
+                                             |> function [slot] -> not slot.Absent && slot.UnknownOrigins.IsEmpty | _ -> false) ->
+                                            valuePath graph input |> Option.map (fun (address, inputPath) ->
+                                                // The aggregate account retains dependency premises. Code
+                                                // transport retains the actual projection and stored value path.
+                                                address, (path @ inputPath @ [projection.Aggregate] @
+                                                          (aggregate.Alternatives |> List.map _.Construction) |> List.distinct))
+                                        | _ -> None)
+                                | _ -> Some(node, path))
+                        match source with
                         | Some({
                                    Kind = SemanticKind.Application(fn, [ argument ])
                                } as address,
@@ -242,7 +264,7 @@ let private readUncached (graph: SemanticGraph) : Reading =
                             finding
                                 call
                                 DeclarationDefect.Invalid
-                                "The receiving entry needs direct current FnPtr.ofFunction transport; aggregate projection is not admitted by this profile."
+                                "The receiving entry needs current FnPtr.ofFunction transport or one immutable record projection with an exact source supplier."
             | _ -> ()
         | _ -> ()
 

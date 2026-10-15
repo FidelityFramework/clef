@@ -87,6 +87,21 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                          | Some hypothesis, [current] -> hypothesis = current
                          | _ -> false))) then None
                     else Some(failure (Some call.Site) call.Participants "The integer result lacks its complete current conditional numeric account and declared behavioral hypothesis."))
+            let projectedCallbackErrors =
+                calls |> List.collect (fun call ->
+                    call.Arguments |> List.choose (fun operand ->
+                        match operand.Abi, PlatformResolution.valuePath graph operand.Actual with
+                        | BoundaryScalar.Entry invocation, Some({ Kind = SemanticKind.FieldGet _; Id = projection }, _) ->
+                            let current =
+                                match closedEntries |> List.filter (fun entry ->
+                                    entry.Invocation = invocation && entry.Transport.Contains operand.Actual) with
+                                | [entry] ->
+                                    Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.nativeProjection graph projection entry.Formation
+                                | _ -> Error "The receiving projection lost its exact closed entry correspondence."
+                            match current with
+                            | Ok () -> None
+                            | Error reason -> Some(failure (Some call.Site) call.Participants reason)
+                        | _ -> None))
             let coverageMembership = coverages |> List.map (fun coverage -> coverage.Site, coverage.Ordinal, coverage.Operand) |> List.sort
             if (imports |> List.map _.Identity |> List.sort) <> domain.Imports || (entries |> List.map _.Formation |> List.sort) <> domain.Entries || (calls |> List.map _.Site |> List.sort) <> domain.Calls || expectedCoverage <> coverageMembership then
                 stale "The boundary domain lost or duplicated an import, call or ordered coverage occurrence."
@@ -161,7 +176,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                             | edge :: tail when key edge = key expected -> Some (List.rev prefix @ tail)
                             | edge :: tail -> remove (edge :: prefix) tail
                         match remove [] remaining with Some remaining -> subtract remaining rest | None -> false
-                let proofErrors = foreignResultErrors @ intrinsicProofErrors @ proofErrors
+                let proofErrors = projectedCallbackErrors @ foreignResultErrors @ intrinsicProofErrors @ proofErrors
                 let expectedIntrinsicProofs = domain.IntrinsicCalls |> List.collect (fun call -> [-1;0;1;2] |> List.map (fun ordinal -> call.Site, ordinal)) |> List.sort
                 let actualIntrinsicProofs = domain.IntrinsicProofs |> List.map (fun proof -> proof.Site, proof.Ordinal) |> List.sort
                 let callbackMembership =

@@ -269,7 +269,6 @@
     <Compile Include="PSGSaturation\SemanticGraph\ProgramInitialization.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Predicates.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MappedBindings.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\CallbackDeclarations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Mmio.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\BorrowedViews.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MappedSpans.fs" />
@@ -339,6 +338,7 @@
     <Compile Include="Baker\Recipes\ProgramInitializationRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
     <Compile Include="Baker\Ingredients\CallableAggregateProjections.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallbackDeclarations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DirectCaptures.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ClosureEnvironments.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\SchemeInstances.fs" />

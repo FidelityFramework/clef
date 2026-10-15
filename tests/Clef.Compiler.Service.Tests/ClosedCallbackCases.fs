@@ -50,7 +50,7 @@ let inline listener handler = makeEntry handler
             | _ -> None) |> Set.ofSeq
 
     // This source fixture stipulates a receiving C contract. It executes no C.
-    let receivingGraph () =
+    let receivingGraphWith wrapper =
         let source =
             """
 module ReceivingCallback
@@ -77,6 +77,16 @@ let main _ =
     0
 """
 
+        let source =
+            if wrapper then
+                let record =
+                    "type NativeRecord = { Handler: FnPtr<int -> int> }\nlet receiveRecord (callback: NativeRecord) = receive callback.Handler\nlet callback (_unused: int) = 7"
+
+                let wrapped = source.Replace("let callback (_unused: int) = 7", record)
+                wrapped.Replace("    receive (FnPtr.ofFunction callback)", "    receiveRecord { Handler = FnPtr.ofFunction callback }")
+            else
+                source
+
         let parse source path =
             match parseStringWithDefaults source path with
             | ParseSuccess input -> input
@@ -97,6 +107,9 @@ let main _ =
 
         DimensionalCases.noErrors result
         result.Graph
+
+    let receivingGraph () = receivingGraphWith false
+    let receivingWrapperGraph () = receivingGraphWith true
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
 type ClosedCallbackTests() =
@@ -304,3 +317,167 @@ let main _ =
                         "NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required."
             )
         | Ok _ -> failwith "Changed receiving hypothesis retained old numeric evidence"
+
+
+    [<Fact>]
+    member _.``Receiving record projection retains original native callback account``() =
+        let graph = ClosedCallbackCases.receivingWrapperGraph ()
+        let association = (read graph).Receiving |> Assert.Single
+
+        let boundary =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
+            | Ok boundary -> boundary
+            | Result.Error errors -> failwithf "Projected callback source publication refused: %A" errors
+
+        let closed = boundary.ClosedEntries.Values |> Assert.Single
+        Assert.Equal(association.Address, closed.Formation)
+        Assert.Contains(association.Operand, closed.Transport)
+
+        let projection =
+            graph.Codata.Value.CallableAggregateValues[association.Operand] |> Assert.Single
+
+        Assert.Equal(CallableAggregateOperation.Project, projection.Operation)
+        Assert.Equal(closed.Formation, projection.Alternatives.Head.Formation)
+        let formal = closed.Formals |> Assert.Single
+        Assert.Equal(Some(ValueRange.twosComplement 64), graph.Nodes[formal].ValueRange)
+
+        match graph.Nodes[association.Operand].Kind with
+        | SemanticKind.FieldGet(_, "Handler") -> ()
+        | kind -> failwithf "The generic declared record field was not retained: %A" kind
+
+    [<Fact>]
+    member _.``Receiving record projection refuses coherently withdrawn supplier``() =
+        let graph = ClosedCallbackCases.receivingWrapperGraph ()
+        let association = (read graph).Receiving |> Assert.Single
+        let facts = graph.Codata.Value
+        let projection = facts.CallableAggregateValues[association.Operand] |> Assert.Single
+        let construction = projection.FormationInputs.Head
+
+        let withdrawn =
+            { graph with
+                Codata =
+                    lazy
+                        { facts with
+                            CallableAggregateValues = facts.CallableAggregateValues.Remove construction
+                        }
+            }
+        // Renew only the held aggregate account. The source Project and native
+        // signature remain intact, so an old-account mismatch cannot kill this test.
+        let account =
+            match Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.author withdrawn association.Operand with
+            | Ok account -> account
+            | Result.Error reason -> failwith reason
+
+        let renewed =
+            { withdrawn.Codata.Value with
+                CallableAggregateDependencies = facts.CallableAggregateDependencies.Add(association.Operand, account)
+            }
+
+        let changed = { withdrawn with Codata = lazy renewed }
+
+        match Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed association.Operand with
+        | Ok _ -> ()
+        | Result.Error reason -> failwithf "Coherent account renewal failed: %s" reason
+
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Result.Error failures ->
+            Assert.Contains(
+                failures,
+                fun failure -> failure.Reason = "BoundaryEmission: The receiving projection has no exact admitted supplying construction."
+            )
+        | Ok _ -> failwith "The receiving projection survived withdrawal of its supplying construction"
+
+
+    [<Fact>]
+    member _.``Receiving record account retains ordinary body but excludes foreign placeholder``() =
+        let graph = ClosedCallbackCases.receivingWrapperGraph ()
+        let association = (read graph).Receiving |> Assert.Single
+        let account = graph.Codata.Value.CallableAggregateDependencies[association.Operand]
+
+        let _, wrapper =
+            graph.Nodes
+            |> Map.toSeq
+            |> Seq.find (fun (_, node) ->
+                match node.Kind with
+                | SemanticKind.Binding("receiveRecord", _, _, _) -> true
+                | _ -> false)
+
+        let implementation = graph.Nodes[wrapper.Children |> List.exactlyOne]
+
+        let body =
+            match implementation.Kind with
+            | SemanticKind.Lambda(_, body, _, _, _) -> body
+            | kind -> failwithf "Expected exact ordinary wrapper declaration: %A" kind
+
+        Assert.Contains(account.Sources, fun source -> source.Node = body)
+
+        let foreignBodies =
+            graph.Edges
+            |> List.choose (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDeclaration declaration -> Some declaration.Body
+                | _ -> None)
+
+        Assert.NotEmpty foreignBodies
+
+        for placeholder in foreignBodies do
+            Assert.DoesNotContain(account.Sources, fun source -> source.Node = placeholder)
+
+        let changed =
+            { graph with
+                Nodes = graph.Nodes.Remove body
+            }
+
+        match Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed association.Operand with
+        | Result.Error reason ->
+            Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).", reason)
+        | Ok _ -> failwith "Withdrawing an ordinary wrapper body retained its old dependency account"
+
+
+    [<Fact>]
+    member _.``Receiving record public replay refuses withdrawn projection account``() =
+        let graph = ClosedCallbackCases.receivingWrapperGraph ()
+
+        let revision =
+            match Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph with
+            | Ok revision -> revision
+            | Result.Error failures -> failwithf "Source callback revision refused: %A" failures
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let call = revision.Emission.Boundary.Calls.Values |> Assert.Single
+
+        let operand =
+            call.Arguments
+            |> List.filter (fun operand ->
+                match operand.Abi with
+                | Fidelity.PSG.BoundaryScalar.Entry _ -> true
+                | _ -> false)
+            |> Assert.Single
+
+        let callable = revision.Emission.Callable
+
+        let withdrawn =
+            { callable with
+                AggregateValues = callable.AggregateValues.Remove operand.Actual
+                AggregateDependencies = callable.AggregateDependencies.Remove operand.Actual
+            }
+
+        let changed =
+            { revision with
+                Codata =
+                    { revision.Codata with
+                        CallableAggregateValues = withdrawn.AggregateValues
+                        CallableAggregateDependencies = withdrawn.AggregateDependencies
+                    }
+                Emission =
+                    { revision.Emission with
+                        Callable = withdrawn
+                    }
+            }
+
+        Assert.Contains(
+            Fidelity.PSG.Integrity.check changed,
+            fun failure ->
+                failure.Part = "Emission.Boundary.Calls.CallbackProjection"
+                && failure.Reason = "The projected callback argument lacks its exact original closed-entry aggregate account."
+        )
