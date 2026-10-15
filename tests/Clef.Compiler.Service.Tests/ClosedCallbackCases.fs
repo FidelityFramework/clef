@@ -600,3 +600,95 @@ let main _ =
                 (ClosedCallbackCases.pairSource "let callback (_first: int) = 7")
         Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8207" && diagnostic.Message.Contains("declares 2 parameters; the binding takes 1"))
         Assert.Empty(result.Graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry -> Some entry | _ -> None))
+
+    [<Fact>]
+    member _.``Mixed receiving callback blocks publish immediate meets without a duplicate return cast``() =
+        let callback =
+            """let callback (first: int) (second: int) =
+    let marker = second
+    if first < 0 then
+        if second > 9223372036854775807 then 4294967295 else 0
+    else 0"""
+
+        let result =
+            ClosedCallbackCases.receivingCheckWith false (fun source ->
+                let paired = ClosedCallbackCases.pairSource callback source
+
+                paired
+                    .Replace("{ Name = \"arg0\"; Type = Integer (Signed, 64)", "{ Name = \"arg0\"; Type = Integer (Signed, 32)")
+                    .Replace("{ Name = \"arg1\"; Type = Integer (Signed, 64)", "{ Name = \"arg1\"; Type = Integer (Unsigned, 64)")
+                    .Replace("ReturnType = Integer (Signed, 64)", "ReturnType = Integer (Unsigned, 32)"))
+
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let receiving = (read graph).Receiving |> Assert.Single
+        let body = receiving.Signature.Body.Value
+
+        let child =
+            match graph.Nodes[body].Kind with
+            | SemanticKind.Sequential values -> List.last values
+            | kind -> failwithf "Expected source block, got %A" kind
+
+        let bodyMeet = graph.Codata.Value.Meets[body] |> Assert.Single
+        Assert.Equal(body, bodyMeet.Consumer)
+        Assert.Equal(child, bodyMeet.Operand)
+        Assert.Equal(64, bodyMeet.From)
+        Assert.Equal(32, bodyMeet.To)
+        Assert.Equal(MeetKind.Truncate, bodyMeet.Adapt)
+        Assert.False(graph.Codata.Value.ReturnMeets.ContainsKey receiving.Lambda)
+
+        let numeric =
+            Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+
+        Assert.Equal(ValueRange.Bounded(0I, 4294967295I), numeric.Values[body].Range)
+        Assert.Equal(SettledSlot.Integer(32, Some "unsigned32"), numeric.Values[body].Slot)
+        Assert.NotEmpty numeric.Values[body].Obligations
+
+        for formal, declared in receiving.Signature.Parameters do
+            Assert.Equal(Some declared.Value.Range, graph.Nodes[formal].ValueRange)
+
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let native = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
+        Assert.True(native.ResultAdaptation.IsNone)
+
+        Assert.Equal(
+            [ 32; 64 ],
+            revision.Emission.Boundary.CallbackInvocations[native.Invocation].Signature.Parameters
+            |> List.map (function
+                | Fidelity.PSG.BoundaryScalar.Integer(bits, _) -> bits
+                | value -> failwithf "%A" value)
+        )
+
+        let publishedMeet = revision.Codata.Meets[Fidelity.PSG.NodeId(NodeId.value body)] |> Assert.Single
+        Assert.Equal(Fidelity.PSG.NodeId(NodeId.value bodyMeet.Consumer), publishedMeet.Consumer)
+        Assert.Equal(Fidelity.PSG.NodeId(NodeId.value bodyMeet.Operand), publishedMeet.Operand)
+        Assert.Equal(bodyMeet.From, publishedMeet.From)
+        Assert.Equal(bodyMeet.To, publishedMeet.To)
+        let withdrawn = { graph with Platform = None }
+
+        let derives =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Meets.derive None withdrawn withdrawn.Codata.Value.Curry
+
+        Assert.False(derives.ContainsKey body)
+
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project withdrawn with
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Reason = "NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required.")
+        | Ok _ -> failwith "Withdrawn selected platform retained current mixed carrier evidence"
+
+    [<Fact>]
+    member _.``Equal native block carrier does not fabricate a forwarding or return meet``() =
+        let graph =
+            ClosedCallbackCases.receivingCheckWith false (fun source ->
+                source.Replace("let callback (_unused: int) = 7", "let callback (_unused: int) =\n    let value = _unused\n    value"))
+
+        DimensionalCases.noErrors graph
+        let receiving = (read graph.Graph).Receiving |> Assert.Single
+        let body = receiving.Signature.Body.Value
+        Assert.False(graph.Graph.Codata.Value.Meets.ContainsKey body)
+        Assert.False(graph.Graph.Codata.Value.ReturnMeets.ContainsKey receiving.Lambda)

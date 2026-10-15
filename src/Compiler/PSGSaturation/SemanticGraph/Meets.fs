@@ -20,6 +20,7 @@
 ///     (Sys.write, read, readline)              indices likewise
 ///   Application, Array.set / Array.create    the value -> the element's settled width
 ///   Set / Binding                            the value -> the binding or cell's held width
+///   Sequential                              immediate final child -> the block's held width
 ///   RecordExpr / TupleExpr                   each field value -> the field's settled representation
 ///   IfThenElse / CaseElimination / Match     each arm's value -> the join's width (the node's)
 ///   Lambda (the return, `returns`)           the body's last value -> the body node's width
@@ -290,6 +291,11 @@ let private nodeMeets (ctx: Ctx) (node: SemanticNode) : Meet list =
         match node.Children with
         | [ valueId ] -> Option.toList (into valueId (nodeWidth graph node.Id))
         | _ -> []
+    | SemanticKind.Sequential values ->
+        values |> List.tryLast |> Option.bind (fun value ->
+            match nodeWidth graph value, nodeWidth graph node.Id with
+            | Some from, Some target -> meet graph node.Id value from target
+            | _ -> None) |> Option.toList
     | SemanticKind.RecordExpr (fields, _) ->
         fields |> List.choose (fun (field, valueId) ->
             match into valueId (fieldSlotWidth graph node.Type field) with
@@ -490,16 +496,39 @@ let lazies (layouts: Map<NodeId, LazyLayout>) (origins: Map<NodeId, NodeId>)
 /// The return meet of every reachable lambda whose body's last value is held at another width
 /// than the body's result.
 let returns (context: PlatformContext option) (graph: SemanticGraph) : Map<NodeId, Meet> =
-    if onFabric context then Map.empty
+    if onFabric context then
+        Map.empty
     else
         graph.Nodes
         |> Map.toList
         |> List.choose (fun (_, node) ->
             match node.Kind with
-            | SemanticKind.Lambda (_, bodyId, _, _, _) when node.IsReachable ->
-                let lastValue = lastValueOf graph bodyId
-                let bodyReachable = SemanticGraph.tryGetNode bodyId graph |> Option.exists (fun b -> b.IsReachable)
-                if lastValue = bodyId || not bodyReachable then None
-                else meetInto graph bodyId lastValue (nodeWidth graph bodyId) |> Option.map (fun m -> node.Id, m)
+            | SemanticKind.Lambda(_, bodyId, _, _, _) when node.IsReachable ->
+                let bodyReachable =
+                    SemanticGraph.tryGetNode bodyId graph |> Option.exists (fun b -> b.IsReachable)
+
+                if not bodyReachable then
+                    None
+                else
+                    match SemanticGraph.tryGetNode bodyId graph with
+                    | Some { Kind = SemanticKind.Sequential _ } ->
+                        // The block already transcribes its immediate-child
+                        // meet. A return reads that held result, not its leaf.
+                        let target =
+                            CallbackDeclarations.numericBoundary graph bodyId
+                            |> Option.map _.Bits
+                            |> Option.orElseWith (fun () -> nodeWidth graph bodyId)
+
+                        match nodeWidth graph bodyId, target with
+                        | Some from, Some target -> meet graph bodyId bodyId from target |> Option.map (fun m -> node.Id, m)
+                        | _ -> None
+                    | _ ->
+                        let lastValue = lastValueOf graph bodyId
+
+                        if lastValue = bodyId then
+                            None
+                        else
+                            meetInto graph bodyId lastValue (nodeWidth graph bodyId)
+                            |> Option.map (fun m -> node.Id, m)
             | _ -> None)
         |> Map.ofList
