@@ -15,7 +15,7 @@ module private ContinuationFields =
             { Name = "unsigned" + string bits; Capability = "native"; Family = "uint"; Bits = bits
               MinMagnitude = "0"; MaxMagnitude = maximum; Boundary = "wrap" }
         let offered = [representation 8 "255"; representation 16 "65535"; representation 64 "18446744073709551615"]
-        { PlatformId = "continuation-placement-test"
+        { PlatformLoading = None; PlatformId = "continuation-placement-test"
           Dimensions = Map.ofList ["Pointer", pointerBits; "Register", 64]
           Representations = offered |> List.map (fun item -> item.Name, item) |> Map.ofList
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None

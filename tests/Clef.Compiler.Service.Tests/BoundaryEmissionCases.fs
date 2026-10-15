@@ -56,7 +56,7 @@ let main _ = if toggle true then 0 else 1
         let unsigned: NumericRepresentation =
             { Name = "uint32"; Capability = "native"; Family = "uint"; Bits = 32
               MinMagnitude = "0"; MaxMagnitude = "4294967295"; Boundary = "wrap" }
-        { PlatformId = "boundary-emission-test"
+        { PlatformLoading = None; PlatformId = "boundary-emission-test"
           Dimensions = Map.ofList ["Pointer", 64; "Register", 32]
           Representations = Map.ofList [signed.Name, signed; unsigned.Name, unsigned]
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None

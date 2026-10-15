@@ -155,7 +155,15 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         selected before emission.Storage.PatternRequirements |> Map.iter (fun _ row -> add row)
         selected before emission.Boundary.Calls |> Map.iter (fun _ row ->
             add row.Import; add row.Callee
-            row.Arguments |> List.iter (fun value -> add value.Actual; add value.Formal))
+            row.Arguments |> List.iter (fun value ->
+                add value.Actual; add value.Formal
+                match value.Abi with BoundaryScalar.Entry invocation -> add invocation | _ -> ()))
+        selected before emission.Boundary.CallbackInvocations |> Map.iter (fun _ row ->
+            add row.Import; add row.Formal; add row.Scope; addMany row.Participants)
+        selected before emission.Boundary.ClosedEntries |> Map.iter (fun _ row ->
+            add row.Operand; add row.Declaration; add row.Implementation; addMany row.Formals; add row.Body
+            add row.Lifetime.Module; add row.Lifetime.Binding; add row.Lifetime.Implementation
+            add row.Invocation; addMany row.Transport; addMany row.Participants)
         selected before emission.Boundary.Imports |> Map.iter (fun _ row -> add row.Identity; add row.Binding; add row.Scope; row.Parameters |> List.iter (fst >> add))
         emission.Numeric.ForeignResultUses
         |> List.filter (fun account -> before.Contains account.Application.Call)
@@ -365,7 +373,7 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
                   EnvironmentResidences = rows storage.EnvironmentResidences
                   ProgramInitializationOrders = rows storage.ProgramInitializationOrders }
       Boundary = { Imports = imports; Loading = if (rows boundary.Entries).IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else boundary.Loading
-                   Entries = rows boundary.Entries; ResultHypotheses = resultHypotheses
+                   Entries = rows boundary.Entries; CallbackInvocations = rows boundary.CallbackInvocations; ClosedEntries = rows boundary.ClosedEntries; ResultHypotheses = resultHypotheses
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)
                    Calls = rows boundary.Calls; ByteViews = rows boundary.ByteViews; StringExtents = rows boundary.StringExtents
                    IntrinsicWriteImports = rows boundary.IntrinsicWriteImports; IntrinsicWrites = rows boundary.IntrinsicWrites

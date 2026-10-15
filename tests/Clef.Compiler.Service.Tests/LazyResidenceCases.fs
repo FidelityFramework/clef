@@ -33,7 +33,7 @@ let main _ =
     let rows role graph = graph.Edges |> List.filter (fun edge -> edge.Role = role)
 
     let platform pointerBits : PlatformContext =
-        { PlatformId = "lazy-runtime-test"
+        { PlatformLoading = None; PlatformId = "lazy-runtime-test"
           Dimensions = Map.ofList ["Pointer", pointerBits; "Register", 64]
           Representations = Map.empty; EndpointReturns = Map.empty
           PlatformLibraryPath = None; PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None

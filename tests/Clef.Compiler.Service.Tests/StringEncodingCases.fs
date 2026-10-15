@@ -23,7 +23,7 @@ module private EncodingFixture =
         let nonnegativeRep: NumericRepresentation =
             { Name = "uint64"; Capability = "native"; Family = "uint"; Bits = 64
               MinMagnitude = "0"; MaxMagnitude = "18446744073709551615"; Boundary = "wrap" }
-        { PlatformId = "encoding-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+        { PlatformLoading = None; PlatformId = "encoding-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
           Representations = [byteRep; integerRep; nonnegativeRep] |> List.map (fun rep -> rep.Name, rep) |> Map.ofList
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = Some "EncodingPlatform.description"
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "encoding-platform.clef")

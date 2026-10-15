@@ -65,10 +65,12 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
         else
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
             let entries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryEntry entry -> Some entry | _ -> None)
+            let callbackInvocations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCallbackInvocation invocation -> Some invocation | _ -> None)
+            let closedEntries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry -> Some entry | _ -> None)
             let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
-                (call.Arguments |> List.mapi (fun ordinal operand -> call.Site, ordinal, operand.Actual)) @
+                (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
                 (call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ -> false | _ -> true) |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
             let foreignResultErrors =
                 let integerCalls = calls |> List.filter (fun call -> match call.Result with Some(BoundaryScalar.Integer _) -> true | _ -> false)
@@ -125,6 +127,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     @ (domain.Declarations |> List.map Declarations.row)
                     @ (imports |> List.map Ingredients.importRow)
                     @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
+                    @ (callbackInvocations |> List.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity))
+                    @ (closedEntries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryClosedEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
                     @ (calls |> List.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call))
                     @ proofRows
                     @ (domain.ByteViews |> List.collect (fun view -> [Bytes.viewRow view; Bytes.storageRow view; Bytes.rewriteRow view]))
@@ -160,7 +164,11 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 let proofErrors = foreignResultErrors @ intrinsicProofErrors @ proofErrors
                 let expectedIntrinsicProofs = domain.IntrinsicCalls |> List.collect (fun call -> [-1;0;1;2] |> List.map (fun ordinal -> call.Site, ordinal)) |> List.sort
                 let actualIntrinsicProofs = domain.IntrinsicProofs |> List.map (fun proof -> proof.Site, proof.Ordinal) |> List.sort
+                let callbackMembership =
+                    (callbackInvocations |> List.map _.Identity |> List.sort) = List.sort domain.CallbackInvocations &&
+                    (closedEntries |> List.map _.Formation |> List.sort) = List.sort domain.ClosedEntries
                 if not proofErrors.IsEmpty then Error (List.rev proofErrors)
+                elif not callbackMembership then stale "The closed native callback or receiving invocation account was withdrawn or duplicated."
                 elif expectedIntrinsicProofs <> actualIntrinsicProofs then stale "The intrinsic boundary lost or duplicated an ordered proof occurrence."
                 elif not completeMembership || not (subtract actual expected) then stale "The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent."
                 else
@@ -168,6 +176,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     let byScope = imports.Values |> Seq.groupBy _.Scope |> Seq.map (fun (scope, imports) -> scope, imports |> Seq.map _.Identity |> Seq.sort |> Seq.toList) |> Map.ofSeq
                     Ok { Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
                          Calls = callsById; ByScope = byScope; ResultHypotheses = domain.ResultHypotheses
+                         CallbackInvocations = callbackInvocations |> List.map (fun invocation -> invocation.Identity, invocation) |> Map.ofList
+                         ClosedEntries = closedEntries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
                          ByteViews = domain.ByteViews |> List.map (fun view -> view.Site, view) |> Map.ofList
                          StringExtents = domain.StringExtents |> List.map (fun extent -> extent.Site, extent) |> Map.ofList
                          IntrinsicWriteImports = domain.IntrinsicImports |> List.map (fun import -> import.Identity, import) |> Map.ofList

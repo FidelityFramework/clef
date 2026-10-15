@@ -18,8 +18,21 @@ type Callback = {
     ReturnsVoid: bool
 }
 
+/// This is a declared receiving association, not code lifetime or a foreign call trace.
+type ReceivingCallback = {
+    Call: NodeId
+    Operand: NodeId
+    Lambda: NodeId
+    Declaration: NodeId
+    Address: NodeId
+    Transport: NodeId list
+    Invocation: DeclaredCallbackInvocation
+    Signature: DeclaredEntrySignature
+}
+
 type Reading = {
     Callbacks: Callback list
+    Receiving: ReceivingCallback list
     NumericBoundaries: Map<NodeId, DeclaredParameter>
     Findings: DeclarationFinding list
 }
@@ -150,6 +163,111 @@ let private readUncached (graph: SemanticGraph) : Reading =
                 | _ -> finding descriptor DeclarationDefect.Malformed "A CallbackDescriptor requires literal Record/Field names and a FunctionDescriptor Signature."
             | _ -> ()
         | _ -> ()
+    let descriptors = readDescriptors graph
+    let mutable receiving = []
+
+    for call in graph.Nodes.Values do
+        match call.Kind with
+        | SemanticKind.Application(callee, actuals) when call.IsReachable ->
+            match target callee with
+            | Some(receiver, _, _) ->
+                for invocation in descriptors.CallbackInvocations do
+                    if
+                        invocation.Declaration.Binding = receiver.Id
+                        && actuals.Length = invocation.Declaration.Formals.Length
+                    then
+                        let actual = actuals[invocation.Parameter]
+
+                        match valuePath graph actual with
+                        | Some({
+                                   Kind = SemanticKind.Application(fn, [ argument ])
+                               } as address,
+                               path) ->
+                            match valueOf graph fn, target argument with
+                            | Some {
+                                       Kind = SemanticKind.Intrinsic {
+                                                                         Module = IntrinsicModule.FnPtr
+                                                                         Operation = "ofFunction"
+                                                                     }
+                                   },
+                              Some(entry, _, lambda) ->
+                                let immutable =
+                                    path
+                                    |> List.forall (fun id ->
+                                        match graph.Nodes.TryFind id |> Option.map _.Kind with
+                                        | Some(SemanticKind.Binding(_, true, _, _)) -> false
+                                        | _ -> true)
+
+                                match recordOf graph invocation.SignatureNode with
+                                | Some(signatureNode, signatureFields) when immutable ->
+                                    let signature, more =
+                                        readEntrySignatureForBinding graph entry signatureNode signatureFields
+
+                                    findings <- List.rev more @ findings
+
+                                    match signature with
+                                    | Some signature when
+                                        more.IsEmpty
+                                        && signature.Body.IsSome
+                                        && (signature.Parameters |> List.forall (snd >> Option.isSome))
+                                        ->
+                                        receiving <-
+                                            {
+                                                Call = call.Id
+                                                Operand = actual
+                                                Lambda = lambda.Id
+                                                Declaration = entry.Id
+                                                Address = address.Id
+                                                Transport = path
+                                                Invocation = invocation
+                                                Signature = signature
+                                            }
+                                            :: receiving
+                                    | _ ->
+                                        finding
+                                            address
+                                            DeclarationDefect.Invalid
+                                            "The receiving entry needs its complete declared scalar signature and source body."
+                                | _ ->
+                                    finding
+                                        address
+                                        DeclarationDefect.Invalid
+                                        "The receiving entry signature or immutable source transport is absent."
+                            | _ ->
+                                finding
+                                    address
+                                    DeclarationDefect.Invalid
+                                    "The receiving entry must be FnPtr.ofFunction of a closed named module function."
+                        | _ ->
+                            finding
+                                call
+                                DeclarationDefect.Invalid
+                                "The receiving entry needs direct current FnPtr.ofFunction transport; aggregate projection is not admitted by this profile."
+            | _ -> ()
+        | _ -> ()
+
+    let receiving =
+        List.rev receiving
+        |> List.distinctBy (fun entry -> entry.Call, entry.Address, entry.Invocation.Quote)
+
+    let signatureKey (signature: DeclaredEntrySignature) =
+        signature.Parameters
+        |> List.map (snd >> Option.map (fun parameter -> parameter.Bits, parameter.Range)),
+        signature.Return |> Option.map (fun result -> result.Bits, result.Range)
+
+    for lambda, entries in receiving |> List.groupBy _.Lambda do
+        if
+            entries
+            |> List.map (fun entry -> signatureKey entry.Signature)
+            |> List.distinct
+            |> List.length
+            <> 1
+        then
+            finding
+                graph.Nodes[lambda]
+                DeclarationDefect.Ambiguous
+                "One receiving callback implementation has incompatible native entry signatures."
+
     let key callback =
         callback.ReturnsVoid,
         callback.Function.Parameters |> List.map (fun (_, d) -> d |> Option.map (fun p -> p.Bits, p.Range)),
@@ -167,7 +285,16 @@ let private readUncached (graph: SemanticGraph) : Reading =
             | Some body, Some result -> (body, result) :: parameters
             | _ -> parameters)
         |> Map.ofList
+    let numeric =
+        receiving |> List.fold (fun numeric entry ->
+            let formals = entry.Signature.Parameters |> List.choose (fun (id, declared) -> declared |> Option.map (fun declared -> id, declared))
+            let result =
+                match entry.Signature.Body, entry.Signature.Return with
+                | Some body, Some declared -> [body, declared]
+                | _ -> []
+            (formals @ result) |> List.fold (fun numeric (id, declared) -> Map.add id declared numeric) numeric) numeric
     { Callbacks = callbacks
+      Receiving = receiving
       NumericBoundaries = numeric
       Findings = List.rev findings }
 

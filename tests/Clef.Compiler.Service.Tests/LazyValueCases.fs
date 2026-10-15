@@ -9,7 +9,7 @@ module LazyElaboration = Clef.Compiler.Nanopass.LazyElaboration
 
 module private LazyFixture =
     let platform pointerBits : PlatformContext =
-        { PlatformId = "lazy-placement-test"
+        { PlatformLoading = None; PlatformId = "lazy-placement-test"
           Dimensions = Map.ofList ["Pointer", pointerBits; "Register", 64]
           Representations = Map.empty; EndpointReturns = Map.empty
           PlatformLibraryPath = None; PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None

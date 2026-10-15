@@ -34,7 +34,7 @@ module private NominalFixture =
     let ty moduleName name graph = (definitions graph)[{Module = [moduleName]; Name = name}]
 
     let context bits : PlatformContext =
-        { PlatformId = "nominal-identity-test"; Dimensions = Map.ofList ["Pointer", bits; "Register", bits]
+        { PlatformLoading = None; PlatformId = "nominal-identity-test"; Dimensions = Map.ofList ["Pointer", bits; "Register", bits]
           Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
           PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None
           PlatformSourcePaths = Set.empty; Predicates = Map.empty; FreestandingStartup = None

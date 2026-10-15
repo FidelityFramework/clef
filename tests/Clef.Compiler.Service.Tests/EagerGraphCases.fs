@@ -35,7 +35,7 @@ module private EagerGraph =
                 { Name = name; Family = family; Bits = width; Capability = "native"
                   MinMagnitude = low; MaxMagnitude = high; Boundary = "wrap" }: NumericRepresentation)
         let platform: PlatformContext =
-            { PlatformId = "demand-test"; Dimensions = Map.ofList ["Pointer", bits; "Register", bits]
+            { PlatformLoading = None; PlatformId = "demand-test"; Dimensions = Map.ofList ["Pointer", bits; "Register", bits]
               Representations = representations |> List.map (fun rep -> rep.Name, rep) |> Map.ofList
               EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = Some "DemandPlatform.description"
               PlatformArchitecture = None; PlatformOS = None

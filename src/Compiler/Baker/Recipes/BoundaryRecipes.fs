@@ -83,12 +83,17 @@ let private scalarRange = function
     | BoundaryScalar.Boolean -> ValueRange.boolean
     | BoundaryScalar.Integer(bits, true) -> ValueRange.twosComplement bits
     | BoundaryScalar.Integer(bits, false) -> ValueRange.unsignedOf bits
+    | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric range."
 
-let private scalarBits = function BoundaryScalar.Boolean -> 1 | BoundaryScalar.Integer(bits, _) -> bits
+let private scalarBits = function
+    | BoundaryScalar.Boolean -> 1
+    | BoundaryScalar.Integer(bits, _) -> bits
+    | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric width."
 
 let private supportedType scalar ty =
     match scalar, Types.tryGetNTUKind ty with
     | BoundaryScalar.Boolean, Some NTUKind.NTUbool -> true
+    | BoundaryScalar.Entry _, Some NTUKind.NTUfnptr -> true
     | BoundaryScalar.Integer _, Some (NTUKind.NTUint _)
     | BoundaryScalar.Integer _, Some (NTUKind.NTUuint _) -> true
     | _ -> false
@@ -102,69 +107,238 @@ let private sourceTypes (graph: SemanticGraph) ids =
 
 let private bindingPath = BoundaryDeclarations.bindingPath
 
-let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descriptors) (binding: SemanticNode) library symbol = checked' {
-    let! scope = binding.Parent |> needed "The external binding has no source module owner."
-    do! require (graph.Nodes.TryFind scope |> Option.exists (fun node -> match node.Kind with SemanticKind.ModuleDef(_, members) -> List.contains binding.Id members | _ -> false))
-            "The external binding is not a structural member of its declared module occurrence."
-    let! declarationPath, sourceFormals, body = bindingPath graph binding.Id
-    let! descriptor =
-        match descriptors.Functions |> List.filter (fun descriptor -> descriptor.Body = Some body) with
-        | [descriptor] -> Ok descriptor
-        | [] -> Error "The external binding has no matching FunctionDescriptor."
-        | _ -> Error "The external binding has duplicate FunctionDescriptor declarations."
-    let! _, fields = Declarations.recordOf graph descriptor.Node |> needed "The FunctionDescriptor no longer names a source record."
-    let! callingId = field "CallingConvention" fields |> needed "The FunctionDescriptor has no declared calling convention."
-    let! convention = Declarations.caseOf graph callingId |> Option.map (fun (_, name, _) -> name) |> needed "The calling convention is not a declared case."
-    do! require (convention = "CDecl") $"Calling convention '{convention}' is not admitted by the scalar C contract."
-    do! require (descriptor.CName = symbol) "FunctionDescriptor.CName disagrees with FidelityExtern.Symbol."
-    do! require (descriptor.References.IsEmpty && descriptor.PointerReferences.IsEmpty && descriptor.RecordReferences.IsEmpty)
-            "Reference arguments require source-settled boundary adapters; scalar C publication cannot substitute a pointer."
-    let parameters =
-        descriptor.Parameters |> List.map (fun (formal, declared) -> checked' {
-            let! declared = declared |> needed "A boundary parameter has no admitted integer or boolean declaration; pointer and aggregate values require a source-settled adapter."
-            let! _, parameterFields = Declarations.recordOf graph declared.Node |> needed "A boundary parameter declaration is missing."
-            let! passing = field "PassBy" parameterFields |> needed "A scalar boundary parameter must explicitly declare PassBy.Value."
-            do! require (Declarations.caseOf graph passing |> Option.exists (fun (_, name, _) -> name = "Value"))
-                    "A scalar boundary parameter must explicitly declare PassBy.Value."
-            let! typeId = field "Type" parameterFields |> needed "A boundary parameter has no TypeRef."
-            let! scalar = typeRef graph typeId
-            let! scalar = scalar |> needed "Void is a result convention, not a boundary parameter."
-            let! formalNode = graph.Nodes.TryFind formal |> needed "A boundary formal is absent from the source graph."
-            do! require (supportedType scalar formalNode.Type) "A boundary formal's source kind disagrees with its declared scalar ABI."
-            do! require (declared.Bits = scalarBits scalar && declared.Range = scalarRange scalar) "The descriptor's scalar range and TypeRef disagree."
-            return formal, scalar }) |> collect
-    let! parameters = parameters
-    let retainedFormals = sourceFormals |> List.map (fun (_, _, id) -> id)
-    let erasedUnitFormals =
-        match sourceFormals, parameters with
-        | [(_, ty, id)], [] when Types.tryGetNTUKind ty = Some NTUKind.NTUunit -> [id]
-        | _ -> []
-    do! require ((parameters |> List.map fst) @ erasedUnitFormals = retainedFormals)
-            "The descriptor's formal order differs from its exact source function declaration."
-    let! returnId = field "ReturnType" fields |> needed "The FunctionDescriptor has no ReturnType."
-    let! result = typeRef graph returnId
-    let! bodyNode = graph.Nodes.TryFind body |> needed "The external binding body is absent from the source graph."
-    do! require (match result with Some scalar -> supportedType scalar bodyNode.Type | None -> Types.tryGetNTUKind bodyNode.Type = Some NTUKind.NTUunit)
-            "The binding result's source kind disagrees with its declared boundary result."
-    let descriptorBindings =
-        graph.Nodes.Values |> Seq.choose (fun node ->
-            match node.Kind, node.Children with
-            | SemanticKind.Binding _, children when node.Parent = Some scope ->
-                children |> List.tryLast |> Option.bind (Declarations.recordOf graph)
-                |> Option.bind (fun (record, _) -> if record.Id = descriptor.Node then Some node.Id else None)
-            | _ -> None) |> Set.ofSeq
-    let! descriptorBinding =
-        match Set.toList descriptorBindings with
-        | [binding] -> Ok binding
-        | _ -> Error "The FunctionDescriptor must retain exactly one source declaration binding."
-    do! require (graph.Nodes.TryFind scope |> Option.exists (fun node -> match node.Kind with SemanticKind.ModuleDef(_, members) -> List.contains descriptorBinding members | _ -> false))
-            "The FunctionDescriptor binding is not a member of its exact source module occurrence."
-    let! facts = declarationFacts graph descriptorBinding
-    let participants = Set.unionMany [facts |> Map.keys |> Set.ofSeq; descriptorBindings; Set.ofList (scope :: body :: retainedFormals @ declarationPath)]
-    let! types = sourceTypes graph (body :: retainedFormals)
-    return { Identity = descriptor.Node; Binding = binding.Id; Scope = scope; Library = library; Symbol = symbol
-             CallingConvention = convention; DeclarationPath = declarationPath; Parameters = parameters; Result = result; Participants = participants; SourceTypes = types; DeclarationFacts = facts }
-}
+let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descriptors) (binding: SemanticNode) library symbol =
+    checked' {
+        let! scope =
+            binding.Parent |> needed "The external binding has no source module owner."
+
+        do!
+            require
+                (graph.Nodes.TryFind scope
+                 |> Option.exists (fun node ->
+                     match node.Kind with
+                     | SemanticKind.ModuleDef(_, members) -> List.contains binding.Id members
+                     | _ -> false))
+                "The external binding is not a structural member of its declared module occurrence."
+
+        let! declarationPath, sourceFormals, body = bindingPath graph binding.Id
+
+        let! descriptor =
+            match
+                descriptors.Functions
+                |> List.filter (fun descriptor -> descriptor.Body = Some body)
+            with
+            | [ descriptor ] -> Ok descriptor
+            | [] -> Error "The external binding has no matching FunctionDescriptor."
+            | _ -> Error "The external binding has duplicate FunctionDescriptor declarations."
+
+        let! _, fields =
+            Declarations.recordOf graph descriptor.Node
+            |> needed "The FunctionDescriptor no longer names a source record."
+
+        let! callingId =
+            field "CallingConvention" fields
+            |> needed "The FunctionDescriptor has no declared calling convention."
+
+        let! convention =
+            Declarations.caseOf graph callingId
+            |> Option.map (fun (_, name, _) -> name)
+            |> needed "The calling convention is not a declared case."
+
+        do! require (convention = "CDecl") $"Calling convention '{convention}' is not admitted by the scalar C contract."
+        do! require (descriptor.CName = symbol) "FunctionDescriptor.CName disagrees with FidelityExtern.Symbol."
+
+        do!
+            require
+                (descriptor.References.IsEmpty
+                 && descriptor.PointerReferences.IsEmpty
+                 && descriptor.RecordReferences.IsEmpty)
+                "Reference arguments require source-settled boundary adapters; scalar C publication cannot substitute a pointer."
+
+        let! parameterRecords =
+            field "Parameters" fields
+            |> Option.bind (Declarations.elementsOf graph)
+            |> needed "The boundary descriptor has no complete ordered ParameterInfo vector."
+
+        do!
+            require
+                (parameterRecords.Length = descriptor.Parameters.Length)
+                "The boundary descriptor's native ordinal vector is incomplete."
+
+        let parameters =
+            descriptor.Parameters
+            |> List.mapi (fun ordinal (formal, declared) ->
+                checked' {
+                    let! _, parameterFields =
+                        Declarations.recordOf graph parameterRecords[ordinal]
+                        |> needed "A boundary parameter declaration is missing."
+
+                    let! passing =
+                        field "PassBy" parameterFields
+                        |> needed "A boundary parameter must explicitly declare PassBy.Value."
+
+                    do!
+                        require
+                            (Declarations.caseOf graph passing
+                             |> Option.exists (fun (_, name, _) -> name = "Value"))
+                            "A boundary parameter must explicitly declare PassBy.Value."
+
+                    let! typeId =
+                        field "Type" parameterFields |> needed "A boundary parameter has no TypeRef."
+
+                    let! formalNode =
+                        graph.Nodes.TryFind formal
+                        |> needed "A boundary formal is absent from the source graph."
+
+                    match Declarations.readTypeRef graph typeId |> Result.mapError _.Message with
+                    | Ok(Declarations.DeclaredTypeRef.Entry selector) ->
+                        let! invocation =
+                            match
+                                descriptors.CallbackInvocations
+                                |> List.filter (fun invocation ->
+                                    invocation.Declaration.Binding = binding.Id
+                                    && invocation.AbiDescriptor = descriptor.Node
+                                    && invocation.Parameter = ordinal
+                                    && invocation.Formal = formal
+                                    && (graph.Nodes.TryFind invocation.DescriptorBinding
+                                        |> Option.bind (Declarations.qualifiedExportName graph))
+                                        =
+                                        Some selector)
+                            with
+                            | [ invocation ] -> Ok invocation
+                            | _ ->
+                                Error
+                                    "TypeRef.Entry requires one exact current receiving callback invocation contract at its original native ordinal."
+
+                        do!
+                            require
+                                (Types.tryGetNTUKind formalNode.Type = Some NTUKind.NTUfnptr)
+                                "The receiving callback formal must be a nonnullable typed FnPtr."
+
+                        return formal, BoundaryScalar.Entry invocation.Quote
+                    | Error reason -> return! Error reason
+                    | _ ->
+                        let! declared =
+                            declared
+                            |> needed
+                                "A boundary parameter has no admitted integer or boolean declaration; pointer and aggregate values require a source-settled adapter."
+
+                        let! scalar = typeRef graph typeId
+
+                        let! scalar =
+                            scalar |> needed "Void is a result convention, not a boundary parameter."
+
+                        do!
+                            require
+                                (supportedType scalar formalNode.Type)
+                                "A boundary formal's source kind disagrees with its declared scalar ABI."
+
+                        do!
+                            require
+                                (declared.Bits = scalarBits scalar && declared.Range = scalarRange scalar)
+                                "The descriptor's scalar range and TypeRef disagree."
+
+                        return formal, scalar
+                })
+            |> collect
+
+        let! parameters = parameters
+        let retainedFormals = sourceFormals |> List.map (fun (_, _, id) -> id)
+
+        let erasedUnitFormals =
+            match sourceFormals, parameters with
+            | [ (_, ty, id) ], [] when Types.tryGetNTUKind ty = Some NTUKind.NTUunit -> [ id ]
+            | _ -> []
+
+        do!
+            require
+                ((parameters |> List.map fst) @ erasedUnitFormals = retainedFormals)
+                "The descriptor's formal order differs from its exact source function declaration."
+
+        let! returnId =
+            field "ReturnType" fields |> needed "The FunctionDescriptor has no ReturnType."
+
+        let! result = typeRef graph returnId
+
+        let! bodyNode =
+            graph.Nodes.TryFind body
+            |> needed "The external binding body is absent from the source graph."
+
+        do!
+            require
+                (match result with
+                 | Some scalar -> supportedType scalar bodyNode.Type
+                 | None -> Types.tryGetNTUKind bodyNode.Type = Some NTUKind.NTUunit)
+                "The binding result's source kind disagrees with its declared boundary result."
+
+        let descriptorBindings =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind, node.Children with
+                | SemanticKind.Binding _, children when node.Parent = Some scope ->
+                    children
+                    |> List.tryLast
+                    |> Option.bind (Declarations.recordOf graph)
+                    |> Option.bind (fun (record, _) -> if record.Id = descriptor.Node then Some node.Id else None)
+                | _ -> None)
+            |> Set.ofSeq
+
+        let! descriptorBinding =
+            match Set.toList descriptorBindings with
+            | [ binding ] -> Ok binding
+            | _ -> Error "The FunctionDescriptor must retain exactly one source declaration binding."
+
+        do!
+            require
+                (graph.Nodes.TryFind scope
+                 |> Option.exists (fun node ->
+                     match node.Kind with
+                     | SemanticKind.ModuleDef(_, members) -> List.contains descriptorBinding members
+                     | _ -> false))
+                "The FunctionDescriptor binding is not a member of its exact source module occurrence."
+
+        let invocationRoots =
+            descriptors.CallbackInvocations
+            |> List.filter (fun invocation -> invocation.Declaration.Binding = binding.Id)
+            |> List.collect (fun invocation -> [ invocation.DescriptorBinding; invocation.ScopeBinding ])
+
+        let! facts =
+            (descriptorBinding :: invocationRoots)
+            |> List.distinct
+            |> List.fold
+                (fun state root ->
+                    state
+                    |> Result.bind (fun facts ->
+                        declarationFacts graph root
+                        |> Result.map (fun next -> Map.fold (fun facts id fact -> Map.add id fact facts) facts next)))
+                (Ok Map.empty)
+
+        let participants =
+            Set.unionMany
+                [
+                    facts |> Map.keys |> Set.ofSeq
+                    descriptorBindings
+                    Set.ofList (scope :: body :: retainedFormals @ declarationPath)
+                ]
+
+        let! types = sourceTypes graph (body :: retainedFormals)
+
+        return
+            {
+                Identity = descriptor.Node
+                Binding = binding.Id
+                Scope = scope
+                Library = library
+                Symbol = symbol
+                CallingConvention = convention
+                DeclarationPath = declarationPath
+                Parameters = parameters
+                Result = result
+                Participants = participants
+                SourceTypes = types
+                DeclarationFacts = facts
+            }
+    }
 
 let private adaptation (graph: SemanticGraph) site operand sourceBits targetBits inputRange = checked' {
     let matches = graph.Codata.Value.Meets.TryFind site |> Option.defaultValue [] |> List.filter (fun meet -> meet.Operand = operand) |> List.distinct
@@ -189,6 +363,7 @@ let private adaptation (graph: SemanticGraph) site operand sourceBits targetBits
 let private sourceWidth graph id scalar =
     match scalar with
     | BoundaryScalar.Boolean -> Ok 1
+    | BoundaryScalar.Entry _ -> Error "Native entry arguments require their declared code signature, not a numeric width."
     | BoundaryScalar.Integer _ -> checked' {
         let! representation = RangeAnalysis.selectedRepresentation graph id |> needed "The scalar occurrence has no source-selected offered integer representation."
         do! require (NumericRepresentation.isOffered representation && (representation.Family = "int" || representation.Family = "uint"))
@@ -218,9 +393,13 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
             do! require (supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
             do! require (import.SourceTypes.TryFind formal = Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type))
                     "The actual boundary argument does not retain its formal's native kind and dimension identity."
-            let! range = match abi with BoundaryScalar.Boolean -> Ok ValueRange.boolean | _ -> node.ValueRange |> needed "The actual scalar argument lacks an established source range."
-            let! sourceBits = sourceWidth graph actual abi
-            let! meet = adaptation graph site.Id actual sourceBits (scalarBits abi) range
+            let! meet =
+                match abi with
+                | BoundaryScalar.Entry _ -> Ok None
+                | _ -> checked' {
+                    let! range = match abi with BoundaryScalar.Boolean -> Ok ValueRange.boolean | _ -> node.ValueRange |> needed "The actual scalar argument lacks an established source range."
+                    let! sourceBits = sourceWidth graph actual abi
+                    return! adaptation graph site.Id actual sourceBits (scalarBits abi) range }
             return { Actual = actual; Formal = formal; Abi = abi; Adaptation = meet } }) |> collect
     let! resultAdaptation =
         match import.Result with
@@ -708,6 +887,281 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 | _ -> imports, calls, entries, errors)
             (Map.empty, Map.empty, Map.empty, initialErrors)
 
+    let callbacks = CallbackDeclarations.read graph
+    let scoped = ScopedDeclarations.read graph
+
+    let numeric =
+        lazy
+            (NumericPublication.project graph
+             |> Result.mapError (fun _ -> "A closed C entry requires current source numeric carrier and proof settlement."))
+
+    let invocationAt (import: BoundaryImport) identity =
+        checked' {
+            let! source =
+                match
+                    descriptors.CallbackInvocations
+                    |> List.filter (fun source -> source.Quote = identity && source.AbiDescriptor = import.Identity)
+                with
+                | [ source ] -> Ok source
+                | _ -> Error "The receiving invocation quote no longer matches its exact import."
+
+            do!
+                require
+                    (scoped.Findings.IsEmpty
+                     && scoped.Parameters.Contains source.Formal
+                     && (scoped.Participants.TryFind source.Formal
+                         |> Option.exists (fun participants ->
+                             participants.Contains source.ScopeBinding
+                             && participants.Contains source.Scope
+                             && participants.Contains source.Declaration.Binding)))
+                    "The receiving invocation requires its exact current scoped activation declaration and native formal."
+
+            let integer =
+                function
+                | BAREWire.Descriptors.TypeRef.Integer(signed, bits) ->
+                    Ok(BoundaryScalar.Integer(bits, (signed = BAREWire.Descriptors.Signedness.Signed)))
+                | _ -> Error "The closed C entry profile requires scalar integer parameters and result."
+
+            let! parameters =
+                source.Contract.Signature.Parameters
+                |> Array.toList
+                |> List.map (fun parameter -> integer parameter.Type)
+                |> collect
+
+            let! result = integer source.Contract.Signature.ReturnType
+
+            do!
+                require
+                    (parameters.Length = 1
+                     && source.Contract.Signature.CallingConvention = BAREWire.Descriptors.CallConv.CDecl)
+                    "The first closed C entry profile requires one scalar integer native formal and CDecl."
+
+            let participants = Set.ofList source.Participants
+
+            return source, ({
+                Identity = source.Quote
+                Import = import.Identity
+                Parameter = source.Parameter
+                Formal = source.Formal
+                Scope = source.Scope
+                Contract = source.Contract
+                Signature = { Parameters = parameters; Result = Some result; CallingConvention = "CDecl" }
+                Participants = participants
+            }: BoundaryCallbackInvocation)
+        }
+
+    let closedAt (call: BoundaryCall) (operand: BoundaryOperand) identity =
+        checked' {
+            let! import =
+                imports.TryFind call.Import
+                |> needed "The receiving call lost its admitted import."
+
+            let! source, invocation = invocationAt import identity
+
+            do!
+                require
+                    (source.Formal = operand.Formal
+                     && (call.Arguments |> List.tryItem source.Parameter) = Some operand)
+                    "The receiving callback actual differs from its original native formal and ordinal."
+
+            let! formation =
+                Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph operand.Actual
+                |> needed "A receiving callback requires direct current FnPtr.ofFunction of a capture-free immutable module declaration."
+
+            let! evidence =
+                match
+                    callbacks.Receiving
+                    |> List.filter (fun evidence ->
+                        evidence.Call = call.Site
+                        && evidence.Operand = operand.Actual
+                        && evidence.Address = formation.Formation
+                        && evidence.Invocation.Quote = identity)
+                with
+                | [ evidence ] -> Ok evidence
+                | _ -> Error "The receiving callback lost its exact current call, source entry and signature association."
+
+            let! originalOperand =
+                match graph.Nodes.TryFind formation.Formation with
+                | Some { Kind = SemanticKind.Application(_, [argument]) } -> Ok argument
+                | _ -> Error "The closed entry lost its original ofFunction operand."
+            let entry = formation.Entry
+            let implementation = entry.Lifetime.Implementation
+            let formals = entry.Parameters |> List.map (fun (_, _, formal) -> formal)
+
+            do!
+                require
+                    (evidence.Declaration = entry.Lifetime.Binding
+                     && evidence.Lambda = implementation
+                     && evidence.Signature.Body = Some entry.Result
+                     && (evidence.Signature.Parameters |> List.map fst) = formals)
+                    "The receiving callback differs from its original complete module declaration."
+
+            let entryPurposes =
+                purposes.TryFind formation.Formation |> Option.defaultValue Set.empty
+
+            do!
+                require
+                    (entryPurposes |> Set.exists (snd >> (=) DeclRoot.LibraryExport) |> not)
+                    "A closed C callback exposed through an exported library requires an L3 host entry contract."
+
+            do!
+                require
+                    (entryPurposes |> Set.exists (snd >> (=) DeclRoot.EntryPoint))
+                    "The closed C callback requires a hosted executable program entry activation."
+
+            let! carrier =
+                graph.Codata.Value.CallableCarriers.TryFind formation.Formation
+                |> needed "The source closed entry has no current native callable carrier."
+
+            let! contractId =
+                carrier.Contract
+                |> Result.mapError (fun reason -> "The source closed entry has no current callable contract: " + reason)
+
+            let! contract =
+                graph.Codata.Value.CallableContracts.TryFind contractId
+                |> needed "The source closed entry callable contract was withdrawn."
+
+            do!
+                require
+                    (carrier.Kind = CallableKind.NativeEntry
+                     && carrier.Formation = formation.Formation
+                     && carrier.Implementation = implementation
+                     && carrier.OmittedParameters.IsEmpty
+                     && (carrier.Parameters |> List.map (fun (_, _, formal) -> formal)) = formals
+                     && Clef.Compiler.Baker.Ingredients.CallableContracts.sourcePremisesCurrent graph contract
+                     && (match contract.Convention with
+                         | CallableConvention.CompilerOwnedPortable convention -> convention.CodeLifetime = entry.Lifetime
+                         | _ -> false))
+                    "The closed entry lost its existing source-owned code lifetime or complete native formal convention."
+
+            let! _ = numeric.Value
+
+            let currentCarrier id =
+                match
+                    graph.Edges
+                    |> List.choose (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericCarrier value when value.Site = id -> Some value
+                        | _ -> None)
+                with
+                | [ carrier ] -> Ok carrier
+                | _ -> Error "A native entry boundary lost its complete current source numeric carrier."
+
+            do!
+                require
+                    (formals.Length = invocation.Signature.Parameters.Length)
+                    "The closed callback native signature differs from its complete source formal vector."
+
+            let! parameterCarriers = formals |> List.map currentCarrier |> collect
+            let! parameterAdaptations =
+                List.zip3 formals invocation.Signature.Parameters parameterCarriers
+                |> List.map (fun (formal, abi, carrier) ->
+                    checked' {
+                        let! bits = sourceWidth graph formal abi
+
+                        let! capacity =
+                            carrier.Representation
+                            |> Option.bind Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.RangeSources.declaredRange
+                            |> needed "A native incoming formal has no selected finite representation."
+
+                        do!
+                            require
+                                (carrier.Range = scalarRange abi
+                                 && ValueRange.contains capacity (scalarRange abi))
+                                "A native incoming formal must retain its full declared ABI domain, independent of observed source callers."
+
+                        return! adaptation graph implementation formal (scalarBits abi) bits (scalarRange abi)
+                    })
+                |> collect
+
+            let! returned =
+                invocation.Signature.Result
+                |> needed "The closed C profile requires a scalar native return."
+
+            let! resultCarrier = currentCarrier entry.Result
+
+            do!
+                require
+                    (ValueRange.contains (scalarRange returned) resultCarrier.Range)
+                    "The closed callback result does not fit its declared native return ABI."
+
+            let resultAdaptation = graph.Codata.Value.ReturnMeets.TryFind implementation
+            let! resultBits = sourceWidth graph entry.Result returned
+
+            do!
+                require
+                    (resultBits = scalarBits returned)
+                    "The closed callback result requires its source-settled native return slot, not a guessed extension."
+
+            let transport =
+                Set.ofList (formation.Formation :: originalOperand :: operand.Actual :: evidence.Transport)
+
+            let participants =
+                Set.unionMany
+                    [
+                        Set.singleton invocation.Identity
+                        Set.singleton call.Site
+                        transport
+                        Set.ofList (
+                            entry.Result :: implementation :: formals
+                            @ Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.lifetimeNodes entry.Lifetime
+                        )
+                        Set.singleton contract.Identity
+                    ]
+
+            return
+                invocation,
+                ({
+                    Formation = formation.Formation
+                    Operand = originalOperand
+                    Declaration = entry.Lifetime.Binding
+                    Implementation = implementation
+                    Formals = formals
+                    Body = entry.Result
+                    Lifetime = entry.Lifetime
+                    Invocation = identity
+                    ParameterAdaptations = parameterAdaptations
+                    ResultAdaptation = resultAdaptation
+                    Transport = transport
+                    Participants = participants
+                }
+                : BoundaryClosedEntry)
+        }
+
+    let callbackInvocations, closedEntries, errors =
+        calls.Values
+        |> Seq.fold
+            (fun (invocations, entries, errors) call ->
+                call.Arguments
+                |> List.fold
+                    (fun (invocations, entries, errors) operand ->
+                        match operand.Abi with
+                        | BoundaryScalar.Entry identity ->
+                            match closedAt call operand identity with
+                            | Ok(invocation, entry) ->
+                                match Map.tryFind entry.Formation entries with
+                                | Some previous when previous.Invocation <> entry.Invocation ->
+                                    invocations,
+                                    entries,
+                                    (call.Site,
+                                     call.Participants,
+                                     "One closed entry formation cannot acquire different receiving invocation contracts.")
+                                    :: errors
+                                | Some previous ->
+                                    let entry =
+                                        { entry with
+                                            Transport = Set.union previous.Transport entry.Transport
+                                            Participants = Set.union previous.Participants entry.Participants
+                                        }
+
+                                    Map.add invocation.Identity invocation invocations, Map.add entry.Formation entry entries, errors
+                                | None ->
+                                    Map.add invocation.Identity invocation invocations, Map.add entry.Formation entry entries, errors
+                            | Error reason -> invocations, entries, (call.Site, call.Participants, reason) :: errors
+                        | _ -> invocations, entries, errors)
+                    (invocations, entries, errors))
+            (Map.empty, Map.empty, errors)
+
     let errors =
         imports.Values |> Seq.groupBy _.Symbol |> Seq.fold (fun errors (_, declarations) ->
             match Seq.toList declarations with
@@ -740,8 +1194,11 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 else errors) errors) errors) errors
     let proofs, errors = calls |> Map.fold (fun (enrichment, errors) _ call ->
         let argumentRanges = call.Arguments |> List.mapi (fun ordinal operand ->
-            let input = match operand.Abi with BoundaryScalar.Boolean -> ValueRange.boolean | _ -> graph.Nodes[operand.Actual].ValueRange |> Option.defaultValue ValueRange.Unbounded
-            ordinal, operand.Actual, input, scalarRange operand.Abi)
+            match operand.Abi with
+            | BoundaryScalar.Entry _ -> None
+            | _ ->
+                let input = match operand.Abi with BoundaryScalar.Boolean -> ValueRange.boolean | _ -> graph.Nodes[operand.Actual].ValueRange |> Option.defaultValue ValueRange.Unbounded
+                Some(ordinal, operand.Actual, input, scalarRange operand.Abi)) |> List.choose id
         // Integer result narrowing belongs to Numeric's conditional foreign
         // account. The C carrier is an ABI premise, not a behavioral enclosure.
         let resultRange = call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ -> false | _ -> true) |> List.map (fun abi ->
@@ -774,6 +1231,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
           Loading = if entries.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else loading |> Result.toOption
           Entries = Map.keys entries |> Seq.toList
+          CallbackInvocations = Map.keys callbackInvocations |> Seq.toList
+          ClosedEntries = Map.keys closedEntries |> Seq.toList
           ByteViews = intrinsic.Views; StringExtents = intrinsic.Extents; IntrinsicDeclarations = intrinsic.Declarations
           StringOriginRelations = originRelations
           StringOriginRoots = if observedOrigins then Some graph.DeclarationRoots else None
@@ -797,6 +1256,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
          { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
+        @ (callbackInvocations.Values |> Seq.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity) |> Seq.toList)
+        @ (closedEntries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryClosedEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)

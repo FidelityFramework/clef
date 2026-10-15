@@ -16,7 +16,7 @@ module SequenceProgramFixture =
             { Name = name; Family = family; Bits = bits; MinMagnitude = minimum; MaxMagnitude = maximum
               Capability = "native"; Boundary = "wrap" }
         let representations = [integer "signed64" "int" 64 "-9223372036854775808" "9223372036854775807"; integer "uint8" "uint" 8 "0" "255"]
-        { PlatformId = "sequence-program"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+        { PlatformLoading = None; PlatformId = "sequence-program"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
           Representations = representations |> List.map (fun value -> value.Name, value) |> Map.ofList
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = Some "SequenceProgram.description"
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton file

@@ -194,7 +194,7 @@ type Reading = {
 /// quotation to the expression it quotes, through a VarRef to its binding's
 /// value, and through a conversion application (`int64 X`) to its operand.
 /// Stops at the first node that is none of those.
-let private valuePath (graph: SemanticGraph) (id: NodeId) : (SemanticNode * NodeId list) option =
+let valuePath (graph: SemanticGraph) (id: NodeId) : (SemanticNode * NodeId list) option =
     let rec follow seen path id =
         // A cyclic declaration has no settled literal value. Keep its graph
         // intact for the owning declaration/dependency diagnostic.
@@ -257,7 +257,7 @@ let recordOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * (string * Nod
     | _ -> None
 
 /// The elements of an array or list literal; None when the value is neither.
-let private elementsOf (graph: SemanticGraph) (id: NodeId) : NodeId list option =
+let elementsOf (graph: SemanticGraph) (id: NodeId) : NodeId list option =
     match valueOf graph id with
     | Some ({ Kind = SemanticKind.ArrayExpr elements } : SemanticNode) -> Some elements
     | Some ({ Kind = SemanticKind.ListExpr elements } : SemanticNode) -> Some elements
@@ -1070,6 +1070,18 @@ type DeclaredPointerReference = {
 /// not an integer or a boolean on the C side: a pointer, a real, a named type) and the extern's
 /// body node with the declared return. An extern with no descriptor beside it is not described
 /// here and keeps the CPU leg's rule for its parameters.
+/// Native entry signatures have no external symbol name. Parameter ordinals and
+/// source result identity are read by the same owner as FunctionDescriptor.
+type DeclaredEntrySignature = {
+    Node: NodeId
+    Parameters: (NodeId * DeclaredParameter option) list
+    References: (NodeId * DeclaredParameter) list
+    PointerReferences: (NodeId * DeclaredPointerReference) list
+    RecordReferences: (NodeId * bool) list
+    Body: NodeId option
+    Return: DeclaredParameter option
+}
+
 type DeclaredFunction = {
     Node: NodeId
     CName: string
@@ -1094,11 +1106,30 @@ type DeclaredResultRange = {
     Participants: NodeId list
 }
 
+/// A receiving quote selects a current native receiver and its original formal.
+/// It supplies no callback arguments, invocation count, or code lifetime.
+type DeclaredCallbackInvocation = {
+    Node: NodeId
+    DescriptorBinding: NodeId
+    Quote: NodeId
+    SourcePath: NodeId list
+    Declaration: BoundaryDeclaration
+    AbiDescriptor: NodeId
+    Parameter: int
+    Formal: NodeId
+    ScopeBinding: NodeId
+    Scope: NodeId
+    SignatureNode: NodeId
+    Contract: BAREWire.Descriptors.CallbackInvocationContract
+    Participants: NodeId list
+}
+
 /// Every boundary declaration in the graph, with every defect found reading them.
 type Descriptors = {
     Layouts: DeclaredLayout list
     Functions: DeclaredFunction list
     ResultRanges: DeclaredResultRange list
+    CallbackInvocations: DeclaredCallbackInvocation list
     Findings: DeclarationFinding list
 }
 
@@ -1166,11 +1197,13 @@ type DeclaredTypeRef =
     | Float of int
     | Pointer of int
     | Named of string
+    | Entry of string
 
 let scalarRange = function
     | BoundaryScalar.Boolean -> 1, ValueRange.boolean
     | BoundaryScalar.Integer(bits, true) -> bits, ValueRange.twosComplement bits
     | BoundaryScalar.Integer(bits, false) -> bits, ValueRange.unsignedOf bits
+    | BoundaryScalar.Entry _ -> invalidOp "An entry declaration has no scalar integer range."
 
 let private numericType = function
     | DeclaredTypeRef.Scalar scalar -> Some (scalarRange scalar)
@@ -1197,8 +1230,11 @@ let readTypeRef (graph: SemanticGraph) (id: NodeId) : Result<DeclaredTypeRef, De
     | Some (_, "Void", None) -> Ok DeclaredTypeRef.Void
     | Some (_, "Named", Some payload) when (stringOf graph payload).IsSome -> Ok (DeclaredTypeRef.Named (stringOf graph payload |> Option.get))
     | Some (node, "Named", _) -> Error (findingAt node DeclarationDefect.Malformed "a Named TypeRef's payload must be a string literal naming the record")
+    | Some (_, "Entry", Some payload) when (stringOf graph payload |> Option.exists (System.String.IsNullOrWhiteSpace >> not)) ->
+        Ok (DeclaredTypeRef.Entry (stringOf graph payload |> Option.get))
+    | Some (node, "Entry", _) -> Error (findingAt node DeclarationDefect.Malformed "an Entry TypeRef's payload must be a non-empty qualified callback invocation contract binding")
     | Some (node, other, _) -> Error (findingAt node DeclarationDefect.Invalid (sprintf "'%s' is not a TypeRef case the BAREWire vocabulary names" other))
-    | None -> Error (findingOn graph id DeclarationDefect.Malformed "a Type must be a TypeRef case (Integer, Float, Pointer, Bool, Void, Named)")
+    | None -> Error (findingOn graph id DeclarationDefect.Malformed "a Type must be a TypeRef case (Integer, Float, Pointer, Bool, Void, Named, Entry)")
 
 /// One `ParameterInfo` as declared.
 let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string * DeclaredParameter option * bool * DeclaredPointerReference option * string option * bool), DeclarationFinding> =
@@ -1378,61 +1414,176 @@ let private externBeside (graph: SemanticGraph) (descriptor: SemanticNode) (bind
             | SemanticKind.Binding (n, _, _, _) when n = name && node.Parent = descriptor.Parent && Map.containsKey "FidelityExtern.Library" node.Metadata -> Some node
             | _ -> None)
 
-/// A binding descriptor at its declaring node, paired with the extern beside it.
-let readFunctionForBinding (graph: SemanticGraph) (binding: SemanticNode) (_bindingName: string) (node: SemanticNode) (fields: (string * NodeId) list) : DeclaredFunction option * DeclarationFinding list =
-    match field "CName" fields |> Option.bind (stringOf graph), field "ReturnType" fields with
-    | Some cname, Some returnId ->
-        let parameters, parameterFindings = readList graph fields "Parameters" (readParameter graph)
+/// One parameter/result reader for named imports and symbol-free native entries.
+let private readSignatureForBinding
+    (graph: SemanticGraph)
+    (binding: SemanticNode)
+    (cname: string)
+    (node: SemanticNode)
+    (fields: (string * NodeId) list)
+    : DeclaredEntrySignature option * DeclarationFinding list =
+    match field "ReturnType" fields with
+    | Some returnId ->
+        let parameters, parameterFindings =
+            readList graph fields "Parameters" (readParameter graph)
+
         let returned, returnFindings =
             match readTypeRef graph returnId |> Result.map numericType with
-            | Ok (Some (bits, range)) -> Some { Node = returnId; Name = "ReturnType"; Bits = bits; Range = range }, []
+            | Ok(Some(bits, range)) ->
+                Some
+                    {
+                        Node = returnId
+                        Name = "ReturnType"
+                        Bits = bits
+                        Range = range
+                    },
+                []
             | Ok None -> None, []
             | Error f -> None, [ f ]
+
         let pairs, references, pointerReferences, recordReferences, body, externFindings =
             match lambdaOfBinding graph binding.Id with
             | None -> [], [], [], [], None, []
-            | Some (lambdaParameters, body) ->
+            | Some(lambdaParameters, body) ->
                 let lambdaParameters =
                     match parameters, lambdaParameters with
-                    | [], [(_, ty, _)] when Types.tryGetNTUKind ty = Some NTUKind.NTUunit -> []
+                    | [], [ (_, ty, _) ] when Types.tryGetNTUKind ty = Some NTUKind.NTUunit -> []
                     | _ -> lambdaParameters
+
                 if List.length lambdaParameters <> List.length parameters then
-                    [], [], [], [], None, [ findingAt node DeclarationDefect.Invalid (sprintf "the descriptor of '%s' declares %d parameters; the binding takes %d" cname parameters.Length lambdaParameters.Length) ]
+                    [],
+                    [],
+                    [],
+                    [],
+                    None,
+                    [
+                        findingAt
+                            node
+                            DeclarationDefect.Invalid
+                            (sprintf
+                                "the descriptor of '%s' declares %d parameters; the binding takes %d"
+                                cname
+                                parameters.Length
+                                lambdaParameters.Length)
+                    ]
                 else
                     let rows =
                         List.zip lambdaParameters parameters
                         |> List.map (fun ((_, ty, paramId), (declaredName, declared, byReference, pointer, named, readOnly)) ->
-                            let ranged ty = Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool
+                            let ranged ty =
+                                Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool
+
                             let element =
                                 match ty with
-                                | NativeType.TApp (tc, [elem]) when tc.Name = "array" || tc.Name = "Array" -> Some elem
+                                | NativeType.TApp(tc, [ elem ]) when tc.Name = "array" || tc.Name = "Array" -> Some elem
                                 | _ -> None
+
                             let nullableHandle ty =
                                 match ty with
-                                | NativeType.TApp (tc, [inner]) when tc.Name = "option" -> Types.tryGetNTUKind inner = Some NTUKind.NTUptr
+                                | NativeType.TApp(tc, [ inner ]) when tc.Name = "option" -> Types.tryGetNTUKind inner = Some NTUKind.NTUptr
                                 | _ -> false
-                            let invalid message = (paramId, None), None, None, None, Some (findingAt node DeclarationDefect.Invalid message)
+
+                            let invalid message =
+                                (paramId, None), None, None, None, Some(findingAt node DeclarationDefect.Invalid message)
+
                             match declared, byReference, pointer, named, element with
-                            | Some d, true, _, _, Some elem when ranged elem -> (paramId, None), Some (paramId, d), None, None, None
-                            | Some _, true, _, _, _ -> invalid (sprintf "the reference parameter '%s' of '%s' requires a bounded scalar array" declaredName cname)
-                            | _, true, Some d, _, Some elem when nullableHandle elem -> (paramId, None), None, Some (paramId, d), None, None
-                            | _, true, Some _, _, _ -> invalid (sprintf "the pointer reference '%s' of '%s' requires a bounded option<CHandle<_>> array" declaredName cname)
+                            | Some d, true, _, _, Some elem when ranged elem -> (paramId, None), Some(paramId, d), None, None, None
+                            | Some _, true, _, _, _ ->
+                                invalid (sprintf "the reference parameter '%s' of '%s' requires a bounded scalar array" declaredName cname)
+                            | _, true, Some d, _, Some elem when nullableHandle elem -> (paramId, None), None, Some(paramId, d), None, None
+                            | _, true, Some _, _, _ ->
+                                invalid (
+                                    sprintf
+                                        "the pointer reference '%s' of '%s' requires a bounded option<CHandle<_>> array"
+                                        declaredName
+                                        cname
+                                )
                             | _, true, _, Some name, _ ->
                                 let declaredTypes = recordTypesNamed graph name
-                                let actual = match ty with NativeType.TApp (tc, _) -> Some (NominalTypeIdentity.ofConstructor tc) | _ -> None
-                                if actual |> Option.exists (fun actual -> declaredTypes = [actual]) then
-                                    (paramId, None), None, None, Some (paramId, readOnly), None
-                                else invalid (sprintf "the reference '%s' of '%s' requires the declared record '%s'" declaredName cname name)
-                            | Some d, false, _, _, _ when not (ranged ty) -> invalid (sprintf "the parameter '%s' of '%s' is declared an integer of %d bits, but the binding's parameter is not an integer" declaredName cname d.Bits)
+
+                                let actual =
+                                    match ty with
+                                    | NativeType.TApp(tc, _) -> Some(NominalTypeIdentity.ofConstructor tc)
+                                    | _ -> None
+
+                                if actual |> Option.exists (fun actual -> declaredTypes = [ actual ]) then
+                                    (paramId, None), None, None, Some(paramId, readOnly), None
+                                else
+                                    invalid (
+                                        sprintf "the reference '%s' of '%s' requires the declared record '%s'" declaredName cname name
+                                    )
+                            | Some d, false, _, _, _ when not (ranged ty) ->
+                                invalid (
+                                    sprintf
+                                        "the parameter '%s' of '%s' is declared an integer of %d bits, but the binding's parameter is not an integer"
+                                        declaredName
+                                        cname
+                                        d.Bits
+                                )
                             | _ -> (paramId, (if ranged ty then declared else None)), None, None, None, None)
+
                     rows |> List.map (fun (p, _, _, _, _) -> p),
                     rows |> List.choose (fun (_, r, _, _, _) -> r),
                     rows |> List.choose (fun (_, _, p, _, _) -> p),
                     rows |> List.choose (fun (_, _, _, r, _) -> r),
-                    Some body, rows |> List.choose (fun (_, _, _, _, f) -> f)
-        Some { Node = node.Id; CName = cname; Parameters = pairs; References = references; PointerReferences = pointerReferences; RecordReferences = recordReferences; Body = body; Return = returned },
+                    Some body,
+                    rows |> List.choose (fun (_, _, _, _, f) -> f)
+
+        Some
+            {
+                Node = node.Id
+                Parameters = pairs
+                References = references
+                PointerReferences = pointerReferences
+                RecordReferences = recordReferences
+                Body = body
+                Return = returned
+            },
         parameterFindings @ returnFindings @ externFindings
-    | _ -> None, [ findingAt node DeclarationDefect.Malformed "a FunctionDescriptor's CName must be a string literal and it must declare a ReturnType" ]
+    | _ ->
+        None,
+        [
+            findingAt node DeclarationDefect.Malformed "a native signature must declare a ReturnType"
+        ]
+
+/// A binding descriptor retains its declared external symbol separately from ABI.
+let readFunctionForBinding graph binding (_bindingName: string) node fields : DeclaredFunction option * DeclarationFinding list =
+    match field "CName" fields |> Option.bind (stringOf graph), field "ReturnType" fields with
+    | Some cname, Some _ ->
+        let signature, findings = readSignatureForBinding graph binding cname node fields
+
+        signature
+        |> Option.map (fun signature ->
+            {
+                Node = signature.Node
+                CName = cname
+                Parameters = signature.Parameters
+                References = signature.References
+                PointerReferences = signature.PointerReferences
+                RecordReferences = signature.RecordReferences
+                Body = signature.Body
+                Return = signature.Return
+            }),
+        findings
+    | _ ->
+        None,
+        [
+            findingAt
+                node
+                DeclarationDefect.Malformed
+                "a FunctionDescriptor's CName must be a string literal and it must declare a ReturnType"
+        ]
+
+/// A receiving entry's ABI has no CName; its declaration remains the source binding.
+let readEntrySignatureForBinding graph binding node fields : DeclaredEntrySignature option * DeclarationFinding list =
+    if typeName node = Some "EntrySignature" then
+        let name = qualifiedExportName graph binding |> Option.defaultValue "native entry"
+        readSignatureForBinding graph binding name node fields
+    else
+        None,
+        [
+            findingAt node DeclarationDefect.Malformed "a callback invocation Signature must be an EntrySignature record"
+        ]
 
 /// Resolve the generated extern beside its descriptor, then use the same reader as callbacks.
 let private readFunction graph binding bindingName node fields =
@@ -1450,10 +1601,10 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
         | _ -> false
     // Keep the existing single source census. Resolve result contracts from the
     // retained declaration/ABI inventories, never by C symbol or beside-name.
-    let layouts, functions, resultDeclarations, externs, findings =
+    let layouts, functions, resultDeclarations, invocationDeclarations, externs, findings =
         graph.Nodes
         |> Map.toList
-        |> List.fold (fun (layouts, functions, ranges, externs, findings) (_, node) ->
+        |> List.fold (fun (layouts, functions, ranges, invocations, externs, findings) (_, node) ->
             let externs =
                 if node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol" then
                     qualifiedExportName graph node |> Option.map (fun name -> (name, node.Id) :: externs) |> Option.defaultValue externs
@@ -1465,23 +1616,25 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                     match typeName record with
                     | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
                         let layout, more = readLayout graph record fields
-                        (Option.toList layout @ layouts, functions, ranges, externs, findings @ more)
+                        (Option.toList layout @ layouts, functions, ranges, invocations, externs, findings @ more)
                     | Some "FunctionDescriptor" ->
                         let target, (f, more) = readFunction graph node name record fields
-                        (layouts, (f |> Option.map (fun f -> target, f) |> Option.toList) @ functions, ranges, externs, findings @ more)
+                        (layouts, (f |> Option.map (fun f -> target, f) |> Option.toList) @ functions, ranges, invocations, externs, findings @ more)
                     | Some "ResultRangeDescriptor" ->
-                        (layouts, functions, (node, record, fields, path) :: ranges, externs, findings)
-                    | _ -> (layouts, functions, ranges, externs, findings)
+                        (layouts, functions, (node, record, fields, path) :: ranges, invocations, externs, findings)
+                    | Some "CallbackInvocationContract" ->
+                        (layouts, functions, ranges, (node, record, fields, path) :: invocations, externs, findings)
+                    | _ -> (layouts, functions, ranges, invocations, externs, findings)
                 | Some (value, _) when typeName value = Some "ResultRangeDescriptor" ->
-                    (layouts, functions, ranges, externs, findings @ [findingAt value DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"])
+                    (layouts, functions, ranges, invocations, externs, findings @ [findingAt value DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"])
                 | _ ->
                     let declared =
                         match node.Type with
                         | NativeType.TApp(_, [inner]) -> typeName { node with Type = inner } = Some "ResultRangeDescriptor"
                         | _ -> typeName node = Some "ResultRangeDescriptor"
                     let more = if declared then [findingAt node DeclarationDefect.Malformed "a ResultRangeDescriptor must retain its quoted record declaration"] else []
-                    (layouts, functions, ranges, externs, findings @ more)
-            | _ -> (layouts, functions, ranges, externs, findings)) ([], [], [], [], [])
+                    (layouts, functions, ranges, invocations, externs, findings @ more)
+            | _ -> (layouts, functions, ranges, invocations, externs, findings)) ([], [], [], [], [], [])
     let readResult (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredResultRange, DeclarationFinding> =
         let malformed reason = Error (findingAt node DeclarationDefect.Malformed ("a ResultRangeDescriptor " + reason))
         let invalid reason = Error (findingAt node DeclarationDefect.Invalid ("a ResultRangeDescriptor " + reason))
@@ -1562,11 +1715,228 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                 | _ -> invalid (sprintf "Binding '%s' is ambiguous" name)
             | _ -> malformed "requires nonempty literal hypothesis Identity, Version and Source"
         | _ -> malformed "requires one immutable quotation, literal Binding, ReturnValue role and ExternalExecutionHypothesis record"
+    let readInvocation (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredCallbackInvocation, DeclarationFinding> =
+        let invalid message =
+            Error(findingAt node DeclarationDefect.Invalid ("A CallbackInvocationContract " + message))
+
+        let text key fields =
+            field key fields
+            |> Option.bind (stringOf graph)
+            |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+
+        let quoted path =
+            path
+            |> List.choose (fun id ->
+                match graph.Nodes.TryFind id |> Option.map _.Kind with
+                | Some(SemanticKind.Quote _) -> Some id
+                | _ -> None)
+
+        let immutable ids =
+            ids
+            |> List.forall (fun id ->
+                match graph.Nodes.TryFind id |> Option.map _.Kind with
+                | Some(SemanticKind.Binding(_, true, _, _)) -> false
+                | _ -> true)
+
+        let integer typeId =
+            readTypeRef graph typeId
+            |> Result.bind (function
+                | DeclaredTypeRef.Scalar(BoundaryScalar.Integer(bits, signed)) ->
+                    Ok(
+                        BAREWire.Descriptors.TypeRef.Integer(
+                            (if signed then
+                                 BAREWire.Descriptors.Signedness.Signed
+                             else
+                                 BAREWire.Descriptors.Signedness.Unsigned),
+                            bits
+                        )
+                    )
+                | _ -> invalid "requires scalar integer entry parameters and result in this closed C profile.")
+
+        let signature (signature: SemanticNode) signatureFields =
+            match
+                field "CallingConvention" signatureFields |> Option.bind (caseOf graph),
+                field "Parameters" signatureFields |> Option.bind (elementsOf graph),
+                field "ReturnType" signatureFields
+            with
+            | Some(_, "CDecl", None), Some parameters, Some returned when typeName signature = Some "EntrySignature" ->
+                let declared =
+                    parameters
+                    |> List.map (fun id ->
+                        match recordOf graph id with
+                        | Some(parameter, parameterFields) when typeName parameter = Some "ParameterInfo" ->
+                            match
+                                text "Name" parameterFields,
+                                field "PassBy" parameterFields |> Option.bind (caseOf graph),
+                                field "Type" parameterFields
+                            with
+                            | Some name, Some(_, "Value", None), Some typeId ->
+                                integer typeId
+                                |> Result.map (fun ty ->
+                                    {
+                                        Name = name
+                                        Type = ty
+                                        PassBy = BAREWire.Descriptors.PassBy.Value
+                                    }
+                                    : BAREWire.Descriptors.ParameterInfo)
+                            | _ -> invalid "requires entry ParameterInfo Name, integer Type and explicit PassBy.Value."
+                        | _ -> invalid "requires entry ParameterInfo records.")
+
+                let parameters =
+                    List.foldBack
+                        (fun item result -> Result.bind (fun value -> Result.map (fun tail -> value :: tail) result) item)
+                        declared
+                        (Ok [])
+
+                parameters
+                |> Result.bind (fun parameters ->
+                    integer returned
+                    |> Result.map (fun returned ->
+                        {
+                            Parameters = Array.ofList parameters
+                            ReturnType = returned
+                            CallingConvention = BAREWire.Descriptors.CallConv.CDecl
+                        }
+                        : BAREWire.Descriptors.EntrySignature))
+            | _ -> invalid "requires a quoted EntrySignature with complete CDecl scalar parameters and result."
+
+        match
+            quoted path,
+            text "Binding" fields,
+            field "Parameter" fields |> Option.bind (int64Of graph),
+            text "Scope" fields,
+            field "Signature" fields |> Option.bind (recordOf graph),
+            field "Hypothesis" fields |> Option.bind (recordOf graph)
+        with
+        | [ quote ], Some name, Some ordinal, Some scopeName, Some(signatureNode, signatureFields), Some(hypothesisNode, hypothesisFields) when
+            immutable (binding.Id :: path)
+            && typeName hypothesisNode = Some "ExternalExecutionHypothesis"
+            ->
+            match text "Identity" hypothesisFields, text "Version" hypothesisFields, text "Source" hypothesisFields with
+            | Some identity, Some version, Some source ->
+                match externs |> List.filter (fun (candidate, _) -> candidate = name) with
+                | [ _, receiver ] ->
+                    let rows =
+                        graph.Edges
+                        |> List.choose (fun edge ->
+                            match edge.Class, edge.Role with
+                            | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration declaration when
+                                edge.Target = receiver && declaration.Binding = receiver
+                                ->
+                                Some(edge, declaration)
+                            | _ -> None)
+
+                    match rows, functions |> List.filter (fun (target, _) -> target = receiver) with
+                    | [ edge, declaration ], [ _, abi ] when
+                        edge.Sources = declaration.Path @ declaration.Formals @ [ declaration.Body ]
+                        && (edge.Sources |> List.forall graph.Nodes.ContainsKey)
+                        && ordinal >= 0L
+                        && ordinal < int64 declaration.Formals.Length
+                        ->
+                        let ordinal = int ordinal
+                        let formal = declaration.Formals[ordinal]
+                        let ownName = qualifiedExportName graph binding
+
+                        let declaredEntry =
+                            recordOf graph abi.Node
+                            |> Option.bind (fun (_, fields) -> field "Parameters" fields |> Option.bind (elementsOf graph))
+                            |> Option.bind (List.tryItem ordinal)
+                            |> Option.bind (recordOf graph)
+                            |> Option.bind (fun (_, fields) -> field "Type" fields)
+                            |> Option.map (readTypeRef graph)
+
+                        match declaredEntry, graph.Nodes.TryFind formal with
+                        | Some(Ok(DeclaredTypeRef.Entry selected)), Some formalNode when
+                            Some selected = ownName
+                            && Types.tryGetNTUKind formalNode.Type = Some NTUKind.NTUfnptr
+                            ->
+                            let scopes =
+                                graph.Nodes.Values
+                                |> Seq.filter (fun candidate -> qualifiedExportName graph candidate = Some scopeName)
+                                |> Seq.toList
+
+                            match scopes with
+                            | [ scopeBinding ] ->
+                                match List.tryLast scopeBinding.Children |> Option.bind (valuePath graph) with
+                                | Some(scopeNode, scopePath) when
+                                    typeName scopeNode = Some "ScopedCallbackDescriptor"
+                                    && immutable (scopeBinding.Id :: scopePath)
+                                    ->
+                                    match quoted scopePath with
+                                    | [ scopeQuote ] ->
+                                        signature signatureNode signatureFields
+                                        |> Result.bind (fun signature ->
+                                            let contract: BAREWire.Descriptors.CallbackInvocationContract =
+                                                {
+                                                    Binding = name
+                                                    Parameter = ordinal
+                                                    Signature = signature
+                                                    Hypothesis =
+                                                        {
+                                                            Identity = identity
+                                                            Version = version
+                                                            Source = source
+                                                        }
+                                                    Scope = scopeName
+                                                }
+
+                                            let inputs = (fields @ hypothesisFields @ signatureFields) |> List.map snd
+
+                                            let paths =
+                                                inputs
+                                                |> List.collect (fun id ->
+                                                    valuePath graph id |> Option.map snd |> Option.defaultValue [ id ])
+
+                                            if not (immutable paths) then
+                                                invalid "requires immutable literal signature and hypothesis inputs."
+                                            else
+                                                Ok
+                                                    {
+                                                        Node = node.Id
+                                                        DescriptorBinding = binding.Id
+                                                        Quote = quote
+                                                        SourcePath = path
+                                                        Declaration = declaration
+                                                        AbiDescriptor = abi.Node
+                                                        Parameter = ordinal
+                                                        Formal = formal
+                                                        ScopeBinding = scopeBinding.Id
+                                                        Scope = scopeQuote
+                                                        SignatureNode = signatureNode.Id
+                                                        Contract = contract
+                                                        Participants =
+                                                                binding.Id :: path
+                                                                @ edge.Sources
+                                                                @ [
+                                                                    abi.Node
+                                                                    formal
+                                                                    scopeBinding.Id
+                                                                    scopeNode.Id
+                                                                    signatureNode.Id
+                                                                    hypothesisNode.Id
+                                                                ]
+                                                                @ scopePath
+                                                                @ paths
+                                                    })
+                                    | _ -> invalid "Scope requires one current immutable quoted ScopedCallbackDescriptor."
+                                | _ -> invalid "Scope must select an immutable quoted ScopedCallbackDescriptor binding."
+                            | _ -> invalid "Scope names a missing or ambiguous fully qualified scoped declaration."
+                        | _ -> invalid "must be selected by TypeRef.Entry at the exact receiver's original nonnullable FnPtr formal."
+                    | _ -> invalid "requires one current receiving declaration/ABI and an ordinal within its unchanged native arity."
+                | _ -> invalid "Binding names a missing or ambiguous fully qualified extern declaration."
+            | _ -> invalid "requires nonempty literal external hypothesis Identity, Version and Source."
+        | _ -> invalid "requires one immutable quote, exact Binding/Parameter/Signature/Hypothesis and Scope."
+
     let results = List.rev resultDeclarations |> List.map readResult
     let ranges = results |> List.choose (function Ok range -> Some range | _ -> None)
-    let duplicateFindings = duplicates "result contract" (fun range -> string range.Declaration.Binding) _.Node graph ranges
+    let duplicateFindings = duplicates "result contract" (fun (range: DeclaredResultRange) -> string range.Declaration.Binding) _.Node graph ranges
+    let invocationResults = List.rev invocationDeclarations |> List.map readInvocation
+    let invocations = invocationResults |> List.choose (function Ok invocation -> Some invocation | _ -> None)
+    let invocationDuplicates = duplicates "callback invocation contract" (fun invocation -> string invocation.Declaration.Binding + ":" + string invocation.Parameter) _.Node graph invocations
     { Layouts = List.rev layouts; Functions = List.rev functions |> List.map snd; ResultRanges = ranges
-      Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings }
+      CallbackInvocations = invocations
+      Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings
+                 @ (invocationResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ invocationDuplicates }
 
 /// The bounded scalar references a call passes, paired with its actual arrays.
 /// The descriptor supplies the element ABI; the lowering must retain an extent

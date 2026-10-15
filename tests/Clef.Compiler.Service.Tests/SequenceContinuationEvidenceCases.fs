@@ -88,6 +88,7 @@ let mutable shared = 1
         let source = programCellSource "(shared + 1) % 100"
         let fixture = fixture source
         let context: PlatformContext = {
+            PlatformLoading = None
             PlatformId = "evidence"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
             Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
             PlatformDescription = Some "Dimensions.description"; PlatformArchitecture = None; PlatformOS = None

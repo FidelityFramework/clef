@@ -52,7 +52,7 @@ let main _ =
               Capability = "native"; Boundary = "wrap" }
         let representations = [integer "signed8" "int" 8 "-128" "127"; integer "unsigned8" "uint" 8 "0" "255"
                                integer "unsigned16" "uint" 16 "0" "65535"; integer "unsigned64" "uint" 64 "0" "18446744073709551615"]
-        { PlatformId = "sequence-family-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+        { PlatformLoading = None; PlatformId = "sequence-family-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
           Representations = representations |> List.map (fun value -> value.Name, value) |> Map.ofList
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None; PlatformArchitecture = None
           PlatformOS = None; PlatformSourcePaths = Set.empty; Predicates = Map.empty; FreestandingStartup = None

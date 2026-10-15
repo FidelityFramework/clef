@@ -29,7 +29,7 @@ module private DirectCapture =
                 { Name = name; Family = family; Bits = bits; Capability = "native"
                   MinMagnitude = low; MaxMagnitude = high; Boundary = "wrap" }: NumericRepresentation)
         let platform: PlatformContext =
-            { PlatformId = "direct-capture-carrier-test"
+            { PlatformLoading = None; PlatformId = "direct-capture-carrier-test"
               Dimensions = Map.ofList ["Pointer", pointerBits; "Register", pointerBits]
               Representations = representations |> List.map (fun representation -> representation.Name, representation) |> Map.ofList
               EndpointReturns = Map.empty

@@ -155,6 +155,34 @@ and mapBoundaryCall (value: S.BoundaryCall) : Fidelity.PSG.BoundaryCall =
         SourceTypes = (value.SourceTypes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapTypeIdentity v) |> Map.ofSeq)
     } : Fidelity.PSG.BoundaryCall)
 
+and mapBoundaryCallbackInvocation (value: S.BoundaryCallbackInvocation) : Fidelity.PSG.BoundaryCallbackInvocation =
+    ({
+        Identity = nodeId value.Identity
+        Import = nodeId value.Import
+        Parameter = value.Parameter
+        Formal = nodeId value.Formal
+        Scope = nodeId value.Scope
+        Contract = value.Contract
+        Signature = mapNativeEntrySignature value.Signature
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryCallbackInvocation)
+
+and mapBoundaryClosedEntry (value: S.BoundaryClosedEntry) : Fidelity.PSG.BoundaryClosedEntry =
+    ({
+        Formation = nodeId value.Formation
+        Operand = nodeId value.Operand
+        Declaration = nodeId value.Declaration
+        Implementation = nodeId value.Implementation
+        Formals = (value.Formals |> List.map (fun x -> nodeId x))
+        Body = nodeId value.Body
+        Lifetime = mapProgramImageCodeLifetime value.Lifetime
+        Invocation = nodeId value.Invocation
+        ParameterAdaptations = (value.ParameterAdaptations |> List.map (fun x -> (x |> Option.map (fun x -> mapMeet x))))
+        ResultAdaptation = (value.ResultAdaptation |> Option.map (fun x -> mapMeet x))
+        Transport = (value.Transport |> Set.map (fun x -> nodeId x))
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.BoundaryClosedEntry)
+
 and mapBoundaryCoverage (value: S.BoundaryCoverage) : Fidelity.PSG.BoundaryCoverage =
     ({
         Site = nodeId value.Site
@@ -215,6 +243,8 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         Links = value.Links
         Failures = (value.Failures |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, (t1 |> Set.map (fun x -> nodeId x)), t2))))
         ResultHypotheses = (value.ResultHypotheses |> List.map (fun x -> mapForeignResultHypothesis x))
+        CallbackInvocations = (value.CallbackInvocations |> List.map (fun x -> nodeId x))
+        ClosedEntries = (value.ClosedEntries |> List.map (fun x -> nodeId x))
     } : Fidelity.PSG.BoundaryDomain)
 
 and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fidelity.PSG.BoundaryEmissionProjection =
@@ -233,6 +263,8 @@ and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fideli
         DeclarationOnly = (value.DeclarationOnly |> Set.map (fun x -> nodeId x))
         Links = value.Links
         ResultHypotheses = (value.ResultHypotheses |> List.map (fun x -> mapForeignResultHypothesis x))
+        CallbackInvocations = (value.CallbackInvocations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryCallbackInvocation v) |> Map.ofSeq)
+        ClosedEntries = (value.ClosedEntries |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryClosedEntry v) |> Map.ofSeq)
     } : Fidelity.PSG.BoundaryEmissionProjection)
 
 and mapBoundaryEntry (value: S.BoundaryEntry) : Fidelity.PSG.BoundaryEntry =
@@ -308,6 +340,7 @@ and mapBoundaryScalar (value: S.BoundaryScalar) : Fidelity.PSG.BoundaryScalar =
     match value with
     | S.BoundaryScalar.Integer(a0, a1) -> Fidelity.PSG.BoundaryScalar.Integer(a0, a1)
     | S.BoundaryScalar.Boolean -> Fidelity.PSG.BoundaryScalar.Boolean
+    | S.BoundaryScalar.Entry(a0) -> Fidelity.PSG.BoundaryScalar.Entry(nodeId a0)
 
 and mapBoundarySourcePremise (value: S.BoundarySourcePremise) : Fidelity.PSG.BoundarySourcePremise =
     ({
@@ -1015,6 +1048,8 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.OrdinaryBindingDemandHistory(a0) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandHistory(mapBindingDemandEvidence a0)
     | S.EdgeRole.FiniteCellRange -> Fidelity.PSG.EdgeRole.FiniteCellRange
     | S.EdgeRole.BoundaryEntry(a0) -> Fidelity.PSG.EdgeRole.BoundaryEntry(mapBoundaryEntry a0)
+    | S.EdgeRole.BoundaryCallbackInvocation(a0) -> Fidelity.PSG.EdgeRole.BoundaryCallbackInvocation(mapBoundaryCallbackInvocation a0)
+    | S.EdgeRole.BoundaryClosedEntry(a0) -> Fidelity.PSG.EdgeRole.BoundaryClosedEntry(mapBoundaryClosedEntry a0)
 
 and mapEmissionStrategy (value: S.EmissionStrategy) : Fidelity.PSG.EmissionStrategy =
     match value with
@@ -1853,6 +1888,13 @@ and mapNTUWidth (value: N.NTUWidth) : Fidelity.PSG.NTUWidth =
     match value with
     | N.NTUWidth.Fixed(a0) -> Fidelity.PSG.NTUWidth.Fixed(a0)
     | N.NTUWidth.Resolved(a0) -> Fidelity.PSG.NTUWidth.Resolved(mapWidthDimension a0)
+
+and mapNativeEntrySignature (value: S.NativeEntrySignature) : Fidelity.PSG.NativeEntrySignature =
+    ({
+        Parameters = (value.Parameters |> List.map (fun x -> mapBoundaryScalar x))
+        Result = (value.Result |> Option.map (fun x -> mapBoundaryScalar x))
+        CallingConvention = value.CallingConvention
+    } : Fidelity.PSG.NativeEntrySignature)
 
 and mapNativeLiteral (value: N.NativeLiteral) : Fidelity.PSG.NativeLiteral =
     match value with

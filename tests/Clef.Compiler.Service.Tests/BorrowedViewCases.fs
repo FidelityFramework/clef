@@ -25,6 +25,7 @@ let viewScope: Expr<ScopedCallbackDescriptor> = <@ { Binding = "BorrowedViewTest
         | ParseFailure errors -> failwithf "Parse failed: %A" errors
     let source body = check (prefix + body)
     let context: PlatformContext = {
+        PlatformLoading = None
         PlatformId = "borrowed-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
         Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
         PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None

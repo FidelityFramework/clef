@@ -20,7 +20,7 @@ module private ContinuationMeetFixture =
               integer "unsigned8" "uint" 8 "0" "255"
               integer "unsigned16" "uint" 16 "0" "65535"
               integer "unsigned64" "uint" 64 "0" "18446744073709551615" ]
-        { PlatformId = "continuation-meet-test"
+        { PlatformLoading = None; PlatformId = "continuation-meet-test"
           Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
           Representations = offered |> List.map (fun representation -> representation.Name, representation) |> Map.ofList
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None

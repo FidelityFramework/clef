@@ -926,6 +926,7 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
             MinMagnitude = "0"; MaxMagnitude = maximum; Boundary = "wrap" }
         let offered = [representation 8 "255"; representation 16 "65535"; representation 64 "18446744073709551615"]
         let context: PlatformContext = {
+            PlatformLoading = None
             PlatformId = "record-instance-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
             Representations = offered |> List.map (fun r -> r.Name, r) |> Map.ofList
             EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None

@@ -51,6 +51,7 @@ module private ClosureValues =
         result.Graph.Nodes |> Map.values |> Seq.filter (fun node ->
             node.IsReachable && (node.Metadata |> Map.tryFind ClosureMetadata.LambdaExpression = Some (MetadataValue.Bool true))) |> Seq.toList
     let context: PlatformContext = {
+            PlatformLoading = None
             PlatformId = "closure-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
             Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
             PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None

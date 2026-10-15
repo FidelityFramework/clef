@@ -49,6 +49,55 @@ let inline listener handler = makeEntry handler
                 | _ -> None
             | _ -> None) |> Set.ofSeq
 
+    // This source fixture stipulates a receiving C contract. It executes no C.
+    let receivingGraph () =
+        let source =
+            """
+module ReceivingCallback
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Void | Entry of string
+type PassBy = | Value
+type CallConv = | CDecl
+type Transfer = | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type EntrySignature = { Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ScopedCallbackDescriptor = { Binding: string; Parameter: string }
+type CallbackInvocationContract = { Binding: string; Parameter: int; Signature: EntrySignature; Hypothesis: ExternalExecutionHypothesis; Scope: string }
+[<FidelityExtern("c", "consume_callback")>]
+let private receive (callback: FnPtr<int -> int>) : unit = NativeDefault.zeroed ()
+let receiveDescriptor: Expr<FunctionDescriptor> = <@ { CName = "consume_callback"; Parameters = [| { Name = "callback"; Type = Entry "ReceivingCallback.invocation"; PassBy = Value } |]; ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let scope: Expr<ScopedCallbackDescriptor> = <@ { Binding = "ReceivingCallback.receive"; Parameter = "callback" } @>
+let invocation: Expr<CallbackInvocationContract> = <@ { Binding = "ReceivingCallback.receive"; Parameter = 0; Signature = { Parameters = [| { Name = "arg0"; Type = Integer (Signed, 64); PassBy = Value } |]; ReturnType = Integer (Signed, 64); CallingConvention = CDecl }; Hypothesis = { Identity = "receiving-test"; Version = "v1"; Source = "declared-source-fixture" }; Scope = "ReceivingCallback.scope" } @>
+let callback (_unused: int) = 7
+[<EntryPoint>]
+let main _ =
+    receive (FnPtr.ofFunction callback)
+    0
+"""
+
+        let parse source path =
+            match parseStringWithDefaults source path with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+
+        let platform = SourcePlatformFixture.platform
+
+        let authority =
+            SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+
+        let result =
+            checkParsedInputsWithPlatform
+                [
+                    parse authority "write-authority.clef"
+                    parse source "receiving-callback.clef"
+                ]
+                (Some platform)
+
+        DimensionalCases.noErrors result
+        result.Graph
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
 type ClosedCallbackTests() =
     [<Fact>]
@@ -185,3 +234,73 @@ let main _ =
         let source = ClosedCallbackCases.declarations.Replace("NativeEntry = NativeDefault.zeroed ()", "NativeEntry = handler 1; NativeDefault.zeroed ()")
         let result = ClosedCallbackCases.check (source + "\nlet handler (value: int) = ()\n[<EntryPoint>]\nlet main _ = let entry = listener handler in 0\n")
         Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8096" && diagnostic.Message.Contains("exactly NativeDefault.zeroed"))
+
+    [<Fact>]
+    member _.``Receiving callback unused native formal preserves ABI64``() =
+        let graph = ClosedCallbackCases.receivingGraph ()
+        let entry = (read graph).Receiving |> Assert.Single
+        let formal, declared = entry.Signature.Parameters |> Assert.Single
+        Assert.Equal(64, declared.Value.Bits)
+        Assert.Equal(Some(ValueRange.twosComplement 64), graph.Nodes[formal].ValueRange)
+
+        match graph.Nodes[entry.Lambda].Kind with
+        | SemanticKind.Lambda(parameters, _, captures, _, _) ->
+            Assert.Equal(formal, parameters |> List.exactlyOne |> fun (_, _, id) -> id)
+            Assert.Empty captures
+        | kind -> failwithf "Expected full callback lambda: %A" kind
+
+        Assert.DoesNotContain(
+            graph.Nodes.Values,
+            fun node ->
+                match node.Kind with
+                | SemanticKind.VarRef(_, Some target) -> target = formal
+                | _ -> false
+        )
+
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+        | Ok numeric -> Assert.Equal(ValueRange.twosComplement 64, numeric.Values[formal].Range)
+        | Result.Error failures -> failwithf "Current incoming numeric evidence refused: %A" failures
+
+    [<Fact>]
+    member _.``Receiving callback changed hypothesis invalidates numeric premises``() =
+        let graph = ClosedCallbackCases.receivingGraph ()
+
+        let declarations =
+            Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.readDescriptors graph
+
+        let invocation = declarations.CallbackInvocations |> Assert.Single
+
+        let _, fields =
+            Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.recordOf graph invocation.Node
+            |> Option.get
+
+        let _, hypothesis =
+            Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.field "Hypothesis" fields
+            |> Option.bind (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.recordOf graph)
+            |> Option.get
+
+        let version, _ =
+            Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.field "Version" hypothesis
+            |> Option.bind (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.valuePath graph)
+            |> Option.get
+
+        let changed =
+            { graph with
+                Nodes =
+                    graph.Nodes.Add(
+                        version.Id,
+                        { version with
+                            Kind = SemanticKind.Literal(NativeLiteral.String "v2")
+                        }
+                    )
+            }
+
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project changed with
+        | Result.Error failures ->
+            Assert.Contains(
+                failures,
+                fun failure ->
+                    failure.Reason =
+                        "NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required."
+            )
+        | Ok _ -> failwith "Changed receiving hypothesis retained old numeric evidence"

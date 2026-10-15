@@ -350,6 +350,7 @@ type ForeignReferenceTests() =
     [<Fact>]
     member _.``Mapped stride retains native output bounds and length retains checked extent bounds``() =
         let context: PlatformContext = {
+            PlatformLoading = None
             PlatformId="mapped-boundary-test"; Dimensions=Map.ofList ["Pointer",64;"Register",64]
             Representations=Map.empty; EndpointReturns=Map.empty; PlatformLibraryPath=None
             PlatformDescription=None; PlatformArchitecture=None; PlatformOS=None

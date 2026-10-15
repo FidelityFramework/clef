@@ -681,8 +681,14 @@ type MeetKind = ExtendUnsigned | ExtendSigned | Truncate | ExtendFloat | Truncat
 
 type Meet = { Consumer: NodeId; Operand: NodeId; From: int; To: int; Adapt: MeetKind }
 
+type ProgramImageCodeLifetime = {
+    Module: NodeId
+    Binding: NodeId
+    Implementation: NodeId
+}
+
 [<RequireQualifiedAccess>]
-type BoundaryScalar = Integer of bits: int * signed: bool | Boolean
+type BoundaryScalar = Integer of bits: int * signed: bool | Boolean | Entry of invocation: NodeId
 
 /// A physical slot settled by the source numeric/layout owner.
 [<RequireQualifiedAccess>]
@@ -810,6 +816,39 @@ type BoundaryEntry = {
     Declaration: NodeId
     Loading: NodeId
     SourceType: TypeIdentity
+    Transport: Set<NodeId>
+    Participants: Set<NodeId>
+}
+
+/// Receiving contracts supply native ABI, not ordinary callable authority.
+type NativeEntrySignature = {
+    Parameters: BoundaryScalar list
+    Result: BoundaryScalar option
+    CallingConvention: string
+}
+
+type BoundaryCallbackInvocation = {
+    Identity: NodeId
+    Import: NodeId
+    Parameter: int
+    Formal: NodeId
+    Scope: NodeId
+    Contract: BAREWire.Descriptors.CallbackInvocationContract
+    Signature: NativeEntrySignature
+    Participants: Set<NodeId>
+}
+
+type BoundaryClosedEntry = {
+    Formation: NodeId
+    Operand: NodeId
+    Declaration: NodeId
+    Implementation: NodeId
+    Formals: NodeId list
+    Body: NodeId
+    Lifetime: ProgramImageCodeLifetime
+    Invocation: NodeId
+    ParameterAdaptations: Meet option list
+    ResultAdaptation: Meet option
     Transport: Set<NodeId>
     Participants: Set<NodeId>
 }
@@ -1491,6 +1530,8 @@ type BoundaryDomain = {
     Loading: BoundaryLoading option
     Entries: NodeId list
     Calls: NodeId list
+    CallbackInvocations: NodeId list
+    ClosedEntries: NodeId list
     ByteViews: BoundaryByteView list
     StringExtents: BoundaryStringExtent list
     /// Present only when Baker consumed a validated lazy or captured string origin.
@@ -1889,6 +1930,8 @@ type EdgeRole =
     /// finite program cell. The arithmetic certificate supplies no lifetime.
     | FiniteCellRange
     | BoundaryEntry of BoundaryEntry
+    | BoundaryCallbackInvocation of BoundaryCallbackInvocation
+    | BoundaryClosedEntry of BoundaryClosedEntry
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
@@ -2454,12 +2497,6 @@ type CallableEnvironment = { Owner: NodeId; Formal: NodeId }
 /// Ordinary closure storage and native code lifetime remain distinct contracts.
 [<RequireQualifiedAccess>]
 type CallableKind = OrdinaryFlatClosure | NativeEntry
-
-type ProgramImageCodeLifetime = {
-    Module: NodeId
-    Binding: NodeId
-    Implementation: NodeId
-}
 
 [<RequireQualifiedAccess>]
 type CallableConversion = Identity of ValueRepresentation
@@ -3150,6 +3187,8 @@ type BoundaryEmissionProjection = {
     ResultHypotheses: ForeignResultHypothesis list
     ByScope: Map<NodeId, NodeId list>
     Calls: Map<NodeId, BoundaryCall>
+    CallbackInvocations: Map<NodeId, BoundaryCallbackInvocation>
+    ClosedEntries: Map<NodeId, BoundaryClosedEntry>
     ByteViews: Map<NodeId, BoundaryByteView>
     StringExtents: Map<NodeId, BoundaryStringExtent>
     IntrinsicWriteImports: Map<NodeId, IntrinsicWriteImport>

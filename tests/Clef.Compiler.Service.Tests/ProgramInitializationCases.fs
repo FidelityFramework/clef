@@ -22,7 +22,7 @@ let main _ = trace
     let plan graph = StartupFacts.read graph |> Option.defaultWith (fun () -> failwith "Missing validated startup plan")
     let name (graph: SemanticGraph) id = match graph.Nodes[id].Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> failwith "Expected a declaration"
     let platform =
-        { PlatformId = "startup-structure-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+        { PlatformLoading = None; PlatformId = "startup-structure-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
           Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
           PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
           Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None

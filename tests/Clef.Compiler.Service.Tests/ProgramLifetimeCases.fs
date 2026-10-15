@@ -17,6 +17,7 @@ module private ProgramStorageFixture =
     // dimensions/offerings empty here so the source declaration supplies them.
     // These declaration tests make no native-image or FPGA acceptance claim.
     let context: PlatformContext = {
+        PlatformLoading = None
         PlatformId = "storage-test"; Dimensions = Map.empty; Representations = Map.empty
         EndpointReturns = Map.empty; PlatformLibraryPath = None
         PlatformDescription = Some "StorageAuthority.description"

@@ -37,7 +37,7 @@ module private RegionFixture =
         let unsigned: NumericRepresentation = {
             Name = "unsigned64"; Capability = "native"; Family = "uint"; Bits = 64
             MinMagnitude = "0"; MaxMagnitude = "18446744073709551615"; Boundary = "wrap" }
-        { PlatformId = "sequence-region-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+        { PlatformLoading = None; PlatformId = "sequence-region-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
           Representations = Map.ofList [signed.Name, signed; unsigned.Name, unsigned]
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty

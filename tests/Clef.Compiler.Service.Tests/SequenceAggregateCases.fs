@@ -21,7 +21,7 @@ module private AggregateFixture =
         let reps = [rep "signed8" "int" 8 "-128" "127"; rep "unsigned8" "uint" 8 "0" "255"
                     rep "signed64" "int" 64 "-9223372036854775808" "9223372036854775807"
                     rep "unsigned64" "uint" 64 "0" "18446744073709551615"]
-        { PlatformId = "aggregate-transport-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+        { PlatformLoading = None; PlatformId = "aggregate-transport-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
           Representations = reps |> List.map (fun rep -> rep.Name, rep) |> Map.ofList
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty

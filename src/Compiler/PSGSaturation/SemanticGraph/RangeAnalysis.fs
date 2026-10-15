@@ -1744,6 +1744,15 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                 | Some body, Some r -> Map.add body r.Range seeds
                 | _ -> seeds
             (seeds, declared @ (f.Parameters |> List.choose (fun (paramId, d) -> d |> Option.map (fun d -> paramId, d))))) (Map.empty, [])
+    // A receiving contract states the native incoming domain, including unused
+    // formals. It supplies no observed callback arguments or body result range.
+    let boundarySeeds, declaredParameters =
+        (CallbackDeclarations.read graph).Receiving
+        |> List.fold (fun (seeds, declared) entry ->
+            entry.Signature.Parameters |> List.fold (fun (seeds, declared) (formal, parameter) ->
+                match parameter with
+                | Some parameter -> Map.add formal parameter.Range seeds, (formal, parameter) :: declared
+                | None -> seeds, declared) (seeds, declared)) (boundarySeeds, declaredParameters)
     let boundarySeeds =
         Clef.Compiler.Baker.Recipes.KernelDeclarations.seeds graph
         |> Map.fold (fun seeds formal range -> Map.add formal range seeds) boundarySeeds

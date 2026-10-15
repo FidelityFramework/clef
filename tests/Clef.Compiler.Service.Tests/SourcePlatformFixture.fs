@@ -16,7 +16,7 @@ module SourcePlatformFixture =
               representation "unsigned32" "uint" 32 "0" "4294967295"
               representation "signed64" "int" 64 "-9223372036854775808" "9223372036854775807"
               representation "unsigned64" "uint" 64 "0" "18446744073709551615" ]
-        { PlatformId = "intrinsic-write-test"; Dimensions = Map.ofList ["Pointer",64; "Register",64]
+        { PlatformLoading = None; PlatformId = "intrinsic-write-test"; Dimensions = Map.ofList ["Pointer",64; "Register",64]
           Representations = representations |> List.map (fun value -> value.Name, value) |> Map.ofList
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = Some "WriteAuthority.description"
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "write-authority.clef")

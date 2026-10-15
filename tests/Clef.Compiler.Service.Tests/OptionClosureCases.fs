@@ -10,6 +10,7 @@ module private OptionClosures =
     let option payload = NativeType.TApp(Types.optionTyCon, [payload])
 
     let context pointerBits : PlatformContext = {
+        PlatformLoading = None
         PlatformId = "option-closure-test"
         Dimensions = Map.ofList ["Pointer", pointerBits; "Register", 64]
         Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None

@@ -557,6 +557,7 @@ let observed = distances, durations
         Assert.Equal<int option>(None, LoopRanges.selectedWidth graph power.Id)
         Assert.Contains(graph.Edges, fun edge -> edge.Target = power.Id && edge.Role = EdgeRole.LoopRangePending LoopRangeResidual.ProofResources)
         let platform: PlatformContext = {
+            PlatformLoading = None
             PlatformId = "recurrence-resource-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
             Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
             PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty

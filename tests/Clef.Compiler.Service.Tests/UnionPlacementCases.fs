@@ -8,7 +8,7 @@ module UnionPlacement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
 
 module private UnionPlacementFixture =
     let context bits : PlatformContext =
-        { PlatformId = "union-placement-test"; Dimensions = Map.ofList ["Pointer", bits; "Register", bits]
+        { PlatformLoading = None; PlatformId = "union-placement-test"; Dimensions = Map.ofList ["Pointer", bits; "Register", bits]
           Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
           PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None
           PlatformSourcePaths = Set.empty; Predicates = Map.empty; FreestandingStartup = None

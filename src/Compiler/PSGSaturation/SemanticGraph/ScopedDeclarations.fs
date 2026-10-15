@@ -74,6 +74,11 @@ let private readUncached (graph: SemanticGraph) =
                         | [(_, ty, id)] ->
                             match applySubst ty with
                             | NativeType.TFun _ -> declare id [node.Id; descriptor.Id; binding.Id]
+                            | NativeType.TApp(constructor, [signature]) when constructor.NTUKind = Some NTUKind.NTUfnptr &&
+                                  (match applySubst signature with NativeType.TFun _ -> true | _ -> false) ->
+                                // This states synchronous use only. Receiving ABI and
+                                // code residence remain separate boundary premises.
+                                declare id [node.Id; descriptor.Id; binding.Id]
                             | _ -> finding descriptor "A ScopedCallbackDescriptor must name a function-valued parameter."
                         | [] -> finding descriptor (sprintf "Scoped callback parameter '%s.%s' is missing from the declared callable boundary." bindingName parameterName)
                         | _ -> finding descriptor (sprintf "Scoped callback parameter '%s.%s' is ambiguous." bindingName parameterName)
