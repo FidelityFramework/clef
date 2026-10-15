@@ -144,6 +144,19 @@ let main _ =
         DimensionalCases.noErrors result
         result.Graph
 
+    let receivingZeroCheckWith signature callback =
+        receivingCheckWith true (fun source ->
+            source
+                .Replace("FnPtr<int -> int>", "FnPtr<" + signature + ">")
+                .Replace("type EntrySignature =", "type CallbackDescriptor = { Record: string; Field: string; Signature: FunctionDescriptor }\ntype EntrySignature =")
+                .Replace("let receiveRecord (callback: NativeRecord)", "let legacyEntry: Expr<CallbackDescriptor> = <@ { Record = \"NativeRecord\"; Field = \"Handler\"; Signature = { CName = \"callback\"; Parameters = [||]; ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } } @>\nlet receiveRecord (callback: NativeRecord)")
+                .Replace("Parameters = [| { Name = \"arg0\"; Type = Integer (Signed, 64); PassBy = Value } |]", "Parameters = [||]")
+                .Replace("ReturnType = Integer (Signed, 64); CallingConvention", "ReturnType = Void; CallingConvention")
+                .Replace("let callback (_unused: int) = 7", callback))
+
+    let receivingZeroCheck callback =
+        receivingZeroCheckWith "unit -> unit" callback
+
     let receivingGraph () = receivingGraphWith false
     let receivingWrapperGraph () = receivingGraphWith true
 
@@ -861,3 +874,169 @@ let main _ =
         let body = receiving.Signature.Body.Value
         Assert.False(graph.Graph.Codata.Value.Meets.ContainsKey body)
         Assert.False(graph.Graph.Codata.Value.ReturnMeets.ContainsKey receiving.Lambda)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Sole source unit formal is retained while its native vector is empty``(used: bool) =
+        let callback =
+            if used then
+                "let callback (value: unit) : unit =\n    let marker = 7\n    value"
+            else
+                "let callback (_unused: unit) : unit = ()"
+
+        let result = ClosedCallbackCases.receivingZeroCheck callback
+        DimensionalCases.noErrors result
+
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph
+            |> Result.defaultWith (fun errors -> failwithf "Sole unit publication refused: %A" errors)
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let entry = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
+        let formal = entry.Formals |> Assert.Single
+        let invocation = revision.Emission.Boundary.CallbackInvocations[entry.Invocation]
+        let carrier = revision.Emission.Callable.Carriers[entry.Formation]
+
+        let contract =
+            carrier.Contract
+            |> Result.defaultWith failwith
+            |> fun identity -> revision.Emission.Callable.Contracts[identity]
+
+        Assert.Empty invocation.Contract.Signature.Parameters
+        Assert.Empty invocation.Signature.Parameters
+        Assert.Equal(BAREWire.Descriptors.TypeRef.Void, invocation.Contract.Signature.ReturnType)
+        Assert.True invocation.Signature.Result.IsNone
+        Assert.True(Set.singleton formal = carrier.OmittedParameters)
+        Assert.Equal<int list>([ 0 ], contract.OmittedParameters)
+        Assert.Empty contract.ParameterRepresentations
+        Assert.True(Fidelity.PSG.TypeIdentity.isUnit revision.Nodes[formal].Type)
+        Assert.Contains(formal, revision.Emission.Callable.UnitNodes)
+        Assert.Equal<Fidelity.PSG.Meet option list>([ None ], entry.ParameterAdaptations)
+        Assert.True(entry.ResultAdaptation.IsNone)
+        Assert.False(revision.Emission.Numeric.Values.ContainsKey formal)
+        Assert.False(revision.Emission.Numeric.Values.ContainsKey entry.Body)
+
+        let limits: Fidelity.PSG.Binary.Limits =
+            {
+                MaxBytes = 8 * 1024 * 1024
+                MaxCollectionLength = 100000
+                MaxDepth = 128
+                MaxStringBytes = 1024 * 1024
+                MaxBigIntegerBytes = 4096
+                MaxValues = 2000000
+            }
+
+        let bytes =
+            Fidelity.PSG.Binary.encode limits revision
+            |> Result.defaultWith (fun error -> failwithf "%A" error)
+
+        let copy =
+            Fidelity.PSG.Binary.decode limits bytes
+            |> Result.defaultWith (fun error -> failwithf "%A" error)
+
+        Assert.Equal(revision.Emission.Boundary, copy.Emission.Boundary)
+        Assert.True(carrier.OmittedParameters = copy.Emission.Callable.Carriers[entry.Formation].OmittedParameters)
+
+    [<Theory>]
+    [<InlineData("let callback (_unused: int) : unit = ()")>]
+    [<InlineData("let callback (_first: unit) (_second: unit) : unit = ()")>]
+    member _.``Empty native vector refuses a source formal vector without exact sole unit``(callback: string) =
+        let signature =
+            if callback.Contains("_first") then
+                "unit -> unit -> unit"
+            else
+                "int -> unit"
+
+        let result = ClosedCallbackCases.receivingZeroCheckWith signature callback
+
+        Assert.Contains(
+            result.Diagnostics,
+            fun diagnostic ->
+                diagnostic.Code = "CCS8413"
+                && diagnostic.Message = "Callable receiving convention has not been settled by its source recipe."
+        )
+
+    [<Theory>]
+    [<InlineData("type")>]
+    [<InlineData("representation")>]
+    [<InlineData("unit-fact")>]
+    [<InlineData("convention")>]
+    member _.``Sole unit public erasure refuses withdrawn exact formal premises``(shape: string) =
+        let result =
+            ClosedCallbackCases.receivingZeroCheck "let callback (value: unit) : unit = value"
+
+        DimensionalCases.noErrors result
+
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph
+            |> Result.defaultWith (fun errors -> failwithf "%A" errors)
+
+        let entry = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
+        let formal = entry.Formals |> Assert.Single
+
+        let changed =
+            match shape with
+            | "convention" ->
+                let boundary = revision.Emission.Boundary
+                let invocation = boundary.CallbackInvocations[entry.Invocation]
+
+                let invocation =
+                    { invocation with
+                        Signature =
+                            { invocation.Signature with
+                                CallingConvention = "not-CDecl"
+                            }
+                    }
+
+                { revision with
+                    Emission =
+                        { revision.Emission with
+                            Boundary =
+                                { boundary with
+                                    CallbackInvocations = boundary.CallbackInvocations.Add(entry.Invocation, invocation)
+                                }
+                        }
+                }
+            | "type" ->
+                let body = revision.Nodes[formal]
+
+                let integer =
+                    revision.Nodes.Values
+                    |> Seq.find (fun node ->
+                        not (Fidelity.PSG.TypeIdentity.isUnit node.Type)
+                        && revision.Emission.Numeric.Values.ContainsKey node.Id)
+
+                { revision with
+                    Nodes = revision.Nodes.Add(formal, { body with Type = integer.Type })
+                }
+            | "representation" ->
+                { revision with
+                    Emission =
+                        { revision.Emission with
+                            Numeric =
+                                { revision.Emission.Numeric with
+                                    OccurrenceRepresentations = revision.Emission.Numeric.OccurrenceRepresentations.Remove formal
+                                }
+                        }
+                }
+            | _ ->
+                { revision with
+                    Emission =
+                        { revision.Emission with
+                            Callable =
+                                { revision.Emission.Callable with
+                                    UnitNodes = revision.Emission.Callable.UnitNodes.Remove formal
+                                }
+                        }
+                }
+
+        let part, reason =
+            if shape = "convention" then
+                "Emission.Boundary.CallbackInvocations.Signature",
+                "The callback signature differs from its complete nonempty integer-formal CDecl receiving quotation and exact integer or void result."
+            else
+                "Emission.Boundary.ClosedEntries.UnitParameters",
+                "A zero-argument void callback requires its exact sole source unit formal and current unit representation."
+
+        Assert.Contains(Fidelity.PSG.Integrity.check changed, fun issue -> issue.Part = part && issue.Reason = reason)

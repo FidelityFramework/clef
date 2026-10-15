@@ -129,6 +129,11 @@ let private readUncached (graph: SemanticGraph) : Reading =
                                                     let parameter = declared.Parameters |> List.tryFind (fun (id, _) -> id = paramId) |> Option.bind snd
                                                     match parameter, Types.tryGetNTUKind ty with
                                                     | Some _, _ -> () // The common descriptor reader validates scalar/source agreement.
+                                                    | None, Some NTUKind.NTUunit when parameters.Length = 1 && returnsVoid &&
+                                                                                   declared.Parameters.IsEmpty &&
+                                                                                   (graph.Nodes.TryFind paramId |> Option.exists (fun node -> Types.tryGetNTUKind node.Type = Some NTUKind.NTUunit)) &&
+                                                                                   (field "Parameters" signatureFields |> Option.bind (valueOf graph)
+                                                                                    |> Option.exists (fun node -> match node.Kind with SemanticKind.ArrayExpr [] -> true | _ -> false)) -> ()
                                                     | None, Some NTUKind.NTUptr | None, Some NTUKind.NTUfnptr ->
                                                         if not (pointerDeclared (List.tryItem index parameterTypes |> Option.flatten)) then
                                                             finding address DeclarationDefect.Invalid "An opaque callback parameter requires a matching Pointer declaration."

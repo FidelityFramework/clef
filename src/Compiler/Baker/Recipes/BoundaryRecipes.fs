@@ -935,9 +935,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
 
             do!
                 require
-                    (not parameters.IsEmpty
+                    ((not parameters.IsEmpty || source.Contract.Signature.ReturnType = BAREWire.Descriptors.TypeRef.Void)
                      && source.Contract.Signature.CallingConvention = BAREWire.Descriptors.CallConv.CDecl)
-                    "The closed C entry profile requires nonempty scalar integer native formals and CDecl."
+                    "The closed C entry profile requires scalar integer native formals or exact zero-argument void, and CDecl."
 
             let participants = Set.ofList source.Participants
 
@@ -998,13 +998,23 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
             let entry = formation.Entry
             let implementation = entry.Lifetime.Implementation
             let formals = entry.Parameters |> List.map (fun (_, _, formal) -> formal)
+            let unitParameterOmission =
+                invocation.Contract.Signature.Parameters.Length = 0 &&
+                invocation.Contract.Signature.ReturnType = BAREWire.Descriptors.TypeRef.Void &&
+                invocation.Signature.Parameters.IsEmpty && invocation.Signature.Result.IsNone &&
+                (match entry.Parameters with
+                 | [(_, ty, formal)] ->
+                     Types.tryGetNTUKind ty = Some NTUKind.NTUunit &&
+                     (graph.Nodes.TryFind formal |> Option.exists (fun node -> Types.tryGetNTUKind node.Type = Some NTUKind.NTUunit)) &&
+                     (graph.Nodes.TryFind entry.Result |> Option.exists (fun node -> Types.tryGetNTUKind node.Type = Some NTUKind.NTUunit))
+                 | _ -> false)
 
             do!
                 require
                     (evidence.Declaration = entry.Lifetime.Binding
                      && evidence.Lambda = implementation
                      && evidence.Signature.Body = Some entry.Result
-                     && (evidence.Signature.Parameters |> List.map fst) = formals)
+                     && (evidence.Signature.Parameters |> List.map fst) = (if unitParameterOmission then [] else formals))
                     "The receiving callback differs from its original complete module declaration."
 
             let entryPurposes =
@@ -1037,7 +1047,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     (carrier.Kind = CallableKind.NativeEntry
                      && carrier.Formation = formation.Formation
                      && carrier.Implementation = implementation
-                     && carrier.OmittedParameters.IsEmpty
+                     && carrier.OmittedParameters = (if unitParameterOmission then Set.ofList formals else Set.empty)
                      && (carrier.Parameters |> List.map (fun (_, _, formal) -> formal)) = formals
                      && Clef.Compiler.Baker.Ingredients.CallableContracts.sourcePremisesCurrent graph contract
                      && (match contract.Convention with
@@ -1060,12 +1070,13 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
 
             do!
                 require
-                    (formals.Length = invocation.Signature.Parameters.Length)
+                    (unitParameterOmission || formals.Length = invocation.Signature.Parameters.Length)
                     "The closed callback native signature differs from its complete source formal vector."
 
-            let! parameterCarriers = formals |> List.map currentCarrier |> collect
+            let nativeFormals = if unitParameterOmission then [] else formals
+            let! parameterCarriers = nativeFormals |> List.map currentCarrier |> collect
             let! parameterAdaptations =
-                List.zip3 formals invocation.Signature.Parameters parameterCarriers
+                List.zip3 nativeFormals invocation.Signature.Parameters parameterCarriers
                 |> List.map (fun (formal, abi, carrier) ->
                     checked' {
                         let! bits = sourceWidth graph formal abi
@@ -1140,7 +1151,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     Body = entry.Result
                     Lifetime = entry.Lifetime
                     Invocation = identity
-                    ParameterAdaptations = parameterAdaptations
+                    ParameterAdaptations = if unitParameterOmission then [None] else parameterAdaptations
                     ResultAdaptation = resultAdaptation
                     Transport = transport
                     Participants = participants

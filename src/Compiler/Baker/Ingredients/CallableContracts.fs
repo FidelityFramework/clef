@@ -136,11 +136,20 @@ let signature (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
         let unitResult =
             resultRepresentation = ValueRepresentation.Scalar SettledSlot.Unit
             && Types.tryGetNTUKind result.Type = Some NTUKind.NTUunit
+        let unitParameterOmission =
+            match carrier.Parameters with
+            | [(_, ty, formal)] ->
+                carrier.OmittedParameters = Set.singleton formal &&
+                Types.tryGetNTUKind ty = Some NTUKind.NTUunit && unitResult &&
+                (graph.Nodes.TryFind formal |> Option.exists (fun node -> Types.tryGetNTUKind node.Type = Some NTUKind.NTUunit)) &&
+                (domain |> Option.bind (fun domain -> domain.OccurrenceRepresentations.TryFind formal)) =
+                    Some(Ok(ValueRepresentation.Scalar SettledSlot.Unit))
+            | _ -> false
         let convention =
             match carrier.Kind with
             | CallableKind.OrdinaryFlatClosure -> Some CallableConvention.Ordinary
             | CallableKind.NativeEntry when bytes.IsNone && carrier.EnvironmentValue.IsNone &&
-                                           carrier.OmittedParameters.IsEmpty &&
+                                           (carrier.OmittedParameters.IsEmpty || unitParameterOmission) &&
                                            (parameters |> List.forall (snd >> scalar)) && (scalar resultRepresentation || unitResult) ->
                 match domain |> Option.bind _.Platform, Entries.tryImplementation graph carrier.Implementation,
                       Entries.tryFormation graph carrier.Occurrence with

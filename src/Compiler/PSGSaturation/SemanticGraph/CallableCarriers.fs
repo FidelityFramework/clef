@@ -263,7 +263,14 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
                       Lifetime = []
                       Parameters = parameters
                       ParameterShapes = parameters |> List.map (fun (_, _, id) -> valueShape graph graph.Nodes[id])
-                      OmittedParameters = if native.IsSome then Set.empty else OrdinaryDemand.parameters graph implementation
+                      OmittedParameters =
+                          if native.IsSome then
+                              match parameters with
+                              | [(_, ty, formal)] when Types.tryGetNTUKind ty = Some NTUKind.NTUunit &&
+                                                       Types.tryGetNTUKind graph.Nodes[body].Type = Some NTUKind.NTUunit ->
+                                  Set.singleton formal
+                              | _ -> Set.empty
+                          else OrdinaryDemand.parameters graph implementation
                       Result = body; ResultShape = valueShape graph graph.Nodes[body]
                       Environment = environment |> Option.map (fun known ->
                           { Owner = known.EnvironmentOwner; Formal = inputs.Layouts[known.EnvironmentOwner].Formal }) }
