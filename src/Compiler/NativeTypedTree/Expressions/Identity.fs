@@ -63,6 +63,9 @@ let rec private resolveIdentifierCore
         // 2a. Try operator intrinsics (not, op_BooleanAnd, etc.)
         match tryResolveOperator name range with
         | Some (info, ty) -> IntrinsicNode (info, ty)
+        | None when Types.isWidthNamedNumericType name && (tryLookupBinding name env).IsSome ->
+            // A declared value is not an obsolete numeric type or conversion.
+            resolveBinding parts fullName env range
         | None ->
 
         // 2b. Try conversion intrinsics (float, int, etc.)

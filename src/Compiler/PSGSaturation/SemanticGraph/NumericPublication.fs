@@ -198,8 +198,9 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
     | _ -> reject None Set.empty "Exactly one source NumericSettlement domain is required before witnessing."
 
 /// Retain each Pending identity beside the currentness refusal that explains it.
-/// Completeness is checked first; neither a partial ledger nor a Pending claim
-/// can grant physical publication.
+/// Currentness is checked before reading the source completeness census.
+/// Every admitted domain still requires completeness; neither a partial ledger
+/// nor a Pending claim can grant physical publication.
 let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessProjectionFailure list> =
     let pending =
         graph.Nodes
@@ -229,10 +230,10 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
                 | _ -> None
             | _ -> None)
 
-    match completeness graph with
-    | failures when not failures.IsEmpty -> Error(failures @ pending)
-    | _ ->
-        match projectDomain graph, pending with
-        | Error failures, _ -> Error(failures @ pending)
-        | Ok _, _ :: _ -> Error pending
-        | Ok projection, [] -> Ok projection
+    match projectDomain graph with
+    | Error failures -> Error(failures @ pending)
+    | Ok projection ->
+        match completeness graph, pending with
+        | failures, _ when not failures.IsEmpty -> Error(failures @ pending)
+        | _, _ :: _ -> Error pending
+        | _, [] -> Ok projection

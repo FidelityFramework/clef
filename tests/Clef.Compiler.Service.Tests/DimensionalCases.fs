@@ -52,6 +52,22 @@ let different expected actual =
     | other -> failwithf "Expected dimensional mismatch, got %A" other
 
 let tests = [
+    "legacy numeric spellings preserve bound value identifiers", fun () ->
+        let result = check "let double input = input * 2\n[<EntryPoint>]\nlet main _ = if double 3 = 6 && Dimensions.double 4 = 8 then 0 else 1\n"
+        noErrors result
+        if result.Diagnostics |> List.exists (fun diagnostic -> diagnostic.Code = "CCS8706") then
+            failwith "An ordinary bound function identifier was treated as an obsolete numeric type"
+
+    "legacy numeric spellings remain refused in actual type annotations", fun () ->
+        let result = check "let bad (value: double) = value\n"
+        if result.Diagnostics |> List.exists (fun diagnostic -> diagnostic.Code = "CCS8706" && diagnostic.Message.Contains "'double' is not a Clef source type") |> not then
+            failwithf "An obsolete source type annotation lost its located refusal: %A" result.Diagnostics
+
+    "legacy numeric spellings remain refused as unbound conversions", fun () ->
+        let result = check "[<EntryPoint>]\nlet main _ = double 3\n"
+        if result.Diagnostics |> List.exists (fun diagnostic -> diagnostic.Code = "CCS8706" && diagnostic.Message.Contains "'double' is not a Clef source type") |> not then
+            failwithf "An unbound obsolete numeric conversion lost its located refusal: %A" result.Diagnostics
+
     "native kind strings preserve structural union spelling for every case and width", fun () ->
         let widths = [
             for bits in [System.Int32.MinValue; -1; 0; 1; 3; 32; System.Int32.MaxValue] do
