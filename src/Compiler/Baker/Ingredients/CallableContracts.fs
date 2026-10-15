@@ -133,12 +133,15 @@ let signature (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
         let scalar = function
             | ValueRepresentation.Scalar(SettledSlot.Integer _ | SettledSlot.Real _ | SettledSlot.Bool | SettledSlot.Char) -> true
             | _ -> false
+        let unitResult =
+            resultRepresentation = ValueRepresentation.Scalar SettledSlot.Unit
+            && Types.tryGetNTUKind result.Type = Some NTUKind.NTUunit
         let convention =
             match carrier.Kind with
             | CallableKind.OrdinaryFlatClosure -> Some CallableConvention.Ordinary
             | CallableKind.NativeEntry when bytes.IsNone && carrier.EnvironmentValue.IsNone &&
                                            carrier.OmittedParameters.IsEmpty &&
-                                           (parameters |> List.forall (snd >> scalar)) && scalar resultRepresentation ->
+                                           (parameters |> List.forall (snd >> scalar)) && (scalar resultRepresentation || unitResult) ->
                 match domain |> Option.bind _.Platform, Entries.tryImplementation graph carrier.Implementation,
                       Entries.tryFormation graph carrier.Occurrence with
                 | Some target, Some entry, Some formation

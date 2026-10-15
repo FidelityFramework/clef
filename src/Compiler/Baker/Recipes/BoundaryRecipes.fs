@@ -928,7 +928,10 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 |> List.map (fun parameter -> integer parameter.Type)
                 |> collect
 
-            let! result = integer source.Contract.Signature.ReturnType
+            let! result =
+                match source.Contract.Signature.ReturnType with
+                | BAREWire.Descriptors.TypeRef.Void -> Ok None
+                | result -> integer result |> Result.map Some
 
             do!
                 require
@@ -945,7 +948,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 Formal = source.Formal
                 Scope = source.Scope
                 Contract = source.Contract
-                Signature = { Parameters = parameters; Result = Some result; CallingConvention = "CDecl" }
+                Signature = { Parameters = parameters; Result = result; CallingConvention = "CDecl" }
                 Participants = participants
             }: BoundaryCallbackInvocation)
         }
@@ -1082,24 +1085,33 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     })
                 |> collect
 
-            let! returned =
-                invocation.Signature.Result
-                |> needed "The closed C profile requires a scalar native return."
-
-            let! resultCarrier = currentCarrier entry.Result
-
-            do!
-                require
-                    (ValueRange.contains (scalarRange returned) resultCarrier.Range)
-                    "The closed callback result does not fit its declared native return ABI."
-
             let resultAdaptation = graph.Codata.Value.ReturnMeets.TryFind implementation
-            let! resultBits = sourceWidth graph entry.Result returned
 
             do!
-                require
-                    (resultBits = scalarBits returned)
-                    "The closed callback result requires its source-settled native return slot, not a guessed extension."
+                match invocation.Contract.Signature.ReturnType, invocation.Signature.Result with
+                | BAREWire.Descriptors.TypeRef.Void, None ->
+                    require
+                        ((graph.Nodes.TryFind entry.Result |> Option.exists (fun body -> Types.tryGetNTUKind body.Type = Some NTUKind.NTUunit))
+                         && evidence.Signature.Return.IsNone
+                         && resultAdaptation.IsNone)
+                        "A void native callback requires its actual unit source body and no numeric return adaptation."
+                | _, Some returned ->
+                    checked' {
+                        let! resultCarrier = currentCarrier entry.Result
+
+                        do!
+                            require
+                                (ValueRange.contains (scalarRange returned) resultCarrier.Range)
+                                "The closed callback result does not fit its declared native return ABI."
+
+                        let! resultBits = sourceWidth graph entry.Result returned
+
+                        return!
+                            require
+                                (resultBits = scalarBits returned)
+                                "The closed callback result requires its source-settled native return slot, not a guessed extension."
+                    }
+                | _ -> Error "The closed C profile requires an exact integer or void native return."
 
             let transport =
                 Set.ofList (formation.Formation :: originalOperand :: operand.Actual :: evidence.Transport)

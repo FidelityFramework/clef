@@ -1738,9 +1738,8 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                 | Some(SemanticKind.Binding(_, true, _, _)) -> false
                 | _ -> true)
 
-        let integer typeId =
-            readTypeRef graph typeId
-            |> Result.bind (function
+        let integer =
+            function
                 | DeclaredTypeRef.Scalar(BoundaryScalar.Integer(bits, signed)) ->
                     Ok(
                         BAREWire.Descriptors.TypeRef.Integer(
@@ -1751,7 +1750,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                             bits
                         )
                     )
-                | _ -> invalid "requires scalar integer entry parameters and result in this closed C profile.")
+                | _ -> invalid "requires scalar integer entry parameters and result in this closed C profile."
 
         let signature (signature: SemanticNode) signatureFields =
             match
@@ -1771,7 +1770,8 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                 field "Type" parameterFields
                             with
                             | Some name, Some(_, "Value", None), Some typeId ->
-                                integer typeId
+                                readTypeRef graph typeId
+                                |> Result.bind integer
                                 |> Result.map (fun ty ->
                                     {
                                         Name = name
@@ -1790,7 +1790,10 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
 
                 parameters
                 |> Result.bind (fun parameters ->
-                    integer returned
+                    readTypeRef graph returned
+                    |> Result.bind (function
+                        | DeclaredTypeRef.Void -> Ok BAREWire.Descriptors.TypeRef.Void
+                        | result -> integer result)
                     |> Result.map (fun returned ->
                         {
                             Parameters = Array.ofList parameters

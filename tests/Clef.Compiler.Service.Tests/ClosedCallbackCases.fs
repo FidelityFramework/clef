@@ -126,6 +126,24 @@ let main _ =
         DimensionalCases.noErrors result
         result.Graph
 
+    let receivingUnitGraph mixed =
+        let result =
+            receivingCheckWith true (fun source ->
+                let source =
+                    (pairSource "let callback (_first: int) (_second: int) : unit =\n    let marker = 7\n    ()" source)
+                        .Replace("FnPtr<int -> int -> int>", "FnPtr<int -> int -> unit>")
+                        .Replace("ReturnType = Integer (Signed, 64); CallingConvention", "ReturnType = Void; CallingConvention")
+
+                if mixed then
+                    source
+                        .Replace("{ Name = \"arg0\"; Type = Integer (Signed, 64)", "{ Name = \"arg0\"; Type = Integer (Signed, 32)")
+                        .Replace("{ Name = \"arg1\"; Type = Integer (Signed, 64)", "{ Name = \"arg1\"; Type = Integer (Unsigned, 64)")
+                else
+                    source)
+
+        DimensionalCases.noErrors result
+        result.Graph
+
     let receivingGraph () = receivingGraphWith false
     let receivingWrapperGraph () = receivingGraphWith true
 
@@ -590,8 +608,159 @@ let main _ =
             if part = "Emission.Boundary.ClosedEntries.Declaration" then
                 "The closed entry differs from its original capture-free implementation, body or complete ordered native formals."
             else
-                "The callback signature differs from its complete nonempty integer CDecl receiving quotation."
+                "The callback signature differs from its complete nonempty integer-formal CDecl receiving quotation and exact integer or void result."
         Assert.Contains(Fidelity.PSG.Integrity.check changed, fun error -> error.Part = part && error.Reason = reason)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Receiving unit result preserves full integer domains and an empty native result through codec``(mixed: bool) =
+        let graph = ClosedCallbackCases.receivingUnitGraph mixed
+        let receiving = (read graph).Receiving |> Assert.Single
+        Assert.Equal(2, receiving.Signature.Parameters.Length)
+        Assert.True receiving.Signature.Return.IsNone
+        let body = receiving.Signature.Body.Value
+        Assert.Equal(Some NTUKind.NTUunit, Types.tryGetNTUKind graph.Nodes[body].Type)
+        Assert.False(graph.Codata.Value.ReturnMeets.ContainsKey receiving.Lambda)
+
+        let expected =
+            if mixed then
+                [ ValueRange.twosComplement 32; ValueRange.unsignedOf 64 ]
+            else
+                [ ValueRange.twosComplement 64; ValueRange.twosComplement 64 ]
+
+        let numeric =
+            Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph
+            |> Result.defaultWith (fun errors -> failwithf "Unit incoming domains refused: %A" errors)
+
+        for (formal, declared), domain in List.zip receiving.Signature.Parameters expected do
+            Assert.Equal(domain, declared.Value.Range)
+            Assert.Equal(domain, numeric.Values[formal].Range)
+
+        Assert.False(numeric.Values.ContainsKey body)
+
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (fun errors -> failwithf "Unit source publication refused: %A" errors)
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let entry = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
+        let invocation = revision.Emission.Boundary.CallbackInvocations[entry.Invocation]
+        Assert.Equal(BAREWire.Descriptors.TypeRef.Void, invocation.Contract.Signature.ReturnType)
+        Assert.True(invocation.Signature.Result.IsNone && entry.ResultAdaptation.IsNone)
+        Assert.True(Fidelity.PSG.TypeIdentity.isUnit revision.Nodes[entry.Body].Type)
+        Assert.Contains(entry.Body, revision.Emission.Callable.UnitNodes)
+        Assert.Equal(2, entry.Formals.Length)
+        Assert.False(revision.Emission.Numeric.Values.ContainsKey entry.Body)
+
+        let limits: Fidelity.PSG.Binary.Limits =
+            {
+                MaxBytes = 8 * 1024 * 1024
+                MaxCollectionLength = 100000
+                MaxDepth = 128
+                MaxStringBytes = 1024 * 1024
+                MaxBigIntegerBytes = 4096
+                MaxValues = 2000000
+            }
+
+        let bytes =
+            Fidelity.PSG.Binary.encode limits revision
+            |> Result.defaultWith (fun error -> failwithf "%A" error)
+
+        let copy =
+            Fidelity.PSG.Binary.decode limits bytes
+            |> Result.defaultWith (fun error -> failwithf "%A" error)
+
+        Assert.True(revision.Emission.Boundary = copy.Emission.Boundary)
+
+    [<Theory>]
+    [<InlineData("missing-void")>]
+    [<InlineData("body")>]
+    [<InlineData("unit-fact")>]
+    [<InlineData("result")>]
+    member _.``Receiving unit public account refuses missing void or actual unit evidence``(shape: string) =
+        let revision =
+            ClosedCallbackCases.receivingUnitGraph false
+            |> Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish
+            |> Result.defaultWith (fun errors -> failwithf "Unit source publication refused: %A" errors)
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let boundary = revision.Emission.Boundary
+        let entry = boundary.ClosedEntries.Values |> Assert.Single
+        let invocation = boundary.CallbackInvocations[entry.Invocation]
+
+        let withInvocation (invocation: Fidelity.PSG.BoundaryCallbackInvocation) =
+            { revision with
+                Emission =
+                    { revision.Emission with
+                        Boundary =
+                            { boundary with
+                                CallbackInvocations = boundary.CallbackInvocations.Add(invocation.Identity, invocation)
+                            }
+                    }
+            }
+
+        let changed, part, reason =
+            if shape = "missing-void" || shape = "result" then
+                let invocation =
+                    if shape = "missing-void" then
+                        { invocation with
+                            Contract =
+                                { invocation.Contract with
+                                    Signature =
+                                        { invocation.Contract.Signature with
+                                            ReturnType = BAREWire.Descriptors.TypeRef.Pointer 64
+                                        }
+                                }
+                        }
+                    else
+                        { invocation with
+                            Signature =
+                                { invocation.Signature with
+                                    Result = Some(Fidelity.PSG.BoundaryScalar.Integer(64, true))
+                                }
+                        }
+
+                withInvocation invocation,
+                "Emission.Boundary.CallbackInvocations.Signature",
+                "The callback signature differs from its complete nonempty integer-formal CDecl receiving quotation and exact integer or void result."
+            else
+                let changed =
+                    if shape = "unit-fact" then
+                        { revision with
+                            Emission =
+                                { revision.Emission with
+                                    Callable =
+                                        { revision.Emission.Callable with
+                                            UnitNodes = revision.Emission.Callable.UnitNodes.Remove entry.Body
+                                        }
+                                }
+                        }
+                    else
+                        let body = revision.Nodes[entry.Body]
+
+                        let wrongType =
+                            match body.Type with
+                            | Fidelity.PSG.TypeIdentity.Application(constructor, arguments) ->
+                                Fidelity.PSG.TypeIdentity.Application(
+                                    { constructor with
+                                        NativeKind = Some Fidelity.PSG.NTUKind.NTUbool
+                                    },
+                                    arguments
+                                )
+                            | _ -> failwith "Expected the actual source unit type."
+
+                        { revision with
+                            Nodes = revision.Nodes.Add(entry.Body, { body with Type = wrongType })
+                        }
+
+                changed,
+                "Emission.Boundary.ClosedEntries.UnitResult",
+                "A void native callback requires its actual unit source body and no numeric result or return adaptation."
+
+        let failures = Fidelity.PSG.Integrity.check changed
+        Assert.Contains(failures, fun error -> error.Part = part && error.Reason = reason)
+        if shape = "missing-void" then Assert.Single failures |> ignore
 
     [<Fact>]
     member _.``Receiving integer pair refuses source callback with missing native formal``() =
