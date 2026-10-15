@@ -1325,7 +1325,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
-          Loading = if entries.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else loading |> Result.toOption
+          // Native entries and callback accounts require their selected source loading
+          // even when every import is libc; ordinary direct libc calls keep no account.
+          Loading = if entries.IsEmpty && closedEntries.IsEmpty && callbackInvocations.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else loading |> Result.toOption
           Entries = Map.keys entries |> Seq.toList
           CallbackInvocations = Map.keys callbackInvocations |> Seq.toList
           ClosedEntries = Map.keys closedEntries |> Seq.toList
