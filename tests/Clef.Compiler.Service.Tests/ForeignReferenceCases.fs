@@ -114,6 +114,45 @@ type ResourceDescriptor = { Resource:ResourceProtocol; Hypothesis:ExternalExecut
 
     let resourceGraph () = resourceGraphFor [resourceSource,"resource-declarations.clef"]
 
+    let resourceApplication body =
+        let root =
+            System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/resource-application-tests", System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory root |> ignore
+        let write (name:string) (text:string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root,name),text)
+        write "authority.clef" (SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\""))
+        write "resource.clef" resourceSource
+        write "main.clef" ("module ResourceApplicationMain\n[<EntryPoint>]\nlet main _ =\n" + body)
+        write "resource.fidproj" """
+[package]
+name="ResourceApplicationRequirement"
+version="0.1.0"
+[compilation]
+target="cpu"
+memory_model="stack_only"
+[build]
+output_kind="console"
+sources=["authority.clef","resource.clef","main.clef"]
+[platform]
+description="WriteAuthority.description"
+runtime_model="libc"
+os="linux"
+arch="x86_64"
+[link]
+libraries=["c"]
+"""
+        Clef.Compiler.Project.ProjectChecker.checkProject (System.IO.Path.Combine(root,"resource.fidproj"))
+        |> Result.defaultWith(fun error -> failwithf "%A" error)
+
+    let resourceRequirements (graph:SemanticGraph) =
+        graph.Nodes.Values |> Seq.choose(fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind.StartsWith("foreign-resource-",System.StringComparison.Ordinal) -> Some(node.Id,info)
+            | _ -> None) |> Seq.toList
+
+    let resourceRequirementSupport (graph:SemanticGraph) id =
+        graph.Edges |> List.filter(fun edge -> edge.Target=id && edge.Role=EdgeRole.Constrains)
+        |> function [edge] -> edge.Sources | rows -> failwithf "Expected one exact requirement incidence: %A" rows
+
     let publishedResources =
         lazy (resourceGraph ()
               |> Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish
@@ -198,6 +237,112 @@ let main _ = 0
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ForeignReferences")>]
 type ForeignReferenceTests() =
+    [<Fact>]
+    member _.``Resource application requirements stay pending in the source ledger without native admission``() =
+        let result = ForeignCases.resourceApplication "    match Foreign.mallocFirst 8 with\n    | Some handle -> Foreign.freeFirst handle; 0\n    | None -> 0\n"
+        let graph = result.CheckResult.Graph
+        let requirements = ForeignCases.resourceRequirements graph
+        Assert.Equal(2,requirements.Length)
+        Assert.Equal<string list>(["foreign-resource-cleanup";"foreign-resource-nullable-conversion"],requirements |> List.map(fun (_,info) -> info.Kind) |> List.sort)
+        let resource = (ForeignDeclarations.readDescriptors graph).Resources |> List.find(fun row -> row.Contract.Hypothesis.Identity="fixture-owned-First")
+        let selected = (ForeignDeclarations.read graph).Platform |> Option.get
+        for id,info in requirements do
+            Assert.Equal("",info.Logic)
+            match info.Body with
+            | ObligationBody.Pending reasons -> Assert.Single reasons |> ignore
+            | other -> failwithf "An unmet resource requirement acquired proof authority: %A" other
+            let support = ForeignCases.resourceRequirementSupport graph id
+            for required in [resource.Quote;resource.Acquisition.Binding;resource.Release.Binding;resource.ReleaseFormal;selected.Node;selected.Core.Value.Node] do
+                Assert.Contains(required,support)
+        let dispatch = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize graph |> Result.defaultWith(fun errors -> failwithf "%A" errors)
+        let ledger = Clef.Compiler.Nanopass.ObligationDischarge.ledgerJson (dispatch.Required |> List.map snd)
+        for _,info in requirements do
+            Assert.Contains(info.Kind,ledger)
+            let row = Clef.Compiler.Nanopass.ObligationDischarge.ledgerJson [info]
+            Assert.Contains("\"state\": \"pending\"",row)
+            Assert.Contains("\"missingPremises\"",row)
+            match info.Body with
+            | ObligationBody.Pending reasons -> for reason in reasons do Assert.Contains(reason,row)
+            | _ -> failwith "The exact ledger row lost its pending resource requirement."
+        match dispatch.Query with
+        | Error unavailable ->
+            for id,_ in requirements do Assert.Contains(unavailable,fun (site,_) -> site=id)
+        | Ok query -> failwithf "Pending conversion/cleanup exported a solver query: %s" query
+        Assert.DoesNotContain(graph.Edges,fun edge -> match edge.Role with EdgeRole.BoundaryCall _ -> true | _ -> false)
+        match Clef.Compiler.Project.ProjectChecker.publish result with
+        | Error reason -> Assert.Contains("source-settled adapter beyond the scalar C contract",reason)
+        | Ok _ -> failwith "Pending requirements granted an executable/public witness."
+
+    [<Theory>]
+    [<InlineData("mallocFirst")>]
+    [<InlineData("mallocSecond")>]
+    member _.``Resource application requirements keep equal actual calls and same symbol twins independent``(second:string) =
+        let body =
+            "    match Foreign.mallocFirst 8 with\n"
+            + "    | Some first ->\n"
+            + "        match Foreign."+second+" 8 with\n"
+            + "        | Some second -> Foreign.freeFirst first; 0\n"
+            + "        | None -> Foreign.freeFirst first; 0\n"
+            + "    | None -> 0\n"
+        let graph = (ForeignCases.resourceApplication body).CheckResult.Graph
+        let requirements = ForeignCases.resourceRequirements graph
+        Assert.Equal(4,requirements.Length)
+        Assert.Equal(4,requirements |> List.map(fun (_,info) -> info.Id) |> List.distinct |> List.length)
+        let declarations = (ForeignDeclarations.readDescriptors graph).Resources
+        let sites = requirements |> List.map(fun (id,_) ->
+            ForeignCases.resourceRequirementSupport graph id |> List.filter(fun site ->
+                match graph.Nodes[site].Kind with SemanticKind.Application _ -> true | _ -> false) |> List.head)
+        Assert.Equal(2,sites |> List.distinct |> List.length)
+        let supportedQuotes =
+            requirements |> List.map(fun (id,_) ->
+                let support = ForeignCases.resourceRequirementSupport graph id
+                let quotes = declarations |> List.filter(fun declaration -> List.contains declaration.Quote support)
+                Assert.Single quotes |> ignore
+                let quote = quotes.Head
+                Assert.Contains(quote.Release.Binding,support)
+                Assert.Contains(quote.ReleaseFormal,support)
+                quote.Quote) |> Set.ofList
+        Assert.Equal((if second="mallocFirst" then 1 else 2),supportedQuotes.Count)
+
+    [<Fact>]
+    member _.``Resource application requirements renew claim roles without retaining old obligation nodes``() =
+        let graph = (ForeignCases.resourceApplication "    match Foreign.mallocFirst 8 with\n    | Some handle -> Foreign.freeFirst handle; 0\n    | None -> 0\n").CheckResult.Graph
+        let original = ForeignCases.resourceRequirements graph
+        let renewed = Clef.Compiler.Nanopass.BoundarySettlement.normalize graph
+        let current = ForeignCases.resourceRequirements renewed
+        Assert.Equal<string list>(original |> List.map(fun (_,info) -> info.Id) |> List.sort,current |> List.map(fun (_,info) -> info.Id) |> List.sort)
+        Assert.Equal(2,current.Length)
+        for id,_ in original do Assert.False(renewed.Nodes.ContainsKey id)
+
+    [<Fact>]
+    member _.``Resource application requirements invalidate changed quote target and repeated actual incidence``() =
+        let graph = (ForeignCases.resourceApplication "    match Foreign.mallocFirst 8 with\n    | Some handle -> Foreign.freeFirst handle; 0\n    | None -> 0\n").CheckResult.Graph
+        let declaration = (ForeignDeclarations.readDescriptors graph).Resources |> List.find(fun row -> row.Contract.Hypothesis.Identity="fixture-owned-First")
+        let _,fields = ForeignDeclarations.recordOf graph declaration.Node |> Option.get
+        let _,hypothesis = ForeignDeclarations.field "Hypothesis" fields |> Option.bind(ForeignDeclarations.recordOf graph) |> Option.get
+        let literal,_ = ForeignDeclarations.field "Version" hypothesis |> Option.bind(ForeignDeclarations.valuePath graph) |> Option.get
+        let site =
+            let id,_ = ForeignCases.resourceRequirements graph |> List.head
+            ForeignCases.resourceRequirementSupport graph id |> List.find(fun id ->
+                match graph.Nodes[id].Kind with SemanticKind.Application _ -> true | _ -> false)
+        let application = graph.Nodes[site]
+        let repeated =
+            match application.Kind with
+            | SemanticKind.Application(callee,[actual]) -> {application with Kind=SemanticKind.Application(callee,[actual;actual]);Children=[callee;actual;actual]}
+            | other -> failwithf "Unexpected source acquisition: %A" other
+        let changed =
+            [ {graph with Nodes=graph.Nodes.Add(literal.Id,{literal with Kind=SemanticKind.Literal(NativeLiteral.String "changed-version")})}
+              {graph with Nodes=graph.Nodes.Remove declaration.Quote}
+              {graph with Nodes=graph.Nodes.Add(site,repeated)}
+              {graph with Platform=graph.Platform |> Option.map(fun platform -> {platform with PlatformArchitecture=Some "changed-target"})} ]
+        for current in changed do
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project current with
+            | Error failures -> Assert.Contains(failures,fun failure -> failure.Reason="BoundaryEmission: A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph.")
+            | Ok _ -> failwith "Changed exact resource support retained an old boundary account."
+        let renewed = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed.Head
+        Assert.Equal<string list>(ForeignCases.resourceRequirements graph |> List.map(fun (_,info) -> info.Id) |> List.sort,
+                                  ForeignCases.resourceRequirements renewed |> List.map(fun (_,info) -> info.Id) |> List.sort)
+
     [<Fact>]
     member _.``Resource declaration replay separates actual qualified scopes with identical module leaves``() =
         let source ns =

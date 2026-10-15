@@ -678,7 +678,39 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                           PointerBits = resource.PointerBits; AcquisitionType = resource.AcquisitionType; ResultType = resource.ResultType; HandleType = resource.HandleType
                           Contract = resource.Contract; DeclarationFacts = facts; Participants = Map.keys facts |> Set.ofSeq }
                     Map.add row.Identity row rows,errors) (Map.empty,[])
-    let initialErrors = resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
+    // Requirements belong to the exact source application, before any native
+    // adapter exists. Neither a matching release call nor an unused argument
+    // establishes conversion, alias retirement or complete exit coverage.
+    let resourceRequirements, resourceRequirementErrors =
+        graph.Nodes |> Map.fold (fun (enrichment, errors) _ node ->
+            match node.Kind with
+            | SemanticKind.Application(callee, arguments) when node.IsReachable ->
+                match target graph callee with
+                | Some(binding, transport) when BoundaryDeclarations.isExternal binding ->
+                    match resourceDeclarations.Values |> Seq.filter(fun row -> row.Acquisition=binding.Id) |> Seq.toList with
+                    | [resource] ->
+                        let platform =
+                            runtime.Platform |> Option.map(fun selected ->
+                                selected.Node :: (selected.Core |> Option.map _.Node |> Option.toList))
+                            |> Option.defaultValue []
+                        let participants =
+                            Set.unionMany [transport;resource.Participants;Set.ofList(callee::arguments @ platform)]
+                            |> Set.toList
+                        let requirements =
+                            [ ("foreign-resource-nullable-conversion",
+                              $"The exact foreign acquisition requires conversion at the selected target's established pointer width, agreeing with its declared {resource.PointerBits}-bit ABI: NativeNull to None with no resource, and NonNull to Some of its declared CHandle.",
+                              "The source-owned nullable-result conversion account is not established.")
+                              ("foreign-resource-cleanup",
+                              "After a nonnull acquisition, its exact release must retire every alias on every admitted exit, including later failures; a null result creates no release demand.",
+                              "Complete source-owned resource alias retirement and exit coverage are not established.") ]
+                        requirements |> List.fold(fun (enrichment, errors) (role, statement, reason) ->
+                            match Ingredients.resourceRequirement enrichId node role statement reason participants with
+                            | Ok requirement -> Enrichment.combine enrichment requirement, errors
+                            | Error reason -> enrichment,(node.Id,Set.ofList participants,reason)::errors) (enrichment,errors)
+                    | _ -> enrichment,errors
+                | _ -> enrichment,errors
+            | _ -> enrichment,errors) (Enrichment.empty,[])
+    let initialErrors = resourceRequirementErrors @ resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
     let imported binding =
         checked' {
             let! library =
@@ -1385,7 +1417,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
-    Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment
+    Enrichment.combine resourceRequirements
+        (Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment)
 
 let elaborate graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore graph)

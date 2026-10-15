@@ -237,6 +237,23 @@ let private coverageCore enrichId (graph: SemanticGraph) (call: BoundaryCall) or
 let coverage enrichId graph call ordinal operand input destination =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> coverageCore enrichId graph call ordinal operand input destination)
 
+/// A requirement is a current ledger citizen, not a native adapter or a proof.
+/// Pending has no solver term: its source participants still constrain renewal.
+let resourceRequirement enrichId (subject: SemanticNode) role statement reason participants =
+    match sourceClaimId role subject with
+    | None -> Error "A resource application requirement lacks its source-owned claim site identity."
+    | Some identity ->
+        let node =
+            obligationNode subject enrichId
+                { Id = identity; Kind = role; Logic = ""; Statement = statement
+                  Source = fmtRange subject.Range; Refs = []; Body = ObligationBody.Pending [reason] }
+            |> markOwned
+        let sources = List.distinct (subject.Id :: participants)
+        Ok { NewNodes = [node]; Annotated = []
+             NewEdges =
+                [ constrains sources node
+                  row EdgeRole.EnrichedWith 0 sources node.Id ] }
+
 
 /// A graph citizen records this recipe firing even for an empty domain.
 let private anchorCore enrichId (graph: SemanticGraph) =
