@@ -16,8 +16,13 @@ module StringOrigins = Clef.Compiler.Baker.Ingredients.StringOrigins
 /// Validate the original per-use citizen before admitting its exact relation
 /// rows to the boundary census or the Pending dispatch partition.
 let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id: NodeId, info: ObligationInfo) =
-    match info.Body with
-    | ObligationBody.Pending reasons ->
+    let body =
+        match info.Body with
+        | ObligationBody.Pending reasons -> Some(Choice1Of2 reasons)
+        | ObligationBody.OptionalEntryArgumentConversion model -> Some(Choice2Of2 model)
+        | _ -> None
+    match body with
+    | Some body ->
         let accounts =
             calls |> List.collect (fun call ->
                 call.Arguments |> List.mapi (fun ordinal operand -> call, ordinal, operand)
@@ -45,8 +50,29 @@ let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id
                 let edges = graph.Edges |> List.filter (fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=id)
                 let heldResidence = graph.Edges |> List.filter (fun edge -> edge.Target=id && edge.Role=EdgeRole.EnrichedWith)
                 let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+                let bodyCurrent =
+                    match body with
+                    | Choice1Of2 reasons ->
+                        if reasons=[expectedReason] then Ok ()
+                        else Error "The optional-entry Pending claim has different conversion reasons."
+                    | Choice2Of2 model ->
+                        let entry = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry when entry.Formation=model.Formation -> Some entry | _ -> None)
+                        let source = graph.Nodes.TryFind selected.Construction |> Option.exists (fun node ->
+                            match node.Kind with
+                            | SemanticKind.UnionCase(_, ordinal, payload)
+                            | SemanticKind.DUConstruct(_, ordinal, payload, _) -> ordinal=model.SourceCase && payload=Some model.Payload
+                            | _ -> false)
+                        let arms = [{CaseOrdinal=0;Choice=OptionalEntryPlanChoice.PendingAbsence;Formation=None}
+                                    {CaseOrdinal=1;Choice=OptionalEntryPlanChoice.ClosedEntry;Formation=Some model.Formation}]
+                        if model.Call=call.Site && model.Parameter=ordinal && model.Actual=(List.item ordinal call.Arguments).Actual &&
+                           model.Construction=selected.Construction && model.SourceCase=1 && selected.CaseOrdinal=1 && source &&
+                           selected.Payload=Some model.Payload && selected.Formation=Some model.Formation &&
+                           (List.item ordinal call.Arguments).Abi=BoundaryScalar.Entry model.Invocation && model.Arms=arms &&
+                           (match entry with [entry] -> entry.Invocation=model.Invocation && entry.Transport.IsSupersetOf selected.Transport | _ -> false) &&
+                           info.Logic="QF_LIA" && info.Statement="The exact source Some selection has complete finite native-choice plan correspondence; target realization remains an artifact obligation." then Ok ()
+                        else Error "The optional-entry conversion claim lost its exact current Some source plan."
                 if info.Kind <> role then Error "The optional-entry Pending claim has a different original argument ordinal."
-                elif reasons <> [expectedReason] then Error "The optional-entry Pending claim has different conversion reasons."
+                elif Result.isError bodyCurrent then bodyCurrent |> Result.map (fun () -> [expected;residence])
                 elif (graph.Nodes.TryFind call.Site |> Option.bind (sourceClaimId role)) <> Some info.Id then
                     Error "The optional-entry Pending claim lost its source-owned claim identity."
                 elif not (graph.Nodes.TryFind id |> Option.exists (fun node ->
@@ -1957,9 +1983,40 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                     (Set.toList support)) with
                         | Error reason -> operand::arguments,enrichment,(call.Site,call.Participants,reason)::errors
                         | Ok requirement ->
-                            let obligation = requirement.NewNodes |> List.exactlyOne |> _.Id
-                            let selected = {selection with Obligation=obligation}
-                            {operand with OptionalEntry=Some selected}::arguments,Enrichment.combine enrichment requirement,errors)
+                            let issued =
+                                match requirement.NewNodes with
+                                | [citizen] -> Ok citizen
+                                | _ -> Error "An optional-entry application lost its unique source-issued requirement citizen."
+                            let issued = issued |> Result.map (fun citizen ->
+                                let refined =
+                                    match selection.Payload, selection.Formation, graph.Nodes.TryFind selection.Construction with
+                                    | Some payload, Some formation, Some construction ->
+                                        let sourceCase =
+                                            match construction.Kind with
+                                            | SemanticKind.UnionCase(_, ordinal, Some original)
+                                            | SemanticKind.DUConstruct(_, ordinal, Some original, _) when original=payload -> Some ordinal
+                                            | _ -> None
+                                        match sourceCase, closedEntries.TryFind formation, operand.Abi with
+                                        | Some sourceCase, Some entry, BoundaryScalar.Entry invocation when sourceCase=1 && entry.Invocation=invocation ->
+                                            let model:OptionalEntryArgumentConversionModel =
+                                                {Call=call.Site;Parameter=ordinal;Actual=operand.Actual;Construction=selection.Construction
+                                                 SourceCase=sourceCase;Payload=payload;Formation=formation;Invocation=invocation
+                                                 Arms=[{CaseOrdinal=0;Choice=OptionalEntryPlanChoice.PendingAbsence;Formation=None}
+                                                       {CaseOrdinal=1;Choice=OptionalEntryPlanChoice.ClosedEntry;Formation=Some formation}]}
+                                            let refined = refine citizen (ObligationBody.OptionalEntryArgumentConversion model) (call.Participants.Remove citizen.Id) [] requirement
+                                            let nodes = refined.NewNodes |> List.map (fun node ->
+                                                match node.Kind with
+                                                | SemanticKind.Obligation info ->
+                                                    {node with Kind=SemanticKind.Obligation {info with Statement="The exact source Some selection has complete finite native-choice plan correspondence; target realization remains an artifact obligation."}}
+                                                | _ -> node)
+                                            {refined with NewNodes=nodes}
+                                        | _ -> requirement
+                                    | _ -> requirement
+                                let selected = {selection with Obligation=citizen.Id}
+                                {operand with OptionalEntry=Some selected}, refined)
+                            match issued with
+                            | Ok(operand, requirement) -> operand::arguments,Enrichment.combine enrichment requirement,errors
+                            | Error reason -> operand::arguments,enrichment,(call.Site,call.Participants,reason)::errors)
                     ([],enrichment,errors)
             let arguments = List.rev arguments
             let participants = arguments |> List.choose _.OptionalEntry |> List.map _.Obligation |> Set.ofList |> Set.union call.Participants

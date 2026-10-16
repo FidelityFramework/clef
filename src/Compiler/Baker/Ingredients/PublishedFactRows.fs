@@ -2219,9 +2219,21 @@ and mapNumericWitnessProjection (value: S.NumericWitnessProjection) : Fidelity.P
         ForeignResultUses = (value.ForeignResultUses |> List.map (fun x -> mapForeignResultUse x))
     } : Fidelity.PSG.NumericWitnessProjection)
 
+and mapOptionalEntryArgumentConversionModel (value: S.OptionalEntryArgumentConversionModel) : Fidelity.PSG.OptionalEntryArgumentConversionModel =
+    { Call=nodeId value.Call; Parameter=value.Parameter; Actual=nodeId value.Actual
+      Construction=nodeId value.Construction; SourceCase=value.SourceCase
+      Payload=nodeId value.Payload; Formation=nodeId value.Formation; Invocation=nodeId value.Invocation
+      Arms=value.Arms |> List.map (fun arm ->
+          { CaseOrdinal=arm.CaseOrdinal
+            Choice=(match arm.Choice with
+                    | S.OptionalEntryPlanChoice.PendingAbsence -> Fidelity.PSG.OptionalEntryPlanChoice.PendingAbsence
+                    | S.OptionalEntryPlanChoice.ClosedEntry -> Fidelity.PSG.OptionalEntryPlanChoice.ClosedEntry)
+            Formation=arm.Formation |> Option.map nodeId }) }
+
 and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     match value with
     | S.ObligationBody.Pending reasons -> invalidOp ("A pending obligation cannot be published: " + String.concat "; " reasons)
+    | S.ObligationBody.OptionalEntryArgumentConversion model -> Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion(mapOptionalEntryArgumentConversionModel model)
     | S.ObligationBody.ProgramInitializationOrder(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ProgramInitializationOrder(a0, a1, a2)
     | S.ObligationBody.FiniteLoopTrip(a0) -> Fidelity.PSG.ObligationBody.FiniteLoopTrip(mapFiniteLoopTripModel a0)
     | S.ObligationBody.FiniteSequencePull(a0) -> Fidelity.PSG.ObligationBody.FiniteSequencePull(mapFiniteSequencePullModel a0)

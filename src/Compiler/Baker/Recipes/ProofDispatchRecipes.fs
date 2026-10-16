@@ -23,7 +23,10 @@ let boundaryCalls (graph: SemanticGraph) =
 
 let private admittedPending (graph: SemanticGraph) (required: (NodeId * ObligationInfo) list) =
     if required |> List.exists (fun (_, info) -> match info.Body with ObligationBody.Pending _ -> true | _ -> false) then
-        required |> List.filter (optionalEntryPendingInCalls graph (boundaryCalls graph)) |> List.map fst |> Set.ofList
+        required |> List.filter (fun ((_, info) as claim) ->
+            match info.Body with
+            | ObligationBody.Pending _ -> optionalEntryPendingInCalls graph (boundaryCalls graph) claim
+            | _ -> false) |> List.map fst |> Set.ofList
     else Set.empty
 
 let private inventory (graph: SemanticGraph) =
@@ -46,10 +49,18 @@ let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjec
     try
         let admitted = admittedPending graph required
         let solverRequired = required |> List.filter (fun (id, _) -> not (admitted.Contains id))
+        let stalePlans = required |> List.choose (fun ((id, info) as claim) ->
+            match info.Body with
+            | ObligationBody.OptionalEntryArgumentConversion _ ->
+                match BoundaryRecipes.optionalEntryClaimRows graph (boundaryCalls graph) claim with
+                | Ok _ -> None
+                | Error reason -> Some(id, [reason])
+            | _ -> None)
         let query =
-            match Discharge.trySmtLib (List.map snd solverRequired) with
-            | Ok text -> Ok text
-            | Error _ ->
+            match stalePlans, Discharge.trySmtLib (List.map snd solverRequired) with
+            | failures, _ when not failures.IsEmpty -> Error failures
+            | _, Ok text -> Ok text
+            | _, Error _ ->
                 // Preserve exact node identities, even if anchor strings repeat.
                 Error (solverRequired |> List.choose (fun (id, info) ->
                     match info.Body with

@@ -266,14 +266,21 @@ type ClosedCallbackTests() =
         Assert.Contains(operand.Actual, call.Participants)
         Assert.Contains(operand.Formal, call.Participants)
         for id in account.Obligation :: account.Construction :: Set.toList account.Transport do Assert.Contains(id, call.Participants)
-        let pending = graph.Nodes.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation {Body=ObligationBody.Pending _} -> Some node.Id | _ -> None) |> Seq.toList
+        let pending = graph.Nodes.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation claim when claim.Kind.StartsWith("foreign-optional-entry-conversion-") -> Some node.Id | _ -> None) |> Seq.toList
         Assert.Equal<NodeId>(account.Obligation, pending |> Assert.Single)
         match graph.Nodes[account.Obligation].Kind with
         | SemanticKind.Obligation claim ->
             Assert.Equal("foreign-optional-entry-conversion-0", claim.Kind)
             match claim.Body with
-            | ObligationBody.Pending reasons ->
+            | ObligationBody.Pending reasons when not present ->
                 Assert.Contains(reasons, fun reason -> reason.Contains("conversion") && (present || reason.Contains("nullable-acceptance")))
+            | ObligationBody.OptionalEntryArgumentConversion model when present ->
+                Assert.Equal(call.Site, model.Call)
+                Assert.Equal(0, model.Parameter)
+                Assert.Equal(account.Construction, model.Construction)
+                Assert.Equal(1, model.SourceCase)
+                Assert.Equal(account.Payload, Some model.Payload)
+                Assert.Equal(account.Formation, Some model.Formation)
             | body -> failwithf "Optional conversion was not Pending: %A" body
         | kind -> failwithf "Optional conversion lost its ledger citizen: %A" kind
         let sourceGroup = graph.Edges |> List.filter (fun edge -> edge.Target=account.Obligation && edge.Role=EdgeRole.Constrains) |> Assert.Single |> _.Sources
@@ -284,6 +291,22 @@ type ClosedCallbackTests() =
         Assert.Empty(Fidelity.PSG.Integrity.check revision)
         let publicId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId account.Obligation
         let publicClaim = revision.CurrentClaims[publicId]
+        match publicClaim.Body with
+        | Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion model ->
+            let noneArm = model.Arms |> List.find (fun arm -> arm.CaseOrdinal=0)
+            let someArm = model.Arms |> List.find (fun arm -> arm.CaseOrdinal=1)
+            let mutants =
+                [ {model with Arms=[someArm]}
+                  {model with Arms=[noneArm;someArm;someArm]}
+                  {model with Arms=[{noneArm with CaseOrdinal=1};{someArm with CaseOrdinal=0}]}
+                  {model with Arms=[noneArm;{someArm with Formation=Some model.Construction}]}
+                  {model with Arms=[{noneArm with Formation=Some model.Formation};someArm]} ]
+            for mutant in mutants do
+                let changedClaim = {publicClaim with Body=Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion mutant}
+                let changed = {revision with CurrentClaims=revision.CurrentClaims.Add(publicId, changedClaim)
+                                             Obligations=revision.Obligations |> List.map (fun claim -> if claim.Id=publicClaim.Id then changedClaim else claim)}
+                Assert.Contains(Fidelity.PSG.Integrity.check changed, fun violation -> violation.Part="Emission.Boundary.Calls.OptionalEntry.Obligation")
+        | _ -> ()
         let publicCall = revision.Emission.Boundary.Calls[Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId call.Site]
         let transportNode = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId operand.Actual
         let changedCall = {publicCall with Participants=publicCall.Participants.Remove transportNode}
@@ -296,8 +319,11 @@ type ClosedCallbackTests() =
             match source.Body with
             | ObligationBody.Pending expected -> Assert.Equal<string list>(expected, reasons)
             | body -> failwithf "Optional source claim changed: %A" body
+        | SemanticKind.Obligation source, Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion _ when present ->
+            Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo source, publicClaim)
         | other -> failwithf "Optional published claim changed: %A" other
-        Assert.DoesNotContain(publicClaim.Id, revision.ObligationQuery)
+        if present then Assert.Contains(publicClaim.Id, revision.ObligationQuery)
+        else Assert.DoesNotContain(publicClaim.Id, revision.ObligationQuery)
         let sourceGroup = revision.ObligationSources[publicId] |> List.exactlyOne
         for groups in [[]; [List.rev sourceGroup]] do
             let changed = {revision with ObligationSources=revision.ObligationSources.Add(publicId, groups)}
@@ -317,6 +343,48 @@ type ClosedCallbackTests() =
     member _.``Optional receiving entry rejects mutable alias transport``() =
         let result = ClosedCallbackCases.optionalCheck true true (fun source -> source.Replace("let selected:", "let mutable selected:"))
         Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional Some conversion refuses branch and function result alias transport``(functionResult) =
+        let result = ClosedCallbackCases.optionalCheck true true (fun source ->
+            if functionResult then
+                source.Replace("[<EntryPoint>]", "let choose () = Some (FnPtr.ofFunction callback)\n[<EntryPoint>]")
+                      .Replace("let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)", "let selected: option<FnPtr<int -> int>> = choose ()")
+            else source.Replace("let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)",
+                                "let selected: option<FnPtr<int -> int>> = if true then Some (FnPtr.ofFunction callback) else None"))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
+        Assert.Empty((read result.Graph).OptionalReceiving)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional Some conversion citizens stay unique across calls and native ordinals``(twoOrdinals) =
+        let result = ClosedCallbackCases.optionalCheck true false (fun source ->
+            let call = "    receive (Some (FnPtr.ofFunction callback))"
+            if not twoOrdinals then source.Replace(call, "    let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)\n    receive selected\n    receive selected")
+            else
+                let scope = source.Split('\n') |> Array.find (fun line -> line.StartsWith("let scope:"))
+                let invocation = source.Split('\n') |> Array.find (fun line -> line.StartsWith("let invocation:"))
+                let extra = scope.Replace("let scope:", "let scope2:").Replace("Parameter = \"callback\"", "Parameter = \"other\"") + "\n" +
+                            invocation.Replace("let invocation:", "let invocation2:").Replace("Parameter = 0", "Parameter = 1").Replace("ReceivingCallback.scope\"", "ReceivingCallback.scope2\"").Replace("ReturnType = Integer (Signed, 64)", "ReturnType = Void")
+                source.Replace("(callback: option<FnPtr<int -> int>>) : unit", "(callback: option<FnPtr<int -> int>>) (other: option<FnPtr<int -> unit>>) : unit")
+                      .Replace("Entry \"ReceivingCallback.invocation\"; PassBy = Value } |]", "Entry \"ReceivingCallback.invocation\"; PassBy = Value }; { Name = \"other\"; Type = Entry \"ReceivingCallback.invocation2\"; PassBy = Value } |]")
+                      .Replace("let callback (_unused: int) = 7", extra+"\nlet callback (_unused: int) = 7\nlet callback2 (_unused: int) : unit = ()")
+                      .Replace(call, call+" (Some (FnPtr.ofFunction callback2))"))
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let claims = graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with SemanticKind.Obligation ({Body=ObligationBody.OptionalEntryArgumentConversion model} as info) -> Some(node.Id,info,model) | _ -> None) |> Seq.toList
+        Assert.Equal(2, claims.Length)
+        Assert.Equal(2, claims |> List.map (fun (_, info, _) -> info.Id) |> List.distinct |> List.length)
+        Assert.Equal((if twoOrdinals then 1 else 2), claims |> List.map (fun (_,_,model) -> model.Call) |> List.distinct |> List.length)
+        Assert.Equal<int list>((if twoOrdinals then [0;1] else [0;0]), claims |> List.map (fun (_,_,model) -> model.Parameter) |> List.sort)
+        for citizen, info, model in claims do
+            Assert.True(Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph (Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph) (citizen,info) |> Result.isOk)
+            let call = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph |> List.find (fun call -> call.Site=model.Call)
+            Assert.Equal(Some citizen, (List.item model.Parameter call.Arguments).OptionalEntry |> Option.map _.Obligation)
 
     [<Theory>]
     [<InlineData(false)>]
@@ -407,13 +475,14 @@ type ClosedCallbackTests() =
             let call = boundary.Calls[selection.Call]
             let selected = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne
             Assert.Equal((if present then 1 else 0), selected.CaseOrdinal)
-            let pending = graph.Nodes.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation ({Body=ObligationBody.Pending _} as claim) -> Some(node.Id, claim) | _ -> None) |> Assert.Single
+            let pending = graph.Nodes.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation claim when claim.Kind.StartsWith("foreign-optional-entry-conversion-") -> Some(node.Id, claim) | _ -> None) |> Assert.Single
             let pendingId, claim = pending
             Assert.Equal(selected.Obligation, pendingId)
             match claim.Body with
-            | ObligationBody.Pending [reason] ->
+            | ObligationBody.Pending [reason] when not present ->
                 Assert.Equal("foreign-optional-entry-conversion-0", claim.Kind)
                 Assert.Equal(not present, reason.Contains("nullable-acceptance"))
+            | ObligationBody.OptionalEntryArgumentConversion model when present -> Assert.Equal(selected.Formation, Some model.Formation)
             | other -> failwithf "The current source conversion claim changed: %A" other
 
     [<Theory>]
@@ -427,7 +496,7 @@ type ClosedCallbackTests() =
             match Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize graph with
             | Ok dispatch -> dispatch
             | Result.Error failures -> failwithf "Optional dispatch refused: %A" failures
-        let pending = dispatch.Required |> List.filter (fun (_, info) -> match info.Body with ObligationBody.Pending _ -> true | _ -> false)
+        let pending = dispatch.Required |> List.filter (fun (_, info) -> info.Kind.StartsWith("foreign-optional-entry-conversion-"))
         let id, info = pending |> Assert.Single
         let boundary =
             match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
@@ -440,7 +509,7 @@ type ClosedCallbackTests() =
         Assert.NotEmpty ready
         let query = dispatch.Query |> Result.defaultWith (fun _ -> failwith "Optional conversion still blocked the ready query")
         for _, claim in ready do Assert.Contains(claim.Id, query)
-        Assert.DoesNotContain(info.Id, query)
+        if present then Assert.Contains(info.Id, query) else Assert.DoesNotContain(info.Id, query)
         Assert.Contains(id, dispatch.SourceGroups.Keys)
         let facts = graph.Codata.Value
         let scope = facts.WitnessLiveScope |> Option.defaultWith (fun () -> failwith "Optional source lost its live scope")
@@ -458,8 +527,11 @@ type ClosedCallbackTests() =
                 Assert.False(published.Nodes.ContainsKey publicId)
                 let expectedGroups = dispatch.SourceGroups[id] |> List.map (List.map Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId)
                 Assert.Equal<Fidelity.PSG.NodeId list list>(expectedGroups, published.ObligationSources[publicId])
+            | ObligationBody.OptionalEntryArgumentConversion _, Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion _ when present ->
+                Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo info, claim)
+                Assert.Contains(claim, published.Obligations)
             | other -> failwithf "Optional Pending disappeared from the published ledger: %A" other
-        Assert.Throws<System.InvalidOperationException>(fun () -> Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo info |> ignore) |> ignore
+        if not present then Assert.Throws<System.InvalidOperationException>(fun () -> Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo info |> ignore) |> ignore
         let withoutAccounts = {boundary with Calls=boundary.Calls |> Map.map (fun _ call -> {call with Arguments=call.Arguments |> List.map (fun operand -> {operand with OptionalEntry=None})})}
         Assert.False(Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.optionalEntryPending graph withoutAccounts (id, info))
         let omitted = {selected with Emission={selected.Emission with Boundary=withoutAccounts}}
@@ -549,7 +621,7 @@ type ClosedCallbackTests() =
                         | "ordinal" -> {info with Kind="foreign-optional-entry-conversion-1"}
                         | "reason" -> {info with Body=ObligationBody.Pending ["Changed conversion premise."]}
                         | "append-reason" ->
-                            let reasons = match info.Body with ObligationBody.Pending reasons -> reasons | _ -> failwith "Expected Pending"
+                            let reasons = match info.Body with ObligationBody.Pending reasons -> reasons | _ -> []
                             {info with Body=ObligationBody.Pending (reasons @ ["Added conversion premise."])}
                         | _ -> info
                     let node = graph.Nodes[id]

@@ -402,6 +402,29 @@ type ResourceConversionModel = {
     Arms: ResourceConversionArm list
 }
 
+/// Finite source selection and native-choice plan. Formations are source
+/// identities, never native addresses. Target realization remains separate.
+[<RequireQualifiedAccess>]
+type OptionalEntryPlanChoice = PendingAbsence | ClosedEntry
+
+type OptionalEntryPlanArm = {
+    CaseOrdinal: int
+    Choice: OptionalEntryPlanChoice
+    Formation: NodeId option
+}
+
+type OptionalEntryArgumentConversionModel = {
+    Call: NodeId
+    Parameter: int
+    Actual: NodeId
+    Construction: NodeId
+    SourceCase: int
+    Payload: NodeId
+    Formation: NodeId
+    Invocation: NodeId
+    Arms: OptionalEntryPlanArm list
+}
+
 /// Observations of the existing evaluation owner's rows, not another flow
 /// producer. Their complete ordered census is a current boundary premise.
 [<RequireQualifiedAccess>]
@@ -562,6 +585,7 @@ type ObligationBody =
     | ForeignResultCoverage of ForeignResultCoverageModel
     | ResourceConversion of ResourceConversionModel
     | ResourceCleanup of ResourceCleanupModel
+    | OptionalEntryArgumentConversion of OptionalEntryArgumentConversionModel
     /// One dynamic snapshot count is shared by the write, complete copy and
     /// allocation. Exact source incidence is replayed separately from bounds.
     | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint

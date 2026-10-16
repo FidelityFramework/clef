@@ -64,6 +64,10 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     match body with
     | ObligationBody.Pending reasons ->
         invalidArg "body" ("A pending obligation has no solver term: " + String.concat "; " reasons)
+    | ObligationBody.OptionalEntryArgumentConversion model ->
+        match Published.mapOptionalEntryArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.project with
+        | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
+        | Error reason -> invalidArg "body" reason
     | ObligationBody.ResourceConversion model ->
         match Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
@@ -498,6 +502,10 @@ let unavailable (obligations: ObligationInfo list) : UnavailableObligation list 
             match Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion with
             | Ok _ -> None
             | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
+        | ObligationBody.OptionalEntryArgumentConversion model ->
+            match Published.mapOptionalEntryArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.project with
+            | Ok _ -> None
+            | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
         | ObligationBody.ResourceCleanup model ->
             match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
             | Ok _ -> None
@@ -593,7 +601,7 @@ let ledgerJson (obligations: ObligationInfo list) : string =
         |> List.exists (fun obligation ->
             match obligation.Body with
             | ObligationBody.ForeignResultCoverage _ | ObligationBody.ResourceConversion _ | ObligationBody.ResourceCleanup _
-            | ObligationBody.SnapshotBorrowBound _ -> true
+            | ObligationBody.SnapshotBorrowBound _ | ObligationBody.OptionalEntryArgumentConversion _ -> true
             | _ -> false)
 
     let rows =
@@ -621,6 +629,7 @@ let ledgerJson (obligations: ObligationInfo list) : string =
                     let state, reasons =
                         match ob.Body with
                         | ObligationBody.Pending reasons -> "pending", reasons
+                        | ObligationBody.OptionalEntryArgumentConversion _ -> "target-pending", ["The finite source plan requires its exact per-call target artifact observation."]
                         | ObligationBody.ForeignResultCoverage model ->
                             match foreignProjection model with
                             | Ok _ -> "ready", []
