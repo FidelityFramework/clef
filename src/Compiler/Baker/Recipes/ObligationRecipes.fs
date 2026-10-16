@@ -52,7 +52,7 @@ let projectAnchors (enrichment: Enrichment) (graph: SemanticGraph) : SemanticNod
     anchors |> Map.toList |> List.map (fun (source, names) ->
         let node =
             current source |> Option.defaultWith (fun () ->
-                invalidOp (sprintf "Source obligation consequence has no current source participant %d." (NodeId.value source)))
+                invalidOp (sprintf "Source obligation consequence has no current source participant %d (claims: %s)." (NodeId.value source) (String.concat ", " names)))
         let held =
             match node.Metadata.TryFind ObligationMetadata.Anchors with
             | None -> []

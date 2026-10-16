@@ -958,7 +958,17 @@ type BoundaryImport = {
     DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
 }
 
-type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option }
+/// One source Option selection at a foreign operand; support belongs to its call.
+type BoundaryOptionalEntry = {
+    Construction: NodeId
+    CaseOrdinal: int
+    Payload: NodeId option
+    Formation: NodeId option
+    Transport: Set<NodeId>
+    Obligation: NodeId
+}
+
+type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option; OptionalEntry: BoundaryOptionalEntry option }
 
 /// Current source incidence for a separately stated process-link assumption.
 /// Identity/Version/Source belong to Contract, not this revision's node IDs.
@@ -2916,7 +2926,7 @@ type CallableAggregateTag = {
 }
 
 [<RequireQualifiedAccess>]
-type CallableAggregateOperation = Construct | Project | Assign | Snapshot
+type CallableAggregateOperation = Construct | Project | Assign | Snapshot | Transport
 
 type CallableAggregateValue = {
     Occurrence: NodeId

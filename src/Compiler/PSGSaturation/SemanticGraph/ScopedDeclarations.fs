@@ -87,7 +87,7 @@ let private readUncached (graph: SemanticGraph) =
                                 | NativeType.TFun _ -> true
                                 | NativeType.TApp(constructor, [signature]) when constructor.NTUKind = Some NTUKind.NTUfnptr ->
                                     match applySubst signature with NativeType.TFun _ -> true | _ -> false
-                                | _ -> false
+                                | _ -> optionalEntrySignature ty |> Option.isSome
                             let scope = valuePath graph body |> Option.map snd |> Option.defaultValue [] |> List.filter(fun id ->
                                 match graph.Nodes[id].Kind with SemanticKind.Quote _ -> true | _ -> false)
                             let extent =
@@ -106,6 +106,8 @@ let private readUncached (graph: SemanticGraph) =
                                         | _ -> finding descriptor "ProcessExitCallbackDescriptor ExitBinding requires an exact literal declaration name."; None
                                 | _ -> finding descriptor "ProcessExitCallbackDescriptor requires signed32 SuccessStatus and an explicit optional ExitBinding."; None
                             match callable, scope, extent with
+                            | true, _, Some(BoundaryCallbackExtent.ProcessExit _, _) when optionalEntrySignature ty |> Option.isSome ->
+                                finding descriptor "Optional native entries require a during-call activation; process-exit optional callbacks are not admitted."
                             | true, [quote], Some(extent, extra) ->
                                 let related = dependencies Set.empty (node.Id :: descriptor.Id :: binding.Id :: extra) |> Set.add id
                                 let related = match extent with BoundaryCallbackExtent.ProcessExit(Some anchor,_) -> related.Add anchor | _ -> related

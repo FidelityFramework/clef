@@ -230,6 +230,32 @@ let private formationInputs (graph: SemanticGraph) (reading: Origins.AggregateRe
         | _ -> direct
     | _ -> direct
 
+/// Consume the existing origin owner's ordered immutable edges. Whole-value
+/// aliases preserve a construction; they are neither a new write nor a field read.
+let private transportInputs (graph: SemanticGraph) (reading: Origins.AggregateResolution) site construction =
+    let step state _ =
+        state |> Result.bind (fun (current, reversed, seen) ->
+            if current = construction then Ok(current,reversed,seen) else
+            match reading.Dependencies.TryFind current, graph.Nodes.TryFind current with
+            | Some [source], Some node when Identity.ofType node.Type = reading.AggregateType ->
+                let agrees =
+                    match node.Kind, node.Children with
+                    | SemanticKind.VarRef(_, Some actual), [] -> actual=source
+                    | SemanticKind.Binding(_, false, _, _), [actual] -> actual=source
+                    | SemanticKind.TypeAnnotation(actual, declared), [child] ->
+                        actual=source && child=actual && Identity.ofType declared=reading.AggregateType
+                    | _ -> false
+                if not agrees then Error "The aggregate transport requires only current VarRef, immutable Binding and same-type TypeAnnotation edges."
+                elif Set.contains source seen then Error "The immutable aggregate transport path repeats a source occurrence."
+                else Ok(source,source::reversed,Set.add source seen)
+            | _ -> Error "The immutable aggregate transport lacks one exact declared same-type edge.")
+    // This consumes at most the finite owner-supplied edge inventory. It never
+    // discovers a successor from syntax or repeats an origin/compiler pass.
+    reading.Dependencies |> Map.toList |> List.fold step (Ok(site,[],Set.singleton site))
+    |> Result.bind (fun (last,reversed,_) ->
+        if last=construction && (graph.Nodes.TryFind construction |> Option.exists (fun node -> Identity.ofType node.Type=reading.AggregateType)) then Ok(List.rev reversed)
+        else Error "The immutable aggregate transport does not reach its declared supplying construction.")
+
 /// Resolve direct fields/payloads with one closed formation per component.
 /// Wider families remain residuals until their source selector/adapter/storage
 /// recipes can establish the complete protocol. No old account supplies facts.
@@ -353,6 +379,42 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
             formation.Selector = row.Selector && formation.SelectedAlternative = row.SelectedAlternative &&
             formation.Tag = row.Tag && formation.Bytes = row.Bytes && formation.Alignment = row.Alignment))
         if not formed then refuse site Codes.CCS8414_CallableAggregateEvidence "The inherited callable copy has no matching admitted supplying constructor row."
+        formed)) |> Map.filter (fun _ rows -> not rows.IsEmpty)
+    // Install transport only after the supplying Construct survives retirement.
+    // Exact component facts are copied; no representation or selection is inferred.
+    let transports =
+        groups |> List.collect (fun work ->
+            let slot = slots.Values |> Seq.filter (fun slot -> slot.AggregateType=work.AggregateType && slot.Path=work.Path) |> Seq.toList
+            work.Rows |> List.choose (fun (site,_,reading) ->
+                match slot, reading.Alternatives, graph.Nodes[site].Kind with
+                | [slot], [formation], (SemanticKind.VarRef _ | SemanticKind.Binding(_,false,_,_) | SemanticKind.TypeAnnotation _)
+                    when site<>formation.Construction && reading.UnknownOrigins.IsEmpty && reading.AbsentOrigins.IsEmpty ->
+                    transportInputs graph reading site formation.Construction
+                    |> Result.toOption
+                    |> Option.map (fun path -> site,slot.Identity,formation.Construction,path,sourceSupport reading site)
+                | _ -> None))
+    for site,slot,construction,path,support in transports do
+        match values.TryFind construction |> Option.defaultValue []
+              |> List.filter (fun row -> row.Slot = slot && row.Operation = CallableAggregateOperation.Construct) with
+        | [source] ->
+            let formationInputs = path @ Option.toList source.Value
+            let carrier = source.Value |> Option.bind inputs.Carriers.TryFind
+            let row = valueRow slot site construction CallableAggregateOperation.Transport formationInputs source.Value
+                               source.SelectedAlternative source.Tag carrier support
+            addValue {row with Alternatives=source.Alternatives; Selector=source.Selector
+                               SelectedAlternative=source.SelectedAlternative; Tag=source.Tag; Value=source.Value
+                               Bytes=source.Bytes; Alignment=source.Alignment}
+        | _ -> refuse site Codes.CCS8414_CallableAggregateEvidence "The immutable aggregate transport has no matching admitted supplying constructor row."
+    values <- values |> Map.map (fun site rows -> rows |> List.filter (fun row ->
+        if row.Operation <> CallableAggregateOperation.Transport then true else
+        let path = if row.Value.IsSome then row.FormationInputs |> List.rev |> List.tail |> List.rev else row.FormationInputs
+        let formed = path |> List.tryLast |> Option.exists (fun construction ->
+            values.TryFind construction |> Option.defaultValue [] |> List.exists (fun source ->
+                source.Operation=CallableAggregateOperation.Construct && source.Slot=row.Slot && source.Value=row.Value &&
+                source.Alternatives=row.Alternatives && source.Selector=row.Selector &&
+                source.SelectedAlternative=row.SelectedAlternative && source.Tag=row.Tag &&
+                source.Bytes=row.Bytes && source.Alignment=row.Alignment))
+        if not formed then refuse site Codes.CCS8414_CallableAggregateEvidence "The immutable aggregate transport lost its admitted supplying constructor row."
         formed)) |> Map.filter (fun _ rows -> not rows.IsEmpty)
     // A projection must retain its admitted formation row, including the
     // constructor's dependencies. It cannot bypass a refused source write.

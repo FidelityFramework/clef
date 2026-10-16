@@ -30,9 +30,22 @@ type ReceivingCallback = {
     Signature: DeclaredEntrySignature
 }
 
+/// Source selection only; an absent arm has no manufactured receiving entry.
+type OptionalReceivingCallback = {
+    Call: NodeId
+    Operand: NodeId
+    Construction: NodeId
+    CaseOrdinal: int
+    Payload: NodeId option
+    Transport: NodeId list
+    Invocation: DeclaredCallbackInvocation
+    Receiving: ReceivingCallback option
+}
+
 type Reading = {
     Callbacks: Callback list
     Receiving: ReceivingCallback list
+    OptionalReceiving: OptionalReceivingCallback list
     NumericBoundaries: Map<NodeId, DeclaredParameter>
     Findings: DeclarationFinding list
 }
@@ -170,6 +183,7 @@ let private readUncached (graph: SemanticGraph) : Reading =
         | _ -> ()
     let descriptors = readDescriptors graph
     let mutable receiving = []
+    let mutable optionalReceiving = []
     let aggregateOrigins = lazy (CallableOrigins.resolve graph)
 
     for call in graph.Nodes.Values do
@@ -183,9 +197,32 @@ let private readUncached (graph: SemanticGraph) : Reading =
                         && actuals.Length = invocation.Declaration.Formals.Length
                     then
                         let actual = actuals[invocation.Parameter]
+                        let optional = optionalEntrySignature graph.Nodes[invocation.Formal].Type |> Option.isSome
+                        let selection =
+                            if not optional then None else
+                            match valuePath graph actual with
+                            | Some(construction, path) when optionalEntrySignature construction.Type |> Option.isSome ->
+                                let immutable = path |> List.forall (fun id ->
+                                    match graph.Nodes[id].Kind with SemanticKind.Binding(_, true, _, _) -> false | _ -> true)
+                                let shape = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes.shape graph construction.Type
+                                match construction.Kind, shape with
+                                | (SemanticKind.UnionCase(name, ordinal, payload) | SemanticKind.DUConstruct(name, ordinal, payload, _)),
+                                  Some(Clef.Compiler.Baker.Ingredients.CallableAggregateTypes.Shape.Union(_, cases)) when immutable ->
+                                    match List.tryItem ordinal cases, payload with
+                                    | Some(expectedName, fields), None when expectedName = name && fields.IsEmpty ->
+                                        Some { Call=call.Id; Operand=actual; Construction=construction.Id; CaseOrdinal=ordinal
+                                               Payload=None; Transport=path; Invocation=invocation; Receiving=None }
+                                    | Some(expectedName, [_, payloadType]), Some payload when expectedName = name &&
+                                        Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[payload].Type = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType payloadType ->
+                                        Some { Call=call.Id; Operand=actual; Construction=construction.Id; CaseOrdinal=ordinal
+                                               Payload=Some payload; Transport=path; Invocation=invocation; Receiving=None }
+                                    | _ -> finding call DeclarationDefect.Invalid "The optional callback requires its exact nominal Option case ordinal and payload."; None
+                                | _ -> finding call DeclarationDefect.Invalid "The optional callback requires a literal nominal Option constructor and immutable aliases."; None
+                            | _ -> finding call DeclarationDefect.Invalid "The optional callback requires a literal nominal Option constructor and immutable aliases."; None
 
                         let source =
-                            valuePath graph actual
+                            (if optional then selection |> Option.bind _.Payload else Some actual)
+                            |> Option.bind (valuePath graph)
                             |> Option.bind (fun (node, path) ->
                                 match node.Kind with
                                 | SemanticKind.FieldGet _ ->
@@ -238,7 +275,7 @@ let private readUncached (graph: SemanticGraph) : Reading =
                                         && signature.Body.IsSome
                                         && (signature.Parameters |> List.forall (snd >> Option.isSome))
                                         ->
-                                        receiving <-
+                                        let evidence =
                                             {
                                                 Call = call.Id
                                                 Operand = actual
@@ -249,7 +286,9 @@ let private readUncached (graph: SemanticGraph) : Reading =
                                                 Invocation = invocation
                                                 Signature = signature
                                             }
-                                            :: receiving
+                                        match selection with
+                                        | Some selected -> optionalReceiving <- { selected with Receiving=Some evidence; Transport=List.distinct(selected.Transport @ path) } :: optionalReceiving
+                                        | None -> receiving <- evidence :: receiving
                                     | _ ->
                                         finding
                                             address
@@ -265,6 +304,11 @@ let private readUncached (graph: SemanticGraph) : Reading =
                                     address
                                     DeclarationDefect.Invalid
                                     "The receiving entry must be FnPtr.ofFunction of a closed named module function."
+                        | _ when optional ->
+                            match selection with
+                            | Some selected when selected.Payload.IsNone -> optionalReceiving <- selected :: optionalReceiving
+                            | Some _ -> finding call DeclarationDefect.Invalid "The optional Some callback requires its exact closed FnPtr.ofFunction payload."
+                            | None -> ()
                         | _ ->
                             finding
                                 call
@@ -276,13 +320,15 @@ let private readUncached (graph: SemanticGraph) : Reading =
     let receiving =
         List.rev receiving
         |> List.distinctBy (fun entry -> entry.Call, entry.Address, entry.Invocation.Quote)
+    let optionalReceiving = List.rev optionalReceiving
+    let allReceiving = receiving @ (optionalReceiving |> List.choose _.Receiving)
 
     let signatureKey (signature: DeclaredEntrySignature) =
         signature.Parameters
         |> List.map (snd >> Option.map (fun parameter -> parameter.Bits, parameter.Range)),
         signature.Return |> Option.map (fun result -> result.Bits, result.Range)
 
-    for lambda, entries in receiving |> List.groupBy _.Lambda do
+    for lambda, entries in allReceiving |> List.groupBy _.Lambda do
         if
             entries
             |> List.map (fun entry -> signatureKey entry.Signature)
@@ -313,7 +359,7 @@ let private readUncached (graph: SemanticGraph) : Reading =
             | _ -> parameters)
         |> Map.ofList
     let numeric =
-        receiving |> List.fold (fun numeric entry ->
+        allReceiving |> List.fold (fun numeric entry ->
             let formals = entry.Signature.Parameters |> List.choose (fun (id, declared) -> declared |> Option.map (fun declared -> id, declared))
             let result =
                 match entry.Signature.Body, entry.Signature.Return with
@@ -322,6 +368,7 @@ let private readUncached (graph: SemanticGraph) : Reading =
             (formals @ result) |> List.fold (fun numeric (id, declared) -> Map.add id declared numeric) numeric) numeric
     { Callbacks = callbacks
       Receiving = receiving
+      OptionalReceiving = optionalReceiving
       NumericBoundaries = numeric
       Findings = List.rev findings }
 
@@ -329,6 +376,13 @@ let private readUncached (graph: SemanticGraph) : Reading =
 // structural declaration reading once per graph without retaining old graphs.
 let private cache = ConditionalWeakTable<SemanticGraph, Reading>()
 let read graph = cache.GetValue(graph, fun graph -> readUncached graph)
+
+/// Present payloads retain their optional selection owner while supplying the
+/// same declared incoming domain as an ordinary closed receiving entry.
+let presentReceiving graph =
+    let reading = read graph
+    reading.Receiving @ (reading.OptionalReceiving |> List.choose _.Receiving)
+
 let forLambda graph lambda = (read graph).Callbacks |> List.tryFind (fun c -> c.Lambda = lambda)
 
 /// Follow a pointer value's declared listener provenance through ordinary

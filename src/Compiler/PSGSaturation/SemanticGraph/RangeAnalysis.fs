@@ -1747,7 +1747,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     // A receiving contract states the native incoming domain, including unused
     // formals. It supplies no observed callback arguments or body result range.
     let boundarySeeds, declaredParameters =
-        (CallbackDeclarations.read graph).Receiving
+        CallbackDeclarations.presentReceiving graph
         |> List.fold (fun (seeds, declared) entry ->
             entry.Signature.Parameters |> List.fold (fun (seeds, declared) (formal, parameter) ->
                 match parameter with

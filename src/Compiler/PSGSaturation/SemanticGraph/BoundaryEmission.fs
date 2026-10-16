@@ -25,6 +25,23 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
     | [domainRow, domain] ->
         let participants = Map.keys domain.Premises |> Set.ofSeq
         let stale reason = Error [failure (Some domainRow.Target) participants reason]
+        let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
+        let optionalClaims =
+            calls |> List.collect (fun call -> call.Arguments |> List.choose _.OptionalEntry |> List.map _.Obligation)
+        let optionalClaimRows =
+            optionalClaims |> List.distinct |> List.map (fun id ->
+                let rows =
+                    match graph.Nodes.TryFind id with
+                    | Some {Kind=SemanticKind.Obligation info} -> Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (id, info)
+                    | _ -> Error "The optional-entry Pending claim lacks its exact owned ledger node."
+                id, rows)
+        let optionalRows = optionalClaimRows |> List.choose (fun (_, rows) -> rows |> Result.toOption)
+        let optionalClaimErrors =
+            optionalClaimRows |> List.choose (fun (id, rows) ->
+                match rows with
+                | Ok _ -> None
+                | Error reason -> Some (failure (Some id) participants
+                    ("The optional native callback lost its exact current per-use Pending conversion claim. " + reason)))
         let borrowMembership =
             let sites values = List.distinct values |> List.sort
             let snapshots = domain.StringBorrowSnapshots |> List.map _.Snapshot |> sites
@@ -69,7 +86,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 | _ -> true)
         let anchorValid = graph.Nodes.TryFind domainRow.Target |> Option.exists (fun node ->
             Ingredients.ownedNode node && match node.Kind with SemanticKind.Literal NativeLiteral.Unit -> true | _ -> false)
-        if not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.platformPremise graph.Platform || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
+        if not optionalClaimErrors.IsEmpty then Error optionalClaimErrors
+        elif not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.platformPremise graph.Platform || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
             stale "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph."
         elif not domain.Failures.IsEmpty then
             Error (domain.Failures |> List.map (fun (site, participants, reason) -> failure (Some site) participants reason))
@@ -102,7 +120,6 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             let entries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryEntry entry -> Some entry | _ -> None)
             let callbackInvocations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCallbackInvocation invocation -> Some invocation | _ -> None)
             let closedEntries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry -> Some entry | _ -> None)
-            let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
                 (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
@@ -311,8 +328,9 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 let writableClaims=writableUses |> List.collect(fun row->[row.CountCoverage;row.StorageCoverage]) |> Set.ofList
                 let ownedTargets = Set.add domainRow.Target ((coverages |> List.map _.Obligation) @ (domain.IntrinsicProofs |> List.map _.Obligation) |> Set.ofList)
                 let expected=expected @ (graph.Edges |> List.filter(fun edge->resourceClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
-                let ownedTargets=Set.unionMany [ownedTargets;resourceClaims;writableClaims]
+                let ownedTargets=Set.unionMany [ownedTargets;resourceClaims;writableClaims;Set.ofList optionalClaims]
                 let expected=expected @ (graph.Edges |> List.filter(fun edge->writableClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
+                let expected=expected @ List.concat optionalRows
                 let completeMembership = Set.union participants ownedTargets = (Map.keys graph.Nodes |> Set.ofSeq)
                 let actual = graph.Edges |> List.filter (fun edge ->
                     edge.Class = EdgeClass.Boundary ||

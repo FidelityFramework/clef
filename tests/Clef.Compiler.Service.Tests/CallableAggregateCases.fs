@@ -61,6 +61,59 @@ let main _ =
 
 type CallableAggregateCases() =
     [<Fact>]
+    member _.``Immutable aggregate Transport retains its source account without becoming a native projection`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.source true)
+        let transported =
+            graph.Codata.Value.CallableAggregateValues.Values
+            |> Seq.collect id
+            |> Seq.find (fun row -> row.Operation = CallableAggregateOperation.Transport)
+        let account =
+            AggregateAccounts.current graph transported.Occurrence
+            |> Result.defaultWith failwith
+        Assert.Contains(transported, account.Values)
+        let supplier = account.Values |> List.find (fun row ->
+            row.Operation = CallableAggregateOperation.Construct && row.Occurrence = transported.Aggregate && row.Slot = transported.Slot)
+        Assert.Equal(supplier.Tag, transported.Tag)
+        Assert.Equal(supplier.Value, transported.Value)
+        Assert.Equal<CallableAggregateAlternative list>(supplier.Alternatives, transported.Alternatives)
+        let formation = transported.Alternatives |> List.head |> _.Formation
+        Assert.Equal<Result<unit, string>>(
+            Result.Error "The receiving callback has no unique current callable projection row.",
+            AggregateAccounts.nativeProjection graph transported.Occurrence formation)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Immutable aggregate Transport detects changed source and withdrawn row`` withdraw =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.source true)
+        let transported =
+            graph.Codata.Value.CallableAggregateValues.Values
+            |> Seq.collect id
+            |> Seq.find (fun row ->
+                row.Operation = CallableAggregateOperation.Transport &&
+                match graph.Nodes[row.Occurrence].Kind with SemanticKind.Binding(_, false, _, _) -> true | _ -> false)
+        let changed =
+            if withdraw then
+                let facts = graph.Codata.Value
+                let rows = facts.CallableAggregateValues[transported.Occurrence] |> List.filter ((<>) transported)
+                { graph with Codata = lazy {facts with CallableAggregateValues = facts.CallableAggregateValues.Add(transported.Occurrence, rows)} }
+            else
+                let node = graph.Nodes[transported.Occurrence]
+                let kind =
+                    match node.Kind with
+                    | SemanticKind.Binding(name, _, recursive, root) -> SemanticKind.Binding(name, true, recursive, root)
+                    | _ -> failwith "The fixture lost its immutable binding."
+                { graph with Nodes = graph.Nodes.Add(node.Id, {node with Kind = kind}) }
+        let expectedReason =
+            if withdraw then
+                Assert.Empty changed.Codata.Value.CallableAggregateValues[transported.Occurrence]
+                "Callable aggregate account has absent, repeated or misfiled value rows."
+            else "Callable aggregate source support changed after its dependency account was authored (CCS8414)."
+        match AggregateAccounts.current changed transported.Occurrence with
+        | Result.Error reason -> Assert.Equal(expectedReason, reason)
+        | Ok _ -> failwith "Changed source evidence retained its aggregate account authority."
+
+    [<Fact>]
     member _.``Published callable projection refuses coherent supplying construction withdrawal``() =
         let graph = CallableAggregateFixture.check (CallableAggregateFixture.source true)
 

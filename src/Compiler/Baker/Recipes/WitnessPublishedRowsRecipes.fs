@@ -11,7 +11,7 @@ let private failure occurrence reason : WitnessProjectionFailure =
     { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = occurrence; Participants = Set.ofList (Option.toList occurrence)
       Reason = "Frozen publication rows: " + reason }
 
-let private freezeNode (node: SemanticNode) =
+let private freezeNode claim (node: SemanticNode) =
     try
         let anchors =
             match node.Metadata.TryFind ObligationMetadata.Anchors with
@@ -19,7 +19,9 @@ let private freezeNode (node: SemanticNode) =
             | Some(MetadataValue.StringList names) -> names
             | Some other -> invalidOp (sprintf "Obligation anchors are recorded as %A, not as a list of names." other)
         Ok ({ Id = nodeId node.Id
-              Kind = mapSemanticKind node.Kind
+              Kind = match node.Kind with
+                     | SemanticKind.Obligation info -> Fidelity.PSG.SemanticKind.Obligation(claim (node.Id, info))
+                     | kind -> mapSemanticKind kind
               Range = { File = node.Range.File
                         Start = { Line = node.Range.Start.Line; Column = node.Range.Start.Column }
                         End = { Line = node.Range.End.Line; Column = node.Range.End.Column } }
@@ -32,7 +34,7 @@ let private freezeNode (node: SemanticNode) =
               ObligationAnchors = anchors } : Fidelity.PSG.SemanticNode)
     with error -> Error(failure (Some node.Id) ("The node cannot be frozen: " + error.Message))
 
-let private freezeCodata (facts: WitnessLiveCodata) : Fidelity.PSG.Codata =
+let private freezeCodata claim (facts: WitnessLiveCodata) : Fidelity.PSG.Codata =
     let ids = Map.toSeq >> Seq.map (fun (key, value) -> nodeId key, nodeId value) >> Map.ofSeq
     let rows map (table: Map<NodeId, _>) = table |> Map.toSeq |> Seq.map (fun (key, value) -> nodeId key, map value) |> Map.ofSeq
     { WitnessSegmentation = Option.map mapWitnessSegmentation facts.WitnessSegmentation
@@ -54,7 +56,7 @@ let private freezeCodata (facts: WitnessLiveCodata) : Fidelity.PSG.Codata =
       CallableFlows = rows mapCallableFlow facts.CallableFlows
       CallableAggregateSlots = rows mapCallableAggregateSlot facts.CallableAggregateSlots
       CallableAggregateValues = rows (List.map mapCallableAggregateValue) facts.CallableAggregateValues
-      CallableAggregateDependencies = rows mapCallableAggregateDependencyAccount facts.CallableAggregateDependencies
+      CallableAggregateDependencies = rows (mapCallableAggregateDependencyAccountUsing claim) facts.CallableAggregateDependencies
       CallableBranches = mapCallableBranchAuthority facts.CallableBranches
       MutableCallableStorage = rows mapMutableCallableStorage facts.MutableCallableStorage
       ContinuationFrames = rows mapContinuationFrame facts.ContinuationFrames
@@ -80,27 +82,45 @@ let project (graph: SemanticGraph) (scope: WitnessLiveScopePlan) (selected: Witn
     | _, Error unavailable ->
         Error (unavailable |> List.map (fun (id, reasons) -> failure (Some id) ("Source proof dispatch is unavailable: " + String.concat "; " reasons)))
     | Some platform, Ok query ->
-        let bodies = scope.Occurrences.Values |> Seq.map (fun occurrence -> freezeNode occurrence.Body) |> Seq.toList
-        let errors = bodies |> List.choose (function Error error -> Some error | Ok _ -> None)
-        if not errors.IsEmpty then Error errors else
-        try
-            let nodes = bodies |> List.choose (function Ok node -> Some(node.Id, node) | Error _ -> None) |> Map.ofList
-            let width dimension = PlatformContext.tryWidth platform (WidthDimension.name dimension)
-            Ok { SourcePlatform = platform
-                 Nodes = nodes; SourceReadings = mapWitnessSourceReadings scope
-                 Edges = List.map mapHyperedge selected.Edges
-                 DeclarationRoots = selected.DeclarationRoots |> List.map (fun (id, root) -> nodeId id, mapDeclRoot root)
-                 ModuleClassifications = selected.ModuleClassifications |> Map.toSeq |> Seq.map (fun (id, row) -> nodeId id, mapModuleClassification row) |> Map.ofSeq
-                 Platform = { Register = width WidthDimension.Register; Pointer = width WidthDimension.Pointer }
-                 StaticStringPool = Option.map mapStaticStringPool selected.StaticStringPool
-                 LiteralStorage = selected.LiteralStorage |> Map.toSeq |> Seq.map (fun (id, row) -> nodeId id, mapLiteralStorage row) |> Map.ofSeq
-                 Codata = freezeCodata selected.Codata; Emission = mapWitnessEmissionProjection selected.Emission
-                 Foreign = mapWitnessForeignStorage selected.Foreign; Demand = mapWitnessExplicitDemand selected.Demand
-                 Obligations = dispatch.Required |> List.map (snd >> mapObligationInfo)
-                 CurrentClaims = dispatch.Required |> List.map (fun (id, claim) -> nodeId id, mapObligationInfo claim) |> Map.ofList
-                 ObligationSources = dispatch.SourceGroups |> Map.toSeq |> Seq.map (fun (id, groups) -> nodeId id, groups |> List.map (List.map nodeId)) |> Map.ofSeq
-                 ObligationQuery = query }
-        with error -> Error [failure None ("The selected source facts cannot be frozen: " + error.Message)]
+        let pending = dispatch.Required |> List.filter (fun (_, info) -> match info.Body with ObligationBody.Pending _ -> true | _ -> false)
+        let unadmitted = pending |> List.filter (ProofDispatchRecipes.optionalEntryPending graph selected.Emission.Boundary >> not)
+        let current = pending.IsEmpty || ProofDispatchRecipes.matchesInventory graph dispatch
+        let boundaryCurrent =
+            if pending.IsEmpty then true else
+            let authored = ProofDispatchRecipes.boundaryCalls graph
+            authored.Length = selected.Emission.Boundary.Calls.Count &&
+            (authored |> List.forall (fun call -> selected.Emission.Boundary.Calls.TryFind call.Site = Some call))
+        if not unadmitted.IsEmpty then
+            Error (unadmitted |> List.map (fun (id, _) -> failure (Some id) "Source proof dispatch is unavailable: The Pending claim lacks its exact current optional-entry conversion account."))
+        elif not current || not boundaryCurrent then Error [failure None "The source proof dispatch inventory, optional-entry accounts or exact query changed before publication."]
+        else
+            let claim (id, info) =
+                if ProofDispatchRecipes.optionalEntryPending graph selected.Emission.Boundary (id, info) then
+                    mapObligationInfoUsing (function
+                        | ObligationBody.Pending reasons -> Fidelity.PSG.ObligationBody.Pending reasons
+                        | body -> mapObligationBody body) info
+                else mapObligationInfo info
+            let bodies = scope.Occurrences.Values |> Seq.map (fun occurrence -> freezeNode claim occurrence.Body) |> Seq.toList
+            let errors = bodies |> List.choose (function Error error -> Some error | Ok _ -> None)
+            if not errors.IsEmpty then Error errors else
+            try
+                let nodes = bodies |> List.choose (function Ok node -> Some(node.Id, node) | Error _ -> None) |> Map.ofList
+                let width dimension = PlatformContext.tryWidth platform (WidthDimension.name dimension)
+                Ok { SourcePlatform = platform
+                     Nodes = nodes; SourceReadings = mapWitnessSourceReadings scope
+                     Edges = List.map mapHyperedge selected.Edges
+                     DeclarationRoots = selected.DeclarationRoots |> List.map (fun (id, root) -> nodeId id, mapDeclRoot root)
+                     ModuleClassifications = selected.ModuleClassifications |> Map.toSeq |> Seq.map (fun (id, row) -> nodeId id, mapModuleClassification row) |> Map.ofSeq
+                     Platform = { Register = width WidthDimension.Register; Pointer = width WidthDimension.Pointer }
+                     StaticStringPool = Option.map mapStaticStringPool selected.StaticStringPool
+                     LiteralStorage = selected.LiteralStorage |> Map.toSeq |> Seq.map (fun (id, row) -> nodeId id, mapLiteralStorage row) |> Map.ofSeq
+                     Codata = freezeCodata claim selected.Codata; Emission = mapWitnessEmissionProjection selected.Emission
+                     Foreign = mapWitnessForeignStorage selected.Foreign; Demand = mapWitnessExplicitDemand selected.Demand
+                     Obligations = dispatch.Required |> List.map claim
+                     CurrentClaims = dispatch.Required |> List.map (fun (id, info) -> nodeId id, claim (id, info)) |> Map.ofList
+                     ObligationSources = dispatch.SourceGroups |> Map.toSeq |> Seq.map (fun (id, groups) -> nodeId id, groups |> List.map (List.map nodeId)) |> Map.ofSeq
+                     ObligationQuery = query }
+            with error -> Error [failure None ("The selected source facts cannot be frozen: " + error.Message)]
 
 /// Source re-observation compares the complete frozen leaf tables. The native
 /// platform is the exact source input object; it is never reconstructed here.

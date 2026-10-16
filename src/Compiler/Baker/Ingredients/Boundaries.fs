@@ -239,9 +239,9 @@ let coverage enrichId graph call ordinal operand input destination =
 
 /// A requirement is a current ledger citizen, not a native adapter or a proof.
 /// Pending has no solver term: its source participants still constrain renewal.
-let resourceRequirement enrichId (subject: SemanticNode) role statement reason participants =
+let requirement enrichId (subject: SemanticNode) role statement reason participants =
     match sourceClaimId role subject with
-    | None -> Error "A resource application requirement lacks its source-owned claim site identity."
+    | None -> Error "A boundary application requirement lacks its source-owned claim site identity."
     | Some identity ->
         let node =
             obligationNode subject enrichId
@@ -254,6 +254,30 @@ let resourceRequirement enrichId (subject: SemanticNode) role statement reason p
                 [ constrains sources node
                   row EdgeRole.EnrichedWith 0 sources node.Id ] }
 
+
+/// The aggregate owner separates semantic source incidences from typed relation
+/// participants. Calls constrain the former; the complete typed account stays
+/// with its owner and is never flattened into semantic source identities.
+let optionalEntrySourceSupport (accounts: Map<NodeId, CallableAggregateDependencyAccount>) (call: BoundaryCall) =
+    call.Arguments |> List.fold (fun state operand ->
+        state |> Result.bind (fun () ->
+            match operand.OptionalEntry with
+            | None -> Ok ()
+            | Some _ ->
+                match accounts.TryFind operand.Actual with
+                | Some account when account.Occurrence = operand.Actual && not account.Slots.IsEmpty ->
+                    let identities = account.Slots |> List.map _.Identity |> Set.ofList
+                    if identities |> Set.forall (fun identity ->
+                        account.Participants |> List.exists (fun participant ->
+                            participant.Node = identity && participant.Role = ParticipantRole.AggregateSlot)) then
+                        let sources = account.Sources |> List.map _.Node |> Set.ofList
+                        if Set.isSubset sources call.Participants then Ok ()
+                        else Error "An optional-entry source account omits its semantic source incidences from the call support."
+                    else Error "An optional-entry source account lacks its exact aggregate-slot participant role."
+                | _ -> Error "An optional-entry source account lacks its exact current aggregate slots.")) (Ok ())
+    |> Result.map (fun () ->
+        let claims = call.Arguments |> List.choose _.OptionalEntry |> List.map _.Obligation |> Set.ofList
+        Set.difference call.Participants claims)
 
 /// A graph citizen records this recipe firing even for an empty domain.
 let private anchorCore enrichId (graph: SemanticGraph) =

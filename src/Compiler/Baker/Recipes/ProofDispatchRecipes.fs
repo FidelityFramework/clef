@@ -4,17 +4,39 @@
 /// complete semantic support or permission to partition or reuse proofs.
 module Clef.Compiler.Baker.Recipes.ProofDispatchRecipes
 
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Graph = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph
 module Discharge = Clef.Compiler.Nanopass.ObligationDischarge
 
-let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjectionFailure list> =
+/// Only this source-owned per-use conversion may retain Pending in a complete
+/// published ledger. The current boundary projection supplies its exact anchor.
+let private optionalEntryPendingInCalls (graph: SemanticGraph) (calls: BoundaryCall list) (id: NodeId, info: ObligationInfo) =
+    Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (id, info) |> Result.isOk
+
+let optionalEntryPending graph (boundary: BoundaryEmissionProjection) claim =
+    optionalEntryPendingInCalls graph (boundary.Calls.Values |> Seq.toList) claim
+
+/// Already authored boundary rows, available before final Codata installation.
+let boundaryCalls (graph: SemanticGraph) =
+    graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
+
+let private admittedPending (graph: SemanticGraph) (required: (NodeId * ObligationInfo) list) =
+    if required |> List.exists (fun (_, info) -> match info.Body with ObligationBody.Pending _ -> true | _ -> false) then
+        required |> List.filter (optionalEntryPendingInCalls graph (boundaryCalls graph)) |> List.map fst |> Set.ofList
+    else Set.empty
+
+let private inventory (graph: SemanticGraph) =
     let required = Graph.obligations graph |> List.map (fun (node, info) -> node.Id, info)
     let constrains = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains)
     let sources =
         constrains |> List.groupBy _.Target
         |> List.map (fun (target, rows) -> target, rows |> List.map _.Sources)
         |> Map.ofList
+    required, constrains, sources
+
+let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjectionFailure list> =
+    let required, constrains, sources = inventory graph
     let failure occurrence reason =
         { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = occurrence
           Participants =
@@ -22,15 +44,20 @@ let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjec
             |> List.collect _.Sources |> Set.ofList
           Reason = "Proof dispatch rendering failed: " + reason }
     try
+        let admitted = admittedPending graph required
+        let solverRequired = required |> List.filter (fun (id, _) -> not (admitted.Contains id))
         let query =
-            match Discharge.trySmtLib (List.map snd required) with
+            match Discharge.trySmtLib (List.map snd solverRequired) with
             | Ok text -> Ok text
             | Error _ ->
                 // Preserve exact node identities, even if anchor strings repeat.
-                Error (required |> List.choose (fun (id, info) ->
+                Error (solverRequired |> List.choose (fun (id, info) ->
                     match info.Body with
                     | ObligationBody.Pending reasons -> Some (id, reasons)
-                    | _ -> None))
+                    | _ ->
+                        match Discharge.trySmtLib [info] with
+                        | Ok _ -> None
+                        | Error unavailable -> Some(id, unavailable |> List.collect _.MissingPremises)))
         Ok { Required = required; Constrains = constrains; SourceGroups = sources; Query = query }
     with error ->
         // Locate malformed bodies at their source obligation. Pending bodies are
@@ -47,3 +74,9 @@ let matches (expected: ProofDispatchPlan) (actual: ProofDispatchPlan) =
     expected.Required = actual.Required &&
     rows expected.Constrains = rows actual.Constrains &&
     expected.SourceGroups = actual.SourceGroups && expected.Query = actual.Query
+
+/// Publication checks its supplied complete source inventory without rendering
+/// another query or waiting for the future Codata installation.
+let matchesInventory graph (dispatch: ProofDispatchPlan) =
+    let required, constrains, sources = inventory graph
+    matches {dispatch with Required=required; Constrains=constrains; SourceGroups=sources} dispatch

@@ -174,8 +174,464 @@ let main _ =
     let receivingGraph () = receivingGraphWith false
     let receivingWrapperGraph () = receivingGraphWith true
 
+    let optionalCheck present alias transform =
+        receivingCheckWith false (fun source ->
+            let actual = if present then "Some (FnPtr.ofFunction callback)" else "None"
+            let invocation =
+                if alias then "    let selected: option<FnPtr<int -> int>> = " + actual + "\n    receive selected"
+                else "    receive (" + actual + ")"
+            source.Replace("let private receive (callback: FnPtr<int -> int>)", "let private receive (callback: option<FnPtr<int -> int>>)")
+                  .Replace("    receive (FnPtr.ofFunction callback)", invocation)
+            |> transform)
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
 type ClosedCallbackTests() =
+    [<Theory>]
+    [<InlineData(false, false)>]
+    [<InlineData(true, false)>]
+    [<InlineData(false, true)>]
+    [<InlineData(true, true)>]
+    member _.``Optional receiving entry retains explicit current source selection and Pending conversion``(present, alias) =
+        let result = ClosedCallbackCases.optionalCheck present alias id
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let observations = read graph
+        Assert.Empty observations.Receiving
+        let selection = observations.OptionalReceiving |> Assert.Single
+        Assert.Equal(present, selection.Payload.IsSome)
+        Assert.Equal(present, selection.Receiving.IsSome)
+        let boundary =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
+            | Ok boundary -> boundary
+            | Result.Error failures -> failwithf "Optional source boundary refused: %A" failures
+        let call = boundary.Calls[selection.Call]
+        let operand = call.Arguments |> Assert.Single
+        let account = operand.OptionalEntry |> Option.get
+        let expectedCase = if present then 1 else 0
+        Assert.Equal(expectedCase, account.CaseOrdinal)
+        match graph.Nodes[account.Construction].Kind with
+        | SemanticKind.UnionCase(name, ordinal, payload)
+        | SemanticKind.DUConstruct(name, ordinal, payload, _) ->
+            Assert.Equal((if present then "Some" else "None"), name)
+            Assert.Equal(expectedCase, ordinal)
+            Assert.Equal(account.Payload, payload)
+        | other -> failwithf "The optional construction is not the original literal Option case: %A" other
+        match Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[account.Construction].Type with
+        | Clef.Compiler.NativeTypedTree.NativeTypes.TypeIdentity.Application(constructor, [_]) ->
+            Assert.Equal(Clef.Compiler.NativeTypedTree.TypeIdentities.constructor Types.optionTyCon, constructor)
+        | other -> failwithf "The optional constructor lost its nominal source identity: %A" other
+        let rec originalPath seen id =
+            if Set.contains id seen then failwith "The source alias path repeats a node"
+            elif id=account.Construction then [id]
+            else
+                let next =
+                    match graph.Nodes[id].Kind, graph.Nodes[id].Children with
+                    | SemanticKind.VarRef("selected", Some binding), [] -> binding
+                    | SemanticKind.Binding("selected", false, false, _), [initializer] -> initializer
+                    | SemanticKind.TypeAnnotation(inner, _), [child] when inner=child -> inner
+                    | other -> failwithf "The fixture's alias is not its original immutable source edge: %A" other
+                id :: originalPath (Set.add id seen) next
+        let path = originalPath Set.empty operand.Actual
+        let transports = graph.Codata.Value.CallableAggregateValues[operand.Actual] |> List.filter (fun row -> row.Operation=CallableAggregateOperation.Transport)
+        if alias then
+            Assert.NotEqual(operand.Actual, account.Construction)
+            let transport = transports |> Assert.Single
+            Assert.Equal<NodeId list>(List.tail path @ Option.toList account.Payload, transport.FormationInputs)
+        else
+            Assert.Equal(operand.Actual, account.Construction)
+            Assert.Empty transports
+        Assert.True(account.Transport = Set.ofList(path @ Option.toList account.Payload))
+        Assert.Equal(selection.Operand, operand.Actual)
+        Assert.Equal(selection.Construction, account.Construction)
+        Assert.Equal(selection.CaseOrdinal, account.CaseOrdinal)
+        Assert.Equal(selection.Payload, account.Payload)
+        Assert.Equal(present, account.Formation.IsSome)
+        Assert.Equal((if present then 1 else 0), boundary.ClosedEntries.Count)
+        let invocation = boundary.CallbackInvocations.Values |> Assert.Single
+        Assert.Equal(BoundaryScalar.Entry invocation.Identity, operand.Abi)
+        Assert.Equal(BoundaryCallbackExtent.DuringCall, invocation.Extent)
+        if present then
+            let payload = account.Payload |> Option.get
+            let entry = boundary.ClosedEntries.Values |> Assert.Single
+            Assert.Equal(Some entry.Formation, account.Formation)
+            Assert.Equal(payload, entry.Formation)
+            match graph.Nodes[payload].Kind with
+            | SemanticKind.Application(intrinsic, [_]) ->
+                match graph.Nodes[intrinsic].Kind with
+                | SemanticKind.Intrinsic info ->
+                    Assert.Equal(IntrinsicModule.FnPtr, info.Module)
+                    Assert.Equal("ofFunction", info.Operation)
+                | other -> failwithf "The source payload callee is not FnPtr.ofFunction: %A" other
+            | other -> failwithf "The source Some payload is not its ofFunction application: %A" other
+        Assert.Contains(operand.Actual, call.Participants)
+        Assert.Contains(operand.Formal, call.Participants)
+        for id in account.Obligation :: account.Construction :: Set.toList account.Transport do Assert.Contains(id, call.Participants)
+        let pending = graph.Nodes.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation {Body=ObligationBody.Pending _} -> Some node.Id | _ -> None) |> Seq.toList
+        Assert.Equal<NodeId>(account.Obligation, pending |> Assert.Single)
+        match graph.Nodes[account.Obligation].Kind with
+        | SemanticKind.Obligation claim ->
+            Assert.Equal("foreign-optional-entry-conversion-0", claim.Kind)
+            match claim.Body with
+            | ObligationBody.Pending reasons ->
+                Assert.Contains(reasons, fun reason -> reason.Contains("conversion") && (present || reason.Contains("nullable-acceptance")))
+            | body -> failwithf "Optional conversion was not Pending: %A" body
+        | kind -> failwithf "Optional conversion lost its ledger citizen: %A" kind
+        let sourceGroup = graph.Edges |> List.filter (fun edge -> edge.Target=account.Obligation && edge.Role=EdgeRole.Constrains) |> Assert.Single |> _.Sources
+        for id in [call.Site;operand.Actual;account.Construction;invocation.Identity] @ Option.toList account.Formation do Assert.Contains(id, sourceGroup)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (fun errors -> failwithf "Optional revision publication refused: %A" errors)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let publicId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId account.Obligation
+        let publicClaim = revision.CurrentClaims[publicId]
+        let publicCall = revision.Emission.Boundary.Calls[Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId call.Site]
+        let transportNode = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId operand.Actual
+        let changedCall = {publicCall with Participants=publicCall.Participants.Remove transportNode}
+        let changedBoundary = {revision.Emission.Boundary with Calls=revision.Emission.Boundary.Calls.Add(publicCall.Site, changedCall)}
+        let changedSupport = {revision with Emission={revision.Emission with Boundary=changedBoundary}}
+        Assert.Contains(Fidelity.PSG.Integrity.check changedSupport, fun violation -> violation.Part="Emission.Boundary.Calls.OptionalEntry.Participants")
+        match graph.Nodes[account.Obligation].Kind, publicClaim.Body with
+        | SemanticKind.Obligation source, Fidelity.PSG.ObligationBody.Pending reasons ->
+            Assert.Equal(source.Id, publicClaim.Id)
+            match source.Body with
+            | ObligationBody.Pending expected -> Assert.Equal<string list>(expected, reasons)
+            | body -> failwithf "Optional source claim changed: %A" body
+        | other -> failwithf "Optional published claim changed: %A" other
+        Assert.DoesNotContain(publicClaim.Id, revision.ObligationQuery)
+        let sourceGroup = revision.ObligationSources[publicId] |> List.exactlyOne
+        for groups in [[]; [List.rev sourceGroup]] do
+            let changed = {revision with ObligationSources=revision.ObligationSources.Add(publicId, groups)}
+            Assert.Contains(Fidelity.PSG.Integrity.check changed, fun violation ->
+                violation.Part = "Emission.Boundary.Calls.OptionalEntry.Obligation")
+        let limits : Fidelity.PSG.Binary.Limits =
+            {MaxBytes=8*1024*1024; MaxCollectionLength=100000; MaxDepth=128
+             MaxStringBytes=1024*1024; MaxBigIntegerBytes=4096; MaxValues=2000000}
+        let bytes = Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith (fun error -> failwithf "%A" error)
+        let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith (fun error -> failwithf "%A" error)
+        Assert.Empty(Fidelity.PSG.Integrity.check copy)
+        Assert.Equal(publicClaim, copy.CurrentClaims[publicId])
+        Assert.Equal<Fidelity.PSG.NodeId list list>(revision.ObligationSources[publicId], copy.ObligationSources[publicId])
+        Assert.Equal<Fidelity.PSG.ObligationInfo list>(revision.Obligations, copy.Obligations)
+
+    [<Fact>]
+    member _.``Optional receiving entry rejects mutable alias transport``() =
+        let result = ClosedCallbackCases.optionalCheck true true (fun source -> source.Replace("let selected:", "let mutable selected:"))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional receiving public adapter refuses absent contextual selection account``(present) =
+        let result = ClosedCallbackCases.optionalCheck present false (fun source ->
+            source.Replace("let callback (_unused: int) = 7",
+                           "let call_optional (callback: option<FnPtr<int -> int>>) : unit = receive callback\nlet callback (_unused: int) = 7")
+                  .Replace("    receive (", "    call_optional ("))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
+        Assert.Empty((read result.Graph).OptionalReceiving)
+        Assert.Empty((read result.Graph).Receiving)
+
+    [<Fact>]
+    member _.``Optional receiving entry rejects user union with None Some case names``() =
+        let result = ClosedCallbackCases.optionalCheck false false (fun source ->
+            source.Replace("type Signedness =", "type Pretend<'T> = None | Some of 'T\ntype Signedness =")
+                  .Replace("callback: option<FnPtr<int -> int>>", "callback: Pretend<FnPtr<int -> int>>"))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("original nonnullable FnPtr formal"))
+
+    [<Fact>]
+    member _.``Optional receiving entry does not reuse record projection for Option field``() =
+        let result = ClosedCallbackCases.receivingCheckWith true (fun source ->
+            source.Replace("callback: FnPtr<int -> int>", "callback: option<FnPtr<int -> int>>")
+                  .Replace("Handler: FnPtr<int -> int>", "Handler: option<FnPtr<int -> int>>")
+                  .Replace("{ Handler = FnPtr.ofFunction callback }", "{ Handler = Some (FnPtr.ofFunction callback) }"))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
+
+    [<Fact>]
+    member _.``Optional receiving entry refuses captured payload``() =
+        let result = ClosedCallbackCases.optionalCheck true false (fun source ->
+            source.Replace("    receive (Some (FnPtr.ofFunction callback))", "    let captured = 7\n    let local value = value + captured\n    receive (Some (FnPtr.ofFunction local))"))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("closed"))
+        Assert.Empty((read result.Graph).Receiving)
+
+    [<Fact>]
+    member _.``Optional receiving entry refuses process exit without registration``() =
+        let result = ClosedCallbackCases.receivingProcessCheckWith (fun source ->
+            source.Replace("let private receive (callback: FnPtr<unit -> unit>)", "let private receive (callback: option<FnPtr<unit -> unit>>)")
+                  .Replace("receive callback.Handler", "receive None"))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("process-exit optional callbacks are not admitted"))
+        Assert.Empty((read result.Graph).OptionalReceiving)
+        Assert.DoesNotContain((Clef.Compiler.PSGSaturation.SemanticGraph.ScopedDeclarations.read result.Graph).Activations.Values,
+                              fun activation -> match activation.Extent with BoundaryCallbackExtent.ProcessExit _ -> true | _ -> false)
+
+    [<Theory>]
+    [<InlineData(false, false)>]
+    [<InlineData(true, false)>]
+    [<InlineData(false, true)>]
+    [<InlineData(true, true)>]
+    member _.``Optional receiving entry source account withdrawal refuses before publication``(present, alias) =
+        let result = ClosedCallbackCases.optionalCheck present alias id
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let selection = (read graph).OptionalReceiving |> Assert.Single
+        let facts = graph.Codata.Value
+        let changed = {graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Remove selection.Operand}}
+        let call = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph |> List.find (fun call -> call.Site=selection.Call)
+        let claim = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> _.Obligation
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Result.Error failures ->
+            let failure = failures |> Assert.Single
+            Assert.Equal(Some claim, failure.Occurrence)
+            Assert.Equal("BoundaryEmission: The optional native callback lost its exact current per-use Pending conversion claim. An optional-entry source account lacks its exact current aggregate slots.", failure.Reason)
+        | Ok _ -> failwith "Optional source selection survived account withdrawal"
+
+    [<Fact>]
+    member _.``Optional receiving Some to None source recheck withdraws payload activation and closed entry``() =
+        for present in [true; false] do
+            let result = ClosedCallbackCases.optionalCheck present false id
+            DimensionalCases.noErrors result
+            let graph = result.Graph
+            let callback = graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("callback", false, _, _) -> true | _ -> false) |> Assert.Single
+            let lambda = callback.Children |> List.exactlyOne
+            let formals = match graph.Nodes[lambda].Kind with SemanticKind.Lambda(formals, _, _, _, _) -> formals | other -> failwithf "Original callback declaration changed: %A" other
+            let reading = read graph
+            let selection = reading.OptionalReceiving |> Assert.Single
+            let boundary =
+                match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
+                | Ok boundary -> boundary
+                | Result.Error failures -> failwithf "Optional source recheck refused: %A" failures
+            Assert.Equal((if present then 1 else 0), boundary.ClosedEntries.Count)
+            match present, selection.Receiving with
+            | true, Some receiving -> Assert.Equal(lambda, receiving.Lambda)
+            | false, None -> ()
+            | other -> failwithf "Source payload activation survived the changed Option case: %A" other
+            for _, _, formal in formals do Assert.Equal(present, reading.NumericBoundaries.ContainsKey formal)
+            let call = boundary.Calls[selection.Call]
+            let selected = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne
+            Assert.Equal((if present then 1 else 0), selected.CaseOrdinal)
+            let pending = graph.Nodes.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation ({Body=ObligationBody.Pending _} as claim) -> Some(node.Id, claim) | _ -> None) |> Assert.Single
+            let pendingId, claim = pending
+            Assert.Equal(selected.Obligation, pendingId)
+            match claim.Body with
+            | ObligationBody.Pending [reason] ->
+                Assert.Equal("foreign-optional-entry-conversion-0", claim.Kind)
+                Assert.Equal(not present, reason.Contains("nullable-acceptance"))
+            | other -> failwithf "The current source conversion claim changed: %A" other
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional receiving Pending dispatch retains complete ledger and exact ready query``(present) =
+        let result = ClosedCallbackCases.optionalCheck present false id
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let dispatch =
+            match Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize graph with
+            | Ok dispatch -> dispatch
+            | Result.Error failures -> failwithf "Optional dispatch refused: %A" failures
+        let pending = dispatch.Required |> List.filter (fun (_, info) -> match info.Body with ObligationBody.Pending _ -> true | _ -> false)
+        let id, info = pending |> Assert.Single
+        let boundary =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
+            | Ok boundary -> boundary
+            | Result.Error failures -> failwithf "Optional boundary refused: %A" failures
+        Assert.True(Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.optionalEntryPending graph boundary (id, info))
+        let originalIds = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.obligations graph |> List.map (fst >> _.Id) |> List.sort
+        Assert.Equal<NodeId list>(originalIds, dispatch.Required |> List.map fst |> List.sort)
+        let ready = dispatch.Required |> List.filter (fun (_, info) -> match info.Body with ObligationBody.Pending _ -> false | _ -> true)
+        Assert.NotEmpty ready
+        let query = dispatch.Query |> Result.defaultWith (fun _ -> failwith "Optional conversion still blocked the ready query")
+        for _, claim in ready do Assert.Contains(claim.Id, query)
+        Assert.DoesNotContain(info.Id, query)
+        Assert.Contains(id, dispatch.SourceGroups.Keys)
+        let facts = graph.Codata.Value
+        let scope = facts.WitnessLiveScope |> Option.defaultWith (fun () -> failwith "Optional source lost its live scope")
+        let selected = facts.WitnessLiveRows |> Option.defaultWith (fun () -> failwith "Optional source lost its selected publication rows")
+        match Clef.Compiler.Baker.Recipes.WitnessPublishedRowsRecipes.project graph scope selected dispatch with
+        | Result.Error failures -> failwithf "Admitted optional Pending publication refused: %A" failures
+        | Ok published ->
+            let publicId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId id
+            let claim = published.CurrentClaims[publicId]
+            Assert.Equal(info.Id, claim.Id)
+            match info.Body, claim.Body with
+            | ObligationBody.Pending reasons, Fidelity.PSG.ObligationBody.Pending publishedReasons ->
+                Assert.Equal<string list>(reasons, publishedReasons)
+                Assert.Contains(claim, published.Obligations)
+                Assert.False(published.Nodes.ContainsKey publicId)
+                let expectedGroups = dispatch.SourceGroups[id] |> List.map (List.map Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId)
+                Assert.Equal<Fidelity.PSG.NodeId list list>(expectedGroups, published.ObligationSources[publicId])
+            | other -> failwithf "Optional Pending disappeared from the published ledger: %A" other
+        Assert.Throws<System.InvalidOperationException>(fun () -> Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo info |> ignore) |> ignore
+        let withoutAccounts = {boundary with Calls=boundary.Calls |> Map.map (fun _ call -> {call with Arguments=call.Arguments |> List.map (fun operand -> {operand with OptionalEntry=None})})}
+        Assert.False(Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.optionalEntryPending graph withoutAccounts (id, info))
+        let omitted = {selected with Emission={selected.Emission with Boundary=withoutAccounts}}
+        match Clef.Compiler.Baker.Recipes.WitnessPublishedRowsRecipes.project graph scope omitted dispatch with
+        | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("Pending claim lacks its exact current optional-entry conversion account"))
+        | Ok _ -> failwith "Optional Pending survived publication account omission"
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional receiving Pending dispatch rejects wrong family and withdrawn support``(withdrawSupport) =
+        let result = ClosedCallbackCases.optionalCheck false false id
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let id, info =
+            graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+                match node.Kind with
+                | SemanticKind.Obligation info when info.Kind.StartsWith("foreign-optional-entry-conversion-") -> Some(id, info)
+                | _ -> None) |> Assert.Single
+        let changed =
+            if withdrawSupport then
+                {graph with Edges=graph.Edges |> List.filter (fun edge -> not (edge.Target=id && edge.Role=EdgeRole.Constrains))}
+            else
+                {graph with Nodes=graph.Nodes.Add(id, {graph.Nodes[id] with Kind=SemanticKind.Obligation {info with Kind="foreign-unrelated-pending"}})}
+        match Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize changed with
+        | Result.Ok {Query=Result.Error unavailable} -> Assert.Contains(unavailable, fun (claim, reasons) -> claim=id && not reasons.IsEmpty)
+        | other -> failwithf "Unadmitted Pending acquired a ready query: %A" other
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional receiving shared claim matcher refuses changed canonical evidence``(present) =
+        let result = ClosedCallbackCases.optionalCheck present false id
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let id, info =
+            graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+                match node.Kind with
+                | SemanticKind.Obligation info when info.Kind.StartsWith("foreign-optional-entry-conversion-") -> Some(id, info)
+                | _ -> None) |> Assert.Single
+        let calls = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph
+        Assert.True((Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (id, info)) |> Result.isOk)
+        let call = calls |> List.find (fun call -> call.Arguments |> List.exists (fun operand -> operand.OptionalEntry |> Option.exists (fun entry -> entry.Obligation=id)))
+        let operand = call.Arguments |> List.find (fun operand -> operand.OptionalEntry.IsSome)
+        let facts = graph.Codata.Value
+        let account = facts.CallableAggregateDependencies[operand.Actual]
+        let cases =
+            [ "stale-source", "Callable aggregate source support changed after its dependency account was authored (CCS8414)."
+              "stale-participant", "Callable aggregate source support changed after its dependency account was authored (CCS8414)."
+              "source-support", "An optional-entry source account omits its semantic source incidences from the call support."
+              "slot-role", "An optional-entry source account lacks its exact aggregate-slot participant role."
+              "ordinal", "The optional-entry Pending claim has a different original argument ordinal."
+              "identity", "The optional-entry Pending claim lost its source-owned claim identity."
+              "reason", "The optional-entry Pending claim has different conversion reasons."
+              "append-reason", "The optional-entry Pending claim has different conversion reasons."
+              "unowned", "The optional-entry Pending claim lacks its exact owned ledger node."
+              "remove-constrains", "The optional-entry Pending claim lost its exact ordered Constrains incidence."
+              "duplicate-constrains", "The optional-entry Pending claim lost its exact ordered Constrains incidence."
+              "added-constrains-source", "The optional-entry Pending claim lost its exact ordered Constrains incidence."
+              "reordered-constrains-source", "The optional-entry Pending claim lost its exact ordered Constrains incidence."
+              "remove-residence", "The optional-entry Pending claim lost its exact EnrichedWith residence."
+              "duplicate-residence", "The optional-entry Pending claim lost its exact EnrichedWith residence." ]
+        for change, reason in cases do
+            let changed =
+                match change with
+                | "stale-source" | "stale-participant" | "slot-role" ->
+                    let changedAccount =
+                        match change with
+                        | "stale-source" ->
+                            let source = List.head account.Sources
+                            {account with Sources={source with Anchors="changed-source-anchor"::source.Anchors}::List.tail account.Sources}
+                        | "stale-participant" -> {account with Participants=List.head account.Participants::account.Participants}
+                        | _ -> {account with Participants=account.Participants |> List.filter (fun participant -> participant.Role<>ParticipantRole.AggregateSlot)}
+                    {graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Add(operand.Actual, changedAccount)}}
+                | "source-support" ->
+                    let source = List.head account.Sources
+                    let edges =
+                        graph.Edges |> List.map (fun edge ->
+                            match edge.Role with
+                            | EdgeRole.BoundaryCall held when held.Site=call.Site -> {edge with Role=EdgeRole.BoundaryCall {held with Participants=held.Participants.Remove source.Node}}
+                            | _ -> edge)
+                    {graph with Edges=edges}
+                | "identity" | "reason" | "append-reason" | "ordinal" | "unowned" ->
+                    let claim =
+                        match change with
+                        | "identity" -> {info with Id=info.Id+"-changed"}
+                        | "ordinal" -> {info with Kind="foreign-optional-entry-conversion-1"}
+                        | "reason" -> {info with Body=ObligationBody.Pending ["Changed conversion premise."]}
+                        | "append-reason" ->
+                            let reasons = match info.Body with ObligationBody.Pending reasons -> reasons | _ -> failwith "Expected Pending"
+                            {info with Body=ObligationBody.Pending (reasons @ ["Added conversion premise."])}
+                        | _ -> info
+                    let node = graph.Nodes[id]
+                    let metadata = if change="unowned" then node.Metadata.Remove "Baker.BoundaryOwned" else node.Metadata
+                    {graph with Nodes=graph.Nodes.Add(id, {node with Kind=SemanticKind.Obligation claim; Metadata=metadata})}
+                | _ ->
+                    let role = if change.Contains("constrains") then EdgeRole.Constrains else EdgeRole.EnrichedWith
+                    let edge = graph.Edges |> List.filter (fun edge -> edge.Target=id && edge.Role=role) |> Assert.Single
+                    if change.StartsWith("remove") then {graph with Edges=graph.Edges |> List.filter (fun edge -> not (edge.Target=id && edge.Role=role))}
+                    elif change.StartsWith("duplicate") then {graph with Edges=graph.Edges @ [edge]}
+                    else
+                        let sources = if change.StartsWith("added") then edge.Sources @ [operand.Actual] else List.rev edge.Sources
+                        Assert.NotEqual<NodeId list>(edge.Sources, sources)
+                        {graph with Edges=graph.Edges |> List.map (fun held -> if held.Target=id && held.Role=role then {held with Sources=sources} else held)}
+            let current = match changed.Nodes[id].Kind with SemanticKind.Obligation claim -> claim | other -> failwithf "%A" other
+            let changedCalls = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls changed
+            match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed changedCalls (id, current) with
+            | Result.Error actual -> Assert.Equal(reason, actual)
+            | Ok _ -> failwithf "Changed Pending evidence survived %s" change
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+            | Result.Error failures ->
+                let failure = failures |> Assert.Single
+                Assert.Equal(Some id, failure.Occurrence)
+                Assert.Equal("BoundaryEmission: The optional native callback lost its exact current per-use Pending conversion claim. " + reason, failure.Reason)
+            | Ok _ -> failwithf "Changed Pending evidence reached publication after %s" change
+            match Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize changed with
+            | Result.Ok {Query=Result.Error unavailable} -> Assert.Contains(unavailable, fun (claim, reasons) -> claim=id && not reasons.IsEmpty)
+            | other -> failwithf "Changed Pending evidence acquired a ready query after %s: %A" change other
+
+    [<Fact>]
+    member _.``Optional receiving source support keeps actual nodes separately from typed aggregate slots``() =
+        let result = ClosedCallbackCases.optionalCheck false false id
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let selection = (read graph).OptionalReceiving |> Assert.Single
+        let boundary =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
+            | Ok boundary -> boundary
+            | Result.Error failures -> failwithf "Optional boundary refused: %A" failures
+        let call = boundary.Calls[selection.Call]
+        let accounts = graph.Codata.Value.CallableAggregateDependencies
+        let account = accounts[selection.Operand]
+        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport accounts call with
+        | Result.Error reason -> failwith reason
+        | Ok support ->
+            let obligation = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> _.Obligation
+            let edge = graph.Edges |> List.filter (fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=obligation) |> Assert.Single
+            Assert.True(Set.ofList edge.Sources = support)
+            Assert.NotEmpty account.Slots
+            for slot in account.Slots do
+                Assert.Contains(account.Participants, fun participant -> participant.Node=slot.Identity && participant.Role=ParticipantRole.AggregateSlot)
+                Assert.DoesNotContain(slot.Identity, call.Participants)
+                Assert.DoesNotContain(slot.Identity, support)
+                Assert.False(graph.Nodes.ContainsKey slot.Identity)
+            for source in account.Sources do Assert.Contains(source.Node, support)
+            Assert.Contains(selection.Construction, support)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional receiving source support refuses absent or changed aggregate slot roles``(changeRole) =
+        let result = ClosedCallbackCases.optionalCheck false false id
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let selection = (read graph).OptionalReceiving |> Assert.Single
+        let boundary =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
+            | Ok boundary -> boundary
+            | Result.Error failures -> failwithf "Optional boundary refused: %A" failures
+        let call = boundary.Calls[selection.Call]
+        let accounts = graph.Codata.Value.CallableAggregateDependencies
+        let account = accounts[selection.Operand]
+        let slots = account.Slots |> List.map _.Identity |> Set.ofList
+        let participants = account.Participants |> List.choose (fun participant ->
+            if participant.Role = ParticipantRole.AggregateSlot && slots.Contains participant.Node then
+                if changeRole then Some {participant with Role=ParticipantRole.AggregateSource} else None
+            else Some participant)
+        let changed = accounts.Add(selection.Operand, {account with Participants=participants})
+        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport changed call with
+        | Result.Error reason -> Assert.Equal("An optional-entry source account lacks its exact aggregate-slot participant role.", reason)
+        | Ok _ -> failwith "An untyped aggregate relation identity entered the semantic source constraint domain"
+
     [<Fact>]
     member _.``A binding adapter hides native arguments from a closed application handler``() =
         let body = """

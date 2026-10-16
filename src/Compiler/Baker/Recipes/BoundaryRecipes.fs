@@ -13,6 +13,53 @@ module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
 module Participants = Clef.Compiler.Baker.Ingredients.Participants
 module StringOrigins = Clef.Compiler.Baker.Ingredients.StringOrigins
 
+/// Validate the original per-use citizen before admitting its exact relation
+/// rows to the boundary census or the Pending dispatch partition.
+let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id: NodeId, info: ObligationInfo) =
+    match info.Body with
+    | ObligationBody.Pending reasons ->
+        let accounts =
+            calls |> List.collect (fun call ->
+                call.Arguments |> List.mapi (fun ordinal operand -> call, ordinal, operand)
+                |> List.choose (fun (call, ordinal, operand) ->
+                    operand.OptionalEntry |> Option.bind (fun selected ->
+                        if selected.Obligation = id then Some(call, ordinal, selected) else None)))
+        match accounts with
+        | [call, ordinal, selected] ->
+            let role = $"foreign-optional-entry-conversion-{ordinal}"
+            let expectedReason =
+                if selected.Payload.IsNone then "Selected-target optional-entry conversion and the foreign nullable-acceptance premise remain Pending."
+                else "Selected-target optional-entry conversion remains Pending."
+            Ingredients.optionalEntrySourceSupport graph.Codata.Value.CallableAggregateDependencies call
+            |> Result.bind (fun support ->
+                call.Arguments |> List.fold (fun state operand ->
+                    state |> Result.bind (fun () ->
+                        match operand.OptionalEntry with
+                        | None -> Ok ()
+                        | Some _ -> Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph operand.Actual |> Result.map ignore)) (Ok ())
+                |> Result.map (fun () -> support))
+            |> Result.bind (fun support ->
+                let sources = List.distinct (call.Site :: Set.toList support)
+                let expected = {Class=EdgeClass.Obligation; Role=EdgeRole.Constrains; Ordinal=0; Sources=sources; Target=id}
+                let residence = Ingredients.row EdgeRole.EnrichedWith 0 sources id
+                let edges = graph.Edges |> List.filter (fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=id)
+                let heldResidence = graph.Edges |> List.filter (fun edge -> edge.Target=id && edge.Role=EdgeRole.EnrichedWith)
+                let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+                if info.Kind <> role then Error "The optional-entry Pending claim has a different original argument ordinal."
+                elif reasons <> [expectedReason] then Error "The optional-entry Pending claim has different conversion reasons."
+                elif (graph.Nodes.TryFind call.Site |> Option.bind (sourceClaimId role)) <> Some info.Id then
+                    Error "The optional-entry Pending claim lost its source-owned claim identity."
+                elif not (graph.Nodes.TryFind id |> Option.exists (fun node ->
+                    Ingredients.ownedNode node && match node.Kind with SemanticKind.Obligation claim -> claim = info | _ -> false)) then
+                    Error "The optional-entry Pending claim lacks its exact owned ledger node."
+                elif not (match edges with [edge] -> key edge = key expected | _ -> false) then
+                    Error "The optional-entry Pending claim lost its exact ordered Constrains incidence."
+                elif not (match heldResidence with [held] -> key held = key residence | _ -> false) then
+                    Error "The optional-entry Pending claim lost its exact EnrichedWith residence."
+                else Ok [expected; residence])
+        | _ -> Error "The optional-entry Pending claim lacks one exact current operand owner."
+    | _ -> Error "The optional-entry conversion claim no longer has its Pending body."
+
 type private CheckedBuilder() =
     member _.Bind(value, next) = Result.bind next value
     member _.Return(value) = Ok value
@@ -230,7 +277,8 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
 
                         do!
                             require
-                                (Types.tryGetNTUKind formalNode.Type = Some NTUKind.NTUfnptr)
+                                (Types.tryGetNTUKind formalNode.Type = Some NTUKind.NTUfnptr ||
+                                 (Declarations.optionalEntrySignature formalNode.Type |> Option.isSome))
                                 "The receiving callback formal must be a nonnullable typed FnPtr."
 
                         return formal, BoundaryScalar.Entry invocation.Quote
@@ -450,10 +498,38 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
         | [], [unit] when graph.Nodes.TryFind unit |> Option.exists (fun node -> Types.tryGetNTUKind node.Type = Some NTUKind.NTUunit) -> [], [unit]
         | _ -> args, []
     do! require (operands.Length = import.Parameters.Length) "The external call does not supply exactly the declared ordered scalar arguments."
-    let! arguments =
+    let! supportedArguments =
         List.zip operands import.Parameters |> List.map (fun (actual, (formal, abi)) -> checked' {
             let! node = graph.Nodes.TryFind actual |> needed "An actual boundary argument is absent from the source graph."
-            do! require (match abi with BoundaryScalar.ResourceHandle _ -> resource.IsSome | BoundaryScalar.WritableBytes _ -> writable |> Option.exists(fun row->row.Buffer=actual) | _ -> supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
+            let! optionalEntry, optionalSupport =
+                match abi with
+                | BoundaryScalar.Entry identity when Declarations.optionalEntrySignature node.Type |> Option.isSome -> checked' {
+                    let! selected =
+                        (CallbackDeclarations.read graph).OptionalReceiving |> List.filter(fun row ->
+                            row.Call=site.Id && row.Operand=actual && row.Invocation.Quote=identity && row.Invocation.Formal=formal)
+                        |> function [row] -> Ok row | _ -> Error "The optional callback lost its exact current selection account."
+                    let! account = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph actual
+                    let! construction =
+                        account.Values |> List.filter(fun row -> row.Occurrence=selected.Construction && row.Operation=CallableAggregateOperation.Construct)
+                        |> function [row] -> Ok row | _ -> Error "The optional callback lost its exact current Option construction account."
+                    do! require (construction.Value=selected.Payload &&
+                                 (construction.Tag |> Option.exists(fun tag -> tag.Constructor=selected.Construction && tag.CaseOrdinal=selected.CaseOrdinal && tag.Payload=selected.Payload)))
+                            "The optional callback case ordinal or payload differs from its current Option account."
+                    let! formation =
+                        match selected.Payload, selected.Receiving with
+                        | None, None -> Ok None
+                        | Some _, Some receiving ->
+                            Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph receiving.Address
+                            |> needed "The optional callback payload has no current closed formation." |> Result.map (fun row -> Some row.Formation)
+                        | _ -> Error "The optional callback presence differs from its closed receiving evidence."
+                    let participants =
+                        Set.unionMany [Set.ofList selected.Transport; Set.ofList selected.Invocation.Participants
+                                       account.Sources |> List.map _.Node |> Set.ofList
+                                       Set.ofList [site.Id;actual;formal;import.Identity;selected.Construction]]
+                    return Some {Construction=selected.Construction;CaseOrdinal=selected.CaseOrdinal;Payload=selected.Payload
+                                 Formation=formation;Transport=Set.ofList selected.Transport;Obligation=NodeId 0}, participants }
+                | _ -> Ok (None, Set.empty)
+            do! require (match abi with BoundaryScalar.Entry _ when optionalEntry.IsSome -> true | BoundaryScalar.ResourceHandle _ -> resource.IsSome | BoundaryScalar.WritableBytes _ -> writable |> Option.exists(fun row->row.Buffer=actual) | _ -> supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
             do! require (import.SourceTypes.TryFind formal = Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type))
                     "The actual boundary argument does not retain its formal's native kind and dimension identity."
             let! meet =
@@ -463,7 +539,8 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
                     let! range = match abi with BoundaryScalar.Boolean -> Ok ValueRange.boolean | _ -> node.ValueRange |> needed "The actual scalar argument lacks an established source range."
                     let! sourceBits = sourceWidth graph actual abi
                     return! adaptation graph site.Id actual sourceBits (scalarBits abi) range }
-            return { Actual = actual; Formal = formal; Abi = abi; Adaptation = meet } }) |> collect
+            return { Actual = actual; Formal = formal; Abi = abi; Adaptation = meet; OptionalEntry=optionalEntry }, optionalSupport }) |> collect
+    let arguments = supportedArguments |> List.map fst
     let! resultAdaptation =
         match import.Result with
         | None -> checked' {
@@ -478,7 +555,8 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
     let! types = sourceTypes graph (site.Id :: args)
     return { Site = site.Id; Import = import.Identity; Callee = callee; Entry = entry; Arguments = arguments; ErasedUnitArguments = erased
              Result = import.Result; ResultAdaptation = resultAdaptation; Resource = resource
-             Participants = Set.unionMany [import.Participants; path; Set.ofList (site.Id :: callee :: args)]
+             Participants = Set.unionMany [import.Participants; path; Set.ofList (site.Id :: callee :: args)
+                                           supportedArguments |> List.map snd |> Set.unionMany]
              SourceTypes = types }
 }
 
@@ -1144,7 +1222,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                               "After a nonnull acquisition, its exact release must retire every alias on every admitted exit, including later failures; a null result creates no release demand.",
                               "Complete source-owned resource alias retirement and exit coverage are not established.") ]
                         requirements |> List.fold(fun (enrichment, errors) (role, statement, reason) ->
-                            match Ingredients.resourceRequirement enrichId node role statement reason participants with
+                            match Ingredients.requirement enrichId node role statement reason participants with
                             | Ok requirement -> Enrichment.combine enrichment requirement, errors
                             | Error reason -> enrichment,(node.Id,Set.ofList participants,reason)::errors) (enrichment,errors)
                     | _ -> enrichment,errors
@@ -1593,26 +1671,29 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                      && (call.Arguments |> List.tryItem source.Parameter) = Some operand)
                     "The receiving callback actual differs from its original native formal and ordinal."
 
-            let! evidence =
+            let! evidence, suppliedActual =
                 match
-                    callbacks.Receiving
-                    |> List.filter (fun evidence ->
-                        evidence.Call = call.Site
-                        && evidence.Operand = operand.Actual
-                        && evidence.Invocation.Quote = identity)
+                    operand.OptionalEntry
                 with
-                | [ evidence ] -> Ok evidence
-                | _ -> Error "The receiving callback lost its exact current call, source entry and signature association."
+                | Some selected ->
+                    callbacks.OptionalReceiving |> List.filter(fun row -> row.Call=call.Site && row.Operand=operand.Actual && row.Invocation.Quote=identity &&
+                                                                          row.Construction=selected.Construction && row.CaseOrdinal=selected.CaseOrdinal && row.Payload=selected.Payload)
+                    |> function
+                       | [{ Receiving=Some evidence; Payload=Some payload }] -> Ok(evidence,payload)
+                       | _ -> Error "The optional Some callback lost its exact current selection account."
+                | None ->
+                    callbacks.Receiving |> List.filter(fun evidence -> evidence.Call=call.Site && evidence.Operand=operand.Actual && evidence.Invocation.Quote=identity)
+                    |> function [evidence] -> Ok(evidence,operand.Actual) | _ -> Error "The receiving callback lost its exact current call, source entry and signature association."
 
             let! formation =
                 Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph evidence.Address
                 |> needed "A receiving callback requires current FnPtr.ofFunction of a capture-free immutable module declaration."
 
             do!
-                match Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph operand.Actual with
+                match Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryFormation graph suppliedActual with
                 | Some direct when direct.Formation = formation.Formation -> Ok ()
                 | _ ->
-                    match PlatformResolution.valuePath graph operand.Actual with
+                    match PlatformResolution.valuePath graph suppliedActual with
                     | Some({ Kind = SemanticKind.FieldGet _; Id = projection }, _) ->
                         Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.nativeProjection graph projection formation.Formation
                     | _ -> Error "The receiving callback lost its exact immutable formation or admitted record projection."
@@ -1751,7 +1832,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 | _ -> Error "The closed C profile requires an exact integer or void native return."
 
             let transport =
-                Set.ofList (formation.Formation :: originalOperand :: operand.Actual :: evidence.Transport)
+                Set.union (Set.ofList (formation.Formation :: originalOperand :: operand.Actual :: evidence.Transport))
+                          (operand.OptionalEntry |> Option.map _.Transport |> Option.defaultValue Set.empty)
 
             let participants =
                 Set.unionMany
@@ -1821,8 +1903,18 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     (fun (invocations, entries, errors) operand ->
                         match operand.Abi with
                         | BoundaryScalar.Entry identity ->
-                            match closedAt call operand identity with
-                            | Ok(invocation, entry) ->
+                            let admitted =
+                                match operand.OptionalEntry with
+                                | Some selected when selected.Payload.IsNone ->
+                                    imports.TryFind call.Import |> needed "The optional callback lost its admitted import."
+                                    |> Result.bind(fun import -> invocationAt import identity)
+                                    |> Result.bind(fun (_,invocation) ->
+                                        if invocation.Extent=BoundaryCallbackExtent.DuringCall then Ok(invocation,None)
+                                        else Error "Optional native entries require a during-call activation.")
+                                | _ -> closedAt call operand identity |> Result.map(fun (invocation,entry) -> invocation,Some entry)
+                            match admitted with
+                            | Ok(invocation, None) -> Map.add invocation.Identity invocation invocations, entries, errors
+                            | Ok(invocation, Some entry) ->
                                 match Map.tryFind entry.Formation entries with
                                 | Some previous when previous.Invocation <> entry.Invocation ->
                                     invocations,
@@ -1846,6 +1938,33 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                         | _ -> invocations, entries, errors)
                     (invocations, entries, errors))
             (Map.empty, Map.empty, errors)
+
+    let calls, optionalRequirements, errors =
+        calls |> Map.fold (fun (updated, enrichment, errors) _ call ->
+            let arguments, enrichment, errors =
+                call.Arguments |> List.mapi (fun ordinal operand -> ordinal,operand)
+                |> List.fold (fun (arguments, enrichment, errors) (ordinal,operand) ->
+                    match operand.OptionalEntry with
+                    | None -> operand::arguments,enrichment,errors
+                    | Some selection ->
+                        let reason =
+                            if selection.Payload.IsNone then "Selected-target optional-entry conversion and the foreign nullable-acceptance premise remain Pending."
+                            else "Selected-target optional-entry conversion remains Pending."
+                        match Ingredients.optionalEntrySourceSupport graph.Codata.Value.CallableAggregateDependencies call
+                              |> Result.bind (fun support ->
+                                  Ingredients.requirement enrichId graph.Nodes[call.Site] ($"foreign-optional-entry-conversion-{ordinal}")
+                                    "The exact source Option selection requires an admitted target boundary conversion." reason
+                                    (Set.toList support)) with
+                        | Error reason -> operand::arguments,enrichment,(call.Site,call.Participants,reason)::errors
+                        | Ok requirement ->
+                            let obligation = requirement.NewNodes |> List.exactlyOne |> _.Id
+                            let selected = {selection with Obligation=obligation}
+                            {operand with OptionalEntry=Some selected}::arguments,Enrichment.combine enrichment requirement,errors)
+                    ([],enrichment,errors)
+            let arguments = List.rev arguments
+            let participants = arguments |> List.choose _.OptionalEntry |> List.map _.Obligation |> Set.ofList |> Set.union call.Participants
+            Map.add call.Site {call with Arguments=arguments;Participants=participants} updated,enrichment,errors)
+            (Map.empty,Enrichment.empty,errors)
 
     let errors =
         imports.Values |> Seq.groupBy _.Symbol |> Seq.fold (fun errors (_, declarations) ->
@@ -2013,9 +2132,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
-    Enrichment.combine writableRequirements (Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
+    Enrichment.combine optionalRequirements (Enrichment.combine writableRequirements (Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
         (Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment)
-    )
+    ))
 
 let elaborate graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore graph)

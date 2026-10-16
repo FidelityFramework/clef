@@ -275,6 +275,18 @@ let optionOf (graph: SemanticGraph) (id: NodeId) : NodeId option option =
     | Some ({ Kind = SemanticKind.DUConstruct ("None", _, _, _) } : SemanticNode) -> Some None
     | _ -> None
 
+/// The ordinary nominal Option carrier, never a union recognised by case names.
+let optionalEntrySignature ty =
+    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+    | NativeType.TApp(option, [payload]) when
+        Clef.Compiler.NativeTypedTree.TypeIdentities.constructor option =
+            Clef.Compiler.NativeTypedTree.TypeIdentities.constructor Types.optionTyCon ->
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst payload with
+        | NativeType.TApp(entry, [signature]) when entry.NTUKind = Some NTUKind.NTUfnptr ->
+            match Clef.Compiler.NativeTypedTree.UnionFind.applySubst signature with NativeType.TFun _ -> Some signature | _ -> None
+        | _ -> None
+    | _ -> None
+
 let field (name: string) (fields: (string * NodeId) list) : NodeId option =
     fields |> List.tryFind (fun (n, _) -> n = name) |> Option.map snd
 
@@ -1915,7 +1927,8 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                         match declaredEntry, graph.Nodes.TryFind formal with
                         | Some(Ok(DeclaredTypeRef.Entry selected)), Some formalNode when
                             Some selected = ownName
-                            && Types.tryGetNTUKind formalNode.Type = Some NTUKind.NTUfnptr
+                            && (Types.tryGetNTUKind formalNode.Type = Some NTUKind.NTUfnptr ||
+                                (optionalEntrySignature formalNode.Type |> Option.isSome))
                             ->
                             let scopes =
                                 graph.Nodes.Values
@@ -1925,6 +1938,8 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                             match scopes with
                             | [ scopeBinding ] ->
                                 match List.tryLast scopeBinding.Children |> Option.bind (valuePath graph) with
+                                | Some(scopeNode, _) when typeName scopeNode = Some "ProcessExitCallbackDescriptor" && (optionalEntrySignature formalNode.Type |> Option.isSome) ->
+                                    invalid "Optional native entries require a during-call activation; process-exit optional callbacks are not admitted."
                                 | Some(scopeNode, scopePath) when
                                     (typeName scopeNode = Some "ScopedCallbackDescriptor" || typeName scopeNode = Some "ProcessExitCallbackDescriptor")
                                     && immutable (scopeBinding.Id :: scopePath)

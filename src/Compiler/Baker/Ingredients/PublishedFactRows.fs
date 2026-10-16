@@ -338,12 +338,21 @@ and mapBoundaryLoading (value: S.BoundaryLoading) : Fidelity.PSG.BoundaryLoading
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.BoundaryLoading)
 
+and mapBoundaryOptionalEntry (value: S.BoundaryOptionalEntry) : Fidelity.PSG.BoundaryOptionalEntry =
+    { Construction = nodeId value.Construction
+      CaseOrdinal = value.CaseOrdinal
+      Payload = Option.map nodeId value.Payload
+      Formation = Option.map nodeId value.Formation
+      Transport = Set.map nodeId value.Transport
+      Obligation = nodeId value.Obligation }
+
 and mapBoundaryOperand (value: S.BoundaryOperand) : Fidelity.PSG.BoundaryOperand =
     ({
         Actual = nodeId value.Actual
         Formal = nodeId value.Formal
         Abi = mapBoundaryScalar value.Abi
         Adaptation = (value.Adaptation |> Option.map (fun x -> mapMeet x))
+        OptionalEntry = Option.map mapBoundaryOptionalEntry value.OptionalEntry
     } : Fidelity.PSG.BoundaryOperand)
 
 and mapBoundaryPlatformPremise (value: S.BoundaryPlatformPremise) : Fidelity.PSG.BoundaryPlatformPremise =
@@ -538,6 +547,9 @@ and mapCallableAggregateDeclarationFact (value: S.CallableAggregateDeclarationFa
     } : Fidelity.PSG.CallableAggregateDeclarationFact)
 
 and mapCallableAggregateDependencyAccount (value: S.CallableAggregateDependencyAccount) : Fidelity.PSG.CallableAggregateDependencyAccount =
+    mapCallableAggregateDependencyAccountUsing (fun (_, info) -> mapObligationInfo info) value
+
+and mapCallableAggregateDependencyAccountUsing (claim: N.NodeId * S.ObligationInfo -> Fidelity.PSG.ObligationInfo) (value: S.CallableAggregateDependencyAccount) : Fidelity.PSG.CallableAggregateDependencyAccount =
     ({
         Occurrence = nodeId value.Occurrence
         Slots = (value.Slots |> List.map (fun x -> mapCallableAggregateSlot x))
@@ -548,7 +560,7 @@ and mapCallableAggregateDependencyAccount (value: S.CallableAggregateDependencyA
         Joins = (value.Joins |> List.map (fun x -> mapCallableJoin x))
         Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
         Sources = (value.Sources |> List.map (fun x -> mapCallableAggregateSourceIncidence x))
-        Claims = (value.Claims |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapObligationInfo t1))))
+        Claims = (value.Claims |> List.map (fun (id, info) -> nodeId id, claim (id, info)))
         Symbols = (value.Symbols |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapCallableSymbolName t1))))
         Inactivity = (value.Inactivity |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapOrdinaryInactivityProjection t1))))
     } : Fidelity.PSG.CallableAggregateDependencyAccount)
@@ -576,6 +588,7 @@ and mapCallableAggregateOperation (value: S.CallableAggregateOperation) : Fideli
     | S.CallableAggregateOperation.Project -> Fidelity.PSG.CallableAggregateOperation.Project
     | S.CallableAggregateOperation.Assign -> Fidelity.PSG.CallableAggregateOperation.Assign
     | S.CallableAggregateOperation.Snapshot -> Fidelity.PSG.CallableAggregateOperation.Snapshot
+    | S.CallableAggregateOperation.Transport -> Fidelity.PSG.CallableAggregateOperation.Transport
 
 and mapCallableAggregatePathStep (value: S.CallableAggregatePathStep) : Fidelity.PSG.CallableAggregatePathStep =
     match value with
@@ -2244,6 +2257,9 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.SnapshotBorrowBound(a0, a1, a2, a3, a4, a5) -> Fidelity.PSG.ObligationBody.SnapshotBorrowBound(nodeId a0, nodeId a1, nodeId a2, nodeId a3, a4, a5)
 
 and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
+    mapObligationInfoUsing mapObligationBody value
+
+and mapObligationInfoUsing (body: S.ObligationBody -> Fidelity.PSG.ObligationBody) (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
     ({
         Id = value.Id
         Kind = value.Kind
@@ -2251,7 +2267,7 @@ and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
         Statement = value.Statement
         Source = value.Source
         Refs = value.Refs
-        Body = mapObligationBody value.Body
+        Body = body value.Body
     } : Fidelity.PSG.ObligationInfo)
 
 and mapOccurrenceBreadcrumb (value: S.WitnessOccurrenceBreadcrumb) : Fidelity.PSG.OccurrenceBreadcrumb =
