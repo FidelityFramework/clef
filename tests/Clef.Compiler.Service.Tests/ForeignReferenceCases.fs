@@ -213,6 +213,17 @@ let readResultRange : Expr<ResultRangeDescriptor> = <@ {
         let result=writableRelational.Value
         Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
         Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith)
+    let writablePosixSource =
+        writableRelationalSource.Replace("let read (buffer: int array)","let read (fd: int) (buffer: int array)")
+                                .Replace("    Parameters = [|\n","    Parameters = [|\n        { Name = \"fd\"; Type = Integer (Signed, 32); PassBy = Value }\n")
+                                .Replace("Parameter = 0; CountParameter = 1","Parameter = 1; CountParameter = 2")
+                                .Replace("Upper = Argument 1","Upper = Argument 2")
+    let writablePosixBody = writableRelationalBody.Replace("Test.Native.read buffer 3","Test.Native.read 0 buffer 3")
+    let writablePosix = lazy(writableVoidApplication writablePosixSource writablePosixBody)
+    let publishedWritablePosix = lazy(
+        let result=writablePosix.Value
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith)
 
     let writableProof expected (info:ObligationInfo) =
         let query=Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib [info]
@@ -449,7 +460,7 @@ type ForeignReferenceTests() =
         Assert.Equal(3,claims.Length)
         Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-count" && info.Body=ObligationBody.IntegerRepresentationCoverage(3I,3I,0I,4I))
         Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-storage" && info.Body=ObligationBody.IntegerRepresentationCoverage(0I,255I,0I,255I))
-        Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-adapter" && (match info.Body with ObligationBody.Pending reasons -> List.contains "The first writable adapter requires exactly buffer0 and count1." reasons | _ -> false))
+        Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-adapter" && (match info.Body with ObligationBody.Pending reasons -> List.contains "MemoryPublication: A dynamic array requires exactly one declared writable stack space." reasons | _ -> false))
         for id,info in claims do
             Assert.StartsWith("foreign_writable_",info.Id)
             let anchor=System.Convert.FromHexString(info.Id.Substring("foreign_writable_".Length)) |> System.Text.Encoding.UTF8.GetString
@@ -462,7 +473,7 @@ type ForeignReferenceTests() =
         let reads=graph.Nodes.Values |> Seq.filter(fun node -> match node.Kind with SemanticKind.IndexGet(input,_) -> input<>application.Allocation | _ -> false) |> Seq.toList
         Assert.Contains(reads,fun node->node.ValueRange=Some(ValueRange.bounded 0I 255I))
         Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->
-            message.Contains "Reference arguments require source-settled boundary adapters")
+            message.Contains "A writable byte ABI requires its exact direct application, allocation and current count/storage proof account.")
 
     [<Theory>]
     [<InlineData("unknown-count")>]
@@ -765,6 +776,143 @@ type ForeignReferenceTests() =
         Assert.Equal(2,ambiguous |> List.filter(fun meet->meet.Operand=call.Site) |> List.distinct |> List.length)
         let changed={revision with Codata={revision.Codata with Meets=revision.Codata.Meets.Add(call.Site,ambiguous)}}
         Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue->issue.Node=Some call.Site && issue.Part="Emission.Boundary.Calls.ResultAdaptation")
+
+    [<Fact>]
+    member _.``Writable POSIX result retains the complete fd buffer count call and separate current claims``() =
+        let revision=ForeignCases.publishedWritablePosix.Value
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let row=Assert.Single revision.Emission.Boundary.WritableBufferUses.Values
+        let call=revision.Emission.Boundary.Calls[row.Call]
+        let imported=revision.Emission.Boundary.Imports[call.Import]
+        Assert.Equal(1,row.Parameter)
+        Assert.Equal(2,row.CountParameter)
+        Assert.Equal<Fidelity.PSG.BoundaryScalar list>([Fidelity.PSG.BoundaryScalar.Integer(32,true);Fidelity.PSG.BoundaryScalar.WritableBytes row.Declaration;Fidelity.PSG.BoundaryScalar.Integer(64,false)],call.Arguments |> List.map _.Abi)
+        Assert.Equal(Some(Fidelity.PSG.BoundaryScalar.Integer(64,true)),call.Result)
+        Assert.Equal<(Fidelity.PSG.NodeId*Fidelity.PSG.BoundaryScalar) list>(imported.Parameters,call.Arguments |> List.map(fun argument->argument.Formal,argument.Abi))
+        let resultUse=revision.Emission.Numeric.ForeignResultUses |> List.filter(fun account->account.Application.Call=row.Call) |> Assert.Single
+        Assert.Equal<Fidelity.PSG.NodeId list>(call.Arguments |> List.map _.Actual,resultUse.Application.Arguments |> List.map _.Node)
+        Assert.Equal(Fidelity.PSG.ForeignResultBound.Argument 2,resultUse.Application.Hypothesis.Value.Upper)
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(-1I,3I),revision.Emission.Numeric.Values[row.Call].Range)
+        let fd,count=call.Arguments[0],call.Arguments[2]
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(0I,0I),revision.Emission.Numeric.Values[fd.Actual].Range)
+        for argument,target in [fd,32;count,64] do
+            let meet=revision.Codata.Meets[call.Site] |> List.filter(fun meet->meet.Operand=argument.Actual) |> List.distinct |> Assert.Single
+            Assert.Equal(Some meet,argument.Adaptation)
+            Assert.Equal(call.Site,meet.Consumer)
+            Assert.Equal(target,meet.To)
+        Assert.True(call.ResultAdaptation.IsSome)
+        let citizens=row.CountCoverage::row.StorageCoverage::(resultUse.Claims |> List.map snd)
+        Assert.Equal(4,citizens |> List.distinct |> List.length)
+        Assert.Equal<Fidelity.PSG.ForeignResultProofRole list>([Fidelity.PSG.ForeignResultProofRole.LogicalCoverage;Fidelity.PSG.ForeignResultProofRole.AbiNarrowing],resultUse.Claims |> List.map fst)
+        for citizen in citizens do
+            Assert.Contains(citizen,row.Participants)
+            Assert.Contains(revision.CurrentClaims[citizen],revision.Obligations)
+        Assert.Contains(fd.Actual,row.Participants)
+        let limits:Fidelity.PSG.Binary.Limits={MaxBytes=16000000;MaxCollectionLength=100000;MaxDepth=128;MaxStringBytes=1000000;MaxBigIntegerBytes=4096;MaxValues=4000000}
+        let copy=Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith(fun error->failwithf "%A" error)
+                 |> Fidelity.PSG.Binary.decode limits |> Result.defaultWith(fun error->failwithf "%A" error)
+        Assert.Empty(Fidelity.PSG.Integrity.check copy)
+        Assert.Equal(revision.Emission.Boundary,copy.Emission.Boundary)
+
+    [<Theory>]
+    [<InlineData("Integer (Unsigned, 32)")>]
+    [<InlineData("Integer (Signed, 64)")>]
+    member _.``Writable POSIX fd requires its exact signed32 ABI profile``(abi:string) =
+        let source=ForeignCases.writablePosixSource.Replace("Name = \"fd\"; Type = Integer (Signed, 32)","Name = \"fd\"; Type = "+abi)
+        Assert.NotEqual<string>(ForeignCases.writablePosixSource,source)
+        let result=ForeignCases.writableVoidApplication source ForeignCases.writablePosixBody
+        Assert.DoesNotContain(result.CheckResult.Graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryCall _->true | _->false)
+        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->message.Contains "or signed-32 fd0/buffer1/count2 unsigned-64 with signed-64 result.")
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("upper")>]
+    [<InlineData("lower")>]
+    [<InlineData("count")>]
+    member _.``Writable POSIX result requires its current declared count relation``(shape:string) =
+        let source,body,reason=
+            match shape with
+            | "missing" ->
+                let source=ForeignCases.writablePosixSource
+                source.Substring(0,source.IndexOf("let readResultRange",System.StringComparison.Ordinal)),ForeignCases.writablePosixBody,"The writable result requires its current declared -1..count behavior hypothesis."
+            | "count" -> ForeignCases.writablePosixSource,ForeignCases.writablePosixBody.Replace("Test.Native.read 0 buffer 3","Test.Native.read 0 buffer 2"),"The first relational writable result requires its exact count3 source domain."
+            | _ ->
+                let before,after=if shape="upper" then "Upper = Argument 2","Upper = Argument 0" else "Lower = Constant (-1)","Lower = Constant 0"
+                let body=if shape="upper" then ForeignCases.writablePosixBody.Replace("Test.Native.read 0 buffer 3","Test.Native.read 4 buffer 3") else ForeignCases.writablePosixBody
+                ForeignCases.writablePosixSource.Replace(before,after),body,"The writable result hypothesis or ordered actuals differ from this call's exact -1..count relation."
+        let graph=(ForeignCases.writableVoidApplication source body).CheckResult.Graph
+        Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        Assert.Contains(graph.Nodes.Values,fun node->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-adapter" ->
+                match info.Body with ObligationBody.Pending reasons->List.contains reason reasons | _->false
+            | _->false)
+
+    [<Fact>]
+    member _.``Writable POSIX held account withdraws a changed fd premise``() =
+        let graph=ForeignCases.writablePosix.Value.CheckResult.Graph
+        let application=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd |> Result.defaultWith(fun failure->failwith failure.Reason)
+        let fd=graph.Nodes[application.Arguments.Head]
+        let kind=match fd.Kind with SemanticKind.Literal(NativeLiteral.Int(_,kind))->kind | _->failwith "Expected the fd0 actual"
+        let changed={graph with Nodes=graph.Nodes.Add(fd.Id,{fd with Kind=SemanticKind.Literal(NativeLiteral.Int(1L,kind))})}
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Error failures->Assert.Contains(failures,fun failure->failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
+        | Ok _->failwith "A changed fd retained the held writable boundary account"
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("substituted")>]
+    [<InlineData("ambiguous")>]
+    member _.``Writable POSIX public fd adaptation replays its own current scalar meet``(shape:string) =
+        let revision=ForeignCases.publishedWritablePosix.Value
+        let boundary=revision.Emission.Boundary
+        let row=Assert.Single boundary.WritableBufferUses.Values
+        let call=boundary.Calls[row.Call]
+        let fd=call.Arguments.Head
+        Assert.True(fd.Adaptation.IsSome)
+        let changed=
+            if shape="ambiguous" then
+                let current=revision.Codata.Meets[call.Site]
+                let original=fd.Adaptation.Value
+                let ambiguous=current@[{original with To=64}]
+                Assert.Equal(2,ambiguous |> List.filter(fun meet->meet.Operand=fd.Actual) |> List.distinct |> List.length)
+                {revision with Codata={revision.Codata with Meets=revision.Codata.Meets.Add(call.Site,ambiguous)}}
+            else
+                let adaptation=if shape="missing" then None else call.Arguments[2].Adaptation
+                let changedCall={call with Arguments={fd with Adaptation=adaptation}::call.Arguments.Tail}
+                {revision with Emission={revision.Emission with Boundary={boundary with Calls=boundary.Calls.Add(call.Site,changedCall)}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue->issue.Node=Some call.Site && issue.Part="Emission.Boundary.Calls.Arguments.Adaptation" && issue.Reason="The boundary argument adaptation differs from its exact current source numeric meet.")
+
+    [<Theory>]
+    [<InlineData("order")>]
+    [<InlineData("arity")>]
+    [<InlineData("formal")>]
+    [<InlineData("abi")>]
+    [<InlineData("support")>]
+    [<InlineData("claim")>]
+    [<InlineData("hypothesis")>]
+    member _.``Writable POSIX public replay requires the exact three actual profile and result account``(shape:string) =
+        let revision=ForeignCases.publishedWritablePosix.Value
+        let boundary=revision.Emission.Boundary
+        let key,row=boundary.WritableBufferUses |> Map.toList |> Assert.Single
+        let call=boundary.Calls[row.Call]
+        let fd,count=call.Arguments[0],call.Arguments[2]
+        let resultUse=revision.Emission.Numeric.ForeignResultUses |> List.filter(fun account->account.Application.Call=row.Call) |> Assert.Single
+        let changed=
+            match shape with
+            | "support" -> {revision with Emission={revision.Emission with Boundary={boundary with WritableBufferUses=boundary.WritableBufferUses.Add(key,{row with Participants=row.Participants.Remove fd.Actual})}}}
+            | "claim" -> {revision with CurrentClaims=revision.CurrentClaims.Remove(snd resultUse.Claims.Head)}
+            | "hypothesis" -> {revision with Emission={revision.Emission with Boundary={boundary with ResultHypotheses=[]}}}
+            | _ ->
+                let arguments=match shape with
+                              | "order" -> [{fd with Actual=count.Actual};call.Arguments[1];{count with Actual=fd.Actual}]
+                              | "arity" -> call.Arguments.Tail
+                              | "formal" -> {fd with Formal=count.Formal}::call.Arguments.Tail
+                              | _ -> {fd with Abi=Fidelity.PSG.BoundaryScalar.Integer(64,true)}::call.Arguments.Tail
+                let imported=boundary.Imports[call.Import]
+                let imports=if shape="abi" then boundary.Imports.Add(imported.Identity,{imported with Parameters=(fd.Formal,Fidelity.PSG.BoundaryScalar.Integer(64,true))::imported.Parameters.Tail}) else boundary.Imports
+                {revision with Emission={revision.Emission with Boundary={boundary with Imports=imports;Calls=boundary.Calls.Add(call.Site,{call with Arguments=arguments})}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue->issue.Part="Emission.Boundary.WritableBufferUses.Account")
 
     [<Fact>]
     member _.``Writable relational equal arguments retain distinct original calls and result claims``() =

@@ -161,6 +161,7 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         let writable =
             match writable, descriptor.Parameters with
             | [row], [buffer;count] when row.Parameter=0 && row.CountParameter=1 && fst buffer=row.BufferFormal && fst count=row.CountFormal -> Some row
+            | [row], [_fd;buffer;count] when row.Parameter=1 && row.CountParameter=2 && fst buffer=row.BufferFormal && fst count=row.CountFormal -> Some row
             | _ -> None
         do!
             require
@@ -288,10 +289,12 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
             | [] -> typeRef graph returnId
             | _ -> Error "The acquisition declaration has ambiguous resource ownership."
 
-        do! require (writable.IsNone || ((result.IsNone || result=Some(BoundaryScalar.Integer(64,true))) && parameters |> List.map snd |> function
-                                        | [BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)] -> true
-                                        | _ -> false))
-                "The first writable buffer adapter requires its exact buffer0/count1 unsigned-64 and Void or signed-64 result declaration."
+        do! require (writable.IsNone ||
+                     (match (parameters |> List.map snd),result with
+                     | [BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)],(None | Some(BoundaryScalar.Integer(64,true))) -> true
+                     | [BoundaryScalar.Integer(32,true);BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)],Some(BoundaryScalar.Integer(64,true)) -> true
+                     | _ -> false))
+                "The writable buffer adapter requires buffer0/count1 unsigned-64 with Void or signed-64 result, or signed-32 fd0/buffer1/count2 unsigned-64 with signed-64 result."
 
         let! bodyNode =
             graph.Nodes.TryFind body
@@ -1016,8 +1019,10 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         | _ -> return! Error "The writable result requires its separately supported signed-64 scalar declaration." }
     let writableStorage (application:StringByteStorageRecipes.WritableApplication) = checked' {
         let declaration=application.Declaration
-        do! require (declaration.Parameter=0 && declaration.CountParameter=1 && application.Arguments.Length=2)
-                "The first writable adapter requires exactly buffer0 and count1."
+        do! require (match declaration.Parameter,declaration.CountParameter,application.Arguments.Length with
+                     | 0,1,2 | 1,2,3 -> true
+                     | _ -> false)
+                "The writable adapter requires exactly buffer0/count1 or fd0/buffer1/count2."
         let! rep,format=Bytes.byteRepresentation graph |> needed "The writable application lost its selected unsigned-8 byte declaration."
         do! require (rep.Name=application.Representation) "The writable storage analysis and byte declaration disagree."
         let! memory=MemoryPublication.project graph |> Result.mapError(fun failures->failures |> List.map _.Reason |> String.concat "; ")
@@ -1317,7 +1322,10 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                 if (import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false) then
                                     return import, None
                                 else
-                                    let writable=writableUses.TryFind(node.Id,0)
+                                    let writable=
+                                        import.Parameters |> List.indexed |> List.choose(fun (ordinal,(_,abi))->
+                                            match abi with BoundaryScalar.WritableBytes _->Some ordinal | _->None)
+                                        |> List.tryExactlyOne |> Option.bind(fun ordinal->writableUses.TryFind(node.Id,ordinal))
                                     let! call = readCall graph node callee args path import None None writable
                                     return import, Some call
                             }
