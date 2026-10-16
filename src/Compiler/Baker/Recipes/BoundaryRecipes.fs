@@ -288,10 +288,10 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
             | [] -> typeRef graph returnId
             | _ -> Error "The acquisition declaration has ambiguous resource ownership."
 
-        do! require (writable.IsNone || (result.IsNone && parameters |> List.map snd |> function
+        do! require (writable.IsNone || ((result.IsNone || result=Some(BoundaryScalar.Integer(64,true))) && parameters |> List.map snd |> function
                                         | [BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)] -> true
                                         | _ -> false))
-                "The first writable buffer adapter requires its exact buffer0/count1 unsigned-64 and Void result declaration."
+                "The first writable buffer adapter requires its exact buffer0/count1 unsigned-64 and Void or signed-64 result declaration."
 
         let! bodyNode =
             graph.Nodes.TryFind body
@@ -969,7 +969,51 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                           PointerBits = resource.PointerBits; AcquisitionType = resource.AcquisitionType; ResultType = resource.ResultType; HandleType = resource.HandleType
                           Contract = resource.Contract; DeclarationFacts = facts; Participants = Map.keys facts |> Set.ofSeq }
                     Map.add row.Identity row rows,errors) (Map.empty,[])
+    let numeric =
+        lazy
+            (NumericPublication.project graph
+             |> Result.mapError (fun _ -> "A closed C entry requires current source numeric carrier and proof settlement."))
     let writableApplications = StringByteStorageRecipes.writableApplications graph
+    let writableResult (application:StringByteStorageRecipes.WritableApplication) = checked' {
+        let! _,fields=Declarations.recordOf graph application.Declaration.AbiDescriptor
+                      |> needed "The writable result lost its current FunctionDescriptor."
+        let! returnId=field "ReturnType" fields |> needed "The writable result declaration lacks ReturnType."
+        let! result=typeRef graph returnId
+        match result with
+        | None -> return Set.empty
+        | Some(BoundaryScalar.Integer(64,true)) ->
+            do! require (application.CountRange=ValueRange.point 3I)
+                    "The first relational writable result requires its exact count3 source domain."
+            let! projection=numeric.Value |> Result.mapError(fun _->"The writable result requires its current numeric application and proof inventory.")
+            let! account=projection.ForeignResultUses |> List.filter(fun account->
+                account.Application.Call=application.Site && account.Application.Declaration=application.Declaration.Declaration.Binding)
+                         |> List.tryExactlyOne |> needed "The writable result requires one exact current foreign-result call/context account."
+            let! hypothesis=account.Application.Hypothesis |> needed "The writable result requires its current declared -1..count behavior hypothesis."
+            do! require (hypothesis.Lower=ForeignResultBound.Constant -1I && hypothesis.Upper=ForeignResultBound.Argument application.Declaration.CountParameter &&
+                         (account.Application.Arguments |> List.map(fun argument->argument.Index,argument.Node)) = (application.Arguments |> List.indexed))
+                    "The writable result hypothesis or ordered actuals differ from this call's exact -1..count relation."
+            do! require (descriptors.ResultRanges |> List.exists(fun declared->
+                declared.Declaration.Binding=account.Application.Declaration && declared.AbiDescriptor=application.Declaration.AbiDescriptor && declared.Hypothesis=hypothesis))
+                    "The writable result hypothesis is absent from the current declaration census."
+            do! require (List.map fst account.Claims=[ForeignResultProofRole.LogicalCoverage;ForeignResultProofRole.AbiNarrowing] &&
+                         (account.Claims |> List.map snd |> List.distinct).Length=2 &&
+                         (account.Claims |> List.forall(fun(role,citizen)->
+                             graph.Nodes.TryFind citizen |> Option.exists(fun node->
+                                 match node.Kind with
+                                 | SemanticKind.Obligation info ->
+                                     match info.Body with
+                                     | ObligationBody.ForeignResultCoverage model ->
+                                         info.Kind="foreign-result-coverage" && model.Application=account.Application && model.Role=role &&
+                                         model.Abi=Some application.Declaration.AbiDescriptor && model.AbiRange=ValueRange.twosComplement 64 &&
+                                         model.ResultRange=ValueRange.bounded -1I 3I
+                                     | _ -> false
+                                 | _ -> false))))
+                    "The writable result lacks its own current logical coverage and signed ABI narrowing claim citizens."
+            let! support=match account.Participants with
+                         | ParticipantEvidence.Established rows->Ok(rows |> List.map _.Node |> Set.ofList)
+                         | ParticipantEvidence.Pending _->Error "The writable result has pending source application support."
+            return Set.union support (account.Claims |> List.map snd |> Set.ofList)
+        | _ -> return! Error "The writable result requires its separately supported signed-64 scalar declaration." }
     let writableStorage (application:StringByteStorageRecipes.WritableApplication) = checked' {
         let declaration=application.Declaration
         do! require (declaration.Parameter=0 && declaration.CountParameter=1 && application.Arguments.Length=2)
@@ -985,7 +1029,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         do! match application.CountRange with
             | ValueRange.Bounded(lo,hi) when lo=hi && 0I<=lo && hi<=4I -> Ok()
             | _ -> Error "The first writable adapter requires one exact nonnegative count within four byte slots."
-        return format,storage }
+        let! resultSupport=writableResult application
+        return format,storage,resultSupport }
     // Coverage citizens retain the source effect account independently of the
     // physical adapter. Only the complete finite direct profile drops Pending.
     let writableRequirements, writableRequirementErrors, writableUses =
@@ -1036,14 +1081,14 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 | Error reason ->
                     let current,errors=pending application.Declaration application.Participants reason
                     Enrichment.combine current covered,errors,uses
-                | Ok(format,storage) ->
+                | Ok(format,storage,resultSupport) ->
                     let citizen role=covered.NewNodes |> List.find(fun node->match node.Kind with SemanticKind.Obligation info->info.Kind="foreign-writable-buffer-"+role | _->false) |> _.Id
                     let count,values=citizen "count",citizen "storage"
                     let row:BoundaryWritableBufferUse =
                         {Call=site;Declaration=application.Declaration.Quote;Parameter=application.Declaration.Parameter;CountParameter=application.Declaration.CountParameter
                          Buffer=application.Buffer;Count=application.Count;Allocation=application.Allocation;Capacity=application.Capacity;ByteFormat=format
                          CountCoverage=count;StorageCoverage=values
-                         Participants=Set.union storage.Participants (Set.ofList(count::values::application.Participants))}
+                         Participants=Set.unionMany [storage.Participants;resultSupport;Set.ofList(count::values::application.Participants)]}
                     Enrichment.combine enrichment covered,errors,Map.add (site,row.Parameter) row uses) (Enrichment.empty,[],Map.empty)
     let writableDeclarations, writableErrors =
         descriptors.WritableBuffers |> List.fold (fun (rows,errors) writable ->
@@ -1461,11 +1506,6 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 | Ok anchor -> Map.add anchor.Identity anchor imports, errors
                 | Error reason -> imports, (activation.Scope,activation.Participants,reason)::errors
             | _ -> imports, errors) (imports, errors)
-
-    let numeric =
-        lazy
-            (NumericPublication.project graph
-             |> Result.mapError (fun _ -> "A closed C entry requires current source numeric carrier and proof settlement."))
 
     let invocationAt (import: BoundaryImport) identity =
         checked' {

@@ -195,6 +195,24 @@ libraries=["c"]
         let result=writableNative.Value
         Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
         Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith)
+    let writableRelationalSource =
+        writableVoidSource.Replace("(count: int) : unit", "(count: int) : int")
+                          .Replace("ReturnType = Void", "ReturnType = Integer (Signed, 64)")
+        + """
+type ResultBound = Constant of int | Argument of int
+type ResultRole = | ReturnValue
+type ResultRangeDescriptor = { Binding:string; Role:ResultRole; Hypothesis:ExternalExecutionHypothesis; Lower:ResultBound; Upper:ResultBound }
+let readResultRange : Expr<ResultRangeDescriptor> = <@ {
+    Binding = "Test.Native.read"; Role = ReturnValue
+    Hypothesis = { Identity = "fixture.writable.result"; Version = "1"; Source = "writable-result.pilot.toml" }
+    Lower = Constant (-1); Upper = Argument 1 } @>
+"""
+    let writableRelationalBody = "    let buffer = Array.zeroCreate 4\n    let answer = Test.Native.read buffer 3\n    if answer < 0 then -1 elif answer = 0 then 0 else answer\n"
+    let writableRelational = lazy(writableVoidApplication writableRelationalSource writableRelationalBody)
+    let publishedWritableRelational = lazy(
+        let result=writableRelational.Value
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith)
 
     let writableProof expected (info:ObligationInfo) =
         let query=Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib [info]
@@ -488,6 +506,28 @@ type ForeignReferenceTests() =
         Assert.All(latest,fun node->Assert.Equal(Some(ValueRange.bounded 0I 255I),node.ValueRange))
 
     [<Theory>]
+    [<InlineData("relation")>]
+    [<InlineData("count")>]
+    member _.``Writable relational source requires exact result relation and count domain``(shape:string) =
+        let source,body,reason=
+            match shape with
+            | "relation" ->
+                let source=ForeignCases.writableRelationalSource.Replace("Lower = Constant (-1)","Lower = Constant 0")
+                Assert.NotEqual<string>(ForeignCases.writableRelationalSource,source)
+                source,ForeignCases.writableRelationalBody,"The writable result hypothesis or ordered actuals differ from this call's exact -1..count relation."
+            | _ ->
+                let body=ForeignCases.writableRelationalBody.Replace("Test.Native.read buffer 3","Test.Native.read buffer 2")
+                Assert.NotEqual<string>(ForeignCases.writableRelationalBody,body)
+                ForeignCases.writableRelationalSource,body,"The first relational writable result requires its exact count3 source domain."
+        let graph=(ForeignCases.writableVoidApplication source body).CheckResult.Graph
+        Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        Assert.Contains(graph.Nodes.Values,fun node->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-adapter" ->
+                match info.Body with ObligationBody.Pending reasons->List.contains reason reasons | _->false
+            | _->false)
+
+    [<Theory>]
     [<InlineData("version")>]
     [<InlineData("quotation")>]
     [<InlineData("count")>]
@@ -620,6 +660,110 @@ type ForeignReferenceTests() =
         for citizen in [row.CountCoverage;row.StorageCoverage] do
             Assert.True(revision.CurrentClaims.ContainsKey citizen)
             Assert.Contains(revision.CurrentClaims[citizen],revision.Obligations)
+
+    [<Fact>]
+    member _.``Writable relational result shares original call with separate current proof citizens``() =
+        let revision=ForeignCases.publishedWritableRelational.Value
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let row=Assert.Single revision.Emission.Boundary.WritableBufferUses.Values
+        let call=revision.Emission.Boundary.Calls[row.Call]
+        Assert.Equal(Some(Fidelity.PSG.BoundaryScalar.Integer(64,true)),call.Result)
+        Assert.True(call.ResultAdaptation.IsSome)
+        let useRow=revision.Emission.Numeric.ForeignResultUses |> List.filter(fun account->account.Application.Call=row.Call) |> Assert.Single
+        Assert.Equal<Fidelity.PSG.NodeId list>(call.Arguments |> List.map _.Actual,useRow.Application.Arguments |> List.map _.Node)
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(-1I,3I),revision.Emission.Numeric.Values[row.Call].Range)
+        Assert.Equal<Fidelity.PSG.ForeignResultProofRole list>([Fidelity.PSG.ForeignResultProofRole.LogicalCoverage;Fidelity.PSG.ForeignResultProofRole.AbiNarrowing],useRow.Claims |> List.map fst)
+        for _,citizen in useRow.Claims do
+            Assert.Contains(citizen,row.Participants)
+            Assert.NotEqual(row.CountCoverage,citizen)
+            Assert.NotEqual(row.StorageCoverage,citizen)
+            Assert.Contains(revision.CurrentClaims[citizen],revision.Obligations)
+
+    [<Fact>]
+    member _.``Writable relational missing behavior retains Pending without call authority``() =
+        let source=ForeignCases.writableRelationalSource
+        let changed=source.Substring(0,source.IndexOf("let readResultRange",System.StringComparison.Ordinal))
+        Assert.NotEqual<string>(source,changed)
+        let result=ForeignCases.writableVoidApplication changed ForeignCases.writableRelationalBody
+        let graph=result.CheckResult.Graph
+        Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        Assert.Contains(graph.Nodes.Values,fun node->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-adapter" ->
+                match info.Body with ObligationBody.Pending reasons->List.contains "The writable result requires its current declared -1..count behavior hypothesis." reasons | _->false
+            | _->false)
+
+    [<Theory>]
+    [<InlineData("version")>]
+    [<InlineData("descriptor")>]
+    [<InlineData("count")>]
+    member _.``Writable relational held account withdraws changed current premises``(shape:string) =
+        let graph=ForeignCases.writableRelational.Value.CheckResult.Graph
+        let expected=if shape="version" then "1" else "native_read"
+        let target=
+            if shape="count" then
+                graph.Nodes.Values |> Seq.filter(fun node->
+                    node.IsReachable && node.Range.File.EndsWith "main.clef" &&
+                    (match node.Kind with SemanticKind.Literal(NativeLiteral.Int(3L,_))->true | _->false)) |> Assert.Single
+            else
+                graph.Nodes.Values |> Seq.filter(fun node->
+                    node.Range.File.EndsWith "resource.clef" &&
+                    (match node.Kind with SemanticKind.Literal(NativeLiteral.String value)->value=expected | _->false)) |> Assert.Single
+        let kind=match target.Kind with
+                 | SemanticKind.Literal(NativeLiteral.Int(value,kind))->SemanticKind.Literal(NativeLiteral.Int(value+1L,kind))
+                 | SemanticKind.Literal(NativeLiteral.String value)->SemanticKind.Literal(NativeLiteral.String(value+"-changed"))
+                 | _->failwith "The exact fixture premise is not a literal"
+        let changed={graph with Nodes=graph.Nodes.Add(target.Id,{target with Kind=kind})}
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Error failures->Assert.Contains(failures,fun failure->failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
+        | Ok _->failwith "A changed relational premise retained writable call authority"
+
+    [<Theory>]
+    [<InlineData("support")>]
+    [<InlineData("hypothesis")>]
+    [<InlineData("claim")>]
+    member _.``Writable relational public replay requires its own current result account``(shape:string) =
+        let revision=ForeignCases.publishedWritableRelational.Value
+        let boundary=revision.Emission.Boundary
+        let key,row=boundary.WritableBufferUses |> Map.toList |> Assert.Single
+        let account=revision.Emission.Numeric.ForeignResultUses |> List.filter(fun useRow->useRow.Application.Call=row.Call) |> Assert.Single
+        let citizen=account.Claims.Head |> snd
+        let changed=
+            match shape with
+            | "support"->
+                let row={row with Participants=row.Participants.Remove citizen}
+                {revision with Emission={revision.Emission with Boundary={boundary with WritableBufferUses=boundary.WritableBufferUses.Add(key,row)}}}
+            | "hypothesis"->
+                {revision with Emission={revision.Emission with Boundary={boundary with ResultHypotheses=[]}}}
+            | _->{revision with CurrentClaims=revision.CurrentClaims.Remove citizen}
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue->issue.Part="Emission.Boundary.WritableBufferUses.Account")
+
+    [<Fact>]
+    member _.``Writable relational public result requires its selected adaptation``() =
+        let revision=ForeignCases.publishedWritableRelational.Value
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let boundary=revision.Emission.Boundary
+        let row=Assert.Single boundary.WritableBufferUses.Values
+        let call=boundary.Calls[row.Call]
+        Assert.True(call.ResultAdaptation.IsSome)
+        let changedCall={call with ResultAdaptation=None}
+        let changed={revision with Emission={revision.Emission with Boundary={boundary with Calls=boundary.Calls.Add(row.Call,changedCall)}}}
+        let issues=Fidelity.PSG.Integrity.check changed
+        Assert.Contains(issues,fun issue->issue.Node=Some row.Call && issue.Part="Emission.Boundary.Calls.ResultAdaptation" && issue.Reason="The boundary result adaptation differs from its exact current source numeric meet.")
+
+    [<Fact>]
+    member _.``Writable relational equal arguments retain distinct original calls and result claims``() =
+        let result=ForeignCases.writableVoidApplication ForeignCases.writableRelationalSource "    let buffer = Array.zeroCreate 4\n    let first = Test.Native.read buffer 3\n    let second = Test.Native.read buffer 3\n    if first < 0 then first elif second = 0 then 0 else second\n"
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        let revision=Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let uses=revision.Emission.Boundary.WritableBufferUses.Values |> Seq.toList
+        Assert.Equal(2,uses.Length)
+        Assert.NotEqual(uses[0].Call,uses[1].Call)
+        let accounts=uses |> List.map(fun row->revision.Emission.Numeric.ForeignResultUses |> List.filter(fun account->account.Application.Call=row.Call) |> Assert.Single)
+        let citizens=accounts |> List.collect(fun account->account.Claims |> List.map snd)
+        Assert.Equal(4,citizens |> List.distinct |> List.length)
+        Assert.Equal(uses[0].Allocation,uses[1].Allocation)
 
     [<Theory>]
     [<InlineData("count","Account")>]
@@ -1485,7 +1629,7 @@ let main args =
     [<Fact>]
     member _.``Missing foreign result behavior retains only its complete declared ABI domain``() =
         let graph =
-            ForeignCases.resultGraph
+            ForeignCases.resultPlatformGraph
                 ""
                 """
 [<EntryPoint>]
@@ -1502,6 +1646,17 @@ let main _ = if read 4 = 0 then 0 else 1
                 Assert.True(row.Abi.IsSome)
                 Assert.Equal(ValueRange.Bounded(-(1I <<< 63), (1I <<< 63) - 1I), row.ResultRange)
         )
+        let revision=
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare graph
+            |> Result.defaultWith(fun errors->failwithf "%A" errors)
+            |> Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish
+            |> Result.defaultWith(fun errors->failwithf "%A" errors)
+        let call=Assert.Single revision.Emission.Boundary.Calls.Values
+        Assert.Equal(Some(Fidelity.PSG.BoundaryScalar.Integer(64,true)),call.Result)
+        Assert.True(call.ResultAdaptation.IsNone)
+        let resultMeets=revision.Codata.Meets.TryFind call.Site |> Option.defaultValue [] |> List.filter(fun meet->meet.Operand=call.Site)
+        Assert.Empty resultMeets
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
 
     [<Fact>]
     member _.``Foreign result contract consumes the complete declared ABI domain of an unknown actual``() =
