@@ -752,6 +752,21 @@ type ForeignReferenceTests() =
         Assert.Contains(issues,fun issue->issue.Node=Some row.Call && issue.Part="Emission.Boundary.Calls.ResultAdaptation" && issue.Reason="The boundary result adaptation differs from its exact current source numeric meet.")
 
     [<Fact>]
+    member _.``Writable relational public result refuses ambiguous current adaptations``() =
+        let revision=ForeignCases.publishedWritableRelational.Value
+        let row=Assert.Single revision.Emission.Boundary.WritableBufferUses.Values
+        let call=revision.Emission.Boundary.Calls[row.Call]
+        let current=revision.Codata.Meets[call.Site]
+        let original=current |> List.filter(fun meet->meet.Operand=call.Site) |> Assert.Single
+        Assert.Equal(Some original,call.ResultAdaptation)
+        Assert.Equal(64,original.From)
+        Assert.Equal(32,original.To)
+        let ambiguous=current@[{original with To=16}]
+        Assert.Equal(2,ambiguous |> List.filter(fun meet->meet.Operand=call.Site) |> List.distinct |> List.length)
+        let changed={revision with Codata={revision.Codata with Meets=revision.Codata.Meets.Add(call.Site,ambiguous)}}
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue->issue.Node=Some call.Site && issue.Part="Emission.Boundary.Calls.ResultAdaptation")
+
+    [<Fact>]
     member _.``Writable relational equal arguments retain distinct original calls and result claims``() =
         let result=ForeignCases.writableVoidApplication ForeignCases.writableRelationalSource "    let buffer = Array.zeroCreate 4\n    let first = Test.Native.read buffer 3\n    let second = Test.Native.read buffer 3\n    if first < 0 then first elif second = 0 then 0 else second\n"
         Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
