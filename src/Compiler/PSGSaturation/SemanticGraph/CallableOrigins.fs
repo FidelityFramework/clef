@@ -736,10 +736,11 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
         |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
     // A declared foreign body is a source placeholder, not an ordinary
     // call-target result dependency. Its declaration remains in the callee path.
-    let foreignBodies =
+    let foreignDeclarations =
         graph.Edges |> List.choose (fun edge ->
-            match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration.Body | _ -> None)
-        |> Set.ofList
+            match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
+    let foreignBodies = foreignDeclarations |> List.map _.Body |> Set.ofList
+    let foreignFormals = foreignDeclarations |> List.collect _.Formals |> Set.ofList
     let rawDependencies id =
         match nodes.TryFind id with
         | None -> []
@@ -771,6 +772,10 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
     nodes |> Map.toList |> List.choose (fun (id, node) ->
         let slots =
             match node.Kind with
+            // A foreign formal declares the receiving contract. Each original
+            // actual owns its aggregate construction and per-call conversion;
+            // joining callers does not create one runtime tag for this formal.
+            | SemanticKind.PatternBinding _ when foreignFormals.Contains id -> []
             // Spatial declaration shells consume their source-owned plans.
             // Their descriptor records are not runtime aggregate values
             // (Reachability.hardwareDesignReferences; WitnessLiveRows.valueFacts).

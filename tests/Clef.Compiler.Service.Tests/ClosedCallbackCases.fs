@@ -206,6 +206,21 @@ let main _ =
         optionalCheckUsing metadata present alias (fun source ->
             source.Replace("let callback (_unused: int) = 7",absenceDeclaration+"\nlet callback (_unused: int) = 7") |> transform)
 
+    let private withSecondReceiver (source:string) =
+        let declarations=source.Split('\n') |> Array.filter(fun line->line.StartsWith("let private receive ") || line.StartsWith("let receiveDescriptor:") || line.StartsWith("let scope") || line.StartsWith("let invocation")) |> String.concat "\n"
+        let other=declarations.Replace("let private receive ","let private secondReceiver ").Replace("let receiveDescriptor:","let secondReceiverDescriptor:")
+                              .Replace("let scope","let secondScope").Replace("let invocation","let secondInvocation")
+                              .Replace("ReceivingCallback.receive","ReceivingCallback.secondReceiver").Replace("ReceivingCallback.scope","ReceivingCallback.secondScope").Replace("ReceivingCallback.invocation","ReceivingCallback.secondInvocation")
+                              .Replace("consume_callback","consume_other")
+        source.Replace("let callback (_unused: int) = 7","[<FidelityExtern(\"c\", \"consume_other\")>]\n"+other+"\nlet callback (_unused: int) = 7")
+
+    let mixedFormalCheck noneFirst transform =
+        absenceCheck true false (fun source ->
+            let present="    receive (Some (FnPtr.ofFunction callback))"
+            let absent="    receive None"
+            source.Replace(present,if noneFirst then absent+"\n"+present else present+"\n"+absent)
+            |> withSecondReceiver |> transform)
+
     let mixedAbsenceCheck otherSite transform =
         absenceCheck true false (fun source ->
             let call="    receive (Some (FnPtr.ofFunction callback))"
@@ -220,15 +235,142 @@ let main _ =
                       .Replace("let callback (_unused: int) = 7",extra+"\nlet callback (_unused: int) = 7")
                       .Replace(call,call+" None")
             let source = if otherSite then source.Replace(call+" None","    let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)\n    let absent: option<FnPtr<int -> unit>> = None\n    receive selected absent\n    receive selected absent") else source
-            let declarations=source.Split('\n') |> Array.filter(fun line->line.StartsWith("let private receive ") || line.StartsWith("let receiveDescriptor:") || line.StartsWith("let scope") || line.StartsWith("let invocation")) |> String.concat "\n"
-            let other=declarations.Replace("let private receive ","let private secondReceiver ").Replace("let receiveDescriptor:","let secondReceiverDescriptor:")
-                                  .Replace("let scope","let secondScope").Replace("let invocation","let secondInvocation")
-                                  .Replace("ReceivingCallback.receive","ReceivingCallback.secondReceiver").Replace("ReceivingCallback.scope","ReceivingCallback.secondScope").Replace("ReceivingCallback.invocation","ReceivingCallback.secondInvocation")
-                                  .Replace("consume_callback","consume_other")
-            source.Replace("let callback (_unused: int) = 7","[<FidelityExtern(\"c\", \"consume_other\")>]\n"+other+"\nlet callback (_unused: int) = 7") |> transform)
+            source |> withSecondReceiver |> transform)
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
 type ClosedCallbackTests() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional mixed formal retains per-application Some and None accounts``(noneFirst) =
+        let result=ClosedCallbackCases.mixedFormalCheck noneFirst id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let claims=graph.Nodes |> Map.toList |> List.choose(fun(id,node)->
+            match node.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.OptionalEntryArgumentConversion model -> Some(id,info,model.Call,model.Parameter,model.Actual,model.Construction,true)
+                | ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Some(id,info,model.Call,model.Parameter,model.Actual,model.Construction,false)
+                | _ -> None
+            | _ -> None)
+        Assert.Equal(2,claims.Length)
+        Assert.Equal(2,claims |> List.map(fun(_,info,_,_,_,_,_)->info.Id) |> List.distinct |> List.length)
+        Assert.Equal(2,claims |> List.map(fun(_,_,call,_,_,_,_)->call) |> List.distinct |> List.length)
+        Assert.Equal(2,claims |> List.map(fun(_,_,_,_,actual,_,_)->actual) |> List.distinct |> List.length)
+        let calls=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph
+        let selectedCalls=claims |> List.map(fun(_,_,site,_,_,_,_)->calls |> List.find(fun call->call.Site=site))
+        let formal=selectedCalls |> List.map(fun call->call.Arguments[0].Formal) |> List.distinct |> Assert.Single
+        let declarations=graph.Edges |> List.choose(fun edge->match edge.Role with EdgeRole.BoundaryDeclaration declaration->Some declaration | _->None)
+        Assert.Contains(declarations,fun declaration->List.contains formal declaration.Formals)
+        let origins=Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolveCallableBranches graph
+        Assert.False(origins.Aggregates.ContainsKey formal)
+        Assert.False(graph.Codata.Value.CallableAggregateValues.ContainsKey formal)
+        let boundary=Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph |> Result.defaultWith(failwithf "%A")
+        let absence=boundary.CallbackAbsences.Values |> Assert.Single
+        for id,info,site,ordinal,actual,construction,present in claims do
+            Assert.Equal(0,ordinal)
+            let call=selectedCalls |> List.find(fun call->call.Site=site)
+            Assert.Equal(actual,call.Arguments[ordinal].Actual)
+            Assert.Contains(formal,call.Participants)
+            Assert.True(origins.Aggregates.ContainsKey actual)
+            let account=Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph actual |> Result.defaultWith failwith
+            Assert.Contains(account.Sources,fun source->source.Node=construction)
+            let support=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (id,info) |> Result.defaultWith failwith |> List.collect _.Sources
+            Assert.Contains(actual,support)
+            Assert.Contains(formal,support)
+            Assert.Contains(construction,support)
+            let otherActual=claims |> List.find(fun(other,_,_,_,_,_,_)->other<>id) |> fun(_,_,_,_,other,_,_)->other
+            Assert.DoesNotContain(otherActual,support)
+            if present then Assert.DoesNotContain(absence.Quote,support) else Assert.Contains(absence.Quote,support)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(failwithf "%A")
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Theory>]
+    [<InlineData("stale")>]
+    [<InlineData("ordinal")>]
+    [<InlineData("withdrawn")>]
+    member _.``Optional mixed formal refuses changed per-application source authority``(shape:string) =
+        let result=ClosedCallbackCases.mixedFormalCheck false id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let claims=graph.Nodes |> Map.toList |> List.choose(fun(id,node)->
+            match node.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.OptionalEntryArgumentConversion model -> Some(id,info,model.Actual,model.Construction)
+                | ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Some(id,info,model.Actual,model.Construction)
+                | _ -> None
+            | _ -> None)
+        Assert.Equal(2,claims.Length)
+        for id,info,actual,construction in claims do
+            let changed,claim,reason=
+                match shape with
+                | "stale" ->
+                    let source=graph.Nodes[construction]
+                    let kind=match source.Kind with
+                             | SemanticKind.UnionCase(name,ordinal,payload)->SemanticKind.UnionCase(name,1-ordinal,payload)
+                             | SemanticKind.DUConstruct(name,ordinal,payload,representation)->SemanticKind.DUConstruct(name,1-ordinal,payload,representation)
+                             | _->failwith "Original optional construction disappeared"
+                    {graph with Nodes=graph.Nodes.Add(construction,{source with Kind=kind})},info,
+                    "Callable aggregate source support changed after its dependency account was authored (CCS8414)."
+                | "ordinal" ->
+                    let body,reason=match info.Body with
+                                    | ObligationBody.OptionalEntryArgumentConversion model -> ObligationBody.OptionalEntryArgumentConversion {model with Parameter=1},"The optional-entry conversion claim lost its exact current Some source plan."
+                                    | ObligationBody.OptionalEntryAbsenceArgumentConversion model -> ObligationBody.OptionalEntryAbsenceArgumentConversion {model with Parameter=1},"The optional-entry absence conversion claim lost its exact current quoted promise or None source plan."
+                                    | _->failwith "Original conversion body disappeared"
+                    graph,{info with Body=body},reason
+                | _ ->
+                    let facts=graph.Codata.Value
+                    {graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Remove actual}},info,
+                    "An optional-entry source account lacks its exact current aggregate slots."
+            let calls=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls changed
+            match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (id,claim) with
+            | Result.Error actualReason -> Assert.Equal(reason,actualReason)
+            | Ok _ -> failwithf "Changed %s authority retained its original per-application claim" shape
+            for otherId,otherInfo,_,_ in claims |> List.filter(fun(other,_,_,_)->other<>id) do
+                Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (otherId,otherInfo)
+                |> Result.defaultWith(failwithf "Changed %s authority invalidated the other original actual: %s" shape)
+                |> ignore
+
+    [<Fact>]
+    member _.``Optional mixed formal keeps ordinary aggregate origins outside foreign exclusion``() =
+        let result=ClosedCallbackCases.mixedFormalCheck false (fun source->
+            source.Replace("    receive ","    relay ")
+                  .Replace("[<EntryPoint>]","let relay (value: option<FnPtr<int -> int>>) = receive value\n[<EntryPoint>]"))
+        let graph=result.Graph
+        let foreignFormals=graph.Edges |> List.collect(fun edge->match edge.Role with EdgeRole.BoundaryDeclaration declaration->declaration.Formals | _->[]) |> Set.ofList
+        let ordinary=graph.Nodes.Values |> Seq.filter(fun node->
+            match node.Kind with
+            | SemanticKind.PatternBinding _ when not(foreignFormals.Contains node.Id)->
+                Clef.Compiler.Baker.Ingredients.CallableAggregateTypes.slots graph node.Type |> List.isEmpty |> not
+            | _->false) |> Assert.Single
+        let origins=Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolveCallableBranches graph
+        Assert.True(origins.Aggregates.ContainsKey ordinary.Id)
+        Assert.Equal(2,origins.Aggregates[ordinary.Id].Alternatives.Length)
+        let actuals=origins.ParameterInputs[ordinary.Id] |> List.map snd |> List.distinct
+        Assert.Equal(2,actuals.Length)
+        for actual in actuals do Assert.True(origins.Aggregates.ContainsKey actual)
+        let work=Clef.Compiler.Baker.Recipes.CallableAggregateRecipes.prepareWork origins graph
+        Assert.Contains(work,fun group->group.Rows |> List.exists(fun(site,_,_)->site=ordinary.Id))
+        for formal in foreignFormals do
+            match graph.Nodes[formal].Kind with
+            | SemanticKind.PatternBinding _->Assert.False(origins.Aggregates.ContainsKey formal)
+            | _->()
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional mixed formal without absence promise keeps None Pending``(noneFirst) =
+        let result=ClosedCallbackCases.mixedFormalCheck noneFirst (fun source->source.Replace(ClosedCallbackCases.absenceDeclaration,""))
+        ClosedCallbackCases.absenceNoErrors result
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.defaultWith(failwithf "%A")
+        Assert.Single(revision.CurrentClaims.Values |> Seq.filter(fun info->match info.Body with Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion _->true | _->false)) |> ignore
+        let pending=revision.CurrentClaims.Values |> Seq.filter(fun info->info.Kind.StartsWith("foreign-optional-entry-conversion-") && (match info.Body with Fidelity.PSG.ObligationBody.Pending _->true | _->false)) |> Assert.Single
+        match pending.Body with
+        | Fidelity.PSG.ObligationBody.Pending reasons->Assert.Equal<string list>(["Selected-target optional-entry conversion and the foreign nullable-acceptance premise remain Pending."],reasons)
+        | _->failwith "Missing absence promise was silently admitted"
+
     [<Theory>]
     [<InlineData(false)>]
     [<InlineData(true)>]
