@@ -269,20 +269,26 @@ let main _ =
             source.Replace(present,if noneFirst then absent+"\n"+present else present+"\n"+absent)
             |> withSecondReceiver |> transform)
 
-    let mixedAbsenceCheck otherSite transform =
+    let mixedAbsenceCheck otherSite noneFirst transform =
         absenceCheck true false (fun source ->
             let call="    receive (Some (FnPtr.ofFunction callback))"
+            let pairedCall = if noneFirst then "    receive None (Some (FnPtr.ofFunction callback))" else call+" None"
             let source =
                 let scope=source.Split('\n') |> Array.find(fun line->line.StartsWith("let scope:"))
                 let invocation=source.Split('\n') |> Array.find(fun line->line.StartsWith("let invocation:"))
+                let firstInvocation=if noneFirst then invocation.Replace("ReturnType = Integer (Signed, 64)","ReturnType = Void") else invocation
                 let extra=scope.Replace("let scope:","let scope2:").Replace("Parameter = \"callback\"","Parameter = \"other\"")+"\n"+
-                          invocation.Replace("let invocation:","let invocation2:").Replace("Parameter = 0","Parameter = 1").Replace("ReceivingCallback.scope\"","ReceivingCallback.scope2\"").Replace("ReturnType = Integer (Signed, 64)","ReturnType = Void")
-                source.Replace("(callback: option<FnPtr<int -> int>>) : unit","(callback: option<FnPtr<int -> int>>) (other: option<FnPtr<int -> unit>>) : unit")
+                          (let second=invocation.Replace("let invocation:","let invocation2:").Replace("Parameter = 0","Parameter = 1").Replace("ReceivingCallback.scope\"","ReceivingCallback.scope2\"")
+                           if noneFirst then second else second.Replace("ReturnType = Integer (Signed, 64)","ReturnType = Void"))
+                let parameters=if noneFirst then "(callback: option<FnPtr<int -> unit>>) (other: option<FnPtr<int -> int>>) : unit" else "(callback: option<FnPtr<int -> int>>) (other: option<FnPtr<int -> unit>>) : unit"
+                source.Replace(invocation,firstInvocation)
+                      .Replace("(callback: option<FnPtr<int -> int>>) : unit",parameters)
                       .Replace("Entry \"ReceivingCallback.invocation\"; PassBy = Value } |]","Entry \"ReceivingCallback.invocation\"; PassBy = Value }; { Name = \"other\"; Type = Entry \"ReceivingCallback.invocation2\"; PassBy = Value } |]")
-                      .Replace(absenceDeclaration,absenceDeclaration.Replace("Parameter = 0","Parameter = 1"))
+                      .Replace(absenceDeclaration,if noneFirst then absenceDeclaration else absenceDeclaration.Replace("Parameter = 0","Parameter = 1"))
                       .Replace("let callback (_unused: int) = 7",extra+"\nlet callback (_unused: int) = 7")
-                      .Replace(call,call+" None")
-            let source = if otherSite then source.Replace(call+" None","    let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)\n    let absent: option<FnPtr<int -> unit>> = None\n    receive selected absent\n    receive selected absent") else source
+                      .Replace(call,pairedCall)
+            let aliases=if noneFirst then "    receive absent selected\n    receive absent selected" else "    receive selected absent\n    receive selected absent"
+            let source = if otherSite then source.Replace(pairedCall,"    let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)\n    let absent: option<FnPtr<int -> unit>> = None\n"+aliases) else source
             source |> withSecondReceiver |> transform)
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
@@ -600,8 +606,213 @@ type ClosedCallbackTests() =
     [<Theory>]
     [<InlineData(false)>]
     [<InlineData(true)>]
+    member _.``Optional receiving two ordinals retain independent current source citizens``(noneFirst) =
+        let result=ClosedCallbackCases.mixedAbsenceCheck false noneFirst (fun source ->
+            let invocation=source.Split('\n') |> Array.find(fun line->line.StartsWith("let invocation2:"))
+            source.Replace(invocation,invocation.Replace("Identity = \"receiving-test\"","Identity = \"receiving-second-test\"")))
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let claims=graph.Nodes |> Map.toList |> List.choose(fun(id,node)->
+            match node.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.OptionalEntryArgumentConversion model -> Some(id,info,model.Call,model.Parameter,model.Actual,model.Construction,1)
+                | ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Some(id,info,model.Call,model.Parameter,model.Actual,model.Construction,0)
+                | _ -> None
+            | _ -> None)
+        Assert.Equal(2,claims.Length)
+        Assert.Equal(2,claims |> List.map(fun(_,info,_,_,_,_,_)->info.Id) |> List.distinct |> List.length)
+        Assert.Equal<int list>([0;1],claims |> List.map(fun(_,_,_,ordinal,_,_,_)->ordinal) |> List.sort)
+        Assert.Equal(2,claims |> List.map(fun(_,_,_,_,actual,_,_)->actual) |> List.distinct |> List.length)
+        Assert.Equal(2,claims |> List.map(fun(_,_,_,_,_,construction,_)->construction) |> List.distinct |> List.length)
+        let calls=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph
+        let call=calls |> Assert.Single
+        Assert.Equal(2,call.Arguments.Length)
+        Assert.Equal(2,call.Arguments |> List.map _.Formal |> List.distinct |> List.length)
+        let boundary=Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph |> Result.defaultWith(failwithf "%A")
+        let invocations=boundary.CallbackInvocations.Values |> Seq.toList
+        Assert.Equal(2,invocations.Length)
+        let hypotheses=invocations |> List.map(fun invocation->invocation.Contract.Hypothesis.Identity)
+        Assert.Equal(2,hypotheses |> List.distinct |> List.length)
+        for invocation in invocations do Assert.Equal(BoundaryCallbackExtent.DuringCall,invocation.Extent)
+        let absence=boundary.CallbackAbsences.Values |> Assert.Single
+        Assert.Equal((if noneFirst then 0 else 1),absence.Parameter)
+        Assert.DoesNotContain(absence.Contract.Hypothesis.Identity,hypotheses)
+        for id,info,site,ordinal,actual,construction,sourceCase in claims do
+            Assert.Equal(call.Site,site)
+            Assert.Equal($"foreign-optional-entry-conversion-{ordinal}",info.Kind)
+            let selected=call.Arguments[ordinal].OptionalEntry |> Option.get
+            Assert.Equal(id,selected.Obligation)
+            Assert.Equal(actual,call.Arguments[ordinal].Actual)
+            Assert.Equal(construction,selected.Construction)
+            Assert.Equal((if ordinal=(if noneFirst then 0 else 1) then 0 else 1),sourceCase)
+            Assert.Equal(sourceCase,selected.CaseOrdinal)
+            Assert.Equal((sourceCase=1),selected.Payload.IsSome)
+            Assert.Equal((sourceCase=1),selected.Formation.IsSome)
+            let original=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (id,info) |> Result.defaultWith failwith
+            Assert.Contains(actual,original |> List.collect _.Sources)
+            let otherId,otherInfo,_,_,_,_,_=claims |> List.find(fun(other,_,_,_,_,_,_)->other<>id)
+            let otherBefore=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (otherId,otherInfo) |> Result.defaultWith failwith
+            for shape in ["tag";"support"] do
+                let changed=
+                    if shape="tag" then
+                        let source=graph.Nodes[construction]
+                        let kind=match source.Kind with
+                                 | SemanticKind.UnionCase(name,_,payload)->SemanticKind.UnionCase(name,1-sourceCase,payload)
+                                 | SemanticKind.DUConstruct(name,_,payload,arena)->SemanticKind.DUConstruct(name,1-sourceCase,payload,arena)
+                                 | _->failwith "Expected original supplying Option construction"
+                        {graph with Nodes=graph.Nodes.Add(construction,{source with Kind=kind})}
+                    else
+                        let facts=graph.Codata.Value
+                        let account=facts.CallableAggregateDependencies[actual]
+                        let source=List.head account.Sources
+                        let changedAccount={account with Sources={source with Anchors="changed-ordinal-source"::source.Anchors}::List.tail account.Sources}
+                        {graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Add(actual,changedAccount)}}
+                match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (id,info) with
+                | Result.Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).",reason)
+                | Ok _ -> failwithf "Changed ordinal %d %s retained its current source citizen" ordinal shape
+                let otherAfter=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (otherId,otherInfo) |> Result.defaultWith(failwithf "Changed ordinal %d %s invalidated the other citizen: %s" ordinal shape)
+                let key (edge:Hyperedge)=edge.Class,edge.Role,edge.Ordinal,edge.Sources,edge.Target
+                Assert.True((otherBefore |> List.map key)=(otherAfter |> List.map key),"The other current citizen's exact semantic source rows changed")
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(failwithf "%A")
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``Optional receiving shared Some retains each ordinal invocation and current citizen``() =
+        let result=ClosedCallbackCases.mixedAbsenceCheck false false (fun source ->
+            let invocation=source.Split('\n') |> Array.find(fun line->line.StartsWith("let invocation2:"))
+            source.Replace(invocation,invocation.Replace("ReturnType = Void","ReturnType = Integer (Signed, 64)")
+                                                .Replace("Identity = \"receiving-test\"","Identity = \"receiving-second-test\""))
+                  .Replace("(other: option<FnPtr<int -> unit>>)","(other: option<FnPtr<int -> int>>)")
+                  .Replace("    receive (Some (FnPtr.ofFunction callback)) None","    let present: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)\n    receive present present"))
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let claims=graph.Nodes |> Map.toList |> List.choose(fun(id,node)->
+            match node.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.OptionalEntryArgumentConversion model -> Some(id,info,model)
+                | _ -> None
+            | _ -> None)
+        Assert.Equal(2,claims.Length)
+        Assert.Equal(2,claims |> List.map(fun(_,info,_)->info.Id) |> List.distinct |> List.length)
+        Assert.Equal<int list>([0;1],claims |> List.map(fun(_,_,model)->model.Parameter) |> List.sort)
+        Assert.Equal(2,claims |> List.map(fun(_,_,model)->model.Actual) |> List.distinct |> List.length)
+        Assert.Equal(2,claims |> List.map(fun(_,_,model)->model.Invocation) |> List.distinct |> List.length)
+        let construction=claims |> List.map(fun(_,_,model)->model.Construction) |> List.distinct |> Assert.Single
+        let formation=claims |> List.map(fun(_,_,model)->model.Formation) |> List.distinct |> Assert.Single
+        let calls=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph
+        let call=calls |> Assert.Single
+        Assert.Equal(2,call.Arguments.Length)
+        let boundary=Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph |> Result.defaultWith(failwithf "%A")
+        Assert.Equal(2,boundary.CallbackInvocations.Count)
+        Assert.Equal(2,boundary.CallbackInvocations.Values |> Seq.map(fun invocation->invocation.Contract.Hypothesis.Identity) |> Seq.distinct |> Seq.length)
+        let entry=boundary.ClosedEntries.Values |> Assert.Single
+        Assert.Equal(formation,entry.Formation)
+        Assert.Empty boundary.CallbackAbsences
+        let rows id info=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (id,info) |> Result.defaultWith failwith
+        for id,info,model in claims do
+            Assert.Equal(call.Site,model.Call)
+            Assert.Equal(1,model.SourceCase)
+            let operand=call.Arguments[model.Parameter]
+            Assert.Equal(model.Actual,operand.Actual)
+            Assert.Equal(BoundaryScalar.Entry model.Invocation,operand.Abi)
+            let invocation=boundary.CallbackInvocations[model.Invocation]
+            Assert.Equal(model.Parameter,invocation.Contract.Parameter)
+            Assert.Equal(operand.Formal,invocation.Formal)
+            Assert.Equal(BoundaryCallbackExtent.DuringCall,invocation.Extent)
+            let selected=operand.OptionalEntry |> Option.get
+            Assert.Equal(id,selected.Obligation)
+            Assert.Equal(construction,selected.Construction)
+            Assert.Equal(Some formation,selected.Formation)
+            Assert.Equal(Some formation,selected.Payload)
+            rows id info |> ignore
+        let source=graph.Nodes[construction]
+        let changedKind=match source.Kind with
+                        | SemanticKind.UnionCase(name,_,payload)->SemanticKind.UnionCase(name,0,payload)
+                        | SemanticKind.DUConstruct(name,_,payload,arena)->SemanticKind.DUConstruct(name,0,payload,arena)
+                        | _->failwith "Expected shared supplying Some construction"
+        let changedTag={graph with Nodes=graph.Nodes.Add(construction,{source with Kind=changedKind})}
+        for id,info,_ in claims do
+            match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changedTag calls (id,info) with
+            | Result.Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).",reason)
+            | Ok _ -> failwith "Changed shared Some tag retained a current ordinal citizen"
+        for id,info,model in claims do
+            let facts=graph.Codata.Value
+            let account=facts.CallableAggregateDependencies[model.Actual]
+            let source=List.head account.Sources
+            let changedAccount={account with Sources={source with Anchors="changed-shared-Some-actual"::source.Anchors}::List.tail account.Sources}
+            let changed={graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Add(model.Actual,changedAccount)}}
+            match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (id,info) with
+            | Result.Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).",reason)
+            | Ok _ -> failwith "Changed actual support retained its shared Some ordinal citizen"
+            let otherId,otherInfo,_=claims |> List.find(fun(other,_,_)->other<>id)
+            let otherAfter=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (otherId,otherInfo) |> Result.defaultWith failwith
+            let key (edge:Hyperedge)=edge.Class,edge.Role,edge.Ordinal,edge.Sources,edge.Target
+            Assert.True((rows otherId otherInfo |> List.map key)=(otherAfter |> List.map key),"Changing one actual's support changed the other ordinal's exact current rows")
+        let firstId,firstInfo,firstModel=claims |> List.find(fun(_,_,model)->model.Parameter=0)
+        let secondId,secondInfo,secondModel=claims |> List.find(fun(_,_,model)->model.Parameter=1)
+        for shape in ["version";"withdrawn";"collapsed"] do
+            let changed,info,reason=
+                if shape="collapsed" then
+                    let info={secondInfo with Body=ObligationBody.OptionalEntryArgumentConversion {secondModel with Invocation=firstModel.Invocation}}
+                    {graph with Nodes=graph.Nodes.Add(secondId,{graph.Nodes[secondId] with Kind=SemanticKind.Obligation info})},info,
+                    "The optional-entry conversion claim lost its exact current Some source plan."
+                else
+                    let edges=graph.Edges |> List.choose(fun edge->
+                        match edge.Role with
+                        | EdgeRole.BoundaryCallbackInvocation invocation when invocation.Identity=secondModel.Invocation ->
+                            if shape="withdrawn" then None else Some {edge with Role=EdgeRole.BoundaryCallbackInvocation {invocation with Contract={invocation.Contract with Hypothesis={invocation.Contract.Hypothesis with Version="stale"}}}}
+                        | _ -> Some edge)
+                    {graph with Edges=edges},secondInfo,
+                    (if shape="withdrawn" then "An optional-entry claim lost its current receiving invocation descriptor." else "The optional-entry conversion claim lost its exact current Some source plan.")
+            match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (secondId,info) with
+            | Result.Error actual -> Assert.Equal(reason,actual)
+            | Ok _ -> failwithf "Changed second invocation %s retained its source claim" shape
+            Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (firstId,firstInfo)
+            |> Result.defaultWith(failwithf "Changed second invocation %s invalidated the first current claim: %s" shape) |> ignore
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(failwithf "%A")
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let publicBoundary=revision.Emission.Boundary
+        let publicCall=publicBoundary.Calls.Values |> Assert.Single
+        let publicEntry=publicBoundary.ClosedEntries.Values |> Assert.Single
+        let second=publicCall.Arguments[1].OptionalEntry |> Option.get
+        let secondClaim=revision.CurrentClaims[second.Obligation]
+        let publicModel=match secondClaim.Body with Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion model->model | _->failwith "Missing second published Some plan"
+        let receiving=publicBoundary.CallbackInvocations[publicModel.Invocation]
+        for shape in ["withdrawn-invocation";"ordinary-use";"process-exit";"abi";"collapsed-invocation";"missing-model";"lifetime"] do
+            let changed,part,reason=
+                let incidence="Emission.Boundary.Calls.OptionalEntry","The optional callback differs from its exact current Option construction, tag, payload, closed entry or receiving ordinal."
+                let boundary changed= {revision with Emission={revision.Emission with Boundary=changed}}
+                match shape with
+                | "withdrawn-invocation" ->
+                    boundary {publicBoundary with CallbackInvocations=publicBoundary.CallbackInvocations.Remove receiving.Identity},fst incidence,snd incidence
+                | "ordinary-use" ->
+                    let call={publicCall with Arguments=publicCall.Arguments |> List.mapi(fun ordinal operand->if ordinal=0 then {operand with OptionalEntry=None} else operand)}
+                    boundary {publicBoundary with Calls=publicBoundary.Calls.Add(call.Site,call)},fst incidence,snd incidence
+                | "process-exit" | "abi" ->
+                    let receiving=if shape="process-exit" then {receiving with Extent=Fidelity.PSG.BoundaryCallbackExtent.ProcessExit(None,0)}
+                                  else {receiving with Signature={receiving.Signature with Result=Some(Fidelity.PSG.BoundaryScalar.Integer(32,true))}}
+                    boundary {publicBoundary with CallbackInvocations=publicBoundary.CallbackInvocations.Add(receiving.Identity,receiving)},fst incidence,snd incidence
+                | "lifetime" ->
+                    let entry={publicEntry with Lifetime={publicEntry.Lifetime with Implementation=publicEntry.Operand}}
+                    boundary {publicBoundary with ClosedEntries=publicBoundary.ClosedEntries.Add(entry.Formation,entry)},
+                    "Emission.Boundary.ClosedEntries.Lifetime","The closed entry differs from its original ProgramImage code lifetime contract."
+                | _ ->
+                    let firstInvocation=match publicCall.Arguments[0].Abi with Fidelity.PSG.BoundaryScalar.Entry invocation->invocation | _->failwith "Missing first receiving invocation"
+                    let body=if shape="missing-model" then Fidelity.PSG.ObligationBody.Pending ["Selected-target optional-entry conversion remains Pending."]
+                             else Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion {publicModel with Invocation=firstInvocation}
+                    let claim={secondClaim with Body=body}
+                    {revision with CurrentClaims=revision.CurrentClaims.Add(second.Obligation,claim)
+                                   Obligations=revision.Obligations |> List.map(fun original->if original.Id=claim.Id then claim else original)},
+                    "Emission.Boundary.Calls.OptionalEntry.Obligation","The optional callback requires its exact existing Pending per-call conversion claim."
+            Assert.Contains(Fidelity.PSG.Integrity.check changed,fun violation->violation.Part=part && violation.Reason=reason)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
     member _.``Optional absence content never enters Some support at same call or ordinal``(otherSite) =
-        let result=ClosedCallbackCases.mixedAbsenceCheck otherSite id
+        let result=ClosedCallbackCases.mixedAbsenceCheck otherSite false id
         ClosedCallbackCases.absenceNoErrors result
         let graph=result.Graph
         let claims=graph.Nodes |> Map.toList |> List.choose(fun(id,node)->match node.Kind with SemanticKind.Obligation info when info.Kind.StartsWith("foreign-optional-entry-conversion-")->Some(id,info) | _->None)

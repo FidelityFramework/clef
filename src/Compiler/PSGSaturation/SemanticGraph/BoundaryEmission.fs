@@ -254,7 +254,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 calls |> List.collect (fun call ->
                     call.Arguments |> List.choose (fun operand ->
                         match operand.Abi, PlatformResolution.valuePath graph operand.Actual with
-                        | BoundaryScalar.Entry invocation, Some({ Kind = SemanticKind.FieldGet _; Id = projection }, _) ->
+                        | BoundaryScalar.Entry invocation, Some({ Kind = SemanticKind.FieldGet _; Id = projection }, _) when operand.OptionalEntry.IsNone ->
                             let current =
                                 match closedEntries |> List.filter (fun entry ->
                                     entry.Invocation = invocation && entry.Transport.Contains operand.Actual) with

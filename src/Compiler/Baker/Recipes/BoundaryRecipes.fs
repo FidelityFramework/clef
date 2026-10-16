@@ -91,6 +91,35 @@ let private absenceAccounts (graph:SemanticGraph) (descriptors:Declarations.Desc
 let private demandedAbsences (calls:BoundaryCall list) (rows:Map<NodeId,BoundaryCallbackAbsence>) =
     rows |> Map.filter(fun _ row -> calls |> List.exists(fun call -> call.Import=row.Import && (call.Arguments |> List.indexed |> List.exists(fun(ordinal,operand)->ordinal=row.Parameter && operand.Abi=BoundaryScalar.Entry row.Invocation && (operand.OptionalEntry |> Option.exists(fun selected->selected.Payload.IsNone))))))
 
+let private sameDuringCallAbi (left:BoundaryCallbackInvocation) (right:BoundaryCallbackInvocation) =
+    left.Extent=BoundaryCallbackExtent.DuringCall && right.Extent=BoundaryCallbackExtent.DuringCall &&
+    left.Signature=right.Signature && left.Signature.CallingConvention="CDecl"
+
+/// The formation owns code; every receiving use still owns its own activation.
+let private optionalOnlyUses (invocations:Map<NodeId,BoundaryCallbackInvocation>) (calls:BoundaryCall list) (entry:BoundaryClosedEntry) =
+    calls |> List.forall(fun call -> call.Arguments |> List.forall(fun operand ->
+        let uses=entry.Transport.Contains operand.Actual || (operand.OptionalEntry |> Option.exists(fun selected->selected.Formation=Some entry.Formation))
+        not uses ||
+        match operand.OptionalEntry,operand.Abi with
+        | Some selected,BoundaryScalar.Entry identity when selected.CaseOrdinal=1 && selected.Formation=Some entry.Formation && selected.Payload.IsSome ->
+            invocations.TryFind identity |> Option.exists(fun invocation->invocation.Extent=BoundaryCallbackExtent.DuringCall)
+        | _ -> false))
+
+let private optionalCodeWitness invocations calls entry (receiving:BoundaryCallbackInvocation) =
+    match Map.tryFind entry.Invocation invocations with
+    | Some witness when sameDuringCallAbi witness receiving && entry.Registrations.IsEmpty ->
+        entry.Invocation=receiving.Identity || optionalOnlyUses invocations calls entry
+    | _ -> false
+
+let private currentOptionalInvocation graph (call:BoundaryCall) ordinal (receiving:BoundaryCallbackInvocation) =
+    let declarations=Declarations.readDescriptors graph
+    match declarations.CallbackInvocations |> List.filter(fun source->source.Quote=receiving.Identity) with
+    | [source] ->
+        receiving.Import=call.Import && receiving.Parameter=ordinal && receiving.Formal=call.Arguments[ordinal].Formal &&
+        receiving.Extent=BoundaryCallbackExtent.DuringCall && source.Parameter=ordinal && source.Formal=receiving.Formal &&
+        source.Scope=receiving.Scope && source.Contract=receiving.Contract
+    | _ -> false
+
 let private optionalSupport accounts (imports:Map<NodeId,BoundaryImport>) (invocations:Map<NodeId,BoundaryCallbackInvocation>) (absences:Map<NodeId,BoundaryCallbackAbsence>) (call:BoundaryCall) ordinal =
     Ingredients.optionalEntrySourceSupport accounts call ordinal |> Result.bind(fun own ->
         let operand = call.Arguments[ordinal]
@@ -173,7 +202,11 @@ let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id
                            model.Construction=selected.Construction && model.SourceCase=1 && selected.CaseOrdinal=1 && source &&
                            selected.Payload=Some model.Payload && selected.Formation=Some model.Formation &&
                            (List.item ordinal call.Arguments).Abi=BoundaryScalar.Entry model.Invocation && model.Arms=arms &&
-                           (match entry with [entry] -> entry.Invocation=model.Invocation && entry.Transport.IsSupersetOf selected.Transport | _ -> false) &&
+                           (match entry,invocations.TryFind model.Invocation with
+                            | [entry],Some receiving ->
+                                currentOptionalInvocation graph call ordinal receiving &&
+                                optionalCodeWitness invocations calls entry receiving && entry.Transport.IsSupersetOf selected.Transport
+                            | _ -> false) &&
                            info.Logic="QF_LIA" && info.Statement="The exact source Some selection has complete finite native-choice plan correspondence; target realization remains an artifact obligation." then Ok ()
                         else Error "The optional-entry conversion claim lost its exact current Some source plan."
                     | Choice3Of3 model ->
@@ -1972,50 +2005,63 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 : BoundaryClosedEntry)
         }
 
+    // Reconcile once, then inspect every receiving use before any representative
+    // is chosen. A preceding ordinary use cannot disappear behind a later Some.
+    let receivingUses =
+        calls.Values |> Seq.collect(fun call ->
+            call.Arguments |> List.choose(fun operand ->
+                match operand.Abi with
+                | BoundaryScalar.Entry identity ->
+                    let admitted =
+                        match operand.OptionalEntry with
+                        | Some selected when selected.Payload.IsNone ->
+                            imports.TryFind call.Import |> needed "The optional callback lost its admitted import."
+                            |> Result.bind(fun import -> invocationAt import identity)
+                            |> Result.bind(fun (_,invocation) ->
+                                if invocation.Extent=BoundaryCallbackExtent.DuringCall then Ok(invocation,None)
+                                else Error "Optional native entries require a during-call activation.")
+                        | _ -> closedAt call operand identity |> Result.map(fun(invocation,entry)->invocation,Some entry)
+                    Some(call,operand,admitted)
+                | _ -> None)) |> Seq.toList
+    let shareable formation =
+        receivingUses |> List.forall(fun(_,operand,admitted) ->
+            match admitted with
+            | Ok(invocation,Some entry) when entry.Formation=formation ->
+                entry.Registrations.IsEmpty && invocation.Extent=BoundaryCallbackExtent.DuringCall &&
+                (operand.OptionalEntry |> Option.exists(fun selected->
+                    selected.CaseOrdinal=1 && selected.Payload.IsSome && selected.Formation=Some formation))
+            | _ -> true)
+    let sameCode (left:BoundaryClosedEntry) (right:BoundaryClosedEntry) =
+        {left with Invocation=right.Invocation;Transport=right.Transport;Participants=right.Participants;Registrations=right.Registrations}=right
     let callbackInvocations, closedEntries, errors =
-        calls.Values
-        |> Seq.fold
-            (fun (invocations, entries, errors) call ->
-                call.Arguments
-                |> List.fold
-                    (fun (invocations, entries, errors) operand ->
-                        match operand.Abi with
-                        | BoundaryScalar.Entry identity ->
-                            let admitted =
-                                match operand.OptionalEntry with
-                                | Some selected when selected.Payload.IsNone ->
-                                    imports.TryFind call.Import |> needed "The optional callback lost its admitted import."
-                                    |> Result.bind(fun import -> invocationAt import identity)
-                                    |> Result.bind(fun (_,invocation) ->
-                                        if invocation.Extent=BoundaryCallbackExtent.DuringCall then Ok(invocation,None)
-                                        else Error "Optional native entries require a during-call activation.")
-                                | _ -> closedAt call operand identity |> Result.map(fun (invocation,entry) -> invocation,Some entry)
-                            match admitted with
-                            | Ok(invocation, None) -> Map.add invocation.Identity invocation invocations, entries, errors
-                            | Ok(invocation, Some entry) ->
-                                match Map.tryFind entry.Formation entries with
-                                | Some previous when previous.Invocation <> entry.Invocation ->
-                                    invocations,
-                                    entries,
-                                    (call.Site,
-                                     call.Participants,
-                                     "One closed entry formation cannot acquire different receiving invocation contracts.")
-                                    :: errors
-                                | Some previous ->
-                                    let entry =
-                                        { entry with
-                                            Transport = Set.union previous.Transport entry.Transport
-                                            Participants = Set.union previous.Participants entry.Participants
-                                            Registrations = Map.fold (fun rows key value -> Map.add key value rows) previous.Registrations entry.Registrations
-                                        }
-
-                                    Map.add invocation.Identity invocation invocations, Map.add entry.Formation entry entries, errors
-                                | None ->
-                                    Map.add invocation.Identity invocation invocations, Map.add entry.Formation entry entries, errors
-                            | Error reason -> invocations, entries, (call.Site, call.Participants, reason) :: errors
-                        | _ -> invocations, entries, errors)
-                    (invocations, entries, errors))
-            (Map.empty, Map.empty, errors)
+        receivingUses |> List.fold(fun(invocations,entries,errors) (call,_,admitted) ->
+            match admitted with
+            | Ok(invocation,None) -> Map.add invocation.Identity invocation invocations,entries,errors
+            | Ok(invocation,Some entry) ->
+                match Map.tryFind entry.Formation entries with
+                | Some previous when previous.Invocation<>entry.Invocation ->
+                    match Map.tryFind previous.Invocation invocations with
+                    | Some witness when shareable entry.Formation && previous.Registrations.IsEmpty && entry.Registrations.IsEmpty &&
+                                        sameCode previous entry && sameDuringCallAbi witness invocation ->
+                        // The least invocation identity is a deterministic ABI
+                        // witness only; per-use claims retain their own identity.
+                        let representative=if NodeId.value previous.Invocation<NodeId.value entry.Invocation then previous else entry
+                        let merged =
+                            { representative with
+                                Transport=Set.union previous.Transport entry.Transport
+                                Participants=Set.union previous.Participants entry.Participants }
+                        Map.add invocation.Identity invocation invocations,Map.add entry.Formation merged entries,errors
+                    | _ ->
+                        invocations,entries,(call.Site,call.Participants,"One closed entry formation cannot acquire different receiving invocation contracts.")::errors
+                | Some previous ->
+                    let merged =
+                        { entry with
+                            Transport=Set.union previous.Transport entry.Transport
+                            Participants=Set.union previous.Participants entry.Participants
+                            Registrations=Map.fold(fun rows key value->Map.add key value rows) previous.Registrations entry.Registrations }
+                    Map.add invocation.Identity invocation invocations,Map.add entry.Formation merged entries,errors
+                | None -> Map.add invocation.Identity invocation invocations,Map.add entry.Formation entry entries,errors
+            | Error reason -> invocations,entries,(call.Site,call.Participants,reason)::errors) (Map.empty,Map.empty,errors)
 
     let callbackAbsences, errors =
         match absenceAccounts graph descriptors imports callbackInvocations with
@@ -2058,7 +2104,10 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                             | SemanticKind.DUConstruct(_, ordinal, Some original, _) when original=payload -> Some ordinal
                                             | _ -> None
                                         match sourceCase, closedEntries.TryFind formation, operand.Abi with
-                                        | Some sourceCase, Some entry, BoundaryScalar.Entry invocation when sourceCase=1 && entry.Invocation=invocation ->
+                                        | Some sourceCase, Some entry, BoundaryScalar.Entry invocation when sourceCase=1 &&
+                                            (callbackInvocations.TryFind invocation |> Option.exists(fun receiving->
+                                                currentOptionalInvocation graph call ordinal receiving &&
+                                                optionalCodeWitness callbackInvocations (calls.Values |> Seq.toList) entry receiving)) ->
                                             let model:OptionalEntryArgumentConversionModel =
                                                 {Call=call.Site;Parameter=ordinal;Actual=operand.Actual;Construction=selection.Construction
                                                  SourceCase=sourceCase;Payload=payload;Formation=formation;Invocation=invocation
