@@ -51,7 +51,7 @@ let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjec
         let solverRequired = required |> List.filter (fun (id, _) -> not (admitted.Contains id))
         let stalePlans = required |> List.choose (fun ((id, info) as claim) ->
             match info.Body with
-            | ObligationBody.OptionalEntryArgumentConversion _ ->
+            | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ ->
                 match BoundaryRecipes.optionalEntryClaimRows graph (boundaryCalls graph) claim with
                 | Ok _ -> None
                 | Error reason -> Some(id, [reason])

@@ -119,6 +119,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
             let entries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryEntry entry -> Some entry | _ -> None)
             let callbackInvocations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCallbackInvocation invocation -> Some invocation | _ -> None)
+            let callbackAbsences = graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.BoundaryCallbackAbsence row->Some row | _->None)
             let closedEntries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry -> Some entry | _ -> None)
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
@@ -309,6 +310,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     @ (imports |> List.map Ingredients.importRow)
                     @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
                     @ (callbackInvocations |> List.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity))
+                    @ (callbackAbsences |> List.map(fun row->Ingredients.row (EdgeRole.BoundaryCallbackAbsence row) 0 (row.DeclarationFacts |> Map.keys |> Seq.toList) row.Quote))
                     @ (closedEntries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryClosedEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
                     @ (calls |> List.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call))
                     @ proofRows
@@ -357,6 +359,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 let actualIntrinsicProofs = domain.IntrinsicProofs |> List.map (fun proof -> proof.Site, proof.Ordinal) |> List.sort
                 let callbackMembership =
                     (callbackInvocations |> List.map _.Identity |> List.sort) = List.sort domain.CallbackInvocations &&
+                    (callbackAbsences |> List.map _.Quote |> List.sort) = List.sort domain.CallbackAbsences &&
                     (closedEntries |> List.map _.Formation |> List.sort) = List.sort domain.ClosedEntries
                 if not proofErrors.IsEmpty then Error (List.rev proofErrors)
                 elif (writableDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.WritableBufferDeclarations then
@@ -381,6 +384,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                          Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
                          Calls = callsById; ByScope = byScope; ResultHypotheses = domain.ResultHypotheses
                          CallbackInvocations = callbackInvocations |> List.map (fun invocation -> invocation.Identity, invocation) |> Map.ofList
+                         CallbackAbsences = callbackAbsences |> List.map(fun row->row.Quote,row) |> Map.ofList
                          ClosedEntries = closedEntries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList
                          ByteViews = domain.ByteViews |> List.map (fun view -> view.Site, view) |> Map.ofList
                          StringExtents = domain.StringExtents |> List.map (fun extent -> extent.Site, extent) |> Map.ofList

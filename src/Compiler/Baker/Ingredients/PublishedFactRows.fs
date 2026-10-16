@@ -270,6 +270,7 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         Failures = (value.Failures |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, (t1 |> Set.map (fun x -> nodeId x)), t2))))
         ResultHypotheses = (value.ResultHypotheses |> List.map (fun x -> mapForeignResultHypothesis x))
         CallbackInvocations = (value.CallbackInvocations |> List.map (fun x -> nodeId x))
+        CallbackAbsences = (value.CallbackAbsences |> List.map nodeId)
         ClosedEntries = (value.ClosedEntries |> List.map (fun x -> nodeId x))
     } : Fidelity.PSG.BoundaryDomain)
 
@@ -295,8 +296,24 @@ and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fideli
         Links = value.Links
         ResultHypotheses = (value.ResultHypotheses |> List.map (fun x -> mapForeignResultHypothesis x))
         CallbackInvocations = (value.CallbackInvocations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryCallbackInvocation v) |> Map.ofSeq)
+        CallbackAbsences = value.CallbackAbsences |> Map.toList |> List.map(fun(key,row)->nodeId key,mapBoundaryCallbackAbsence row) |> Map.ofList
         ClosedEntries = (value.ClosedEntries |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryClosedEntry v) |> Map.ofSeq)
     } : Fidelity.PSG.BoundaryEmissionProjection)
+
+and mapCallbackAbsenceInputRole = function
+    | S.CallbackAbsenceInputRole.Binding -> Fidelity.PSG.CallbackAbsenceInputRole.Binding
+    | S.CallbackAbsenceInputRole.Parameter -> Fidelity.PSG.CallbackAbsenceInputRole.Parameter
+    | S.CallbackAbsenceInputRole.Hypothesis -> Fidelity.PSG.CallbackAbsenceInputRole.Hypothesis
+    | S.CallbackAbsenceInputRole.HypothesisIdentity -> Fidelity.PSG.CallbackAbsenceInputRole.HypothesisIdentity
+    | S.CallbackAbsenceInputRole.HypothesisVersion -> Fidelity.PSG.CallbackAbsenceInputRole.HypothesisVersion
+    | S.CallbackAbsenceInputRole.HypothesisSource -> Fidelity.PSG.CallbackAbsenceInputRole.HypothesisSource
+
+and mapBoundaryCallbackAbsence (value:S.BoundaryCallbackAbsence) : Fidelity.PSG.BoundaryCallbackAbsence =
+    {Quote=nodeId value.Quote;DescriptorBinding=nodeId value.DescriptorBinding;Record=nodeId value.Record;Import=nodeId value.Import
+     Parameter=value.Parameter;Formal=nodeId value.Formal;Invocation=nodeId value.Invocation;Contract=value.Contract
+     SourcePath=value.SourcePath |> List.map nodeId
+     Inputs=value.Inputs |> List.map(fun(role,path)->mapCallbackAbsenceInputRole role,List.map nodeId path)
+     DeclarationFacts=value.DeclarationFacts |> Map.toList |> List.map(fun(id,fact)->nodeId id,mapBoundaryDeclarationFact fact) |> Map.ofList}
 
 and mapBoundaryEntry (value: S.BoundaryEntry) : Fidelity.PSG.BoundaryEntry =
     ({
@@ -1210,6 +1227,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.FiniteCellRange -> Fidelity.PSG.EdgeRole.FiniteCellRange
     | S.EdgeRole.BoundaryEntry(a0) -> Fidelity.PSG.EdgeRole.BoundaryEntry(mapBoundaryEntry a0)
     | S.EdgeRole.BoundaryCallbackInvocation(a0) -> Fidelity.PSG.EdgeRole.BoundaryCallbackInvocation(mapBoundaryCallbackInvocation a0)
+    | S.EdgeRole.BoundaryCallbackAbsence(a0) -> Fidelity.PSG.EdgeRole.BoundaryCallbackAbsence(mapBoundaryCallbackAbsence a0)
     | S.EdgeRole.BoundaryClosedEntry(a0) -> Fidelity.PSG.EdgeRole.BoundaryClosedEntry(mapBoundaryClosedEntry a0)
 
 and mapEmissionStrategy (value: S.EmissionStrategy) : Fidelity.PSG.EmissionStrategy =
@@ -2230,9 +2248,14 @@ and mapOptionalEntryArgumentConversionModel (value: S.OptionalEntryArgumentConve
                     | S.OptionalEntryPlanChoice.ClosedEntry -> Fidelity.PSG.OptionalEntryPlanChoice.ClosedEntry)
             Formation=arm.Formation |> Option.map nodeId }) }
 
+and mapOptionalEntryAbsenceArgumentConversionModel (value:S.OptionalEntryAbsenceArgumentConversionModel) : Fidelity.PSG.OptionalEntryAbsenceArgumentConversionModel =
+    {Call=nodeId value.Call;Parameter=value.Parameter;Actual=nodeId value.Actual;Construction=nodeId value.Construction;SourceCase=value.SourceCase;Absence=nodeId value.Absence
+     Arms=value.Arms |> List.map(fun arm -> {CaseOrdinal=arm.CaseOrdinal;Choice=(match arm.Choice with S.OptionalEntryAbsencePlanChoice.AbsentEntry->Fidelity.PSG.OptionalEntryAbsencePlanChoice.AbsentEntry | S.OptionalEntryAbsencePlanChoice.RequiresClosedEntry->Fidelity.PSG.OptionalEntryAbsencePlanChoice.RequiresClosedEntry)})}
+
 and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     match value with
     | S.ObligationBody.Pending reasons -> invalidOp ("A pending obligation cannot be published: " + String.concat "; " reasons)
+    | S.ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion(mapOptionalEntryAbsenceArgumentConversionModel model)
     | S.ObligationBody.OptionalEntryArgumentConversion model -> Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion(mapOptionalEntryArgumentConversionModel model)
     | S.ObligationBody.ProgramInitializationOrder(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ProgramInitializationOrder(a0, a1, a2)
     | S.ObligationBody.FiniteLoopTrip(a0) -> Fidelity.PSG.ObligationBody.FiniteLoopTrip(mapFiniteLoopTripModel a0)

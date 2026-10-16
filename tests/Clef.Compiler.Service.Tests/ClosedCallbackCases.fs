@@ -50,7 +50,7 @@ let inline listener handler = makeEntry handler
             | _ -> None) |> Set.ofSeq
 
     // This source fixture stipulates a receiving C contract. It executes no C.
-    let receivingCheckWith wrapper transform =
+    let receivingCheckUsing (metadata:(string*string) list) wrapper transform =
         let source =
             """
 module ReceivingCallback
@@ -99,15 +99,22 @@ let main _ =
         let authority =
             SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
 
+        let sourcePath path = if metadata.IsEmpty then path else System.IO.Path.GetFullPath path
+        let ownedSources = if metadata.IsEmpty then Set.empty else [sourcePath "write-authority.clef";sourcePath "receiving-callback.clef"] |> Set.ofList
+
         let result =
-            checkParsedInputsWithPlatform
+            checkParsedInputsWithPlatformAndSources
                 [
-                    parse authority "write-authority.clef"
-                    parse source "receiving-callback.clef"
+                    yield! metadata |> List.map(fun(path,text)->parse text path)
+                    parse authority (sourcePath "write-authority.clef")
+                    parse source (sourcePath "receiving-callback.clef")
                 ]
                 (Some platform)
+                ownedSources
 
         result
+
+    let receivingCheckWith wrapper transform = receivingCheckUsing [] wrapper transform
 
     let receivingGraphWith wrapper =
         let result = receivingCheckWith wrapper id
@@ -174,8 +181,8 @@ let main _ =
     let receivingGraph () = receivingGraphWith false
     let receivingWrapperGraph () = receivingGraphWith true
 
-    let optionalCheck present alias transform =
-        receivingCheckWith false (fun source ->
+    let optionalCheckUsing metadata present alias transform =
+        receivingCheckUsing metadata false (fun source ->
             let actual = if present then "Some (FnPtr.ofFunction callback)" else "None"
             let invocation =
                 if alias then "    let selected: option<FnPtr<int -> int>> = " + actual + "\n    receive selected"
@@ -184,8 +191,208 @@ let main _ =
                   .Replace("    receive (FnPtr.ofFunction callback)", invocation)
             |> transform)
 
+    let optionalCheck present alias transform = optionalCheckUsing [] present alias transform
+
+    // The real metadata vocabulary retains unreachable host-width diagnostics.
+    // Use the same blocking predicate as ProjectChecker, then assert the issued path below.
+    let absenceNoErrors result =
+        if Clef.Compiler.NativeService.hasErrors result then failwithf "Unexpected blocking errors: %A" result.Diagnostics
+
+    let absenceDeclaration = "let absence: Expr<BAREWire.Descriptors.CallbackAbsenceContract> = <@ { BAREWire.Descriptors.CallbackAbsenceContract.Binding = \"ReceivingCallback.receive\"; Parameter = 0; Hypothesis = { BAREWire.Descriptors.ExternalExecutionHypothesis.Identity = \"absence-test\"; Version = \"v1\"; Source = \"absence-source\" } } @>"
+
+    let absenceCheck present alias transform =
+        let bare = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__,"..","..","..","BAREWire","src"))
+        let metadata=["Hardware/Descriptors.fs";"Descriptors/Bindings.fs"] |> List.map(fun relative -> let path=System.IO.Path.Combine(bare,relative) in path,System.IO.File.ReadAllText path)
+        optionalCheckUsing metadata present alias (fun source ->
+            source.Replace("let callback (_unused: int) = 7",absenceDeclaration+"\nlet callback (_unused: int) = 7") |> transform)
+
+    let mixedAbsenceCheck otherSite transform =
+        absenceCheck true false (fun source ->
+            let call="    receive (Some (FnPtr.ofFunction callback))"
+            let source =
+                let scope=source.Split('\n') |> Array.find(fun line->line.StartsWith("let scope:"))
+                let invocation=source.Split('\n') |> Array.find(fun line->line.StartsWith("let invocation:"))
+                let extra=scope.Replace("let scope:","let scope2:").Replace("Parameter = \"callback\"","Parameter = \"other\"")+"\n"+
+                          invocation.Replace("let invocation:","let invocation2:").Replace("Parameter = 0","Parameter = 1").Replace("ReceivingCallback.scope\"","ReceivingCallback.scope2\"").Replace("ReturnType = Integer (Signed, 64)","ReturnType = Void")
+                source.Replace("(callback: option<FnPtr<int -> int>>) : unit","(callback: option<FnPtr<int -> int>>) (other: option<FnPtr<int -> unit>>) : unit")
+                      .Replace("Entry \"ReceivingCallback.invocation\"; PassBy = Value } |]","Entry \"ReceivingCallback.invocation\"; PassBy = Value }; { Name = \"other\"; Type = Entry \"ReceivingCallback.invocation2\"; PassBy = Value } |]")
+                      .Replace(absenceDeclaration,absenceDeclaration.Replace("Parameter = 0","Parameter = 1"))
+                      .Replace("let callback (_unused: int) = 7",extra+"\nlet callback (_unused: int) = 7")
+                      .Replace(call,call+" None")
+            let source = if otherSite then source.Replace(call+" None","    let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)\n    let absent: option<FnPtr<int -> unit>> = None\n    receive selected absent\n    receive selected absent") else source
+            let declarations=source.Split('\n') |> Array.filter(fun line->line.StartsWith("let private receive ") || line.StartsWith("let receiveDescriptor:") || line.StartsWith("let scope") || line.StartsWith("let invocation")) |> String.concat "\n"
+            let other=declarations.Replace("let private receive ","let private secondReceiver ").Replace("let receiveDescriptor:","let secondReceiverDescriptor:")
+                                  .Replace("let scope","let secondScope").Replace("let invocation","let secondInvocation")
+                                  .Replace("ReceivingCallback.receive","ReceivingCallback.secondReceiver").Replace("ReceivingCallback.scope","ReceivingCallback.secondScope").Replace("ReceivingCallback.invocation","ReceivingCallback.secondInvocation")
+                                  .Replace("consume_callback","consume_other")
+            source.Replace("let callback (_unused: int) = 7","[<FidelityExtern(\"c\", \"consume_other\")>]\n"+other+"\nlet callback (_unused: int) = 7") |> transform)
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
 type ClosedCallbackTests() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional absence content never enters Some support at same call or ordinal``(otherSite) =
+        let result=ClosedCallbackCases.mixedAbsenceCheck otherSite id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let claims=graph.Nodes |> Map.toList |> List.choose(fun(id,node)->match node.Kind with SemanticKind.Obligation info when info.Kind.StartsWith("foreign-optional-entry-conversion-")->Some(id,info) | _->None)
+        let someClaims=claims |> List.filter(fun(_,info)->match info.Body with ObligationBody.OptionalEntryArgumentConversion _->true | _->false)
+        let noneClaims=claims |> List.filter(fun(_,info)->match info.Body with ObligationBody.OptionalEntryAbsenceArgumentConversion _->true | _->false)
+        Assert.Equal((if otherSite then 2 else 1),someClaims.Length)
+        Assert.Equal((if otherSite then 2 else 1),noneClaims.Length)
+        let calls=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph
+        let boundary=Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph |> Result.defaultWith(failwithf "%A")
+        let absence=boundary.CallbackAbsences.Values |> Assert.Single
+        let content=absence.Inputs |> List.find(fun(role,_)->role=CallbackAbsenceInputRole.Binding) |> snd |> List.last
+        let changed={graph with Nodes=graph.Nodes.Add(content,{graph.Nodes[content] with Kind=SemanticKind.Literal(NativeLiteral.String "ReceivingCallback.secondReceiver")})}
+        for someId,someInfo in someClaims do
+            let before=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (someId,someInfo) |> Result.defaultWith failwith |> List.map _.Sources
+            for _,path in absence.Inputs do for id in path do Assert.DoesNotContain(id,List.concat before)
+            let after=Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (someId,someInfo) |> Result.defaultWith failwith |> List.map _.Sources
+            Assert.Equal<NodeId list list>(before,after)
+            let oldProposition=Clef.Compiler.Nanopass.ObligationDischarge.smtLib [someInfo]
+            let changedInfo=match changed.Nodes[someId].Kind with SemanticKind.Obligation info->info | _->failwith "Some citizen disappeared"
+            Assert.Equal(someInfo,changedInfo)
+            Assert.Equal(oldProposition,Clef.Compiler.Nanopass.ObligationDischarge.smtLib [changedInfo])
+            let model=match someInfo.Body with ObligationBody.OptionalEntryArgumentConversion model->model | _->failwith "Missing Some body"
+            let facts=graph.Codata.Value
+            let account=facts.CallableAggregateDependencies[model.Actual]
+            Assert.Contains(account.Sources,fun source->source.Node=model.Construction)
+            let selected=calls |> List.find(fun call->call.Site=model.Call) |> _.Arguments |> List.item model.Parameter |> _.OptionalEntry |> Option.get
+            Assert.Contains(model.Payload,selected.Transport)
+            Assert.Contains(model.Formation,selected.Transport)
+            let source=List.head account.Sources
+            let stale={graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Add(model.Actual,{account with Sources={source with Anchors="changed-Some-source"::source.Anchors}::List.tail account.Sources})}}
+            match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows stale calls (someId,someInfo) with
+            | Result.Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).",reason)
+            | Ok _ -> failwith "A changed relevant Some account retained a valid claim"
+        for noneId,noneInfo in noneClaims do
+            Assert.True(Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (noneId,noneInfo) |> Result.isError)
+            let dispatch=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize changed |> Result.defaultWith(failwithf "%A")
+            match dispatch.Query with
+            | Result.Error failures -> Assert.Contains(failures,fun(id,_)->id=noneId)
+            | _ -> failwith "Stale absence content became solver-ready"
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional absence real BARE quote retains None plan and exact public account``(alias) =
+        let result=ClosedCallbackCases.absenceCheck false alias id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let declared=graph.Nodes.Values |> Seq.choose(fun node -> match node.Kind with SemanticKind.Binding("absence",_,_,_) -> Some node | _->None) |> Assert.Single
+        let quoted,_=Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.valuePath graph (List.last declared.Children) |> Option.get
+        let expectedFile=System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__,"..","..","..","BAREWire","src","Descriptors","Bindings.fs"))
+        let identity=match Clef.Compiler.NativeTypedTree.UnionFind.applySubst quoted.Type with NativeType.TApp(constructor,[])->NominalTypeIdentity.ofConstructor constructor | _->failwith "Absence annotation lost its nominal constructor"
+        let canonical=Clef.Compiler.PSGSaturation.SemanticGraph.RecordInstances.definitions graph |> Map.find identity
+        Assert.Equal(expectedFile,canonical.Range.File)
+        Assert.Equal(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType canonical.Type,Clef.Compiler.NativeTypedTree.TypeIdentities.ofType quoted.Type)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(failwithf "%A")
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let absence=revision.Emission.Boundary.CallbackAbsences.Values |> Assert.Single
+        Assert.Equal("absence-test",absence.Contract.Hypothesis.Identity)
+        let citizen,claim=revision.CurrentClaims |> Map.toList |> List.filter(fun(_,claim)->match claim.Body with Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion _->true | _->false) |> Assert.Single
+        let model=match claim.Body with Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion model->model | _->failwith "Missing None plan"
+        Assert.Equal(0,model.SourceCase)
+        Assert.Equal(absence.Quote,model.Absence)
+        Assert.Contains(claim.Id,revision.ObligationQuery)
+        let limits:Fidelity.PSG.Binary.Limits={MaxBytes=16000000;MaxCollectionLength=100000;MaxDepth=128;MaxStringBytes=1000000;MaxBigIntegerBytes=4096;MaxValues=10000000}
+        let bytes=Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith(failwithf "%A")
+        let copy=Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith(failwithf "%A")
+        Assert.Equal(claim,copy.CurrentClaims[citizen])
+        let call=revision.Emission.Boundary.Calls[model.Call]
+        let promiseSource=absence.Inputs |> List.find(fun(role,_)->role=Fidelity.PSG.CallbackAbsenceInputRole.HypothesisSource) |> snd |> List.last
+        for changed in [ {revision with Emission={revision.Emission with Boundary={revision.Emission.Boundary with CallbackAbsences=Map.empty}}}
+                         {revision with Emission={revision.Emission with Boundary={revision.Emission.Boundary with Calls=revision.Emission.Boundary.Calls.Add(call.Site,{call with Participants=call.Participants.Remove promiseSource})}}}
+                         {revision with Emission={revision.Emission with Boundary={revision.Emission.Boundary with CallbackAbsences=revision.Emission.Boundary.CallbackAbsences.Add(absence.Quote,{absence with Contract={absence.Contract with Hypothesis={absence.Contract.Hypothesis with Version="changed"}}})}}} ] do
+            Assert.Contains(Fidelity.PSG.Integrity.check changed,fun violation->violation.Part="Emission.Boundary.Calls.OptionalEntry.Obligation" || violation.Part="Emission.Boundary.CallbackAbsences")
+        Assert.True(Fidelity.PSG.OptionalEntryArgumentProof.projectAbsence model |> Result.isOk)
+
+    [<Theory>]
+    [<InlineData("same-hypothesis","distinct from activation")>]
+    [<InlineData("nonnull-formal","nonnull entry formal or contract")>]
+    [<InlineData("receiver","exact current receiving invocation")>]
+    [<InlineData("ordinal","exact current receiving invocation")>]
+    [<InlineData("mutable","immutable quoted content paths")>]
+    [<InlineData("duplicate","declared twice")>]
+    [<InlineData("unquoted","one immutable quote")>]
+    member _.``Optional absence handwritten quote independently refuses conflicting promise``(shape:string,reason:string) =
+        let result=ClosedCallbackCases.absenceCheck false false (fun source ->
+            match shape with
+            | "same-hypothesis" -> source.Replace("Identity = \"absence-test\"","Identity = \"receiving-test\"")
+            | "nonnull-formal" -> source.Replace("callback: option<FnPtr<int -> int>>","callback: FnPtr<int -> int>")
+            | "receiver" -> source.Replace("CallbackAbsenceContract.Binding = \"ReceivingCallback.receive\"","CallbackAbsenceContract.Binding = \"ReceivingCallback.missing\"")
+            | "ordinal" -> source.Replace("CallbackAbsenceContract.Binding = \"ReceivingCallback.receive\"; Parameter = 0","CallbackAbsenceContract.Binding = \"ReceivingCallback.receive\"; Parameter = 1")
+            | "mutable" -> source.Replace("let absence:","let mutable absence:")
+            | "unquoted" -> source.Replace(ClosedCallbackCases.absenceDeclaration,ClosedCallbackCases.absenceDeclaration.Replace("Expr<BAREWire.Descriptors.CallbackAbsenceContract>","BAREWire.Descriptors.CallbackAbsenceContract").Replace("<@ ","").Replace(" @>",""))
+            | _ -> source.Replace("let callback (_unused: int) = 7",ClosedCallbackCases.absenceDeclaration.Replace("let absence:","let secondAbsence:")+"\nlet callback (_unused: int) = 7"))
+        Assert.Contains(result.Diagnostics,fun diagnostic->diagnostic.Message.Contains(reason))
+
+    [<Fact>]
+    member _.``Optional absence same leaf record never grants nominal promise``() =
+        let result=ClosedCallbackCases.absenceCheck false false (fun source ->
+            source.Replace(ClosedCallbackCases.absenceDeclaration,
+                "type CallbackAbsenceContract = { Binding: string; Parameter: int; Hypothesis: BAREWire.Descriptors.ExternalExecutionHypothesis }\n"+
+                ClosedCallbackCases.absenceDeclaration.Replace("BAREWire.Descriptors.CallbackAbsenceContract","CallbackAbsenceContract")))
+        ClosedCallbackCases.absenceNoErrors result
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.defaultWith(failwithf "%A")
+        Assert.Empty(revision.Emission.Boundary.CallbackAbsences)
+        let optional=revision.CurrentClaims.Values |> Seq.filter(fun claim->claim.Kind.StartsWith("foreign-optional-entry-conversion-")) |> Assert.Single
+        match optional.Body with
+        | Fidelity.PSG.ObligationBody.Pending reasons -> Assert.Contains(reasons,fun reason->reason.Contains("foreign nullable-acceptance premise"))
+        | _ -> failwith "A same-leaf record granted an absence promise"
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional absence stale account refuses dispatch with unchanged proposition``(withdrawn) =
+        let result=ClosedCallbackCases.absenceCheck false false id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let citizen,claim=graph.Nodes |> Map.toList |> List.choose(fun(id,node)->match node.Kind with SemanticKind.Obligation info when (match info.Body with ObligationBody.OptionalEntryAbsenceArgumentConversion _->true | _->false)->Some(id,info) | _->None) |> Assert.Single
+        let edges=graph.Edges |> List.choose(fun edge ->
+            match edge.Role with
+            | EdgeRole.BoundaryCallbackAbsence account ->
+                if withdrawn then None
+                else Some {edge with Role=EdgeRole.BoundaryCallbackAbsence {account with Contract={account.Contract with Hypothesis={account.Contract.Hypothesis with Version="stale"}}}}
+            | _ -> Some edge)
+        let changed={graph with Edges=edges}
+        let calls=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls changed
+        match Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows changed calls (citizen,claim) with
+        | Result.Error reason -> Assert.Equal("An absence conversion account is stale or withdrawn.",reason)
+        | Ok _ -> failwith "A stale absence account retained its current claim rows"
+        let dispatch=Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize changed |> Result.defaultWith(failwithf "%A")
+        match dispatch.Query with
+        | Result.Error failures -> Assert.Contains(failures,fun(id,reasons)->id=citizen && List.contains "An absence conversion account is stale or withdrawn." reasons)
+        | _ -> failwith "A stale absence plan remained solver-ready"
+        let held=match changed.Nodes[citizen].Kind with SemanticKind.Obligation info->info | _->failwith "The current citizen disappeared"
+        Assert.Equal(Clef.Compiler.Nanopass.ObligationDischarge.smtLib [claim],Clef.Compiler.Nanopass.ObligationDischarge.smtLib [held])
+
+    [<Fact>]
+    member _.``Optional absence fresh quote rename retains nominal promise``() =
+        let result=ClosedCallbackCases.absenceCheck false false (fun source->source.Replace("let absence:","let renamedPromise:"))
+        ClosedCallbackCases.absenceNoErrors result
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.defaultWith(failwithf "%A")
+        Assert.Single(revision.Emission.Boundary.CallbackAbsences) |> ignore
+        revision.CurrentClaims.Values |> Seq.filter(fun claim->match claim.Body with Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion _->true | _->false) |> Assert.Single |> ignore
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``Optional absence immutable input binding retains exact content path``() =
+        let result=ClosedCallbackCases.absenceCheck false false (fun source ->
+            source.Replace(ClosedCallbackCases.absenceDeclaration,
+                "let promisedReceiver = \"ReceivingCallback.receive\"\n"+ClosedCallbackCases.absenceDeclaration.Replace("CallbackAbsenceContract.Binding = \"ReceivingCallback.receive\"","CallbackAbsenceContract.Binding = promisedReceiver")))
+        ClosedCallbackCases.absenceNoErrors result
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.defaultWith(failwithf "%A")
+        let absence=revision.Emission.Boundary.CallbackAbsences.Values |> Assert.Single
+        revision.CurrentClaims.Values |> Seq.filter(fun claim->match claim.Body with Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion _->true | _->false) |> Assert.Single |> ignore
+        let path=absence.Inputs |> List.find(fun(role,_)->role=Fidelity.PSG.CallbackAbsenceInputRole.Binding) |> snd
+        Assert.Contains(path,fun id->absence.DeclarationFacts[id].Form="reference")
+        Assert.Contains(path,fun id->absence.DeclarationFacts[id].Form="binding")
+        Assert.Equal(absence.Record,List.last absence.SourcePath)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
     [<Theory>]
     [<InlineData(false, false)>]
     [<InlineData(true, false)>]
@@ -664,12 +871,12 @@ type ClosedCallbackTests() =
         let call = boundary.Calls[selection.Call]
         let accounts = graph.Codata.Value.CallableAggregateDependencies
         let account = accounts[selection.Operand]
-        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport accounts call with
+        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport accounts call 0 with
         | Result.Error reason -> failwith reason
         | Ok support ->
             let obligation = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> _.Obligation
             let edge = graph.Edges |> List.filter (fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=obligation) |> Assert.Single
-            Assert.True(Set.ofList edge.Sources = support)
+            Assert.True(Set.isSubset support (Set.ofList edge.Sources))
             Assert.NotEmpty account.Slots
             for slot in account.Slots do
                 Assert.Contains(account.Participants, fun participant -> participant.Node=slot.Identity && participant.Role=ParticipantRole.AggregateSlot)
@@ -700,7 +907,7 @@ type ClosedCallbackTests() =
                 if changeRole then Some {participant with Role=ParticipantRole.AggregateSource} else None
             else Some participant)
         let changed = accounts.Add(selection.Operand, {account with Participants=participants})
-        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport changed call with
+        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport changed call 0 with
         | Result.Error reason -> Assert.Equal("An optional-entry source account lacks its exact aggregate-slot participant role.", reason)
         | Ok _ -> failwith "An untyped aggregate relation identity entered the semantic source constraint domain"
 

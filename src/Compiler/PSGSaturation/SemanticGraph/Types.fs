@@ -413,6 +413,21 @@ type OptionalEntryPlanArm = {
     Formation: NodeId option
 }
 
+[<RequireQualifiedAccess>]
+type OptionalEntryAbsencePlanChoice = AbsentEntry | RequiresClosedEntry
+
+type OptionalEntryAbsencePlanArm = { CaseOrdinal: int; Choice: OptionalEntryAbsencePlanChoice }
+
+type OptionalEntryAbsenceArgumentConversionModel = {
+    Call: NodeId
+    Parameter: int
+    Actual: NodeId
+    Construction: NodeId
+    SourceCase: int
+    Absence: NodeId
+    Arms: OptionalEntryAbsencePlanArm list
+}
+
 type OptionalEntryArgumentConversionModel = {
     Call: NodeId
     Parameter: int
@@ -586,6 +601,7 @@ type ObligationBody =
     | ResourceConversion of ResourceConversionModel
     | ResourceCleanup of ResourceCleanupModel
     | OptionalEntryArgumentConversion of OptionalEntryArgumentConversionModel
+    | OptionalEntryAbsenceArgumentConversion of OptionalEntryAbsenceArgumentConversionModel
     /// One dynamic snapshot count is shared by the write, complete copy and
     /// allocation. Exact source incidence is replayed separately from bounds.
     | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint
@@ -1052,6 +1068,26 @@ type BoundaryCallbackInvocation = {
     Signature: NativeEntrySignature
     Extent: BoundaryCallbackExtent
     Participants: Set<NodeId>
+}
+
+[<RequireQualifiedAccess>]
+type CallbackAbsenceInputRole =
+    | Binding | Parameter | Hypothesis | HypothesisIdentity | HypothesisVersion | HypothesisSource
+
+/// Independent quoted absence promise, with complete current source content.
+/// Invocation names the receiving descriptor, never a callable occurrence.
+type BoundaryCallbackAbsence = {
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    Record: NodeId
+    Import: NodeId
+    Parameter: int
+    Formal: NodeId
+    Invocation: NodeId
+    Contract: BAREWire.Descriptors.CallbackAbsenceContract
+    SourcePath: NodeId list
+    Inputs: (CallbackAbsenceInputRole * NodeId list) list
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
 }
 
 type BoundaryClosedEntry = {
@@ -1816,6 +1852,7 @@ type BoundaryDomain = {
     Entries: NodeId list
     Calls: NodeId list
     CallbackInvocations: NodeId list
+    CallbackAbsences: NodeId list
     ClosedEntries: NodeId list
     ByteViews: BoundaryByteView list
     StringExtents: BoundaryStringExtent list
@@ -2220,6 +2257,7 @@ type EdgeRole =
     | FiniteCellRange
     | BoundaryEntry of BoundaryEntry
     | BoundaryCallbackInvocation of BoundaryCallbackInvocation
+    | BoundaryCallbackAbsence of BoundaryCallbackAbsence
     | BoundaryClosedEntry of BoundaryClosedEntry
 
 /// One directed relation. Sources retain ordered participant occurrences;
@@ -3482,6 +3520,7 @@ type BoundaryEmissionProjection = {
     ByScope: Map<NodeId, NodeId list>
     Calls: Map<NodeId, BoundaryCall>
     CallbackInvocations: Map<NodeId, BoundaryCallbackInvocation>
+    CallbackAbsences: Map<NodeId, BoundaryCallbackAbsence>
     ClosedEntries: Map<NodeId, BoundaryClosedEntry>
     ByteViews: Map<NodeId, BoundaryByteView>
     StringExtents: Map<NodeId, BoundaryStringExtent>

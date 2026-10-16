@@ -83,7 +83,7 @@ let project (graph: SemanticGraph) (scope: WitnessLiveScopePlan) (selected: Witn
         Error (unavailable |> List.map (fun (id, reasons) -> failure (Some id) ("Source proof dispatch is unavailable: " + String.concat "; " reasons)))
     | Some platform, Ok query ->
         let pending = dispatch.Required |> List.filter (fun (_, info) ->
-            match info.Body with ObligationBody.Pending _ | ObligationBody.OptionalEntryArgumentConversion _ -> true | _ -> false)
+            match info.Body with ObligationBody.Pending _ | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ -> true | _ -> false)
         let unadmitted = pending |> List.filter (ProofDispatchRecipes.optionalEntryPending graph selected.Emission.Boundary >> not)
         let current = pending.IsEmpty || ProofDispatchRecipes.matchesInventory graph dispatch
         let boundaryCurrent =

@@ -13,79 +13,6 @@ module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
 module Participants = Clef.Compiler.Baker.Ingredients.Participants
 module StringOrigins = Clef.Compiler.Baker.Ingredients.StringOrigins
 
-/// Validate the original per-use citizen before admitting its exact relation
-/// rows to the boundary census or the Pending dispatch partition.
-let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id: NodeId, info: ObligationInfo) =
-    let body =
-        match info.Body with
-        | ObligationBody.Pending reasons -> Some(Choice1Of2 reasons)
-        | ObligationBody.OptionalEntryArgumentConversion model -> Some(Choice2Of2 model)
-        | _ -> None
-    match body with
-    | Some body ->
-        let accounts =
-            calls |> List.collect (fun call ->
-                call.Arguments |> List.mapi (fun ordinal operand -> call, ordinal, operand)
-                |> List.choose (fun (call, ordinal, operand) ->
-                    operand.OptionalEntry |> Option.bind (fun selected ->
-                        if selected.Obligation = id then Some(call, ordinal, selected) else None)))
-        match accounts with
-        | [call, ordinal, selected] ->
-            let role = $"foreign-optional-entry-conversion-{ordinal}"
-            let expectedReason =
-                if selected.Payload.IsNone then "Selected-target optional-entry conversion and the foreign nullable-acceptance premise remain Pending."
-                else "Selected-target optional-entry conversion remains Pending."
-            Ingredients.optionalEntrySourceSupport graph.Codata.Value.CallableAggregateDependencies call
-            |> Result.bind (fun support ->
-                call.Arguments |> List.fold (fun state operand ->
-                    state |> Result.bind (fun () ->
-                        match operand.OptionalEntry with
-                        | None -> Ok ()
-                        | Some _ -> Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph operand.Actual |> Result.map ignore)) (Ok ())
-                |> Result.map (fun () -> support))
-            |> Result.bind (fun support ->
-                let sources = List.distinct (call.Site :: Set.toList support)
-                let expected = {Class=EdgeClass.Obligation; Role=EdgeRole.Constrains; Ordinal=0; Sources=sources; Target=id}
-                let residence = Ingredients.row EdgeRole.EnrichedWith 0 sources id
-                let edges = graph.Edges |> List.filter (fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=id)
-                let heldResidence = graph.Edges |> List.filter (fun edge -> edge.Target=id && edge.Role=EdgeRole.EnrichedWith)
-                let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
-                let bodyCurrent =
-                    match body with
-                    | Choice1Of2 reasons ->
-                        if reasons=[expectedReason] then Ok ()
-                        else Error "The optional-entry Pending claim has different conversion reasons."
-                    | Choice2Of2 model ->
-                        let entry = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry when entry.Formation=model.Formation -> Some entry | _ -> None)
-                        let source = graph.Nodes.TryFind selected.Construction |> Option.exists (fun node ->
-                            match node.Kind with
-                            | SemanticKind.UnionCase(_, ordinal, payload)
-                            | SemanticKind.DUConstruct(_, ordinal, payload, _) -> ordinal=model.SourceCase && payload=Some model.Payload
-                            | _ -> false)
-                        let arms = [{CaseOrdinal=0;Choice=OptionalEntryPlanChoice.PendingAbsence;Formation=None}
-                                    {CaseOrdinal=1;Choice=OptionalEntryPlanChoice.ClosedEntry;Formation=Some model.Formation}]
-                        if model.Call=call.Site && model.Parameter=ordinal && model.Actual=(List.item ordinal call.Arguments).Actual &&
-                           model.Construction=selected.Construction && model.SourceCase=1 && selected.CaseOrdinal=1 && source &&
-                           selected.Payload=Some model.Payload && selected.Formation=Some model.Formation &&
-                           (List.item ordinal call.Arguments).Abi=BoundaryScalar.Entry model.Invocation && model.Arms=arms &&
-                           (match entry with [entry] -> entry.Invocation=model.Invocation && entry.Transport.IsSupersetOf selected.Transport | _ -> false) &&
-                           info.Logic="QF_LIA" && info.Statement="The exact source Some selection has complete finite native-choice plan correspondence; target realization remains an artifact obligation." then Ok ()
-                        else Error "The optional-entry conversion claim lost its exact current Some source plan."
-                if info.Kind <> role then Error "The optional-entry Pending claim has a different original argument ordinal."
-                elif Result.isError bodyCurrent then bodyCurrent |> Result.map (fun () -> [expected;residence])
-                elif (graph.Nodes.TryFind call.Site |> Option.bind (sourceClaimId role)) <> Some info.Id then
-                    Error "The optional-entry Pending claim lost its source-owned claim identity."
-                elif not (graph.Nodes.TryFind id |> Option.exists (fun node ->
-                    Ingredients.ownedNode node && match node.Kind with SemanticKind.Obligation claim -> claim = info | _ -> false)) then
-                    Error "The optional-entry Pending claim lacks its exact owned ledger node."
-                elif not (match edges with [edge] -> key edge = key expected | _ -> false) then
-                    Error "The optional-entry Pending claim lost its exact ordered Constrains incidence."
-                elif not (match heldResidence with [held] -> key held = key residence | _ -> false) then
-                    Error "The optional-entry Pending claim lost its exact EnrichedWith residence."
-                else Ok [expected; residence])
-        | _ -> Error "The optional-entry Pending claim lacks one exact current operand owner."
-    | _ -> Error "The optional-entry conversion claim no longer has its Pending body."
-
 type private CheckedBuilder() =
     member _.Bind(value, next) = Result.bind next value
     member _.Return(value) = Ok value
@@ -146,6 +73,131 @@ let private declarationFacts (graph: SemanticGraph) root =
             let next = value.References @ value.Children
             return! List.fold (fun state child -> state |> Result.bind (fun facts -> visit facts child)) (Ok (Map.add id value facts)) next }
     visit Map.empty root
+
+/// Complete account observation stays with the source declaration/fact owners.
+let private absenceAccounts (graph:SemanticGraph) (descriptors:Declarations.Descriptors) (imports:Map<NodeId,BoundaryImport>) (invocations:Map<NodeId,BoundaryCallbackInvocation>) =
+    descriptors.CallbackAbsences |> List.fold(fun state source ->
+        state |> Result.bind(fun rows ->
+            match imports.TryFind source.Invocation.AbiDescriptor, invocations.TryFind source.Invocation.Quote with
+            | Some imported, Some invocation when imported.Binding=source.Invocation.Declaration.Binding && invocation.Import=imported.Identity && invocation.Formal=source.Invocation.Formal && invocation.Extent=BoundaryCallbackExtent.DuringCall ->
+                declarationFacts graph source.DescriptorBinding |> Result.map(fun facts ->
+                    let account:BoundaryCallbackAbsence =
+                        {Quote=source.Quote;DescriptorBinding=source.DescriptorBinding;Record=source.Node;Import=imported.Identity
+                         Parameter=source.Contract.Parameter;Formal=source.Invocation.Formal;Invocation=invocation.Identity
+                         Contract=source.Contract;SourcePath=source.SourcePath;Inputs=source.Inputs;DeclarationFacts=facts}
+                    Map.add source.Quote account rows)
+            | _ -> Ok rows)) (Ok Map.empty)
+
+let private demandedAbsences (calls:BoundaryCall list) (rows:Map<NodeId,BoundaryCallbackAbsence>) =
+    rows |> Map.filter(fun _ row -> calls |> List.exists(fun call -> call.Import=row.Import && (call.Arguments |> List.indexed |> List.exists(fun(ordinal,operand)->ordinal=row.Parameter && operand.Abi=BoundaryScalar.Entry row.Invocation && (operand.OptionalEntry |> Option.exists(fun selected->selected.Payload.IsNone))))))
+
+let private optionalSupport accounts (imports:Map<NodeId,BoundaryImport>) (invocations:Map<NodeId,BoundaryCallbackInvocation>) (absences:Map<NodeId,BoundaryCallbackAbsence>) (call:BoundaryCall) ordinal =
+    Ingredients.optionalEntrySourceSupport accounts call ordinal |> Result.bind(fun own ->
+        let operand = call.Arguments[ordinal]
+        match imports.TryFind call.Import, operand.Abi with
+        | Some imported, BoundaryScalar.Entry identity ->
+            match invocations.TryFind identity with
+            | Some invocation ->
+                let selected=operand.OptionalEntry.Value
+                let absent = if selected.Payload.IsSome then [] else absences.Values |> Seq.filter(fun row -> row.Import=call.Import && row.Parameter=ordinal && row.Invocation=identity) |> Seq.toList
+                let extra = absent |> List.collect(fun row -> row.Quote::row.DescriptorBinding::row.Record::row.SourcePath @ (row.Inputs |> List.collect snd) @ (row.DeclarationFacts |> Map.keys |> Seq.toList)) |> Set.ofList
+                Ok(Set.unionMany [own;imported.Participants;invocation.Participants;extra])
+            | _ -> Error "An optional-entry claim lost its current receiving invocation descriptor."
+        | _ -> Error "An optional-entry claim lost its current import.")
+
+/// Validate the original per-use citizen before admitting its exact relation
+/// rows to the boundary census or the Pending dispatch partition.
+let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id: NodeId, info: ObligationInfo) =
+    let body =
+        match info.Body with
+        | ObligationBody.Pending reasons -> Some(Choice1Of3 reasons)
+        | ObligationBody.OptionalEntryArgumentConversion model -> Some(Choice2Of3 model)
+        | ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Some(Choice3Of3 model)
+        | _ -> None
+    match body with
+    | Some body ->
+        let accounts =
+            calls |> List.collect (fun call ->
+                call.Arguments |> List.mapi (fun ordinal operand -> call, ordinal, operand)
+                |> List.choose (fun (call, ordinal, operand) ->
+                    operand.OptionalEntry |> Option.bind (fun selected ->
+                        if selected.Obligation = id then Some(call, ordinal, selected) else None)))
+        match accounts with
+        | [call, ordinal, selected] ->
+            let role = $"foreign-optional-entry-conversion-{ordinal}"
+            let expectedReason =
+                if selected.Payload.IsNone then "Selected-target optional-entry conversion and the foreign nullable-acceptance premise remain Pending."
+                else "Selected-target optional-entry conversion remains Pending."
+            let imports = graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.BoundaryImport row->Some(row.Identity,row) | _->None) |> Map.ofList
+            let invocations = graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.BoundaryCallbackInvocation row->Some(row.Identity,row) | _->None) |> Map.ofList
+            let heldAbsences = graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.BoundaryCallbackAbsence row->Some(row.Quote,row) | _->None) |> Map.ofList
+            let observed = absenceAccounts graph (Declarations.readDescriptors graph) imports invocations
+            observed |> Result.bind(fun observed ->
+                let absences=demandedAbsences calls observed
+                let ownAbsences=if selected.Payload.IsSome then Map.empty else absences |> Map.filter(fun _ row->row.Import=call.Import && row.Parameter=ordinal)
+                let current =
+                    match body with
+                    | Choice3Of3 model -> ownAbsences.TryFind model.Absence |> Option.exists(fun row->heldAbsences.TryFind model.Absence=Some row)
+                    | _ -> true
+                if not current || (ownAbsences |> Map.exists(fun key row -> heldAbsences.TryFind key <> Some row)) then Error "An absence conversion account is stale or withdrawn."
+                else optionalSupport graph.Codata.Value.CallableAggregateDependencies imports invocations absences call ordinal)
+            |> Result.bind (fun support ->
+                [call.Arguments[ordinal]] |> List.fold (fun state operand ->
+                    state |> Result.bind (fun () ->
+                        match operand.OptionalEntry with
+                        | None -> Ok ()
+                        | Some _ -> Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph operand.Actual |> Result.map ignore)) (Ok ())
+                |> Result.map (fun () -> support))
+            |> Result.bind (fun support ->
+                let sources = List.distinct (call.Site :: Set.toList support)
+                let expected = {Class=EdgeClass.Obligation; Role=EdgeRole.Constrains; Ordinal=0; Sources=sources; Target=id}
+                let residence = Ingredients.row EdgeRole.EnrichedWith 0 sources id
+                let edges = graph.Edges |> List.filter (fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=id)
+                let heldResidence = graph.Edges |> List.filter (fun edge -> edge.Target=id && edge.Role=EdgeRole.EnrichedWith)
+                let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+                let bodyCurrent =
+                    match body with
+                    | Choice1Of3 reasons ->
+                        if reasons=[expectedReason] then Ok ()
+                        else Error "The optional-entry Pending claim has different conversion reasons."
+                    | Choice2Of3 model ->
+                        let entry = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry when entry.Formation=model.Formation -> Some entry | _ -> None)
+                        let source = graph.Nodes.TryFind selected.Construction |> Option.exists (fun node ->
+                            match node.Kind with
+                            | SemanticKind.UnionCase(_, ordinal, payload)
+                            | SemanticKind.DUConstruct(_, ordinal, payload, _) -> ordinal=model.SourceCase && payload=Some model.Payload
+                            | _ -> false)
+                        let arms = [{CaseOrdinal=0;Choice=OptionalEntryPlanChoice.PendingAbsence;Formation=None}
+                                    {CaseOrdinal=1;Choice=OptionalEntryPlanChoice.ClosedEntry;Formation=Some model.Formation}]
+                        if model.Call=call.Site && model.Parameter=ordinal && model.Actual=(List.item ordinal call.Arguments).Actual &&
+                           model.Construction=selected.Construction && model.SourceCase=1 && selected.CaseOrdinal=1 && source &&
+                           selected.Payload=Some model.Payload && selected.Formation=Some model.Formation &&
+                           (List.item ordinal call.Arguments).Abi=BoundaryScalar.Entry model.Invocation && model.Arms=arms &&
+                           (match entry with [entry] -> entry.Invocation=model.Invocation && entry.Transport.IsSupersetOf selected.Transport | _ -> false) &&
+                           info.Logic="QF_LIA" && info.Statement="The exact source Some selection has complete finite native-choice plan correspondence; target realization remains an artifact obligation." then Ok ()
+                        else Error "The optional-entry conversion claim lost its exact current Some source plan."
+                    | Choice3Of3 model ->
+                        let account = heldAbsences.TryFind model.Absence
+                        let arms=[{CaseOrdinal=0;Choice=OptionalEntryAbsencePlanChoice.AbsentEntry};{CaseOrdinal=1;Choice=OptionalEntryAbsencePlanChoice.RequiresClosedEntry}]
+                        if model.Call=call.Site && model.Parameter=ordinal && model.Actual=call.Arguments[ordinal].Actual &&
+                           model.Construction=selected.Construction && model.SourceCase=0 && selected.CaseOrdinal=0 && selected.Payload.IsNone && selected.Formation.IsNone && model.Arms=arms &&
+                           (account |> Option.exists(fun account -> account.Import=call.Import && account.Parameter=ordinal && account.Formal=call.Arguments[ordinal].Formal && call.Arguments[ordinal].Abi=BoundaryScalar.Entry account.Invocation)) &&
+                           info.Logic="QF_LIA" && info.Statement="The exact source None selection has complete finite absence-choice correspondence under its external binding hypothesis; target realization remains an artifact obligation." then Ok ()
+                        else Error "The optional-entry absence conversion claim lost its exact current quoted promise or None source plan."
+                if info.Kind <> role then Error "The optional-entry Pending claim has a different original argument ordinal."
+                elif Result.isError bodyCurrent then bodyCurrent |> Result.map (fun () -> [expected;residence])
+                elif (graph.Nodes.TryFind call.Site |> Option.bind (sourceClaimId role)) <> Some info.Id then
+                    Error "The optional-entry Pending claim lost its source-owned claim identity."
+                elif not (graph.Nodes.TryFind id |> Option.exists (fun node ->
+                    Ingredients.ownedNode node && match node.Kind with SemanticKind.Obligation claim -> claim = info | _ -> false)) then
+                    Error "The optional-entry Pending claim lacks its exact owned ledger node."
+                elif not (match edges with [edge] -> key edge = key expected | _ -> false) then
+                    Error "The optional-entry Pending claim lost its exact ordered Constrains incidence."
+                elif not (match heldResidence with [held] -> key held = key residence | _ -> false) then
+                    Error "The optional-entry Pending claim lost its exact EnrichedWith residence."
+                else Ok [expected; residence])
+        | _ -> Error "The optional-entry Pending claim lacks one exact current operand owner."
+    | _ -> Error "The optional-entry conversion claim no longer has its Pending body."
 
 let private typeRef graph typeId =
     Declarations.readTypeRef graph typeId
@@ -1965,6 +2017,15 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     (invocations, entries, errors))
             (Map.empty, Map.empty, errors)
 
+    let callbackAbsences, errors =
+        match absenceAccounts graph descriptors imports callbackInvocations with
+        | Ok rows ->
+            demandedAbsences (calls.Values |> Seq.toList) rows, errors
+        | Error reason -> Map.empty,(anchor.Id,Set.singleton anchor.Id,reason)::errors
+    let calls = calls |> Map.map(fun _ call ->
+        let extra=callbackAbsences.Values |> Seq.filter(fun row->row.Import=call.Import && (call.Arguments |> List.indexed |> List.exists(fun(ordinal,operand)->ordinal=row.Parameter && (operand.OptionalEntry |> Option.exists(fun selected->selected.Payload.IsNone)))))
+                  |> Seq.collect(fun row -> row.DeclarationFacts |> Map.keys) |> Set.ofSeq
+        {call with Participants=Set.union call.Participants extra})
     let calls, optionalRequirements, errors =
         calls |> Map.fold (fun (updated, enrichment, errors) _ call ->
             let arguments, enrichment, errors =
@@ -1976,7 +2037,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                         let reason =
                             if selection.Payload.IsNone then "Selected-target optional-entry conversion and the foreign nullable-acceptance premise remain Pending."
                             else "Selected-target optional-entry conversion remains Pending."
-                        match Ingredients.optionalEntrySourceSupport graph.Codata.Value.CallableAggregateDependencies call
+                        match optionalSupport graph.Codata.Value.CallableAggregateDependencies imports callbackInvocations callbackAbsences call ordinal
                               |> Result.bind (fun support ->
                                   Ingredients.requirement enrichId graph.Nodes[call.Site] ($"foreign-optional-entry-conversion-{ordinal}")
                                     "The exact source Option selection requires an admitted target boundary conversion." reason
@@ -2003,13 +2064,25 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                                  SourceCase=sourceCase;Payload=payload;Formation=formation;Invocation=invocation
                                                  Arms=[{CaseOrdinal=0;Choice=OptionalEntryPlanChoice.PendingAbsence;Formation=None}
                                                        {CaseOrdinal=1;Choice=OptionalEntryPlanChoice.ClosedEntry;Formation=Some formation}]}
-                                            let refined = refine citizen (ObligationBody.OptionalEntryArgumentConversion model) (call.Participants.Remove citizen.Id) [] requirement
+                                            let support = requirement.NewEdges |> List.find(fun edge->edge.Role=EdgeRole.Constrains) |> _.Sources |> Set.ofList
+                                            let refined = refine citizen (ObligationBody.OptionalEntryArgumentConversion model) support [] requirement
                                             let nodes = refined.NewNodes |> List.map (fun node ->
                                                 match node.Kind with
                                                 | SemanticKind.Obligation info ->
                                                     {node with Kind=SemanticKind.Obligation {info with Statement="The exact source Some selection has complete finite native-choice plan correspondence; target realization remains an artifact obligation."}}
                                                 | _ -> node)
                                             {refined with NewNodes=nodes}
+                                        | _ -> requirement
+                                    | None, None, Some _ when selection.CaseOrdinal=0 ->
+                                        let rows=callbackAbsences.Values |> Seq.filter(fun row->row.Import=call.Import && row.Parameter=ordinal) |> Seq.toList
+                                        match rows with
+                                        | [absence] ->
+                                            let model:OptionalEntryAbsenceArgumentConversionModel =
+                                                {Call=call.Site;Parameter=ordinal;Actual=operand.Actual;Construction=selection.Construction;SourceCase=selection.CaseOrdinal;Absence=absence.Quote
+                                                 Arms=[{CaseOrdinal=0;Choice=OptionalEntryAbsencePlanChoice.AbsentEntry};{CaseOrdinal=1;Choice=OptionalEntryAbsencePlanChoice.RequiresClosedEntry}]}
+                                            let support=requirement.NewEdges |> List.find(fun edge->edge.Role=EdgeRole.Constrains) |> _.Sources |> Set.ofList
+                                            let refined=refine citizen (ObligationBody.OptionalEntryAbsenceArgumentConversion model) support [] requirement
+                                            {refined with NewNodes=refined.NewNodes |> List.map(fun node -> match node.Kind with SemanticKind.Obligation info -> {node with Kind=SemanticKind.Obligation {info with Statement="The exact source None selection has complete finite absence-choice correspondence under its external binding hypothesis; target realization remains an artifact obligation."}} | _->node)}
                                         | _ -> requirement
                                     | _ -> requirement
                                 let selected = {selection with Obligation=citizen.Id}
@@ -2156,6 +2229,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Loading = if entries.IsEmpty && closedEntries.IsEmpty && callbackInvocations.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else loading |> Result.toOption
           Entries = Map.keys entries |> Seq.toList
           CallbackInvocations = Map.keys callbackInvocations |> Seq.toList
+          CallbackAbsences = Map.keys callbackAbsences |> Seq.toList
           ClosedEntries = Map.keys closedEntries |> Seq.toList
           ByteViews = intrinsic.Views; StringExtents = intrinsic.Extents; IntrinsicDeclarations = intrinsic.Declarations
           StringOriginRelations = originRelations
@@ -2185,6 +2259,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (callbackInvocations.Values |> Seq.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity) |> Seq.toList)
+        @ (callbackAbsences.Values |> Seq.map(fun row -> Ingredients.row (EdgeRole.BoundaryCallbackAbsence row) 0 (row.DeclarationFacts |> Map.keys |> Seq.toList) row.Quote) |> Seq.toList)
         @ (closedEntries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryClosedEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)

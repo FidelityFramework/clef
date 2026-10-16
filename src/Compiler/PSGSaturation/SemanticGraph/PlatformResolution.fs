@@ -1143,6 +1143,16 @@ type DeclaredCallbackInvocation = {
 
 /// Exact source resource declaration only. This grants no acquisition,
 /// nullable-word conversion, cleanup, alias retirement or execution authority.
+type DeclaredCallbackAbsence = {
+    Node: NodeId
+    DescriptorBinding: NodeId
+    Quote: NodeId
+    SourcePath: NodeId list
+    Invocation: DeclaredCallbackInvocation
+    Contract: BAREWire.Descriptors.CallbackAbsenceContract
+    Inputs: (CallbackAbsenceInputRole * NodeId list) list
+}
+
 type DeclaredResource = {
     Node: NodeId
     Quote: NodeId
@@ -1185,6 +1195,7 @@ type Descriptors = {
     Functions: DeclaredFunction list
     ResultRanges: DeclaredResultRange list
     CallbackInvocations: DeclaredCallbackInvocation list
+    CallbackAbsences: DeclaredCallbackAbsence list
     Resources: DeclaredResource list
     WritableBuffers: DeclaredWritableBuffer list
     Findings: DeclarationFinding list
@@ -1663,6 +1674,16 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
         | _ -> false
     // Keep the existing single source census. Resolve result contracts from the
     // retained declaration/ABI inventories, never by C symbol or beside-name.
+    let absenceDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
+    let exactAbsence (node: SemanticNode) =
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst node.Type with
+        | NativeType.TApp(constructor, []) ->
+            let identity = NominalTypeIdentity.ofConstructor constructor
+            identity.Module = ["BAREWire";"Descriptors"] &&
+            identity.Name = "Descriptors.CallbackAbsenceContract" &&
+            (RecordInstances.definitions graph |> Map.tryFind identity |> Option.exists(fun definition ->
+                match definition.Kind with SemanticKind.TypeDef(_, TypeDefKind.RecordDef _, _) -> true | _ -> false))
+        | _ -> false
     let layouts, functionDeclarations, resultDeclarations, invocationDeclarations, resourceDeclarations, writableDeclarations, externs, findings =
         graph.Nodes
         |> Map.toList
@@ -1675,6 +1696,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
             | SemanticKind.Binding (name, _, _, _) when isModuleLevel node && not (List.isEmpty node.Children) ->
                 match valuePath graph (List.last node.Children) with
                 | Some (({ Kind = SemanticKind.RecordExpr(fields, _) } as record), path) ->
+                    if exactAbsence record then absenceDeclarations.Add(node, record, fields, path)
                     match typeName record with
                     | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
                         let layout, more = readLayout graph record fields
@@ -1691,6 +1713,8 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                     | Some "CallbackInvocationContract" ->
                         (layouts, functions, ranges, (node, record, fields, path) :: invocations, resources, writable, externs, findings)
                     | _ -> (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                | Some (value, _) when exactAbsence value ->
+                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed "A CallbackAbsenceContract must retain its exact immutable quoted record."])
                 | Some (value, _) when typeName value = Some "ResultRangeDescriptor" || typeName value = Some "WritableBufferDescriptor" ->
                     let name=typeName value |> Option.defaultValue "ResultRangeDescriptor"
                     (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed ($"a {name} must retain its quoted record declaration")])
@@ -2151,6 +2175,34 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
     let invocationResults = List.rev invocationDeclarations |> List.map readInvocation
     let invocations = invocationResults |> List.choose (function Ok invocation -> Some invocation | _ -> None)
     let invocationDuplicates = duplicates "callback invocation contract" (fun (invocation:DeclaredCallbackInvocation) -> string invocation.Declaration.Binding + ":" + string invocation.Parameter) _.Node graph invocations
+    let absenceResults =
+        absenceDeclarations |> Seq.toList |> List.map (fun (binding,node,fields,path) ->
+            let invalid reason = Error(findingAt node DeclarationDefect.Invalid ("A CallbackAbsenceContract " + reason))
+            let quotes = path |> List.filter(fun id -> match graph.Nodes[id].Kind with SemanticKind.Quote _ -> true | _ -> false)
+            let text fields name = field name fields |> Option.bind(stringOf graph) |> Option.filter(System.String.IsNullOrWhiteSpace >> not)
+            match quotes, text fields "Binding", field "Parameter" fields |> Option.bind(int64Of graph), field "Hypothesis" fields |> Option.bind(recordOf graph) with
+            | [quote], Some receiver, Some ordinal, Some(_,hypothesisFields) ->
+                let matches = invocations |> List.filter(fun invocation -> invocation.Contract.Binding=receiver && int64 invocation.Parameter=ordinal)
+                match matches, text hypothesisFields "Identity", text hypothesisFields "Version", text hypothesisFields "Source" with
+                | [invocation], Some identity, Some version, Some source ->
+                    let inputs = [CallbackAbsenceInputRole.Binding,field "Binding" fields; CallbackAbsenceInputRole.Parameter,field "Parameter" fields
+                                  CallbackAbsenceInputRole.Hypothesis,field "Hypothesis" fields
+                                  CallbackAbsenceInputRole.HypothesisIdentity,field "Identity" hypothesisFields
+                                  CallbackAbsenceInputRole.HypothesisVersion,field "Version" hypothesisFields
+                                  CallbackAbsenceInputRole.HypothesisSource,field "Source" hypothesisFields]
+                                 |> List.map(fun(role,id)->role,id |> Option.bind(valuePath graph) |> Option.map snd |> Option.defaultValue [])
+                    let immutable = binding.Id::path @ (inputs |> List.collect snd) |> List.forall(fun id ->
+                        match graph.Nodes[id].Kind with SemanticKind.Binding(_,true,_,_)->false | _->true)
+                    if not immutable || (inputs |> List.exists(snd >> List.isEmpty)) then invalid "requires complete immutable quoted content paths."
+                    elif identity=invocation.Contract.Hypothesis.Identity then invalid "requires an absence hypothesis identity distinct from activation."
+                    elif optionalEntrySignature graph.Nodes[invocation.Formal].Type |> Option.isNone then invalid "conflicts with the receiving nonnull entry formal or contract."
+                    elif recordOf graph invocation.Scope |> Option.exists(fun(scope,_)->typeName scope=Some "ProcessExitCallbackDescriptor") then invalid "requires a during-call receiving invocation."
+                    else Ok {Node=node.Id;DescriptorBinding=binding.Id;Quote=quote;SourcePath=path;Invocation=invocation
+                             Contract={Binding=receiver;Parameter=int ordinal;Hypothesis={Identity=identity;Version=version;Source=source}};Inputs=inputs}
+                | _ -> invalid "requires one exact current receiving invocation and an independent nonempty versioned hypothesis."
+            | _ -> invalid "requires one immutable quote and exact Binding, Parameter and Hypothesis fields.")
+    let absences = absenceResults |> List.choose(function Ok row->Some row | _->None)
+    let absenceDuplicates = duplicates "callback absence contract" (fun (row:DeclaredCallbackAbsence)->string row.Invocation.Declaration.Binding+":"+string row.Contract.Parameter) _.Node graph absences
     let resourceResults = List.rev resourceDeclarations |> List.map readResource
     let resources = resourceResults |> List.choose (function Ok value -> Some value | _ -> None)
     let resourceDuplicates = duplicates "resource contract" (fun resource -> string resource.Acquisition.Binding) _.Node graph resources
@@ -2158,9 +2210,10 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
     let writable = writableResults |> List.choose (function Ok value -> Some value | _ -> None)
     let writableDuplicates = duplicates "writable buffer contract" (fun (value:DeclaredWritableBuffer) -> string value.Declaration.Binding+":"+string value.Parameter) _.Node graph writable
     { Layouts = List.rev layouts; Functions = List.rev functions |> List.map snd; ResultRanges = ranges
-      CallbackInvocations = invocations; Resources = resources; WritableBuffers = writable
+      CallbackInvocations = invocations; CallbackAbsences = absences; Resources = resources; WritableBuffers = writable
       Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings
                  @ (invocationResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ invocationDuplicates
+                 @ (absenceResults |> List.choose(function Error finding->Some finding | _->None)) @ absenceDuplicates
                  @ (resourceResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ resourceDuplicates
                  @ (writableResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ writableDuplicates }
 

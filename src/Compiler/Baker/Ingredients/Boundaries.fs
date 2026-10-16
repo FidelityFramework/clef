@@ -258,26 +258,19 @@ let requirement enrichId (subject: SemanticNode) role statement reason participa
 /// The aggregate owner separates semantic source incidences from typed relation
 /// participants. Calls constrain the former; the complete typed account stays
 /// with its owner and is never flattened into semantic source identities.
-let optionalEntrySourceSupport (accounts: Map<NodeId, CallableAggregateDependencyAccount>) (call: BoundaryCall) =
-    call.Arguments |> List.fold (fun state operand ->
-        state |> Result.bind (fun () ->
-            match operand.OptionalEntry with
-            | None -> Ok ()
-            | Some _ ->
-                match accounts.TryFind operand.Actual with
-                | Some account when account.Occurrence = operand.Actual && not account.Slots.IsEmpty ->
-                    let identities = account.Slots |> List.map _.Identity |> Set.ofList
-                    if identities |> Set.forall (fun identity ->
-                        account.Participants |> List.exists (fun participant ->
-                            participant.Node = identity && participant.Role = ParticipantRole.AggregateSlot)) then
-                        let sources = account.Sources |> List.map _.Node |> Set.ofList
-                        if Set.isSubset sources call.Participants then Ok ()
-                        else Error "An optional-entry source account omits its semantic source incidences from the call support."
-                    else Error "An optional-entry source account lacks its exact aggregate-slot participant role."
-                | _ -> Error "An optional-entry source account lacks its exact current aggregate slots.")) (Ok ())
-    |> Result.map (fun () ->
-        let claims = call.Arguments |> List.choose _.OptionalEntry |> List.map _.Obligation |> Set.ofList
-        Set.difference call.Participants claims)
+let optionalEntrySourceSupport (accounts: Map<NodeId, CallableAggregateDependencyAccount>) (call: BoundaryCall) ordinal =
+    match List.tryItem ordinal call.Arguments with
+    | Some operand when operand.OptionalEntry.IsSome ->
+        let selected = operand.OptionalEntry.Value
+        match accounts.TryFind operand.Actual with
+        | Some account when account.Occurrence=operand.Actual && not account.Slots.IsEmpty ->
+            if account.Slots |> List.forall(fun slot -> account.Participants |> List.exists(fun participant -> participant.Node=slot.Identity && participant.Role=ParticipantRole.AggregateSlot)) then
+                let sources = account.Sources |> List.map _.Node |> Set.ofList
+                if not(Set.isSubset sources call.Participants) then Error "An optional-entry source account omits its semantic source incidences from the call support."
+                else Ok(Set.unionMany [sources; selected.Transport; Set.ofList[call.Site;call.Import;call.Callee;operand.Actual;operand.Formal;selected.Construction]])
+            else Error "An optional-entry source account lacks its exact aggregate-slot participant role."
+        | _ -> Error "An optional-entry source account lacks its exact current aggregate slots."
+    | _ -> Error "An optional-entry source claim lost its exact original operand."
 
 /// A graph citizen records this recipe firing even for an empty domain.
 let private anchorCore enrichId (graph: SemanticGraph) =
