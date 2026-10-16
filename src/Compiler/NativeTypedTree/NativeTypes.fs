@@ -991,6 +991,11 @@ type PlatformContext = {
     /// What execution environment services are available.
     RuntimeModel: RuntimeModel option
 
+    /// Frozen project path, captured-project digest, diagnostic model name and
+    /// heap permission derived by the project owner from its parsed memory model.
+    /// Standalone source checks carry no project allocation authority.
+    ProjectMemoryPolicy: (string * string * string * bool) option
+
     /// Memory spaces available on this substrate.
     /// Empty = all spaces available (for backward compat).
     AvailableMemorySpaces: NTUMemorySpace list

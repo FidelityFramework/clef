@@ -63,7 +63,7 @@ let main _ = if toggle true then 0 else 1
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
           Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None
           RuntimeModel = Some RuntimeModel.Libc; AvailableMemorySpaces = []; DefaultMemorySpace = None
-          ClockFrequencyMhz = None; NsPerWeightUnit = None }
+          ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let authority (context: PlatformContext) =
         let widths = context.Dimensions |> Map.toList |> List.map (fun (name, bits) ->

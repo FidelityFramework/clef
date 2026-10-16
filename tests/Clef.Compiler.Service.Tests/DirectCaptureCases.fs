@@ -37,7 +37,7 @@ module private DirectCapture =
               PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "capture-platform.clef")
               Predicates = Map.empty; FreestandingStartup = None
               SubstrateKind = None; RuntimeModel = None; AvailableMemorySpaces = []; DefaultMemorySpace = None
-              ClockFrequencyMhz = None; NsPerWeightUnit = None }
+              ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
         let representationsText =
             representations |> List.map (fun representation ->
                 sprintf "{ Name=\"%s\"; Family=\"%s\"; Bits=%d; Capability=\"native\"; MinMagnitude=\"%s\"; MaxMagnitude=\"%s\"; Boundary=\"wrap\" }"

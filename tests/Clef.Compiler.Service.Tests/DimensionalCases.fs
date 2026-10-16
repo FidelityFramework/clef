@@ -948,7 +948,7 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
             EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
             PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
             Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
         let graph = { result.Graph with Platform = Some context }
         let graph, _ = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run (Some context) graph
         let graph = Placement.settle (Some context) graph

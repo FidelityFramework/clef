@@ -19,6 +19,11 @@ type Inputs = {
     Joins: Map<NodeId, CallableJoin>
 }
 
+let memoryPolicy (graph: SemanticGraph) : ProjectMemoryPolicy option =
+    graph.Platform |> Option.bind _.ProjectMemoryPolicy
+    |> Option.map (fun (path, version, model, _) ->
+        { ProjectPath = path; SourceVersion = version; Model = model })
+
 let private collect (lookup: NodeId -> 'value option) (label: string) (keys: NodeId list) : Result<'value list, string> =
     let values = keys |> List.map (fun key ->
         match lookup key with
@@ -139,7 +144,8 @@ let authorWith (facts: Inputs) (graph: SemanticGraph) (occurrence: NodeId) : Res
                     Ok { Occurrence = occurrence; Slots = slots; Values = values; Carriers = carriers
                          Contracts = contracts; Flows = flows; Joins = joins; Participants = participants
                          Sources = sources |> List.choose (function Ok source -> Some source | _ -> None)
-                         Claims = claims; Symbols = symbols; Inactivity = inactivity }))))
+                         Claims = claims; Symbols = symbols; Inactivity = inactivity
+                         MemoryPolicy = memoryPolicy graph }))))
 
 let author (graph: SemanticGraph) (occurrence: NodeId) =
     let facts = graph.Codata.Value
@@ -156,6 +162,21 @@ let current (graph: SemanticGraph) (occurrence: NodeId) =
         author graph occurrence |> Result.bind (fun actual ->
             if held = actual then Ok held
             else Error "Callable aggregate source support changed after its dependency account was authored (CCS8414).")
+
+/// Allocation permission is additional to structural formation. An unready
+/// Result never supplies an executable optional-conversion premise.
+let resultRetirement (graph:SemanticGraph) actual receiver =
+    current graph actual |> Result.bind(fun account ->
+        match account.Values |> List.filter(fun row->row.Operation=CallableAggregateOperation.Result) with
+        | [] -> Ok None
+        | [row] ->
+            match row.ResultRetirement with
+            | Some(Ok retirement) when retirement.Application=row.Occurrence && retirement.Actual=actual &&
+                                       retirement.Receiver=receiver && Some retirement.Policy=memoryPolicy graph &&
+                                       (graph.Platform |> Option.bind _.ProjectMemoryPolicy |> Option.exists(fun (_,_,_,allowed)->allowed)) -> Ok(Some retirement)
+            | Some(Error reason) -> Error reason
+            | _ -> Error "Returned optional backing lost its exact current source retirement account."
+        | _ -> Error "Returned optional backing requires one exact application instance.")
 
 
 /// Validate a receiving projection against its existing complete aggregate

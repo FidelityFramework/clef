@@ -28,7 +28,7 @@ module private EncodingFixture =
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = Some "EncodingPlatform.description"
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "encoding-platform.clef")
           Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let declaration (context: PlatformContext) =
         let widths = context.Dimensions |> Map.toList |> List.map (fun (name, bits) -> sprintf "{ Name=\"%s\"; Bits=%d }" name bits) |> String.concat "; "

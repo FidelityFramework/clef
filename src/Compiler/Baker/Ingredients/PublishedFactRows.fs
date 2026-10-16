@@ -563,6 +563,14 @@ and mapCallableAggregateDeclarationFact (value: S.CallableAggregateDeclarationFa
         Definition = mapCallableAggregateDeclarationDefinition value.Definition
     } : Fidelity.PSG.CallableAggregateDeclarationFact)
 
+and mapProjectMemoryPolicy (value:S.ProjectMemoryPolicy) : Fidelity.PSG.ProjectMemoryPolicy =
+    {ProjectPath=value.ProjectPath;SourceVersion=value.SourceVersion;Model=value.Model}
+
+and mapCallableAggregateResultRetirement (value:S.CallableAggregateResultRetirement) : Fidelity.PSG.CallableAggregateResultRetirement =
+    {Application=nodeId value.Application;Caller=nodeId value.Caller;Construction=nodeId value.Construction
+     Actual=nodeId value.Actual;Receiver=nodeId value.Receiver;Policy=mapProjectMemoryPolicy value.Policy
+     Uses=List.map nodeId value.Uses}
+
 and mapCallableAggregateDependencyAccount (value: S.CallableAggregateDependencyAccount) : Fidelity.PSG.CallableAggregateDependencyAccount =
     mapCallableAggregateDependencyAccountUsing (fun (_, info) -> mapObligationInfo info) value
 
@@ -580,6 +588,7 @@ and mapCallableAggregateDependencyAccountUsing (claim: N.NodeId * S.ObligationIn
         Claims = (value.Claims |> List.map (fun (id, info) -> nodeId id, claim (id, info)))
         Symbols = (value.Symbols |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapCallableSymbolName t1))))
         Inactivity = (value.Inactivity |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapOrdinaryInactivityProjection t1))))
+        MemoryPolicy = value.MemoryPolicy |> Option.map mapProjectMemoryPolicy
     } : Fidelity.PSG.CallableAggregateDependencyAccount)
 
 and mapCallableAggregateEnvironmentPlacement (value: S.CallableAggregateEnvironmentPlacement) : Fidelity.PSG.CallableAggregateEnvironmentPlacement =
@@ -664,6 +673,7 @@ and mapCallableAggregateValue (value: S.CallableAggregateValue) : Fidelity.PSG.C
         Value = (value.Value |> Option.map (fun x -> nodeId x))
         SelectedAlternative = value.SelectedAlternative
         Operation = mapCallableAggregateOperation value.Operation
+        ResultRetirement = value.ResultRetirement |> Option.map (Result.map mapCallableAggregateResultRetirement)
         Frontier = (value.Frontier |> Option.map (fun x -> nodeId x))
         Tag = (value.Tag |> Option.map (fun x -> mapCallableAggregateTag x))
         Bytes = value.Bytes
@@ -2242,6 +2252,7 @@ and mapOptionalEntryArgumentConversionModel (value: S.OptionalEntryArgumentConve
     { Call=nodeId value.Call; Parameter=value.Parameter; Actual=nodeId value.Actual
       Construction=nodeId value.Construction; SourceCase=value.SourceCase
       Payload=nodeId value.Payload; Formation=nodeId value.Formation; Invocation=nodeId value.Invocation
+      ResultRetirement=value.ResultRetirement |> Option.map mapCallableAggregateResultRetirement
       Arms=value.Arms |> List.map (fun arm ->
           { CaseOrdinal=arm.CaseOrdinal
             Choice=(match arm.Choice with
@@ -2251,6 +2262,7 @@ and mapOptionalEntryArgumentConversionModel (value: S.OptionalEntryArgumentConve
 
 and mapOptionalEntryAbsenceArgumentConversionModel (value:S.OptionalEntryAbsenceArgumentConversionModel) : Fidelity.PSG.OptionalEntryAbsenceArgumentConversionModel =
     {Call=nodeId value.Call;Parameter=value.Parameter;Actual=nodeId value.Actual;Construction=nodeId value.Construction;SourceCase=value.SourceCase;Absence=nodeId value.Absence
+     ResultRetirement=value.ResultRetirement |> Option.map mapCallableAggregateResultRetirement
      Arms=value.Arms |> List.map(fun arm -> {CaseOrdinal=arm.CaseOrdinal;Choice=(match arm.Choice with S.OptionalEntryAbsencePlanChoice.AbsentEntry->Fidelity.PSG.OptionalEntryAbsencePlanChoice.AbsentEntry | S.OptionalEntryAbsencePlanChoice.RequiresClosedEntry->Fidelity.PSG.OptionalEntryAbsencePlanChoice.RequiresClosedEntry)})}
 
 and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =

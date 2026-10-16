@@ -562,7 +562,7 @@ let observed = distances, durations
             Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
             PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
             Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
         let rerun, diagnostics = LoopRanges.run (Some platform) { graph with Platform = Some platform }
         Assert.Contains(diagnostics, fun diagnostic ->
             diagnostic.Code = "CCS8011" && diagnostic.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error &&

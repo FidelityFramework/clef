@@ -21,7 +21,7 @@ module private ContinuationFields =
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
           Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let graph pointerBits =
         let result = DimensionalCases.check """

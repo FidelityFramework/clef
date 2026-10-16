@@ -42,7 +42,7 @@ module ProjectChecker =
     /// description compiled into the graph and filled in at saturation
     /// (PlatformDeclaration.fill, plan D8, L-13). No word size is read from a
     /// project file and no target is assumed when the section is absent.
-    let private buildPlatformContext (options: FidprojOptions) (selectedTarget: TargetPlatform option) (platformSources: Set<string>) : PlatformContext option =
+    let private buildPlatformContext (options: FidprojOptions) (selectedTarget: TargetPlatform option) (platformSources: Set<string>) projectMemoryPolicy : PlatformContext option =
         // A library stays neutral until its project explicitly selects a
         // platform dependency. That binding supplies the target; no CPU default
         // or executable startup is inferred from source retention.
@@ -99,6 +99,7 @@ module ProjectChecker =
                 FreestandingStartup = freestanding
                 SubstrateKind = Some substrateKind
                 RuntimeModel = runtimeModel
+                ProjectMemoryPolicy = projectMemoryPolicy
                 AvailableMemorySpaces = []
                 DefaultMemorySpace = None
                 // Project clock_mhz overrides binding clock_mhz (design may use PLL/divider)
@@ -216,6 +217,16 @@ module ProjectChecker =
 
     let private checkPreparedWithIdentity identify (prepared: PreparedProject) : ProjectCheckResult =
         Clef.Compiler.CheckExecution.synchronized (fun () ->
+            let projectMemoryPolicy =
+                prepared.Inputs
+                |> List.tryFind (fun (path, _) -> path = normalizePath prepared.Options.ProjectPath)
+                |> Option.map (fun (path, text) ->
+                    let version =
+                        System.Text.Encoding.UTF8.GetBytes text
+                        |> System.Security.Cryptography.SHA256.HashData
+                        |> System.Convert.ToHexString
+                    path, version, string prepared.Options.MemoryModel,
+                    prepared.Options.MemoryModel = MemoryModel.Standard)
             let parsed = prepared.Sources |> List.map (fun (path, content) -> path, parseStringWithDefaults content path)
             let errors = parsed |> List.choose (function path, ParseError errors -> Some(path, errors) | _ -> None) |> Map.ofList
             // A malformed file does not authorize checking a silently shortened project.
@@ -228,7 +239,7 @@ module ProjectChecker =
                     // of whether the subsequent semantic check succeeds.
                     let identities = identify |> Option.map (fun observe -> observe units)
                     checkParsedInputsWithDeclarations (List.map snd units)
-                        (buildPlatformContext prepared.Options prepared.PlatformTarget prepared.PlatformSources)
+                        (buildPlatformContext prepared.Options prepared.PlatformTarget prepared.PlatformSources projectMemoryPolicy)
                         (ownedApplicationSources prepared.Options)
                         (ownedLibrarySources prepared.Options) identities
             { Options = prepared.Options

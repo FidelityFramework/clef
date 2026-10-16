@@ -55,7 +55,7 @@ let private named (wanted: string) (actual: string) = wanted = actual || (not (w
 let private caseName graph id =
     caseOf graph id |> Option.map (fun (_, name, _) -> name)
 
-let private readUncached (graph: SemanticGraph) : Reading =
+let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (graph: SemanticGraph) : Reading =
     let mutable callbacks = []
     let mutable findings = []
     let finding (node: SemanticNode) defect message =
@@ -184,7 +184,6 @@ let private readUncached (graph: SemanticGraph) : Reading =
     let descriptors = readDescriptors graph
     let mutable receiving = []
     let mutable optionalReceiving = []
-    let aggregateOrigins = lazy (CallableOrigins.resolve graph)
 
     // A completed ordinary call may identify the source constructor for
     // declaration discovery. Only the later aggregate recipe authors its
@@ -414,7 +413,11 @@ let private readUncached (graph: SemanticGraph) : Reading =
 // Width readers run for many nodes of the same immutable graph. Retain the
 // structural declaration reading once per graph without retaining old graphs.
 let private cache = ConditionalWeakTable<SemanticGraph, Reading>()
-let read graph = cache.GetValue(graph, fun graph -> readUncached graph)
+let read graph = cache.GetValue(graph, fun graph -> readUncached (lazy (CallableOrigins.resolve graph)) graph)
+
+/// A producing recipe already holds the completed origin reading. Reuse it;
+/// declaration discovery must not start another callable fixed point.
+let readWithOrigins origins graph = readUncached (lazy origins) graph
 
 /// Present payloads retain their optional selection owner while supplying the
 /// same declared incoming domain as an ordinary closed receiving entry.

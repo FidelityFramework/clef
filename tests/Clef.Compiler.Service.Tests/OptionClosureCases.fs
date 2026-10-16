@@ -17,7 +17,7 @@ module private OptionClosures =
         PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None
         PlatformSourcePaths = Set.empty; Predicates = Map.empty; FreestandingStartup = None
         SubstrateKind = None; RuntimeModel = None; AvailableMemorySpaces = []
-        DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+        DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let binding name (graph: SemanticGraph) =
         graph.Nodes.Values |> Seq.find (fun node ->

@@ -39,7 +39,7 @@ module private NominalFixture =
           PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None
           PlatformSourcePaths = Set.empty; Predicates = Map.empty; FreestandingStartup = None
           SubstrateKind = None; RuntimeModel = None; AvailableMemorySpaces = []; DefaultMemorySpace = None
-          ClockFrequencyMhz = None; NsPerWeightUnit = None }
+          ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let split (main: string) =
         [ "left.clef", "module Left\ntype Cell = { Value: bool }\nlet cell = { Value = true }\nlet read () = cell.Value\n"

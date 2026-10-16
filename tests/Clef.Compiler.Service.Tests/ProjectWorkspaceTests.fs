@@ -11,8 +11,8 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Fidelity.FSharp.Incremental.Hosting
 
-type private WorkspaceFiles() =
-    let directory = Path.Combine(Path.GetTempPath(), "clef-workspace-tests-" + Guid.NewGuid().ToString("N"))
+type private WorkspaceFiles(?scratchRoot: string) =
+    let directory = Path.Combine(defaultArg scratchRoot (Path.GetTempPath()), "clef-workspace-tests-" + Guid.NewGuid().ToString("N"))
     let project = Path.Combine(directory, "App.fidproj")
     let source = Path.Combine(directory, "App.clef")
     do
@@ -31,6 +31,30 @@ module private WorkspaceCases =
     let demand revision inputs (workspace: ProjectWorkspace<'T>) = workspace.BeginDemand(revision, inputs) |> need
     let close (workspace: ProjectWorkspace<'T>) = run (workspace.CloseAsync()) |> need
     let entered (signal: ManualResetEventSlim) = Assert.True(signal.Wait(10000), "The owned checker did not reach its deterministic barrier.")
+
+module private ProjectPolicyCases =
+    let files () =
+        new WorkspaceFiles(scratchRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013/optional-entry-retirement-20261016/project-policy-tests")))
+
+    let configure (files: WorkspaceFiles) model =
+        let policy = if model = "" then "" else "memory_model = \"" + model + "\"\n"
+        let text =
+            "[package]\nname = \"App\"\n[compilation]\ntarget = \"cpu\"\n" + policy
+            + "[build]\noutput_kind = \"library\"\nsources = [\"App.clef\"]\n[platform]\nruntime_model = \"libc\"\n"
+        File.WriteAllText(files.Source, "module App\nlet value () = ()\n")
+        File.WriteAllText(files.Project, text)
+        text
+
+    let digest (text: string) =
+        System.Text.Encoding.UTF8.GetBytes text
+        |> System.Security.Cryptography.SHA256.HashData
+        |> Convert.ToHexString
+
+    let policy (result: ProjectCheckResult) =
+        Assert.False(ProjectChecker.hasErrors result, String.concat "\n" (ProjectChecker.getErrorMessages result))
+        result.CheckResult.PlatformContext
+        |> Option.bind _.ProjectMemoryPolicy
+        |> Option.defaultWith (fun () -> failwith "The checked project lost its captured memory policy.")
 
 module private LineageCases =
     let capture (files: WorkspaceFiles) text (workspace: ProjectWorkspace<'T>) =
@@ -871,3 +895,39 @@ let kernel: ElementKernel = { Compute=calculate; Shape={Elements=64;Grain=16} }
                     diagnostic.Code = "CCS8403"
                     && diagnostic.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error
                     && diagnostic.Message.Contains(claim.Id, StringComparison.Ordinal))
+
+    [<Theory>]
+    [<InlineData("standard", "Standard", true)>]
+    [<InlineData("stack_only", "StackOnly", false)>]
+    [<InlineData("static_pools", "StaticPools", false)>]
+    [<InlineData("arena", "Arena", false)>]
+    [<InlineData("", "StackOnly", false)>]
+    member _.``Project allocation permission follows its parsed memory policy``(model, expectedName, expectedHeap) =
+        use files = ProjectPolicyCases.files()
+        let text = ProjectPolicyCases.configure files model
+        let result = ProjectChecker.checkProject files.Project |> WorkspaceCases.need
+        let path, version, name, heap = ProjectPolicyCases.policy result
+        Assert.Equal(Path.GetFullPath(files.Project).Replace('\\', '/'), path)
+        Assert.Equal(ProjectPolicyCases.digest text, version)
+        Assert.Equal(expectedName, name)
+        Assert.Equal(expectedHeap, heap)
+
+    [<Fact>]
+    member _.``Captured project policy survives a later disk edit without rereading it``() =
+        use files = ProjectPolicyCases.files()
+        let captured = ProjectPolicyCases.configure files "standard"
+        let prepared = ProjectChecker.prepare files.Project Map.empty |> WorkspaceCases.need
+        let changed = ProjectPolicyCases.configure files "stack_only"
+        let oldResult = ProjectChecker.checkPrepared prepared
+        let path, oldVersion, oldName, oldHeap = ProjectPolicyCases.policy oldResult
+        Assert.Equal(Path.GetFullPath(files.Project).Replace('\\', '/'), path)
+        Assert.Equal(ProjectPolicyCases.digest captured, oldVersion)
+        Assert.Equal("Standard", oldName)
+        Assert.True(oldHeap)
+        let newResult = ProjectChecker.checkProject files.Project |> WorkspaceCases.need
+        let newPath, newVersion, newName, newHeap = ProjectPolicyCases.policy newResult
+        Assert.Equal(path, newPath)
+        Assert.Equal(ProjectPolicyCases.digest changed, newVersion)
+        Assert.NotEqual(oldVersion, newVersion)
+        Assert.Equal("StackOnly", newName)
+        Assert.False(newHeap)

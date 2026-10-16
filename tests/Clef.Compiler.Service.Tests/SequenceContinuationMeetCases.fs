@@ -26,7 +26,7 @@ module private ContinuationMeetFixture =
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
           Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let build valueType valueRange readType readRange sourceType sourceRange holds scratchHolds =
         let builder = NodeBuilder()

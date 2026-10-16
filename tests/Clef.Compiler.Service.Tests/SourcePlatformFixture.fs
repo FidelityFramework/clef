@@ -21,7 +21,7 @@ module SourcePlatformFixture =
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = Some "WriteAuthority.description"
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "write-authority.clef")
           Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let authority =
         let representations = platform.Representations.Values |> Seq.map (fun rep ->
@@ -55,3 +55,21 @@ let description = { Id = "intrinsic-write-test"
         let result = checkParsedInputsWithPlatform [parse source "write-authority.clef"; parse body path] (Some context)
         DimensionalCases.noErrors result
         result.Graph
+
+    /// Exercise the selected project owner, including its captured parsed policy.
+    /// The fixture units are real project inputs; no test authors policy authority.
+    let checkProjectWithMemoryPolicy model (metadata:(string*string) list) authoritySource source =
+        let root = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013/optional-retirement-20261016/project-fixtures", System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory root |> ignore
+        let write name (text:string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root,name),text)
+        write "Platform.clef" authoritySource
+        write "Main.clef" source
+        write "Platform.fidproj" "[package]\nname = \"Platform\"\n[compilation]\ntarget = \"cpu\"\n[build]\noutput_kind = \"library\"\nsources = [\"Platform.clef\"]\n[platform]\nruntime_model = \"libc\"\ndescription = \"WriteAuthority.description\"\n"
+        let sourcePaths =
+            metadata |> List.mapi(fun ordinal (_,text)->let name = $"Metadata{ordinal}.clef" in write name text; name)
+        let policy = if model="" then "" else $"memory_model = \"{model}\"\n"
+        let sources = sourcePaths@["Main.clef"] |> List.map(fun path->"\""+path+"\"") |> String.concat ", "
+        write "App.fidproj" ($"[package]\nname = \"App\"\n[compilation]\ntarget = \"cpu\"\n{policy}[build]\noutput_kind = \"executable\"\nsources = [{sources}]\n[dependencies]\nplatform = {{ path = \"Platform.fidproj\" }}\n")
+        Clef.Compiler.Project.ProjectChecker.checkProject(System.IO.Path.Combine(root,"App.fidproj"))
+        |> Result.defaultWith(fun failures->failwithf "%A" failures)
+        |> _.CheckResult

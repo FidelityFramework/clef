@@ -418,6 +418,18 @@ type OptionalEntryAbsencePlanChoice = AbsentEntry | RequiresClosedEntry
 
 type OptionalEntryAbsencePlanArm = { CaseOrdinal: int; Choice: OptionalEntryAbsencePlanChoice }
 
+type ProjectMemoryPolicy = { ProjectPath: string; SourceVersion: string; Model: string }
+
+type CallableAggregateResultRetirement = {
+    Application: NodeId
+    Caller: NodeId
+    Construction: NodeId
+    Actual: NodeId
+    Receiver: NodeId
+    Policy: ProjectMemoryPolicy
+    Uses: NodeId list
+}
+
 type OptionalEntryAbsenceArgumentConversionModel = {
     Call: NodeId
     Parameter: int
@@ -426,6 +438,7 @@ type OptionalEntryAbsenceArgumentConversionModel = {
     SourceCase: int
     Absence: NodeId
     Arms: OptionalEntryAbsencePlanArm list
+    ResultRetirement: CallableAggregateResultRetirement option
 }
 
 type OptionalEntryArgumentConversionModel = {
@@ -438,6 +451,7 @@ type OptionalEntryArgumentConversionModel = {
     Formation: NodeId
     Invocation: NodeId
     Arms: OptionalEntryPlanArm list
+    ResultRetirement: CallableAggregateResultRetirement option
 }
 
 /// Observations of the existing evaluation owner's rows, not another flow
@@ -3002,6 +3016,7 @@ type CallableAggregateValue = {
     Value: NodeId option
     SelectedAlternative: int option
     Operation: CallableAggregateOperation
+    ResultRetirement: Result<CallableAggregateResultRetirement, string> option
     Frontier: NodeId option
     Tag: CallableAggregateTag option
     Bytes: int
@@ -3054,6 +3069,7 @@ type CallableAggregateDependencyAccount = {
     Claims: (NodeId * ObligationInfo) list
     Symbols: (NodeId * CallableSymbolName) list
     Inactivity: (NodeId * OrdinaryInactivityProjection) list
+    MemoryPolicy: ProjectMemoryPolicy option
 }
 
 /// A write updates the finite alternative discriminator and the actual

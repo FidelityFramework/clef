@@ -57,7 +57,7 @@ module private ClosureValues =
             PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None
             PlatformSourcePaths = Set.empty
             Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
     let assertPairs (result: CheckResult) =
         let layouts = Clef.Compiler.PSGSaturation.SemanticGraph.Placement.closures (Some context) result.Graph
         let lambdas = expressionLambdas result

@@ -202,6 +202,7 @@ let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id
                            model.Construction=selected.Construction && model.SourceCase=1 && selected.CaseOrdinal=1 && source &&
                            selected.Payload=Some model.Payload && selected.Formation=Some model.Formation &&
                            (List.item ordinal call.Arguments).Abi=BoundaryScalar.Entry model.Invocation && model.Arms=arms &&
+                           Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement graph model.Actual model.Call=Ok model.ResultRetirement &&
                            (match entry,invocations.TryFind model.Invocation with
                             | [entry],Some receiving ->
                                 currentOptionalInvocation graph call ordinal receiving &&
@@ -214,6 +215,7 @@ let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id
                         let arms=[{CaseOrdinal=0;Choice=OptionalEntryAbsencePlanChoice.AbsentEntry};{CaseOrdinal=1;Choice=OptionalEntryAbsencePlanChoice.RequiresClosedEntry}]
                         if model.Call=call.Site && model.Parameter=ordinal && model.Actual=call.Arguments[ordinal].Actual &&
                            model.Construction=selected.Construction && model.SourceCase=0 && selected.CaseOrdinal=0 && selected.Payload.IsNone && selected.Formation.IsNone && model.Arms=arms &&
+                           Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement graph model.Actual model.Call=Ok model.ResultRetirement &&
                            (account |> Option.exists(fun account -> account.Import=call.Import && account.Parameter=ordinal && account.Formal=call.Arguments[ordinal].Formal && call.Arguments[ordinal].Abi=BoundaryScalar.Entry account.Invocation)) &&
                            info.Logic="QF_LIA" && info.Statement="The exact source None selection has complete finite absence-choice correspondence under its external binding hypothesis; target realization remains an artifact obligation." then Ok ()
                         else Error "The optional-entry absence conversion claim lost its exact current quoted promise or None source plan."
@@ -2117,8 +2119,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                 | _ -> Error "An optional-entry application lost its unique source-issued requirement citizen."
                             let issued = issued |> Result.map (fun citizen ->
                                 let refined =
-                                    match selection.Payload, selection.Formation, graph.Nodes.TryFind selection.Construction with
-                                    | Some payload, Some formation, Some construction ->
+                                    match selection.Payload, selection.Formation, graph.Nodes.TryFind selection.Construction,
+                                          Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement graph operand.Actual call.Site with
+                                    | Some payload, Some formation, Some construction, Ok retirement ->
                                         let sourceCase =
                                             match construction.Kind with
                                             | SemanticKind.UnionCase(_, ordinal, Some original)
@@ -2131,7 +2134,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                                 optionalCodeWitness callbackInvocations (calls.Values |> Seq.toList) entry receiving)) ->
                                             let model:OptionalEntryArgumentConversionModel =
                                                 {Call=call.Site;Parameter=ordinal;Actual=operand.Actual;Construction=selection.Construction
-                                                 SourceCase=sourceCase;Payload=payload;Formation=formation;Invocation=invocation
+                                                 SourceCase=sourceCase;Payload=payload;Formation=formation;Invocation=invocation;ResultRetirement=retirement
                                                  Arms=[{CaseOrdinal=0;Choice=OptionalEntryPlanChoice.PendingAbsence;Formation=None}
                                                        {CaseOrdinal=1;Choice=OptionalEntryPlanChoice.ClosedEntry;Formation=Some formation}]}
                                             let support = requirement.NewEdges |> List.find(fun edge->edge.Role=EdgeRole.Constrains) |> _.Sources |> Set.ofList
@@ -2143,12 +2146,12 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                                 | _ -> node)
                                             {refined with NewNodes=nodes}
                                         | _ -> requirement
-                                    | None, None, Some _ when selection.CaseOrdinal=0 ->
+                                    | None, None, Some _, Ok retirement when selection.CaseOrdinal=0 ->
                                         let rows=callbackAbsences.Values |> Seq.filter(fun row->row.Import=call.Import && row.Parameter=ordinal) |> Seq.toList
                                         match rows with
                                         | [absence] ->
                                             let model:OptionalEntryAbsenceArgumentConversionModel =
-                                                {Call=call.Site;Parameter=ordinal;Actual=operand.Actual;Construction=selection.Construction;SourceCase=selection.CaseOrdinal;Absence=absence.Quote
+                                                {Call=call.Site;Parameter=ordinal;Actual=operand.Actual;Construction=selection.Construction;SourceCase=selection.CaseOrdinal;Absence=absence.Quote;ResultRetirement=retirement
                                                  Arms=[{CaseOrdinal=0;Choice=OptionalEntryAbsencePlanChoice.AbsentEntry};{CaseOrdinal=1;Choice=OptionalEntryAbsencePlanChoice.RequiresClosedEntry}]}
                                             let support=requirement.NewEdges |> List.find(fun edge->edge.Role=EdgeRole.Constrains) |> _.Sources |> Set.ofList
                                             let refined=refine citizen (ObligationBody.OptionalEntryAbsenceArgumentConversion model) support [] requirement

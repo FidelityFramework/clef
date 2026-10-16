@@ -1457,7 +1457,7 @@ type ForeignReferenceTests() =
             PlatformDescription=None; PlatformArchitecture=None; PlatformOS=None
             PlatformSourcePaths=Set.empty
             Predicates=Map.empty; FreestandingStartup=None; SubstrateKind=None; RuntimeModel=None
-            AvailableMemorySpaces=[]; DefaultMemorySpace=None; ClockFrequencyMhz=None; NsPerWeightUnit=None }
+            AvailableMemorySpaces=[]; DefaultMemorySpace=None; ClockFrequencyMhz=None; NsPerWeightUnit=None; ProjectMemoryPolicy=None }
         for operation, bits, range in ["stride",32,ValueRange.unsignedOf 32; "length",64,ValueRange.Bounded(0I,9223372036854775807I)] do
             let result = ForeignCases.check (ForeignCases.mapped.Replace("fun _view -> 7", sprintf "fun view -> BorrowedView.%s view" operation))
             let graph = {result.Graph with Platform=Some context}

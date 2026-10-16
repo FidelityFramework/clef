@@ -94,7 +94,7 @@ let mutable shared = 1
             PlatformDescription = Some "Dimensions.description"; PlatformArchitecture = None; PlatformOS = None
             PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "dimensions.clef")
             Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
         let graph, diagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority true { fixture.Graph with Platform = Some context }
         Assert.Empty diagnostics
         let shared = graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("shared", true, _, _) -> true | _ -> false) |> Assert.Single

@@ -11,6 +11,7 @@ module AggregateTypes = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes
 module Accounts = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts
 module Identity = Clef.Compiler.NativeTypedTree.TypeIdentities
 module Codes = Clef.Compiler.NativeTypedTree.Expressions.Types.DiagnosticCodes
+module Callbacks = Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations
 
 type Inputs = {
     Carriers: Map<NodeId, CallableCarrier>
@@ -38,9 +39,11 @@ type WorkGroup = {
     Rows: (NodeId * AggregateTypes.Slot * Origins.AggregateResolution) list
     /// Reuse the completed call reading; result admission never re-enters Origins.
     Calls: Map<NodeId, Origins.ResolvedCall>
+    OptionalReceiving: Callbacks.OptionalReceivingCallback list
 }
 
 let prepareWork (resolution: Origins.Resolution) (graph: SemanticGraph) =
+    let receiving = (Callbacks.readWithOrigins resolution graph).OptionalReceiving
     resolution.Aggregates |> Map.toList |> List.collect (fun (site, reading) ->
         match graph.Nodes.TryFind site with
         | None -> []
@@ -49,7 +52,8 @@ let prepareWork (resolution: Origins.Resolution) (graph: SemanticGraph) =
                 (reading.AggregateType, slot.Path), (site, slot, reading)))
     |> List.groupBy fst
     |> List.map (fun ((aggregateType, path), rows) ->
-        { AggregateType = aggregateType; Path = path; Rows = List.map snd rows; Calls = resolution.Calls })
+        { AggregateType = aggregateType; Path = path; Rows = List.map snd rows; Calls = resolution.Calls
+          OptionalReceiving = receiving })
 
 /// Only actual stored callable receiving signatures create scheduling edges.
 /// The aggregate occurrence itself is not a receiving dependency.
@@ -174,7 +178,7 @@ let private valueRow slot occurrence aggregate operation formationInputs actualV
       Alternatives = alternatives
       Selector = if alternatives.IsEmpty then None else Some { Lower = 0; UpperExclusive = 1; Storage = None; Slot = None; ByteOffset = None }
       FormationInputs = formationInputs; Value = actualValue; SelectedAlternative = selected
-      Operation = operation; Frontier = None; Tag = tag; Bytes = 0; Alignment = 1
+      Operation = operation; ResultRetirement = None; Frontier = None; Tag = tag; Bytes = 0; Alignment = 1
       Participants =
         [ yield participant occurrence ParticipantRole.AggregateValue 0 occurrence
           yield participant occurrence ParticipantRole.AggregateSource 0 aggregate
@@ -312,6 +316,63 @@ let private resultInputs (graph: SemanticGraph) (calls:Map<NodeId,Origins.Resolv
             Ok(ordered,roles)
         | _ -> refused
     | _ -> refused
+
+/// Close the finite use inventory of this one returned instance. Immutable
+/// aliases retain it; every other consumer requires another lifetime profile.
+let private resultRetirement (graph:SemanticGraph) (receiving:Callbacks.OptionalReceivingCallback list)
+                             (values:Map<NodeId,CallableAggregateValue list>) (row:CallableAggregateValue) =
+    let application = row.Occurrence
+    let aliases = values |> Map.toList |> List.choose(fun (site,rows) ->
+        if rows |> List.exists(fun value -> value.Slot=row.Slot && value.Operation=CallableAggregateOperation.Transport && value.Aggregate=application)
+        then Some site else None)
+    let instances = application::aliases |> Set.ofList
+    let selected = receiving |> List.filter(fun call -> instances.Contains call.Operand)
+    let policy = Accounts.memoryPolicy graph
+    let heapAllowed = graph.Platform |> Option.bind _.ProjectMemoryPolicy |> Option.exists(fun (_,_,_,allowed)->allowed)
+    let enclosing id =
+        [1..graph.Nodes.Count] |> List.fold(fun (found,current,path) _ ->
+            match found,current |> Option.bind graph.Nodes.TryFind with
+            | Some _,_ | _,None -> found,None,path
+            | None,Some node ->
+                match node.Kind with
+                | SemanticKind.Lambda _ -> Some node.Id,None,path@[node.Id]
+                | _ -> None,node.Parent,path@[node.Id]) (None,Some id,[])
+        |> fun (owner,_,path)->owner,path
+    let construction = row.Tag |> Option.map _.Constructor
+    match policy,selected,construction with
+    | None,_,_ -> Error "Returned optional backing has no captured project memory policy."
+    | Some _,_,_ when not heapAllowed -> Error "The selected project memory policy forbids escaping returned optional backing."
+    | Some policy,[call],Some construction ->
+        let activation = (Clef.Compiler.PSGSaturation.SemanticGraph.ScopedDeclarations.read graph).Activations.TryFind call.Invocation.ScopeBinding
+        let duringCall = activation |> Option.exists(fun scope->scope.Extent=BoundaryCallbackExtent.DuringCall && scope.Parameter=call.Invocation.Formal && scope.Binding=call.Invocation.Declaration.Binding)
+        let caller,path = enclosing application
+        let receiverCaller,receiverPath = enclosing call.Call
+        let operands (node:SemanticNode) =
+            match node.Kind with
+            | SemanticKind.VarRef(_,Some definition) -> [definition]
+            | SemanticKind.Sequential children -> children |> List.tryLast |> Option.toList
+            | SemanticKind.ModuleDef _ -> []
+            | _ -> node.Children
+        let extraUses = graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.exists(fun node ->
+            let used = operands node |> List.filter instances.Contains
+            not used.IsEmpty && not (instances.Contains node.Id) && node.Id<>call.Call)
+        let straightLine = path@receiverPath |> List.forall(fun id ->
+            match graph.Nodes[id].Kind with
+            | SemanticKind.Application _ | SemanticKind.Binding(_,false,false,_) | SemanticKind.Sequential _
+            | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _ | SemanticKind.Lambda _ -> true
+            | _ -> false)
+        match caller with
+        | Some caller when receiverCaller=Some caller && not extraUses && straightLine && duringCall ->
+            let uses = application::(aliases |> List.sortBy(fun id -> graph.Nodes[id].Range.Start.Line,graph.Nodes[id].Range.Start.Column,NodeId.value id)) @ [call.Call] |> List.distinct
+            let retirement : CallableAggregateResultRetirement =
+                {Application=application;Caller=caller;Construction=construction;Actual=call.Operand
+                 Receiver=call.Call;Policy=policy;Uses=uses}
+            // The optional conversion citizen already owns the exact declared
+            // activation support through optionalSupport. Do not relabel those
+            // declaration facts as executable aggregate source participants.
+            Ok(retirement,List.distinct(path@receiverPath@uses))
+        | _ -> Error "Returned optional backing requires one caller instance, one exact receiver and no other uses."
+    | _ -> Error "Returned optional backing requires one exact receiving use and its original construction."
 
 /// Resolve direct fields/payloads with one closed formation per component.
 /// Wider families remain residuals until their source selector/adapter/storage
@@ -511,6 +572,14 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
                 formation.Slot = row.Slot && formation.Operation = CallableAggregateOperation.Construct)))
         if not formed then refuse site Codes.CCS8414_CallableAggregateEvidence "The callable projection has no admitted source construction row."
         formed)) |> Map.filter (fun _ rows -> not rows.IsEmpty)
+    let receiving = groups |> List.collect _.OptionalReceiving |> List.distinctBy(fun call->call.Call,call.Invocation.Parameter)
+    values <- values |> Map.map(fun _ rows -> rows |> List.map(fun row ->
+        if row.Operation<>CallableAggregateOperation.Result then row else
+        match resultRetirement graph receiving values row with
+        | Error reason -> {row with ResultRetirement=Some(Error reason)}
+        | Ok(retirement,support) ->
+            {row with ResultRetirement=Some(Ok retirement)
+                      Participants=row.Participants @ (support |> List.mapi(fun ordinal node->participant row.Occurrence ParticipantRole.Source ordinal node))}))
     let usedSlots = values.Values |> Seq.collect id |> Seq.map _.Slot |> Set.ofSeq
     slots <- slots |> Map.filter (fun identity _ -> usedSlots.Contains identity)
     { Slots = slots; Values = values; Dependencies = Map.empty; Residuals = List.ofSeq residuals |> List.distinct }

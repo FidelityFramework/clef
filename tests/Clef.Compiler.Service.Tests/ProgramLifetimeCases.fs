@@ -23,7 +23,7 @@ module private ProgramStorageFixture =
         PlatformDescription = Some "StorageAuthority.description"
         PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "program-storage.clef")
         Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = Some SubstrateKind.CPU; RuntimeModel = None
-        AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+        AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let check source =
         match parseStringWithDefaults source "program-storage.clef" with

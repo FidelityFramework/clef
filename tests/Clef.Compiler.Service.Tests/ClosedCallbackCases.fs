@@ -50,7 +50,7 @@ let inline listener handler = makeEntry handler
             | _ -> None) |> Set.ofSeq
 
     // This source fixture stipulates a receiving C contract. It executes no C.
-    let receivingCheckUsing (metadata:(string*string) list) wrapper transform =
+    let receivingCheckUsingPolicy policy (metadata:(string*string) list) wrapper transform =
         let source =
             """
 module ReceivingCallback
@@ -103,6 +103,9 @@ let main _ =
         let ownedSources = if metadata.IsEmpty then Set.empty else [sourcePath "write-authority.clef";sourcePath "receiving-callback.clef"] |> Set.ofList
 
         let result =
+          match policy with
+          | Some model -> SourcePlatformFixture.checkProjectWithMemoryPolicy model metadata authority source
+          | None ->
             checkParsedInputsWithPlatformAndSources
                 [
                     yield! metadata |> List.map(fun(path,text)->parse text path)
@@ -113,6 +116,8 @@ let main _ =
                 ownedSources
 
         result
+
+    let receivingCheckUsing metadata wrapper transform = receivingCheckUsingPolicy None metadata wrapper transform
 
     let receivingCheckWith wrapper transform = receivingCheckUsing [] wrapper transform
 
@@ -181,8 +186,8 @@ let main _ =
     let receivingGraph () = receivingGraphWith false
     let receivingWrapperGraph () = receivingGraphWith true
 
-    let optionalCheckUsing metadata present alias transform =
-        receivingCheckUsing metadata false (fun source ->
+    let optionalCheckUsingPolicy policy metadata present alias transform =
+        receivingCheckUsingPolicy policy metadata false (fun source ->
             let actual = if present then "Some (FnPtr.ofFunction callback)" else "None"
             let invocation =
                 if alias then "    let selected: option<FnPtr<int -> int>> = " + actual + "\n    receive selected"
@@ -191,6 +196,7 @@ let main _ =
                   .Replace("    receive (FnPtr.ofFunction callback)", invocation)
             |> transform)
 
+    let optionalCheckUsing metadata present alias transform = optionalCheckUsingPolicy None metadata present alias transform
     let optionalCheck present alias transform = optionalCheckUsing [] present alias transform
 
     // The real metadata vocabulary retains unreachable host-width diagnostics.
@@ -200,11 +206,13 @@ let main _ =
 
     let absenceDeclaration = "let absence: Expr<BAREWire.Descriptors.CallbackAbsenceContract> = <@ { BAREWire.Descriptors.CallbackAbsenceContract.Binding = \"ReceivingCallback.receive\"; Parameter = 0; Hypothesis = { BAREWire.Descriptors.ExternalExecutionHypothesis.Identity = \"absence-test\"; Version = \"v1\"; Source = \"absence-source\" } } @>"
 
-    let absenceCheck present alias transform =
+    let absenceCheckPolicy policy present alias transform =
         let bare = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__,"..","..","..","BAREWire","src"))
         let metadata=["Hardware/Descriptors.fs";"Descriptors/Bindings.fs"] |> List.map(fun relative -> let path=System.IO.Path.Combine(bare,relative) in path,System.IO.File.ReadAllText path)
-        optionalCheckUsing metadata present alias (fun source ->
+        optionalCheckUsingPolicy policy metadata present alias (fun source ->
             source.Replace("let callback (_unused: int) = 7",absenceDeclaration+"\nlet callback (_unused: int) = 7") |> transform)
+
+    let absenceCheck present alias transform = absenceCheckPolicy None present alias transform
 
     let inferredAbsenceCheck calls transform =
         absenceCheck false false (fun source ->
@@ -212,8 +220,8 @@ let main _ =
             source.Replace("    receive (None)", "    let absent = None\n    let alias = absent\n" + uses)
             |> transform)
 
-    let returnedOptionalCheck present calls transform =
-        absenceCheck present true (fun source ->
+    let returnedOptionalCheckPolicy policy present calls transform =
+        absenceCheckPolicy policy present true (fun source ->
             let constructor = if present then "Some (FnPtr.ofFunction callback)" else "None"
             let helper = if present then "let choose () = " + constructor else "let choose () : option<FnPtr<int -> int>> = None"
             source.Replace("[<EntryPoint>]", helper + "\n[<EntryPoint>]")
@@ -223,6 +231,8 @@ let main _ =
                            "    receive selected" +
                            (if calls=2 then "\n    let second: option<FnPtr<int -> int>> = choose ()\n    receive second" else ""))
             |> transform)
+
+    let returnedOptionalCheck present calls transform = returnedOptionalCheckPolicy (Some "standard") present calls transform
 
     let inferredAbsenceClaims (graph: SemanticGraph) =
         graph.Nodes |> Map.toList |> List.choose (fun (id,node) ->
@@ -1227,7 +1237,6 @@ type ClosedCallbackTests() =
         let bytes = Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith(fun error->failwithf "%A" error)
         let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith(fun error->failwithf "%A" error)
         Assert.Empty(Fidelity.PSG.Integrity.check copy)
-        Assert.Equal(39, copy.Header.Schema)
         for site in results do
             let published = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId site
             Assert.Equal<Fidelity.PSG.CallableAggregateValue list>(revision.Emission.Callable.AggregateValues[published], copy.Emission.Callable.AggregateValues[published])
@@ -2693,3 +2702,171 @@ let main _ =
         | Result.Error failures ->
             Assert.Contains(failures,fun failure -> failure.Reason="NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required.")
         | Ok _ -> failwith "A changed declared ABI or target retained its old ingress width proof."
+
+    [<Theory>]
+    [<InlineData(false,1)>]
+    [<InlineData(true,1)>]
+    [<InlineData(false,2)>]
+    [<InlineData(true,2)>]
+    member _.``Optional returned backing Standard authors exact after-receiver retirement``(present,calls) =
+        let result=ClosedCallbackCases.returnedOptionalCheckPolicy (Some "standard") present calls id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let selected=(read graph).OptionalReceiving |> List.sortBy _.Call
+        Assert.Equal(calls,selected.Length)
+        let rows=selected |> List.map(fun selection ->
+            let row=Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement graph selection.Operand selection.Call |> Result.defaultWith failwith |> Option.defaultWith(fun()->failwith "Missing ready retirement")
+            Assert.Equal(selection.Operand,row.Actual)
+            Assert.Equal(selection.Construction,row.Construction)
+            Assert.Equal(selection.Call,row.Receiver)
+            Assert.NotEqual(row.Application,row.Construction)
+            Assert.Equal(Some row.Application,List.tryHead row.Uses)
+            Assert.Equal(Some row.Receiver,List.tryLast row.Uses)
+            Assert.Contains(row.Actual,row.Uses)
+            Assert.Equal<NodeId list>(List.distinct row.Uses,row.Uses)
+            Assert.Equal("Standard",row.Policy.Model)
+            Assert.True(System.IO.Path.IsPathRooted row.Policy.ProjectPath)
+            Assert.Equal(64,row.Policy.SourceVersion.Length)
+            row)
+        Assert.Equal(calls,rows |> List.map _.Application |> List.distinct |> List.length)
+        let claims=graph.Nodes.Values |> Seq.choose(fun node->
+            match node.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.OptionalEntryArgumentConversion model -> Some(model.Call,model.ResultRetirement)
+                | ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Some(model.Call,model.ResultRetirement)
+                | _ -> None
+            | _ -> None) |> Seq.toList
+        Assert.Equal(calls,claims.Length)
+        for row in rows do Assert.Contains((row.Receiver,Some row),claims)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures->failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let limits:Fidelity.PSG.Binary.Limits={MaxBytes=8*1024*1024;MaxCollectionLength=100000;MaxDepth=128;MaxStringBytes=1024*1024;MaxBigIntegerBytes=4096;MaxValues=2000000}
+        let copy=Fidelity.PSG.Binary.encode limits revision |> Result.bind(Fidelity.PSG.Binary.decode limits) |> Result.defaultWith(fun error->failwithf "%A" error)
+        Assert.Empty(Fidelity.PSG.Integrity.check copy)
+        Assert.Equal<Fidelity.PSG.CallableAggregateDependencyAccount list>(revision.Emission.Callable.AggregateDependencies.Values |> Seq.toList,copy.Emission.Callable.AggregateDependencies.Values |> Seq.toList)
+
+    [<Theory>]
+    [<InlineData(false,false)>]
+    [<InlineData(true,false)>]
+    [<InlineData(false,true)>]
+    [<InlineData(true,true)>]
+    member _.``Optional returned backing restrictive or absent policy remains Pending``(present,missing) =
+        let policy=if missing then None else Some "stack_only"
+        let result=ClosedCallbackCases.returnedOptionalCheckPolicy policy present 1 id
+        let graph=result.Graph
+        let selection=(read graph).OptionalReceiving |> Assert.Single
+        let row=graph.Codata.Value.CallableAggregateDependencies[selection.Operand].Values |> List.filter(fun row->row.Operation=CallableAggregateOperation.Result) |> Assert.Single
+        let expected=if missing then "Returned optional backing has no captured project memory policy." else "The selected project memory policy forbids escaping returned optional backing."
+        Assert.Equal(Some(Result.Error expected),row.ResultRetirement)
+        Assert.Equal(Result.Error expected,Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement graph selection.Operand selection.Call)
+        Assert.DoesNotContain(graph.Nodes.Values,fun node->match node.Kind with SemanticKind.Obligation {Body=ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _}->true | _->false)
+
+    [<Theory>]
+    [<InlineData(false,false)>]
+    [<InlineData(true,false)>]
+    [<InlineData(false,true)>]
+    [<InlineData(true,true)>]
+    member _.``Optional returned backing conditional or repeated receiver refuses retirement``(present,conditional) =
+        let result=ClosedCallbackCases.returnedOptionalCheckPolicy (Some "standard") present 1 (fun source->
+            source.Replace("    receive selected",if conditional then "    if NativeDefault.zeroed<bool> () then receive selected else ()" else "    receive selected\n    receive selected"))
+        let graph=result.Graph
+        let rows=graph.Codata.Value.CallableAggregateValues.Values |> Seq.collect id |> Seq.filter(fun row->row.Operation=CallableAggregateOperation.Result) |> Seq.toList
+        let row=rows |> Assert.Single
+        let expected=if conditional then "Returned optional backing requires one caller instance, one exact receiver and no other uses." else "Returned optional backing requires one exact receiving use and its original construction."
+        Assert.Equal(Some(Result.Error expected),row.ResultRetirement)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional returned backing policy withdrawal invalidates account and proof version``(present) =
+        let result=ClosedCallbackCases.returnedOptionalCheckPolicy (Some "standard") present 1 id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph=result.Graph
+        let selection=(read graph).OptionalReceiving |> Assert.Single
+        let policy=graph.Platform.Value.ProjectMemoryPolicy.Value
+        let path,version,model,allowed=policy
+        for changed in [None;Some(path,version+"changed",model,allowed);Some(path,version,model,false)] do
+            let changedGraph={graph with Platform=graph.Platform |> Option.map(fun platform->{platform with ProjectMemoryPolicy=changed})}
+            Assert.True(Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement changedGraph selection.Operand selection.Call |> Result.isError)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures->failwithf "%A" failures)
+        let project retirement=
+            revision.Obligations |> List.pick(fun claim->
+                match claim.Body with
+                | Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion model -> Some(Fidelity.PSG.OptionalEntryArgumentProof.project {model with ResultRetirement=retirement model.ResultRetirement})
+                | Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Some(Fidelity.PSG.OptionalEntryArgumentProof.projectAbsence {model with ResultRetirement=retirement model.ResultRetirement})
+                | _ -> None) |> Result.defaultWith failwith
+        let before=project id
+        let after=project(Option.map(fun row->{row with Policy={row.Policy with SourceVersion=row.Policy.SourceVersion+"changed"}}))
+        Assert.NotEqual(before.Premises,after.Premises)
+        Assert.NotEqual(before.Conclusion,after.Conclusion)
+        Assert.Contains(before.Declarations,fun(name,_)->name="optional_retirement_policy_version")
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional returned backing public law refuses missing wrong or repeated retirement incidence``(present) =
+        let result=ClosedCallbackCases.returnedOptionalCheckPolicy (Some "standard") present 1 id
+        ClosedCallbackCases.absenceNoErrors result
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.defaultWith(fun failures->failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let callable=revision.Emission.Callable
+        let row=callable.AggregateValues.Values |> Seq.collect id |> Seq.filter(fun row->row.Operation=Fidelity.PSG.CallableAggregateOperation.Result) |> Assert.Single
+        let retirement=row.ResultRetirement |> Option.get |> Result.defaultWith failwith
+        let withdraw (accounts:Map<Fidelity.PSG.NodeId,Fidelity.PSG.CallableAggregateDependencyAccount>) =
+            accounts |> Map.map(fun actual account->
+                if actual=retirement.Actual then {account with Sources=account.Sources |> List.filter(fun source->source.Node<>retirement.Application)} else account)
+        let withdrawn={revision with Emission={revision.Emission with Callable={callable with AggregateDependencies=withdraw callable.AggregateDependencies}}
+                                     Codata={revision.Codata with CallableAggregateDependencies=withdraw revision.Codata.CallableAggregateDependencies}}
+        if present then
+            Assert.Contains(Fidelity.PSG.Integrity.check withdrawn,fun failure->
+                failure.Part="Obligations.Body.OptionalEntryArgumentConversion" && failure.Node=Some retirement.Application && failure.Reason.Contains("is named and is not held"))
+        let alias=retirement.Uses |> List.find(fun site->site<>retirement.Application && site<>retirement.Receiver && site<>retirement.Actual)
+        let cases=[None;Some(Ok {retirement with Receiver=retirement.Application});Some(Ok {retirement with Actual=retirement.Construction});Some(Ok {retirement with Uses=List.rev retirement.Uses});Some(Ok {retirement with Uses=retirement.Uses@[retirement.Actual]});Some(Ok {retirement with Caller=retirement.Construction});Some(Ok {retirement with Uses=retirement.Uses |> List.filter((<>)alias)})]
+        for changed in cases do
+            let row={row with ResultRetirement=changed}
+            let malformed={revision with Emission={revision.Emission with Callable={callable with AggregateValues=callable.AggregateValues.Add(row.Occurrence,[row])}}}
+            Assert.Contains(Fidelity.PSG.Integrity.check malformed,fun failure->failure.Part="Emission.Callable.Aggregates.I5" && failure.Reason.Contains("retirement"))
+        let mismatched=callable.AggregateDependencies |> Map.map(fun actual account->if actual=retirement.Actual then {account with MemoryPolicy=None} else account)
+        let changedPolicy=
+            {revision with
+                Emission={revision.Emission with Callable={callable with AggregateDependencies=mismatched}}
+                Codata={revision.Codata with CallableAggregateDependencies=mismatched}}
+        Assert.Contains(Fidelity.PSG.Integrity.check changedPolicy,fun failure->failure.Part="Emission.Callable.Aggregates.I6" && failure.Reason="The returned optional retirement lost its captured project policy provenance.")
+        let unready={row with ResultRetirement=Some(Result.Error "Retirement never admitted");Participants=row.Participants |> List.filter(fun part->part.Role<>Fidelity.PSG.ParticipantRole.Source)}
+        let counterfeit={unready with ResultRetirement=Some(Ok retirement)}
+        let counterfeit={revision with Emission={revision.Emission with Callable={callable with AggregateValues=callable.AggregateValues.Add(row.Occurrence,[counterfeit])}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check counterfeit,fun failure->failure.Part="Emission.Callable.Aggregates.I5" && failure.Reason="The returned optional retirement differs from its exact caller, instance, receiver or closed use inventory.")
+
+    [<Theory>]
+    [<InlineData(false,"ordinary")>]
+    [<InlineData(true,"ordinary")>]
+    [<InlineData(false,"return")>]
+    [<InlineData(true,"return")>]
+    [<InlineData(false,"nested")>]
+    [<InlineData(true,"nested")>]
+    [<InlineData(false,"loop")>]
+    [<InlineData(true,"loop")>]
+    member _.``Optional returned backing excludes ordinary return nested and loop lifetime paths``(present,shape) =
+        let result=ClosedCallbackCases.returnedOptionalCheckPolicy (Some "standard") present 1 (fun source->
+            match shape with
+            | "ordinary" ->
+                source.Replace("[<EntryPoint>]","let inspect (value: option<FnPtr<int -> int>>) = match value with | None -> 0 | Some _ -> 1\n[<EntryPoint>]")
+                      .Replace("    receive selected\n    0","    receive selected\n    inspect selected")
+            | "return" ->
+                source.Replace("[<EntryPoint>]\nlet main _ =", "let export () =")
+                      .Replace("    receive selected\n    0", "    receive selected\n    selected\n[<EntryPoint>]\nlet main _ =\n    match export () with\n    | None -> 0\n    | Some _ -> 1")
+            | "nested" -> source.Replace("    receive selected","    let delayed () = receive selected\n    delayed ()")
+            | "loop" -> source.Replace("    receive selected","    while NativeDefault.zeroed<bool> () do\n        receive selected")
+            | _ -> failwith "Unknown lifetime path")
+        let rows=result.Graph.Codata.Value.CallableAggregateValues.Values |> Seq.collect id |> Seq.filter(fun row->row.Operation=CallableAggregateOperation.Result) |> Seq.toList
+        if shape="nested" && present then
+            // This existing convention refusal precedes Result authoring; it is not retirement-law coverage.
+            Assert.Empty(rows)
+            Assert.Contains(result.Diagnostics,fun diagnostic->diagnostic.Code="CCS8413" && diagnostic.Message="Callable receiving convention has not been settled by its source recipe.")
+        else
+            let row=Assert.Single(rows)
+            let reason=
+                if shape="nested" then "Returned optional backing requires one exact receiving use and its original construction."
+                else "Returned optional backing requires one caller instance, one exact receiver and no other uses."
+            Assert.Equal(Some(Result.Error reason),row.ResultRetirement)

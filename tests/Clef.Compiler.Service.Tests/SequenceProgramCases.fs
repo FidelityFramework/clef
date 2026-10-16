@@ -21,7 +21,7 @@ module SequenceProgramFixture =
           EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = Some "SequenceProgram.description"
           PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton file
           Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
 
     let header = """module SequenceProgram
 type WidthDeclaration = { Name: string; Bits: int }

@@ -41,7 +41,7 @@ module private EagerGraph =
               PlatformArchitecture = None; PlatformOS = None
               PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "demand-platform.clef")
               Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-              AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+              AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None; ProjectMemoryPolicy = None }
         let declarations = representations |> List.map (fun rep ->
             sprintf "{ Name=\"%s\"; Family=\"%s\"; Bits=%d; Capability=\"native\"; MinMagnitude=\"%s\"; MaxMagnitude=\"%s\"; Boundary=\"wrap\" }"
                 rep.Name rep.Family rep.Bits rep.MinMagnitude rep.MaxMagnitude) |> String.concat "; "
