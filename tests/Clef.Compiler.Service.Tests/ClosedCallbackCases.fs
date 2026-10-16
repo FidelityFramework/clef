@@ -206,6 +206,54 @@ let main _ =
         optionalCheckUsing metadata present alias (fun source ->
             source.Replace("let callback (_unused: int) = 7",absenceDeclaration+"\nlet callback (_unused: int) = 7") |> transform)
 
+    let inferredAbsenceCheck calls transform =
+        absenceCheck false false (fun source ->
+            let uses = List.replicate calls "    receive alias" |> String.concat "\n"
+            source.Replace("    receive (None)", "    let absent = None\n    let alias = absent\n" + uses)
+            |> transform)
+
+    let inferredAbsenceClaims (graph: SemanticGraph) =
+        graph.Nodes |> Map.toList |> List.choose (fun (id,node) ->
+            match node.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Some(id,info,model)
+                | _ -> None
+            | _ -> None)
+
+    // Recreate only the observed checker frontier. The complete source check
+    // proves the seed's types; these controls alter inputs before specialization.
+    let inferredAbsenceInput () =
+        let result = inferredAbsenceCheck 1 id
+        absenceNoErrors result
+        let graph = result.Graph
+        let _,_,claim = inferredAbsenceClaims graph |> Assert.Single
+        let binding name =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind,node.Type with
+                | SemanticKind.Binding(actual,false,false,None),NativeType.TForall _ -> actual = name
+                | _ -> false)
+            |> Assert.Single
+        let absent,alias = binding "absent",binding "alias"
+        let supplying = graph.Nodes[absent.Children |> Assert.Single]
+        let reference = graph.Nodes[alias.Children |> Assert.Single]
+        let actual = graph.Nodes[claim.Actual]
+        let parameters,body = match alias.Type with NativeType.TForall(parameters,body) -> parameters,body | _ -> failwith "Expected original alias scheme"
+        let argument = match actual.Type with NativeType.TApp(_, [argument]) -> argument | _ -> failwith "Expected concrete option instance"
+        let restored =
+            { actual with Kind = SemanticKind.VarRef("alias",Some alias.Id)
+                          Metadata = Map.ofList [SchemeMetadata.Definition,MetadataValue.NodeId alias.Id
+                                                 SchemeMetadata.Declaration,MetadataValue.Type(NativeType.TForall(parameters,body))
+                                                 SchemeMetadata.argument 0,MetadataValue.Type argument] }
+        let nodes =
+            [absent;alias;supplying;reference;restored]
+            |> List.map (fun node ->
+                node.Id,{ node with IsReachable = true; Parent = None
+                                    Metadata = node.Metadata.Remove SchemeMetadata.HistoricalOnly })
+            |> Map.ofList
+        nodes,absent.Id,alias.Id,supplying.Id,reference.Id,restored.Id
+
     let private withSecondReceiver (source:string) =
         let declarations=source.Split('\n') |> Array.filter(fun line->line.StartsWith("let private receive ") || line.StartsWith("let receiveDescriptor:") || line.StartsWith("let scope") || line.StartsWith("let invocation")) |> String.concat "\n"
         let other=declarations.Replace("let private receive ","let private secondReceiver ").Replace("let receiveDescriptor:","let secondReceiverDescriptor:")
@@ -239,6 +287,184 @@ let main _ =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
 type ClosedCallbackTests() =
+    [<Theory>]
+    [<InlineData(1)>]
+    [<InlineData(2)>]
+    member _.``Optional inferred absence retains each original call and current source account``(calls:int) =
+        let result = ClosedCallbackCases.inferredAbsenceCheck calls id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph = result.Graph
+        let claims = ClosedCallbackCases.inferredAbsenceClaims graph
+        Assert.Equal(calls,claims.Length)
+        Assert.Equal(calls,claims |> List.map (fun (_,info,_) -> info.Id) |> List.distinct |> List.length)
+        Assert.Equal(calls,claims |> List.map (fun (_,_,model) -> model.Call) |> List.distinct |> List.length)
+        Assert.Equal(calls,claims |> List.map (fun (_,_,model) -> model.Actual) |> List.distinct |> List.length)
+        Assert.Single(claims |> List.map (fun (_,_,model) -> model.Construction) |> List.distinct) |> ignore
+        let boundaryCalls = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph
+        for id,info,model in claims do
+            Assert.Equal(0,model.Parameter)
+            match graph.Nodes[model.Actual].Kind with
+            | SemanticKind.VarRef(name,Some target) ->
+                match graph.Nodes[target].Kind with
+                | SemanticKind.Binding(expected,_,_,_) -> Assert.Equal(expected,name)
+                | _ -> failwith "Expected the concrete declaration at the exact original actual"
+            | _ -> failwith "Expected the original actual's in-place specialization redirect"
+            Assert.DoesNotContain(graph.Nodes[model.Actual].Metadata.Keys,fun key ->
+                key = SchemeMetadata.Definition || key = SchemeMetadata.Declaration || key.StartsWith("Scheme.Argument."))
+            let account = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph model.Actual |> Result.defaultWith failwith
+            Assert.Contains(account.Sources,fun source -> source.Node = model.Construction)
+            let support = Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph boundaryCalls (id,info) |> Result.defaultWith failwith |> List.collect _.Sources
+            Assert.Contains(model.Actual,support)
+            Assert.Contains(model.Construction,support)
+        let revision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith (failwithf "%A")
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``Optional inferred absence without promise remains Pending``() =
+        let result = ClosedCallbackCases.inferredAbsenceCheck 1 (fun source -> source.Replace(ClosedCallbackCases.absenceDeclaration,""))
+        ClosedCallbackCases.absenceNoErrors result
+        let revision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.defaultWith (failwithf "%A")
+        let pending =
+            revision.CurrentClaims.Values
+            |> Seq.filter (fun info ->
+                info.Kind.StartsWith("foreign-optional-entry-conversion-") &&
+                match info.Body with Fidelity.PSG.ObligationBody.Pending _ -> true | _ -> false)
+            |> Assert.Single
+        match pending.Body with
+        | Fidelity.PSG.ObligationBody.Pending reasons -> Assert.Equal<string list>(["Selected-target optional-entry conversion and the foreign nullable-acceptance premise remain Pending."],reasons)
+        | _ -> failwith "Expected explicit absence-promise Pending"
+
+    [<Fact>]
+    member _.``Optional inferred absence preserves distinct ordinary concrete instances``() =
+        let input,absent,alias,_,_,actual = ClosedCallbackCases.inferredAbsenceInput ()
+        let instance payload (node:SemanticNode) =
+            { node with Type = NativeType.TApp(Clef.Compiler.NativeTypedTree.NativeTypes.Types.optionTyCon,[payload])
+                        Metadata = node.Metadata.Add(SchemeMetadata.argument 0,MetadataValue.Type payload) }
+        let integer = instance Clef.Compiler.NativeTypedTree.NativeTypes.Types.intType input[actual]
+        let boolean = { instance Clef.Compiler.NativeTypedTree.NativeTypes.Types.boolType input[actual] with Id = NodeId.fresh() }
+        let specialized = Clef.Compiler.Nanopass.Monomorphization.runWithEvidence (input.Add(actual,integer).Add(boolean.Id,boolean))
+        let constructions =
+            specialized.Nodes.Values
+            |> Seq.filter (fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.UnionCase("None",0,None) | SemanticKind.DUConstruct("None",0,None,None) -> true
+                | _ -> false)
+            |> Seq.toList
+        Assert.Equal(2,constructions.Length)
+        Assert.Equal(2,constructions |> List.map (fun node -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type) |> List.distinct |> List.length)
+        for construction in constructions do
+            Assert.Contains(specialized.Derivations,fun edge -> edge.Role = EdgeRole.SchemeSpecialization && edge.Target = construction.Id)
+        for original in [absent;alias] do
+            Assert.False(specialized.Nodes[original].IsReachable)
+            Assert.Equal(Some(MetadataValue.Bool true),specialized.Nodes[original].Metadata.TryFind SchemeMetadata.HistoricalOnly)
+        let targets = [actual;boolean.Id] |> List.map (fun id ->
+            match specialized.Nodes[id].Kind with
+            | SemanticKind.VarRef(name,Some target) ->
+                match specialized.Nodes[target].Kind with
+                | SemanticKind.Binding(expected,_,_,_) -> Assert.Equal(expected,name)
+                | _ -> failwith "Expected concrete target declaration"
+                target
+            | _ -> failwith "Expected the same original use identity to reference its concrete clone")
+        Assert.Equal(2,targets |> List.distinct |> List.length)
+        Assert.Equal(2,targets |> List.map (fun id -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType specialized.Nodes[id].Type) |> List.distinct |> List.length)
+
+    [<Theory>]
+    [<InlineData("nominal")>]
+    [<InlineData("some-payload")>]
+    [<InlineData("mutable")>]
+    [<InlineData("retained")>]
+    member _.``Optional inferred absence refuses values outside its nullary immutable profile``(shape:string) =
+        let input,absent,alias,construction,_,_ = ClosedCallbackCases.inferredAbsenceInput ()
+        let changed =
+            match shape with
+            | "nominal" ->
+                let node = input[construction]
+                let ty = match node.Type with
+                         | NativeType.TApp(owner,args) -> NativeType.TApp({ owner with Module = ["OtherOwner"] },args)
+                         | _ -> failwith "Expected nominal option construction"
+                input.Add(construction,{ node with Type = ty })
+            | "some-payload" -> input.Add(construction,{ input[construction] with Kind = SemanticKind.UnionCase("Some",1,Some alias) })
+            | "mutable" -> input.Add(absent,{ input[absent] with Kind = SemanticKind.Binding("absent",true,false,None) })
+            | _ -> input
+        let retained = if shape = "retained" then Set.singleton alias else Set.empty
+        let specialized = Clef.Compiler.Nanopass.Monomorphization.runWithEvidencePreserving retained changed
+        Assert.Equal<Map<NodeId,SemanticNode>>(changed,specialized.Nodes)
+        Assert.Empty specialized.Derivations
+
+    [<Theory>]
+    [<InlineData("absent","argument-missing")>]
+    [<InlineData("absent","argument-changed")>]
+    [<InlineData("absent","declaration-missing")>]
+    [<InlineData("absent","declaration-changed")>]
+    [<InlineData("absent","definition-missing")>]
+    [<InlineData("absent","definition-changed")>]
+    [<InlineData("alias","argument-missing")>]
+    [<InlineData("alias","argument-changed")>]
+    [<InlineData("alias","declaration-missing")>]
+    [<InlineData("alias","declaration-changed")>]
+    [<InlineData("alias","definition-missing")>]
+    [<InlineData("alias","definition-changed")>]
+    member _.``Optional inferred absence refuses changed original checked instance metadata``(reference:string,shape:string) =
+        let input,_,alias,_,upstream,actual = ClosedCallbackCases.inferredAbsenceInput ()
+        let original = input[if reference = "absent" then upstream else actual]
+        let key = if shape.StartsWith("argument") then SchemeMetadata.argument 0
+                  elif shape.StartsWith("definition") then SchemeMetadata.Definition else SchemeMetadata.Declaration
+        let metadata =
+            if shape.EndsWith("missing") then original.Metadata.Remove key
+            elif shape.StartsWith("definition") then original.Metadata.Add(key,MetadataValue.NodeId actual)
+            else original.Metadata.Add(key,MetadataValue.Type Clef.Compiler.NativeTypedTree.NativeTypes.Types.boolType)
+        let specialized = Clef.Compiler.Nanopass.Monomorphization.runWithEvidence (input.Add(original.Id,{ original with Metadata = metadata }))
+        // An inert alias clone can precede an invalid upstream edge. It cannot
+        // authorize a supplying concrete None or a boundary absence account.
+        Assert.DoesNotContain(specialized.Nodes.Values,fun node ->
+            node.IsReachable && not (Clef.Compiler.NativeTypedTree.UnionFind.hasUnboundVars node.Type) &&
+            match node.Kind with
+            | SemanticKind.UnionCase("None",0,None) | SemanticKind.DUConstruct("None",0,None,None) -> true
+            | _ -> false)
+        if reference = "absent" then
+            let target = match specialized.Nodes[actual].Kind with
+                         | SemanticKind.VarRef(_,Some target) when target <> alias -> target
+                         | _ -> failwith "Expected the checked final alias to retain its partial concrete clone"
+            let forwarded = specialized.Nodes[specialized.Nodes[target].Children |> Assert.Single]
+            let parameters = match input[alias].Type with NativeType.TForall(parameters,_) -> parameters | _ -> failwith "Expected alias parameters"
+            let argument = match input[actual].Type with NativeType.TApp(_, [argument]) -> argument | _ -> failwith "Expected concrete argument"
+            for key in [SchemeMetadata.Definition;SchemeMetadata.Declaration;SchemeMetadata.argument 0] do
+                let expected = metadata.TryFind key |> Option.map (function
+                    | MetadataValue.Type ty -> MetadataValue.Type(instantiate parameters [argument] ty)
+                    | value -> value)
+                Assert.Equal(expected,forwarded.Metadata.TryFind key)
+
+    [<Theory>]
+    [<InlineData("tag")>]
+    [<InlineData("alias-edge")>]
+    member _.``Optional inferred absence refuses changed concrete clone support``(shape:string) =
+        let result = ClosedCallbackCases.inferredAbsenceCheck 1 id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph = result.Graph
+        let _,_,claim = ClosedCallbackCases.inferredAbsenceClaims graph |> Assert.Single
+        let account = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph claim.Actual |> Result.defaultWith failwith
+        let source =
+            if shape = "tag" then graph.Nodes[claim.Construction]
+            else
+                match graph.Nodes[claim.Actual].Kind with
+                | SemanticKind.VarRef(_,Some target) ->
+                    Assert.Contains(account.Sources,fun source -> source.Node = target)
+                    graph.Nodes[target]
+                | _ -> failwith "Expected exact original actual's concrete alias target"
+        let node =
+            if shape = "alias-edge" then { source with Children = [] }
+            else
+                let kind = match source.Kind with
+                           | SemanticKind.UnionCase(name,_,payload) -> SemanticKind.UnionCase(name,1,payload)
+                           | SemanticKind.DUConstruct(name,_,payload,arena) -> SemanticKind.DUConstruct(name,1,payload,arena)
+                           | _ -> failwith "Expected supplying concrete None"
+                { source with Kind = kind }
+        let changed = { graph with Nodes = graph.Nodes.Add(source.Id,node) }
+        match Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed claim.Actual with
+        | Ok _ -> failwithf "Changed concrete %s retained its inferred absence account" shape
+        | Result.Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).",reason)
+
     [<Theory>]
     [<InlineData(false)>]
     [<InlineData(true)>]

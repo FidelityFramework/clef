@@ -63,7 +63,10 @@ type MonomorphizationMembershipTests() =
             let forwarded = after[Assert.Single concrete.Children]
             Assert.Equal(range, forwarded.Range)
             match forwarded.Kind with
-            | SemanticKind.VarRef("operation", Some definition) ->
+            | SemanticKind.VarRef(name, Some definition) ->
+                match after[definition].Kind with
+                | SemanticKind.Binding(expected, _, _, _) -> Assert.Equal(expected, name)
+                | _ -> failwith "Expected the exact specialized operation declaration"
                 DimensionalCases.same useSite.Type after[definition].Type
                 match after[Assert.Single after[definition].Children].Kind with
                 | SemanticKind.Intrinsic info -> Assert.Equal("tryHead", info.Operation)

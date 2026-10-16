@@ -302,7 +302,31 @@ let private bareLibraryOperation (nodes: Map<NodeId, SemanticNode>) id =
 
 let private isBareLibraryOperation nodes id = bareLibraryOperation nodes id |> Option.isSome
 
-let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) : (TypeParam list * NativeType * NodeId) option =
+// A nullary native None has no evaluation or callable payload to duplicate.
+// Its immutable aliases use the existing specialization frontier, so a shared
+// initializer never acquires one caller's concrete type.
+let private nullaryNoneDepth retainedDeclarations (nodes: Map<NodeId, SemanticNode>) id =
+    let rec value seen depth id =
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        match nodes.TryFind id with
+        | Some node ->
+            match node.Kind, applySubst node.Type with
+            | (SemanticKind.UnionCase("None", 0, None) | SemanticKind.DUConstruct("None", 0, None, None)),
+              NativeType.TApp(constructor, [_])
+                when node.Children.IsEmpty &&
+                     Clef.Compiler.NativeTypedTree.TypeIdentities.constructor constructor =
+                     Clef.Compiler.NativeTypedTree.TypeIdentities.constructor Types.optionTyCon -> Some depth
+            | SemanticKind.VarRef(_, Some declaration), _ when not (Set.contains declaration retainedDeclarations) ->
+                match nodes.TryFind declaration with
+                | Some { Kind = SemanticKind.Binding(_, false, false, None); Children = [source] } ->
+                    value seen (depth + 1) source
+                | _ -> None
+            | _ -> None
+        | None -> None
+    value Set.empty 0 id
+
+let private isGenericFunctionBinding retainedDeclarations (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) : (TypeParam list * NativeType * NodeId) option =
     if not node.IsReachable then None else
     match node.Kind, node.Type with
     | SemanticKind.Binding (_, isMutable, false, None), NativeType.TForall (typars, body) ->
@@ -311,6 +335,8 @@ let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: S
             match Map.tryFind lambdaId nodes with
             | Some { Kind = SemanticKind.Lambda _ } -> Some (typars, body, lambdaId)
             | _ when not isMutable && isBareLibraryOperation nodes lambdaId -> Some (typars, body, lambdaId)
+            | _ when not isMutable && not (Set.contains node.Id retainedDeclarations) &&
+                     (nullaryNoneDepth retainedDeclarations nodes lambdaId |> Option.isSome) -> Some (typars, body, lambdaId)
             | _ -> None
         | _ -> None
     | _ -> None
@@ -663,15 +689,17 @@ let private runWithEvidenceCore (retainedDeclarations: Set<NodeId>) (nodes: Map<
             current
             |> Map.toList
             |> List.choose (fun (id, node) ->
-                isGenericFunctionBinding current node |> Option.map (fun (tps, body, lambdaId) -> (id, node, tps, body, lambdaId)))
+                isGenericFunctionBinding retainedDeclarations current node |> Option.map (fun (tps, body, lambdaId) -> (id, node, tps, body, lambdaId)))
             // Instantiate the final alias first. Its retirement removes generic
             // forwarding references before upstream declarations discover uses.
             |> List.sortByDescending (fun (_, _, _, _, value) ->
-                bareLibraryOperation current value |> Option.map snd |> Option.defaultValue 0)
+                max (bareLibraryOperation current value |> Option.map snd |> Option.defaultValue 0)
+                    (nullaryNoneDepth retainedDeclarations current value |> Option.defaultValue 0))
         for (bindingId, bindingNode, rawTypars, rawSchemeBody, lambdaId) in generics do
             // Re-root the scheme: unions since generalization may have moved a parameter's root.
             let typars = rawTypars |> List.map (fun tp -> fst (find tp)) |> List.distinctBy (fun tp -> tp.Id)
             let schemeBody = canonicalizeVars rawSchemeBody
+            let isNullaryNone = nullaryNoneDepth retainedDeclarations current lambdaId |> Option.isSome
             let bindingName = match bindingNode.Kind with SemanticKind.Binding (n, _, _, _) -> n | _ -> "generic"
             // A scheme with no key material (only measure-kinded parameters) is one body (d.3):
             // the binding keeps its name and its monotype body (whose measure variables stay, as
@@ -709,7 +737,15 @@ let private runWithEvidenceCore (retainedDeclarations: Set<NodeId>) (nodes: Map<
                     let matched =
                         useSites
                         |> List.map (fun (id, node) ->
-                            match matchTypeArgs typars schemeBody (canonicalizeVars node.Type) with
+                            let substitution =
+                                if isNullaryNone then
+                                    // Ordinary None instances have exact checker authority.
+                                    // No result-type matching fallback or open monotype is lawful.
+                                    checkedArguments bindingId typars schemeBody node
+                                    |> Option.filter (List.forall (hasUnboundVars >> not))
+                                    |> Option.map (fun arguments -> List.zip typars arguments |> List.map (fun (parameter, argument) -> parameter.Id, argument) |> Map.ofList)
+                                else matchTypeArgs typars schemeBody (canonicalizeVars node.Type)
+                            match substitution with
                             | Some subst -> Some (instanceKey typars subst, subst, id)
                             | None -> None)
                     let allMatched = matched |> List.forall Option.isSome
@@ -764,9 +800,13 @@ let private runWithEvidenceCore (retainedDeclarations: Set<NodeId>) (nodes: Map<
                                 Metadata = residualMetadata newBindingId residual signature (generatedMetadata bindingNode.Metadata) }
                         for n in clonedNodes do
                             let node =
-                                if n.Id = newLambdaId then
-                                    { n with Metadata = residualMetadata newBindingId residual signature n.Metadata }
-                                else n
+                                // A forwarding reference owns its target's
+                                // checked instance, not this binding's residual
+                                // implementation declaration.
+                                match n.Id = newLambdaId, n.Kind with
+                                | true, SemanticKind.VarRef(_, Some _) -> n
+                                | true, _ -> { n with Metadata = residualMetadata newBindingId residual signature n.Metadata }
+                                | false, _ -> n
                             current <- Map.add node.Id node current
                         current <- Map.add newBindingId newBinding current
                         let requests = members |> List.map (fun (_, _, useId) -> useId, formatType before[useId].Type)
@@ -794,7 +834,7 @@ let private runWithEvidenceCore (retainedDeclarations: Set<NodeId>) (nodes: Map<
                     for (useId, useNode) in useSites do
                         match Map.tryFind useId redirect with
                         | Some target ->
-                            let name = match useNode.Kind with SemanticKind.VarRef (n, _) -> n | _ -> bindingName
+                            let name = match current[target].Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> invalidOp "Specialized binding required"
                             current <- Map.add useId
                                 { useNode with Kind = SemanticKind.VarRef (name, Some target)
                                                Metadata = instanceMetadata[useId] } current
