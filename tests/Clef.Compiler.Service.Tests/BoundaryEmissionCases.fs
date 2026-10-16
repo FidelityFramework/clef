@@ -376,6 +376,82 @@ let main _ =
         Assert.Equal(BoundaryScalar.Boolean, (Assert.Single call.Arguments).Abi)
         Assert.True (Assert.Single call.Arguments).Adaptation.IsNone
 
+    [<Theory>]
+    [<InlineData("repeated-integer")>]
+    [<InlineData("boolean")>]
+    member _.``Plain scalar public arguments retain their exact current meets`` shape =
+        let body, expected =
+            match shape with
+            | "repeated-integer" ->
+                BoundaryEmissionFixture.declaration +
+                BoundaryEmissionFixture.descriptor.Replace(
+                    "Name = \"right\"; Type = Integer (Signed, 32)",
+                    "Name = \"right\"; Type = Integer (Signed, 64)") +
+                BoundaryEmissionFixture.entry.Replace("combine 11 7", "let x = 11 in combine x x"),
+                [BoundaryScalar.Integer(32, true); BoundaryScalar.Integer(64, true)]
+            | "boolean" ->
+                BoundaryEmissionFixture.booleanDeclaration + BoundaryEmissionFixture.booleanEntry,
+                [BoundaryScalar.Boolean]
+            | _ -> failwithf "Unknown plain scalar shape: %s" shape
+        let context =
+            if shape = "repeated-integer" then
+                let signed64: NumericRepresentation =
+                    { Name = "int64"; Capability = "native"; Family = "int"; Bits = 64
+                      MinMagnitude = "-9223372036854775808"; MaxMagnitude = "9223372036854775807"; Boundary = "wrap" }
+                { BoundaryEmissionFixture.platform with
+                    Representations = BoundaryEmissionFixture.platform.Representations.Add(signed64.Name, signed64) }
+            else BoundaryEmissionFixture.platform
+        let result = BoundaryEmissionFixture.check (Some context) body
+        let graph = result.Graph
+        let projected = BoundarySource.project graph
+        match projected with
+        | Ok projection ->
+            for call in projection.Calls.Values do
+                printfn "G1 shape=%s site=%A actuals=%A currentMeets=%A" shape call.Site
+                    (call.Arguments |> List.map (fun argument -> argument.Actual, graph.Nodes[argument.Actual].Kind, argument.Abi, argument.Adaptation))
+                    (graph.Codata.Value.Meets.TryFind call.Site |> Option.defaultValue [])
+        | Error failures -> printfn "G1 shape=%s failures=%A currentMeets=%A" shape failures graph.Codata.Value.Meets
+        DimensionalCases.noErrors result
+        let projection = projected |> Result.defaultWith (sprintf "%A" >> failwith)
+        let call = Assert.Single projection.Calls.Values
+        let imported = Assert.Single projection.Imports.Values
+        Assert.Equal<BoundaryScalar list>(expected, call.Arguments |> List.map _.Abi)
+        Assert.Equal<(NodeId * BoundaryScalar) list>(imported.Parameters, call.Arguments |> List.map (fun argument -> argument.Formal, argument.Abi))
+        if shape = "repeated-integer" then
+            let left, right = call.Arguments[0], call.Arguments[1]
+            Assert.NotEqual(left.Actual, right.Actual)
+            match graph.Nodes[left.Actual].Kind, graph.Nodes[right.Actual].Kind with
+            | SemanticKind.VarRef("x", Some leftBinding), SemanticKind.VarRef("x", Some rightBinding) ->
+                Assert.Equal(leftBinding, rightBinding)
+            | actuals -> failwithf "The repeated variable lost its distinct source references: %A" actuals
+            Assert.True left.Adaptation.IsNone
+            let meet = right.Adaptation |> Option.defaultWith (fun () -> failwith "The i64 argument lost its own current meet.")
+            Assert.Equal(right.Actual, meet.Operand)
+            Assert.Equal(32, meet.From)
+            Assert.Equal(64, meet.To)
+            Assert.Equal(MeetKind.ExtendUnsigned, meet.Adapt)
+        let sourceMeets = graph.Codata.Value.Meets.TryFind call.Site |> Option.defaultValue []
+        for argument in call.Arguments do
+            let exact = sourceMeets |> List.filter (fun meet -> meet.Operand = argument.Actual) |> List.distinct
+            Assert.True(exact.Length <= 1, sprintf "The source argument has ambiguous current meets: %A" exact)
+            Assert.Equal<Meet option>(List.tryHead exact, argument.Adaptation)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let publicId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId
+        let published = revision.Emission.Boundary.Calls[publicId call.Site]
+        Assert.Equal<Fidelity.PSG.NodeId list>(call.Arguments |> List.map (fun argument -> publicId argument.Actual), published.Arguments |> List.map _.Actual)
+        Assert.Equal<Fidelity.PSG.NodeId list>(call.Arguments |> List.map (fun argument -> publicId argument.Formal), published.Arguments |> List.map _.Formal)
+        let current = revision.Codata.Meets.TryFind published.Site |> Option.defaultValue []
+        for argument in published.Arguments do
+            let exact = current |> List.filter (fun meet -> meet.Operand = argument.Actual) |> List.distinct
+            Assert.True(exact.Length <= 1, sprintf "The public argument has ambiguous current meets: %A" exact)
+            Assert.Equal<Fidelity.PSG.Meet option>(List.tryHead exact, argument.Adaptation)
+            if shape = "boolean" then
+                Assert.Empty exact
+                Assert.True argument.Adaptation.IsNone
+
     [<Fact>]
     member _.``Foreign alias rewrite retains its exact import call and callable origin``() =
         let graph = BoundaryEmissionFixture.checkedGraph
@@ -535,7 +611,7 @@ let main _ =
         BoundaryEmissionFixture.rejected { graph with Edges = edges } |> ignore
 
     [<Fact>]
-    member _.``Boundary normalization retracts stale order and retains repeated actual occurrences``() =
+    member _.``Synthetic actual rewriting requires current invocation context before boundary publication``() =
         let graph = BoundaryEmissionFixture.scalar ()
         let call = Assert.Single (BoundaryEmissionFixture.project graph).Calls.Values
         let site = graph.Nodes[call.Site]
@@ -544,11 +620,10 @@ let main _ =
         let changed = { graph with Nodes = graph.Nodes.Add(site.Id, changedSite) }
         BoundaryEmissionFixture.rejected changed |> ignore
         let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed
-        let revised = Assert.Single (BoundaryEmissionFixture.project settled).Calls.Values
-        Assert.Equal<NodeId list>(repeated, revised.Arguments |> List.map _.Actual)
-        let row = settled.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.BoundaryCall _ -> true | _ -> false) |> Assert.Single
-        Assert.Equal(2, row.Sources |> List.take (2 + repeated.Length) |> List.filter ((=) repeated.Head) |> List.length)
-        Assert.Single(settled.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.BoundaryDomain _ -> true | _ -> false)) |> ignore
+        let failures = BoundaryEmissionFixture.rejected settled
+        Assert.Contains(failures, fun failure ->
+            failure.Reason = "NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required.")
+        Assert.True(BoundaryWitness.tryBoundary settled |> Result.isError)
 
     [<Fact>]
     member _.``Refuted range coverage remains an obligation and prevents publication``() =
