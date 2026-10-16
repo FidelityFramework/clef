@@ -368,7 +368,7 @@ let arrayUses graph site =
                 | None -> closed <- false
             | SemanticKind.FieldGet(buffer, "Length") when aliases.Contains buffer -> ()
             | SemanticKind.Sequential items when items |> List.tryLast |> Option.exists (fun last -> not (aliases.Contains last)) -> ()
-            | SemanticKind.Application _ ->
+            | SemanticKind.Application(callee,actuals) ->
                 match intrinsic graph target.Id [] with
                 | Some(info, [buffer]) when (info.Module = IntrinsicModule.Array || info.Module = IntrinsicModule.String) && info.Operation = "length" && aliases.Contains buffer -> ()
                 | Some({Module=IntrinsicModule.Sys;Operation="write"},[_;buffer;_])
@@ -376,7 +376,15 @@ let arrayUses graph site =
                          (match (live graph buffer).Kind with SemanticKind.StringByteBorrow _ -> true | _ -> false) &&
                          nearestLambda graph target.Id = nearestLambda graph site &&
                          (nearestLambda graph site).IsSome -> ()
-                | _ -> readonly <- false; closed <- false
+                | _ ->
+                    readonly <- false
+                    let hypotheses=Platform.writableReferenceArguments graph callee actuals
+                    match hypotheses with
+                    | [buffer,declaration] when aliases.Contains buffer &&
+                        actuals |> List.mapi(fun ordinal actual->ordinal=declaration.Parameter || not(aliases.Contains actual)) |> List.forall id ->
+                        let scope=nearestLambda graph site
+                        closed <- closed && scope.IsSome && nearestLambda graph target.Id=scope
+                    | _ -> closed <- false
             | _ -> readonly <- false; closed <- false
     readonly && closed, closed, participants
 

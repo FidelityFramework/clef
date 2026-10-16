@@ -95,6 +95,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
         else
             let writableDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryWritableBufferDeclaration row -> Some row | _ -> None)
+            let writableUses = graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.BoundaryWritableBufferUse row -> Some row | _ -> None)
             let resourceDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceDeclaration row -> Some row | _ -> None)
             let resourceAccesses = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceAccess row -> Some row | _ -> None)
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
@@ -104,7 +105,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
-                (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
+                (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
                 (call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ | BoundaryScalar.ResourceHandle _ -> false | _ -> true) |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
             let resourceOwners=domain.ResourceEvaluationRoots |> List.map(fun (owner,_,_)->owner) |> Set.ofList
             let currentRelations=graph.Edges |> List.choose(fun edge ->
@@ -286,6 +287,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     @ (domain.Declarations |> List.map Declarations.row)
                     @ (resourceDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity))
                     @ (writableDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity))
+                    @ (writableUses |> List.map(fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferUse row) 0 (Set.toList row.Participants) row.Call))
                     @ (resourceAccesses |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site))
                     @ (imports |> List.map Ingredients.importRow)
                     @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
@@ -306,9 +308,11 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                         match call.Resource with
                         | Some(BoundaryResourceUse.AcquireNullable account)->[account.Conversion;account.Cleanup]
                         | _->[]) |> Set.ofList
+                let writableClaims=writableUses |> List.collect(fun row->[row.CountCoverage;row.StorageCoverage]) |> Set.ofList
                 let ownedTargets = Set.add domainRow.Target ((coverages |> List.map _.Obligation) @ (domain.IntrinsicProofs |> List.map _.Obligation) |> Set.ofList)
                 let expected=expected @ (graph.Edges |> List.filter(fun edge->resourceClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
-                let ownedTargets=Set.union ownedTargets resourceClaims
+                let ownedTargets=Set.unionMany [ownedTargets;resourceClaims;writableClaims]
+                let expected=expected @ (graph.Edges |> List.filter(fun edge->writableClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
                 let completeMembership = Set.union participants ownedTargets = (Map.keys graph.Nodes |> Set.ofSeq)
                 let actual = graph.Edges |> List.filter (fun edge ->
                     edge.Class = EdgeClass.Boundary ||
@@ -339,6 +343,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 if not proofErrors.IsEmpty then Error (List.rev proofErrors)
                 elif (writableDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.WritableBufferDeclarations then
                     stale "The source writable buffer declaration account was withdrawn or duplicated."
+                elif (writableUses |> List.map(fun row->row.Call,row.Parameter) |> List.sort)<>List.sort domain.WritableBufferUses then
+                    stale "The exact writable application or native buffer ordinal was withdrawn or duplicated."
                 elif (resourceDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.ResourceDeclarations then
                     stale "The source resource declaration account was withdrawn or duplicated."
                 elif not resourceFlowCurrent || not resourceEvidenceCurrent then stale "The complete current resource evaluation relation, original root or scoped source premise incidence changed."
@@ -351,6 +357,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     let byScope = imports.Values |> Seq.groupBy _.Scope |> Seq.map (fun (scope, imports) -> scope, imports |> Seq.map _.Identity |> Seq.sort |> Seq.toList) |> Map.ofSeq
                     Ok { ResourceEvidence = domain.ResourceEvidence
                          WritableBufferDeclarations = writableDeclarations |> List.map(fun row -> row.Identity,row) |> Map.ofList
+                         WritableBufferUses = writableUses |> List.map(fun row->(row.Call,row.Parameter),row) |> Map.ofList
                          ResourceDeclarations = resourceDeclarations |> List.map (fun row -> row.Identity,row) |> Map.ofList
                          ResourceAccesses = resourceAccesses |> List.map(fun row->row.Site,row) |> Map.ofList
                          Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList

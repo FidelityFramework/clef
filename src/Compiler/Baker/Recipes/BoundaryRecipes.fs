@@ -88,12 +88,14 @@ let private scalarRange = function
     | BoundaryScalar.Integer(bits, false) -> ValueRange.unsignedOf bits
     | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric range."
     | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle has no scalar numeric range."
+    | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar numeric range."
 
 let private scalarBits = function
     | BoundaryScalar.Boolean -> 1
     | BoundaryScalar.Integer(bits, _) -> bits
     | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric width."
     | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle requires its exact resource conversion account."
+    | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar numeric width."
 
 let private supportedType scalar ty =
     match scalar, Types.tryGetNTUKind ty with
@@ -113,7 +115,8 @@ let private sourceTypes (graph: SemanticGraph) ids =
 let private bindingPath = BoundaryDeclarations.bindingPath
 
 let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descriptors)
-                       (resources: Map<NodeId, BoundaryResourceDeclaration>) (binding: SemanticNode) library symbol =
+                       (resources: Map<NodeId, BoundaryResourceDeclaration>)
+                       (writables:Map<NodeId,BoundaryWritableBufferDeclaration>) (binding: SemanticNode) library symbol =
     checked' {
         let! scope =
             binding.Parent |> needed "The external binding has no source module owner."
@@ -154,9 +157,14 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         do! require (convention = "CDecl") $"Calling convention '{convention}' is not admitted by the scalar C contract."
         do! require (descriptor.CName = symbol) "FunctionDescriptor.CName disagrees with FidelityExtern.Symbol."
 
+        let writable = writables.Values |> Seq.filter(fun row -> row.Declaration=binding.Id && row.Descriptor=descriptor.Node) |> Seq.toList
+        let writable =
+            match writable, descriptor.Parameters with
+            | [row], [buffer;count] when row.Parameter=0 && row.CountParameter=1 && fst buffer=row.BufferFormal && fst count=row.CountFormal -> Some row
+            | _ -> None
         do!
             require
-                (descriptor.References.IsEmpty
+                ((descriptor.References.IsEmpty || writable.IsSome)
                  && descriptor.PointerReferences.IsEmpty
                  && descriptor.RecordReferences.IsEmpty)
                 "Reference arguments require source-settled boundary adapters; scalar C publication cannot substitute a pointer."
@@ -183,10 +191,11 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                         field "PassBy" parameterFields
                         |> needed "A boundary parameter must explicitly declare PassBy.Value."
 
+                    let writableParameter = writable |> Option.filter(fun row -> row.Parameter=ordinal && row.BufferFormal=formal)
                     do!
                         require
                             (Declarations.caseOf graph passing
-                             |> Option.exists (fun (_, name, _) -> name = "Value"))
+                             |> Option.exists (fun (_, name, _) -> name = (if writableParameter.IsSome then "Reference" else "Value")))
                             "A boundary parameter must explicitly declare PassBy.Value."
 
                     let! typeId =
@@ -197,6 +206,8 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                         |> needed "A boundary formal is absent from the source graph."
 
                     match Declarations.readTypeRef graph typeId |> Result.mapError _.Message with
+                    | Ok _ when writableParameter.IsSome ->
+                        return formal, BoundaryScalar.WritableBytes writableParameter.Value.Identity
                     | Ok(Declarations.DeclaredTypeRef.Entry selector) ->
                         let! invocation =
                             match
@@ -277,6 +288,11 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
             | [] -> typeRef graph returnId
             | _ -> Error "The acquisition declaration has ambiguous resource ownership."
 
+        do! require (writable.IsNone || (result.IsNone && parameters |> List.map snd |> function
+                                        | [BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)] -> true
+                                        | _ -> false))
+                "The first writable buffer adapter requires its exact buffer0/count1 unsigned-64 and Void result declaration."
+
         let! bodyNode =
             graph.Nodes.TryFind body
             |> needed "The external binding body is absent from the source graph."
@@ -320,9 +336,16 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
             descriptors.CallbackInvocations
             |> List.filter (fun invocation -> invocation.Declaration.Binding = binding.Id)
             |> List.collect (fun invocation -> [ invocation.DescriptorBinding; invocation.ScopeBinding ])
+        let writableRoots =
+            descriptors.WritableBuffers |> List.filter(fun row -> writable |> Option.exists(fun current->row.Quote=current.Identity))
+            |> List.map _.DescriptorBinding
+        let! byteRoots =
+            if writable.IsNone then Ok [] else
+                Bytes.byteRepresentation graph |> needed "The writable import lacks its current offered byte representation."
+                |> Result.map(fun (_,declaration)->[declaration])
 
         let! facts =
-            (descriptorBinding :: invocationRoots)
+            (descriptorBinding :: invocationRoots @ writableRoots @ byteRoots)
             |> List.distinct
             |> List.fold
                 (fun state root ->
@@ -391,6 +414,7 @@ let private sourceWidth graph id scalar =
     | BoundaryScalar.Boolean -> Ok 1
     | BoundaryScalar.Entry _ -> Error "Native entry arguments require their declared code signature, not a numeric width."
     | BoundaryScalar.ResourceHandle _ -> Error "An opaque resource handle has no source numeric width."
+    | BoundaryScalar.WritableBytes _ -> Error "A writable byte buffer has no source numeric width."
     | BoundaryScalar.Integer _ -> checked' {
         let! representation = RangeAnalysis.selectedRepresentation graph id |> needed "The scalar occurrence has no source-selected offered integer representation."
         do! require (NumericRepresentation.isOffered representation && (representation.Family = "int" || representation.Family = "uint"))
@@ -400,10 +424,15 @@ let private sourceWidth graph id scalar =
         return representation.Bits }
 
 let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args path (import: BoundaryImport)
-                     (entry:NodeId option) (resource:BoundaryResourceUse option) = checked' {
+                     (entry:NodeId option) (resource:BoundaryResourceUse option) (writable:BoundaryWritableBufferUse option) = checked' {
     let resourceAbi = (import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false)
     do! require (not resourceAbi || (resource.IsSome && entry.IsNone))
             "A resource-bearing call requires its exact direct acquisition/conversion or release/cleanup account; scalar and indirect calls grant no such authority."
+    do! require (import.Parameters |> List.forall(fun (_,abi)->
+                    match abi with
+                    | BoundaryScalar.WritableBytes declaration -> writable |> Option.exists(fun row->row.Call=site.Id && row.Declaration=declaration && entry.IsNone && resource.IsNone)
+                    | _ -> true))
+            "A writable byte ABI requires its exact direct application, allocation and current count/storage proof account."
     let ordered =
         match entry, site.Kind with
         | None, _ -> site.Children = callee :: args
@@ -421,12 +450,12 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
     let! arguments =
         List.zip operands import.Parameters |> List.map (fun (actual, (formal, abi)) -> checked' {
             let! node = graph.Nodes.TryFind actual |> needed "An actual boundary argument is absent from the source graph."
-            do! require (match abi with BoundaryScalar.ResourceHandle _ -> resource.IsSome | _ -> supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
+            do! require (match abi with BoundaryScalar.ResourceHandle _ -> resource.IsSome | BoundaryScalar.WritableBytes _ -> writable |> Option.exists(fun row->row.Buffer=actual) | _ -> supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
             do! require (import.SourceTypes.TryFind formal = Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type))
                     "The actual boundary argument does not retain its formal's native kind and dimension identity."
             let! meet =
                 match abi with
-                | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ -> Ok None
+                | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> Ok None
                 | _ -> checked' {
                     let! range = match abi with BoundaryScalar.Boolean -> Ok ValueRange.boolean | _ -> node.ValueRange |> needed "The actual scalar argument lacks an established source range."
                     let! sourceBits = sourceWidth graph actual abi
@@ -940,12 +969,28 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                           PointerBits = resource.PointerBits; AcquisitionType = resource.AcquisitionType; ResultType = resource.ResultType; HandleType = resource.HandleType
                           Contract = resource.Contract; DeclarationFacts = facts; Participants = Map.keys facts |> Set.ofSeq }
                     Map.add row.Identity row rows,errors) (Map.empty,[])
-    // The source effect account is useful before a physical reference adapter
-    // exists. Its coverage citizens constrain exact ordered actuals and current
-    // descriptor premises; an adapter requirement remains explicitly Pending.
-    let writableRequirements, writableRequirementErrors =
-        StringByteStorageRecipes.writableApplications graph
-        |> Map.fold(fun (enrichment,errors) site observed ->
+    let writableApplications = StringByteStorageRecipes.writableApplications graph
+    let writableStorage (application:StringByteStorageRecipes.WritableApplication) = checked' {
+        let declaration=application.Declaration
+        do! require (declaration.Parameter=0 && declaration.CountParameter=1 && application.Arguments.Length=2)
+                "The first writable adapter requires exactly buffer0 and count1."
+        let! rep,format=Bytes.byteRepresentation graph |> needed "The writable application lost its selected unsigned-8 byte declaration."
+        do! require (rep.Name=application.Representation) "The writable storage analysis and byte declaration disagree."
+        let! memory=MemoryPublication.project graph |> Result.mapError(fun failures->failures |> List.map _.Reason |> String.concat "; ")
+        let! storage=memory.Operations.TryFind application.Allocation |> Option.bind(function MemoryWitnessOperation.ArrayAllocation row->Some row | _->None)
+                     |> needed "The writable application lacks its current source allocation witness."
+        do! require (storage.Element=SettledSlot.Integer(8,Some rep.Name) && storage.ElementBytes=1 &&
+                     storage.MinimumCount=4I && storage.MaximumCount=4I && storage.Construction.Count.Actual=application.Capacity)
+                "The first writable adapter requires its original four explicitly unsigned-8 byte slots."
+        do! match application.CountRange with
+            | ValueRange.Bounded(lo,hi) when lo=hi && 0I<=lo && hi<=4I -> Ok()
+            | _ -> Error "The first writable adapter requires one exact nonnegative count within four byte slots."
+        return format,storage }
+    // Coverage citizens retain the source effect account independently of the
+    // physical adapter. Only the complete finite direct profile drops Pending.
+    let writableRequirements, writableRequirementErrors, writableUses =
+        writableApplications
+        |> Map.fold(fun (enrichment,errors,uses) site observed ->
             let node=graph.Nodes[site]
             let anchor (declaration:Declarations.DeclaredWritableBuffer) role =
                 // Current source anchor, not a numeric citizen identity or a
@@ -977,7 +1022,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
             | Error failure ->
                 let current,errors=pending failure.Declaration failure.Participants failure.Reason
                 let bound=failure.CountCoverage |> Option.map(coverage failure.Declaration failure.Participants "count") |> Option.defaultValue Enrichment.empty
-                Enrichment.combine current bound,errors
+                Enrichment.combine current bound,errors,uses
             | Ok application ->
                 let bodies =
                     match application.CountRange,application.CapacityRange,application.StorageRange with
@@ -987,8 +1032,19 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                     | _ -> ["count",ObligationBody.Pending ["The exact writable count/storage source domains are not established."]]
                 let covered=bodies |> List.fold(fun current (role,body) ->
                     Enrichment.combine current (coverage application.Declaration application.Participants role body)) Enrichment.empty
-                let current,errors=pending application.Declaration application.Participants "The source byte/count account is established; native writable reference/count/result adapters remain unestablished."
-                Enrichment.combine current covered,errors) (Enrichment.empty,[])
+                match writableStorage application with
+                | Error reason ->
+                    let current,errors=pending application.Declaration application.Participants reason
+                    Enrichment.combine current covered,errors,uses
+                | Ok(format,storage) ->
+                    let citizen role=covered.NewNodes |> List.find(fun node->match node.Kind with SemanticKind.Obligation info->info.Kind="foreign-writable-buffer-"+role | _->false) |> _.Id
+                    let count,values=citizen "count",citizen "storage"
+                    let row:BoundaryWritableBufferUse =
+                        {Call=site;Declaration=application.Declaration.Quote;Parameter=application.Declaration.Parameter;CountParameter=application.Declaration.CountParameter
+                         Buffer=application.Buffer;Count=application.Count;Allocation=application.Allocation;Capacity=application.Capacity;ByteFormat=format
+                         CountCoverage=count;StorageCoverage=values
+                         Participants=Set.union storage.Participants (Set.ofList(count::values::application.Participants))}
+                    Enrichment.combine enrichment covered,errors,Map.add (site,row.Parameter) row uses) (Enrichment.empty,[],Map.empty)
     let writableDeclarations, writableErrors =
         descriptors.WritableBuffers |> List.fold (fun (rows,errors) writable ->
             let roots=[writable.DescriptorBinding;writable.AbiDescriptorBinding]
@@ -1065,7 +1121,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                         require
                             (selected |> Option.exists (fun selected -> selected.Contract.Library = library))
                             "This C library requires its exact explicitly selected source process-link loading contract.")
-            let! import = readImport graph descriptors resourceDeclarations binding library symbol
+            let! import = readImport graph descriptors resourceDeclarations writableDeclarations binding library symbol
 
             return
                 { import with
@@ -1132,7 +1188,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 |> needed "The imported entry's original external declaration is absent."
 
             let! import = imported declaration
-            do! require (not ((import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false)))
+            do! require (not ((import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> true | _ -> false)))
                     "A resource-bearing ABI cannot form an indirect native entry without per-invocation conversion and cleanup lineage."
             let! loading = loading
             do! require (import.Library = loading.Contract.Library)
@@ -1216,7 +1272,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                 if (import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false) then
                                     return import, None
                                 else
-                                    let! call = readCall graph node callee args path import None None
+                                    let writable=writableUses.TryFind(node.Id,0)
+                                    let! call = readCall graph node callee args path import None None writable
                                     return import, Some call
                             }
 
@@ -1263,6 +1320,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                                 (Set.unionMany [ path; source.Transport; loading.Participants ])
                                                 import
                                                 (Some source.Formation)
+                                                None
                                                 None
 
                                         return import, entry, call
@@ -1351,7 +1409,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                             let! cleanup,accessRows,flow,root,support,releaseSites=resourceFlow graph resource conversion conversionClaim.Id cleanupClaim.Id
                             let resourceUse=BoundaryResourceUse.AcquireNullable
                                                 {Declaration=resource.Identity;Tag=tag;NoneCase=noneCase;SomeCase=someCase;Conversion=conversionClaim.Id;Cleanup=cleanupClaim.Id}
-                            let! acquisitionCall=readCall graph site callee arguments path import None (Some resourceUse)
+                            let! acquisitionCall=readCall graph site callee arguments path import None (Some resourceUse) None
                             let! releaseCalls=releaseSites |> Map.toList |> List.map(fun (releaseSite,(_,releaseBinding))->checked' {
                                 let! releaseNode=graph.Nodes.TryFind releaseSite |> needed "The release call was withdrawn."
                                 let! releaseCallee,actuals=match releaseNode.Kind with SemanticKind.Application(callee,args)->Ok(callee,args) | _->Error "The release event is not an application."
@@ -1359,7 +1417,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                                    |> function [row]->Ok row | _->Error "The explicit release lost its exact native import."
                                 let! _,releasePath=target graph releaseCallee |> needed "The explicit release lost its actual declaration transport."
                                 let resourceUse=BoundaryResourceUse.ReleaseOwned {Declaration=resource.Identity;Acquisition=site.Id;Cleanup=cleanupClaim.Id}
-                                return! readCall graph releaseNode releaseCallee actuals releasePath releaseImport None (Some resourceUse) }) |> collect
+                                return! readCall graph releaseNode releaseCallee actuals releasePath releaseImport None (Some resourceUse) None }) |> collect
                             let support=Set.union support (Set.ofList [platform.Node;core.Node;site.Id;import.Identity])
                             let hypothesis=resource.Contract.Hypothesis
                             let refs=[sprintf "external-execution-hypothesis identity=%s version=%s source=%s" hypothesis.Identity hypothesis.Version hypothesis.Source]
@@ -1774,7 +1832,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let proofs, errors = calls |> Map.fold (fun (enrichment, errors) _ call ->
         let argumentRanges = call.Arguments |> List.mapi (fun ordinal operand ->
             match operand.Abi with
-            | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ -> None
+            | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> None
             | _ ->
                 let input = match operand.Abi with BoundaryScalar.Boolean -> ValueRange.boolean | _ -> graph.Nodes[operand.Actual].ValueRange |> Option.defaultValue ValueRange.Unbounded
                 Some(ordinal, operand.Actual, input, scalarRange operand.Abi)) |> List.choose id
@@ -1863,6 +1921,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
           WritableBufferDeclarations = Map.keys writableDeclarations |> Seq.toList
+          WritableBufferUses = Map.keys writableUses |> Seq.toList
           ResourceDeclarations = Map.keys resourceDeclarations |> Seq.toList
           ResourceAccesses = Map.keys resourceAccesses |> Seq.toList
           ResourceEvaluationRoots = List.distinct resourceRoots
@@ -1897,6 +1956,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
          { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
         @ (resourceDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
         @ (writableDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
+        @ (writableUses.Values |> Seq.map(fun row->Ingredients.row (EdgeRole.BoundaryWritableBufferUse row) 0 (Set.toList row.Participants) row.Call) |> Seq.toList)
         @ (resourceAccesses.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site) |> Seq.toList)
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)

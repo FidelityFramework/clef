@@ -141,12 +141,12 @@ let readWritableBuffer1Descriptor : Expr<WritableBufferDescriptor> = <@ {
         |> Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish
         |> Result.defaultWith(fun errors -> failwithf "%A" errors))
 
-    let applicationFor source moduleName body =
+    let applicationForAuthority authority source moduleName body =
         let root =
             System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/resource-application-tests", System.Guid.NewGuid().ToString("N")))
         System.IO.Directory.CreateDirectory root |> ignore
         let write (name:string) (text:string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root,name),text)
-        write "authority.clef" (SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\""))
+        write "authority.clef" authority
         write "resource.clef" source
         write "main.clef" ("module "+moduleName+"\n[<EntryPoint>]\nlet main _ =\n" + body)
         write "resource.fidproj" """
@@ -170,19 +170,45 @@ libraries=["c"]
         Clef.Compiler.Project.ProjectChecker.checkProject (System.IO.Path.Combine(root,"resource.fidproj"))
         |> Result.defaultWith(fun error -> failwithf "%A" error)
 
+    let applicationFor source moduleName body =
+        applicationForAuthority (SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")) source moduleName body
+
     let resourceApplication body = applicationFor resourceSource "ResourceApplicationMain" body
     let writableApplication body = applicationFor writableSource "WritableApplicationMain" body
+    let writableVoidSource =
+        let replace (before:string) (after:string) (source:string) =
+            let changed=source.Replace(before,after)
+            if changed=source then failwithf "Missing writable void fixture token: %s" before
+            changed
+        writableSource
+        |> replace "let read (fd: int) (buffer: int array) (count: int) : int" "let read (buffer: int array) (count: int) : unit"
+        |> replace "        { Name = \"fd\"; Type = Integer (Signed, 32); PassBy = Value }\n" ""
+        |> replace "ReturnType = Integer (Signed, 64)" "ReturnType = Void"
+        |> replace "Parameter = 1; CountParameter = 2" "Parameter = 0; CountParameter = 1"
+    let writableVoidApplication source body =
+        let authority=SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+                        .Replace("Spaces = [| rodata |]", "Spaces = [| rodata; { Name = \"stack\"; Kind = \"stack\"; Capacity = 1048576; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"rw\"; Base = None } |]")
+        applicationForAuthority authority source "WritableNativeMain" body
+    let writableNative = lazy(
+        writableVoidApplication writableVoidSource "    let buffer = Array.zeroCreate 4\n    Test.Native.read buffer 3\n    if buffer[0] = 102 then 0 else 1\n")
+    let publishedWritableNative = lazy(
+        let result=writableNative.Value
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith)
 
     let writableProof expected (info:ObligationInfo) =
         let query=Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib [info]
                   |> Result.defaultWith(fun unavailable -> failwithf "A concrete writable coverage body was unavailable: %A" unavailable)
         let start=System.Diagnostics.ProcessStartInfo("cvc5",UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true)
         start.ArgumentList.Add "--lang=smt2"
-        use child=System.Diagnostics.Process.Start start
+        use child=System.Diagnostics.Process.Start start |> Option.ofObj |> Option.defaultWith(fun ()->failwith "cvc5 did not start")
         child.StandardInput.Write query
         child.StandardInput.Close()
         let output,error=child.StandardOutput.ReadToEndAsync(),child.StandardError.ReadToEndAsync()
-        child.WaitForExit()
+        if not(child.WaitForExit(10000)) then
+            child.Kill(true)
+            child.WaitForExit()
+            failwith "The owned cvc5 coverage check exceeded its 10-second bound."
         let directory=System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__,"../../artifacts/writable-buffer-proof-tests"))
         System.IO.Directory.CreateDirectory directory |> ignore
         let path=System.IO.Path.Combine(directory,System.Guid.NewGuid().ToString("N")+".smt2")
@@ -405,7 +431,7 @@ type ForeignReferenceTests() =
         Assert.Equal(3,claims.Length)
         Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-count" && info.Body=ObligationBody.IntegerRepresentationCoverage(3I,3I,0I,4I))
         Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-storage" && info.Body=ObligationBody.IntegerRepresentationCoverage(0I,255I,0I,255I))
-        Assert.Contains(claims,fun(_,info)->match info.Body with ObligationBody.Pending reasons -> reasons |> List.exists(fun reason->reason.Contains "native writable") | _ -> false)
+        Assert.Contains(claims,fun(_,info)->info.Kind="foreign-writable-buffer-adapter" && (match info.Body with ObligationBody.Pending reasons -> List.contains "The first writable adapter requires exactly buffer0 and count1." reasons | _ -> false))
         for id,info in claims do
             Assert.StartsWith("foreign_writable_",info.Id)
             let anchor=System.Convert.FromHexString(info.Id.Substring("foreign_writable_".Length)) |> System.Text.Encoding.UTF8.GetString
@@ -417,7 +443,8 @@ type ForeignReferenceTests() =
             for required in application.Participants do Assert.Contains(required,sources)
         let reads=graph.Nodes.Values |> Seq.filter(fun node -> match node.Kind with SemanticKind.IndexGet(input,_) -> input<>application.Allocation | _ -> false) |> Seq.toList
         Assert.Contains(reads,fun node->node.ValueRange=Some(ValueRange.bounded 0I 255I))
-        Assert.True(Clef.Compiler.Project.ProjectChecker.hasErrors result,"Physical writable adapters are still refused.")
+        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->
+            message.Contains "Reference arguments require source-settled boundary adapters")
 
     [<Theory>]
     [<InlineData("unknown-count")>]
@@ -503,6 +530,137 @@ type ForeignReferenceTests() =
         match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
         | Error failures -> Assert.Contains(failures,fun failure->failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
         | Ok _ -> failwith "Changed local writer retained old writable storage authority"
+
+    [<Fact>]
+    member _.``Writable effect out of byte local store remains Pending without a storage claim``() =
+        let result=ForeignCases.writableApplication "    let buffer = Array.zeroCreate 4\n    let alias = buffer\n    alias[0] <- 300\n    let readResult = Test.Native.read 0 alias 3\n    if readResult < 0 then alias[0] else alias[0]\n"
+        let graph=result.CheckResult.Graph
+        let observed=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd
+        match observed with
+        | Error failure -> Assert.Contains("within 0..255",failure.Reason)
+        | Ok _ -> failwith "An out-of-byte local writer acquired a writable storage account"
+        let claims=graph.Nodes.Values |> Seq.choose(fun node->match node.Kind with SemanticKind.Obligation info when info.Kind.StartsWith "foreign-writable-buffer-" -> Some info | _->None) |> Seq.toList
+        Assert.DoesNotContain(claims,fun info->info.Kind="foreign-writable-buffer-storage")
+        Assert.Contains(claims,fun info->info.Kind="foreign-writable-buffer-adapter" && (match info.Body with ObligationBody.Pending reasons -> reasons |> List.exists(fun reason->reason.Contains "within 0..255") | _->false))
+
+    [<Theory>]
+    [<InlineData("count")>]
+    [<InlineData("capacity")>]
+    member _.``Writable effect indirect scalar provenance reaches literal and retracts old evidence``(shape:string) =
+        let result=ForeignCases.writableApplication "    let n = 3\n    let size = 4\n    let buffer = Array.zeroCreate size\n    let readResult = Test.Native.read 0 buffer n\n    if readResult < 0 then buffer[0] else buffer[0]\n"
+        let graph=result.CheckResult.Graph
+        let observed=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd
+        let application=observed |> Result.defaultWith(fun failure->failwith failure.Reason)
+        let expected=if shape="count" then 3L else 4L
+        let literal=graph.Nodes.Values |> Seq.filter(fun node->node.IsReachable && (match node.Kind with SemanticKind.Literal(NativeLiteral.Int(value,_))->value=expected && node.Range.File.EndsWith "main.clef" | _->false)) |> Assert.Single
+        Assert.Contains(literal.Id,application.Participants)
+        let citizen=graph.Nodes.Values |> Seq.filter(fun node->match node.Kind with SemanticKind.Obligation info->info.Kind="foreign-writable-buffer-count" | _->false) |> Assert.Single
+        Assert.Contains(literal.Id,ForeignCases.resourceRequirementSupport graph citizen.Id)
+        let kind=match literal.Kind with SemanticKind.Literal(NativeLiteral.Int(_,kind))->kind | _->failwith "Expected source literal"
+        let changed={graph with Nodes=graph.Nodes.Add(literal.Id,{literal with Kind=SemanticKind.Literal(NativeLiteral.Int(expected+1L,kind))})}
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Error failures -> Assert.Contains(failures,fun failure->failure.Reason.Contains "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed")
+        | Ok _ -> failwith "A changed scalar derivation retained the old writable count account"
+
+    [<Theory>]
+    [<InlineData("Integer (Unsigned, 32)")>]
+    [<InlineData("Integer (Signed, 8)")>]
+    [<InlineData("Pointer 8")>]
+    member _.``Writable native descriptor requires exact unsigned byte reference``(element:string) =
+        let original=ForeignCases.writableVoidSource
+        let changed=original.Replace("Name = \"buffer\"; Type = Integer (Unsigned, 8); PassBy = Reference",
+                                     "Name = \"buffer\"; Type = "+element+"; PassBy = Reference")
+        Assert.NotEqual<string>(original,changed)
+        let result=ForeignCases.writableVoidApplication changed "    let buffer = Array.zeroCreate 4\n    Test.Native.read buffer 3\n    0\n"
+        let graph=result.CheckResult.Graph
+        let descriptors=ForeignDeclarations.readDescriptors graph
+        Assert.Empty descriptors.WritableBuffers
+        Assert.Contains(descriptors.Findings,fun finding->finding.Message.Contains "explicit unsigned-8 Reference element contract")
+        Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        if element="Pointer 8" then
+            Assert.DoesNotContain(graph.Edges,fun edge->
+                match edge.Role with EdgeRole.BoundaryImport import->import.Symbol="native_read" | _->false)
+        else
+            Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->
+                message.Contains "Reference arguments require source-settled boundary adapters")
+
+    [<Fact>]
+    member _.``Writable native constant count without storage domain stays Pending without a use``() =
+        let result=ForeignCases.writableVoidApplication ForeignCases.writableVoidSource "    let buffer = Array.zeroCreate 4\n    let touch (values:int array) = values[0] <- 0\n    touch buffer\n    Test.Native.read buffer 3\n    0\n"
+        let graph=result.CheckResult.Graph
+        let observed=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd
+        match observed with
+        | Error failure -> Assert.Contains("complete local write family is not established within 0..255",failure.Reason)
+        | Ok _ -> failwith "Unknown storage acquired a writable application account"
+        Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        let claims=graph.Nodes.Values |> Seq.choose(fun node->match node.Kind with SemanticKind.Obligation info->Some info | _->None) |> Seq.toList
+        Assert.DoesNotContain(claims,fun info->info.Kind="foreign-writable-buffer-storage")
+        Assert.Contains(claims,fun info->
+            info.Kind="foreign-writable-buffer-adapter" &&
+            (match info.Body with ObligationBody.Pending reasons->reasons |> List.exists(fun reason->reason.Contains "complete local write family is not established within 0..255") | _->false))
+
+    [<Fact>]
+    member _.``Writable native direct void profile publishes exact byte allocation count and claims``() =
+        let revision=ForeignCases.publishedWritableNative.Value
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let row=Assert.Single revision.Emission.Boundary.WritableBufferUses.Values
+        let call=revision.Emission.Boundary.Calls[row.Call]
+        Assert.Equal(0,row.Parameter)
+        Assert.Equal(1,row.CountParameter)
+        Assert.Equal<Fidelity.PSG.NodeId list>([row.Buffer;row.Count],call.Arguments |> List.map _.Actual)
+        Assert.Equal(Fidelity.PSG.BoundaryScalar.WritableBytes row.Declaration,call.Arguments.Head.Abi)
+        Assert.Equal(None,call.Result)
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(3I,3I),revision.Emission.Numeric.Values[row.Count].Range)
+        match revision.Emission.Memory.Operations[row.Allocation] with
+        | Fidelity.PSG.MemoryWitnessOperation.ArrayAllocation allocation ->
+            Assert.Equal(1,allocation.ElementBytes)
+            Assert.Equal(4I,allocation.MinimumCount)
+            Assert.Equal(4I,allocation.MaximumCount)
+        | _ -> failwith "The writable buffer lost its original allocation"
+        for citizen in [row.CountCoverage;row.StorageCoverage] do
+            Assert.True(revision.CurrentClaims.ContainsKey citizen)
+            Assert.Contains(revision.CurrentClaims[citizen],revision.Obligations)
+
+    [<Theory>]
+    [<InlineData("count","Account")>]
+    [<InlineData("allocation","Storage")>]
+    [<InlineData("format","Storage")>]
+    [<InlineData("claim","Claims")>]
+    [<InlineData("withdrawal","Account")>]
+    member _.``Writable native public replay refuses substituted per use incidence``(shape:string,part:string) =
+        let revision=ForeignCases.publishedWritableNative.Value
+        let boundary=revision.Emission.Boundary
+        let key,row=boundary.WritableBufferUses |> Map.toList |> Assert.Single
+        let changedRow=
+            match shape with
+            | "count" -> {row with Count=row.Capacity}
+            | "allocation" -> {row with Allocation=row.Buffer}
+            | "format" -> {row with ByteFormat=row.Declaration}
+            | "claim" -> {row with CountCoverage=row.StorageCoverage}
+            | _ -> row
+        let uses=if shape="withdrawal" then Map.empty else boundary.WritableBufferUses.Add(key,changedRow)
+        let changed={revision with Emission={revision.Emission with Boundary={boundary with WritableBufferUses=uses}}}
+        let expected=if shape="withdrawal" then "Emission.Boundary.Calls.WritableBuffer" else "Emission.Boundary.WritableBufferUses."+part
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue->issue.Part=expected)
+
+    [<Theory>]
+    [<InlineData("hypothesis")>]
+    [<InlineData("ordinal")>]
+    member _.``Writable native lifetime requires exact current no retain hypothesis and actual ordinal``(shape:string) =
+        let graph=ForeignCases.writableNative.Value.CheckResult.Graph
+        let application=Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd |> Result.defaultWith(fun failure->failwith failure.Reason)
+        let _,closed,_=Clef.Compiler.Baker.Recipes.MemoryAccessRecipes.arrayUses graph application.Allocation
+        Assert.True(closed)
+        let changed=
+            if shape="hypothesis" then
+                let quote=graph.Nodes[application.Declaration.Quote]
+                {graph with Nodes=graph.Nodes.Add(quote.Id,{quote with Kind=SemanticKind.Literal NativeLiteral.Unit;Children=[]})}
+            else
+                let site=graph.Nodes[application.Site]
+                let arguments=List.rev application.Arguments
+                {graph with Nodes=graph.Nodes.Add(site.Id,{site with Kind=SemanticKind.Application(application.Callee,arguments);Children=application.Callee::arguments})}
+        let _,retained,_=Clef.Compiler.Baker.Recipes.MemoryAccessRecipes.arrayUses changed application.Allocation
+        Assert.False(retained)
 
     [<Fact>]
     member _.``Resource application retains exact finite conversion and cleanup models without discharging them``() =

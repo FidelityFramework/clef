@@ -1250,6 +1250,7 @@ let scalarRange = function
     | BoundaryScalar.Integer(bits, false) -> bits, ValueRange.unsignedOf bits
     | BoundaryScalar.Entry _ -> invalidOp "An entry declaration has no scalar integer range."
     | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle has no scalar integer range."
+    | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar integer range."
 
 let private numericType = function
     | DeclaredTypeRef.Scalar scalar -> Some (scalarRange scalar)
@@ -2162,6 +2163,24 @@ let referenceArguments (graph: SemanticGraph) (funcId: NodeId) (args: NodeId lis
         let declared = (readDescriptors graph).Functions |> List.collect (fun f -> f.References) |> Map.ofList
         List.zip parameters args
         |> List.choose (fun ((_, _, parameter), arg) -> Map.tryFind parameter declared |> Option.map (fun d -> arg, d))
+    | _ -> []
+
+/// Exact call-bounded writable hypotheses at their original native ordinals.
+/// This grants neither a byte format nor a count/bounds proof.
+let writableReferenceArguments (graph:SemanticGraph) funcId (args:NodeId list) =
+    let rec binding seen id =
+        if Set.contains id seen then None else
+        match graph.Nodes.TryFind id with
+        | Some {Kind=SemanticKind.TypeAnnotation(inner,_);Children=[child]} when child=inner -> binding (Set.add id seen) inner
+        | Some {Kind=SemanticKind.VarRef(_,Some declaration)} -> Some declaration
+        | _ -> None
+    let descriptors=readDescriptors graph
+    match binding Set.empty funcId with
+    | Some declaration when descriptors.Findings.IsEmpty ->
+        descriptors.WritableBuffers |> List.choose(fun row ->
+            if row.Declaration.Binding=declaration && row.Declaration.Formals.Length=args.Length then
+                args |> List.tryItem row.Parameter |> Option.map(fun actual->actual,row)
+            else None)
     | _ -> []
 
 /// Scalar arrays retain their interior representation. A native projection may

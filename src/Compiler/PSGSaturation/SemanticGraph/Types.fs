@@ -797,6 +797,8 @@ type BoundaryScalar =
     /// Exact resource declaration owns the opaque native ABI and nullability.
     /// This is neither a source integer nor permission to expose an address.
     | ResourceHandle of declaration: NodeId * nullable: bool
+    /// Exact direct-call writable byte-buffer declaration; never a numeric scalar.
+    | WritableBytes of declaration: NodeId
 
 /// A physical slot settled by the source numeric/layout owner.
 [<RequireQualifiedAccess>]
@@ -922,6 +924,22 @@ type BoundaryWritableBufferDeclaration = {
     CountFormal: NodeId
     Contract: BAREWire.Descriptors.WritableBufferDescriptor
     DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: Set<NodeId>
+}
+
+/// Current direct application and finite byte-storage/proof incidence.
+type BoundaryWritableBufferUse = {
+    Call: NodeId
+    Declaration: NodeId
+    Parameter: int
+    CountParameter: int
+    Buffer: NodeId
+    Count: NodeId
+    Allocation: NodeId
+    Capacity: NodeId
+    ByteFormat: NodeId
+    CountCoverage: NodeId
+    StorageCoverage: NodeId
     Participants: Set<NodeId>
 }
 
@@ -1754,6 +1772,7 @@ type BoundaryDomain = {
     Declarations: BoundaryDeclaration list
     ResultHypotheses: ForeignResultHypothesis list
     WritableBufferDeclarations: NodeId list
+    WritableBufferUses: (NodeId * int) list
     ResourceDeclarations: NodeId list
     ResourceAccesses: NodeId list
     ResourceEvaluationRoots: (NodeId * NodeId * NodeId) list
@@ -1828,6 +1847,7 @@ type EdgeRole =
     | BoundaryDomain of BoundaryDomain
     | BoundaryResourceDeclaration of BoundaryResourceDeclaration
     | BoundaryWritableBufferDeclaration of BoundaryWritableBufferDeclaration
+    | BoundaryWritableBufferUse of BoundaryWritableBufferUse
     | BoundaryResourceAccess of BoundaryResourceAccess
     | BoundaryImport of BoundaryImport
     | BoundaryCall of BoundaryCall
@@ -3418,6 +3438,7 @@ module StorageWitnessProjection =
 type BoundaryEmissionProjection = {
     ResourceEvidence: BoundaryResourceEvidence option
     WritableBufferDeclarations: Map<NodeId, BoundaryWritableBufferDeclaration>
+    WritableBufferUses: Map<NodeId * int, BoundaryWritableBufferUse>
     ResourceDeclarations: Map<NodeId, BoundaryResourceDeclaration>
     ResourceAccesses: Map<NodeId, BoundaryResourceAccess>
     Imports: Map<NodeId, BoundaryImport>

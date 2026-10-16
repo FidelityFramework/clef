@@ -321,7 +321,13 @@ let private analyze renew (graph: SemanticGraph) =
                             let dependency = readInput item |> Option.bind (fun input -> origins.TryFind input)
                             let more = match node.Kind with SemanticKind.VarRef(_, Some definition) -> definition :: node.Children | _ -> node.Children
                             values seen (more @ tail) (Option.toList dependency @ dependencies) (item :: nodesRead)
-                let dependencies, valuesRead = values Set.empty (writes |> List.map snd) [] []
+                let scalarInputs =
+                    writable.Values
+                    |> Seq.choose(function
+                        | Ok application when application.Allocation=current -> Some [application.Count;application.Capacity]
+                        | _ -> None)
+                    |> Seq.toList |> List.concat
+                let dependencies, valuesRead = values Set.empty ((writes |> List.map snd)@scalarInputs) [] []
                 visitRoots (Set.add current seen) (dependencies @ rest)
                     (current :: members current @ initialization[current] @ (writes |> List.collect (fun (writer, stored) -> [writer; stored])) @
                      (writable.Values |> Seq.choose(function Ok application when application.Allocation=current -> Some application.Participants | _ -> None) |> Seq.toList |> List.concat) @ valuesRead @ accumulated)
