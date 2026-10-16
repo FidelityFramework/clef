@@ -212,6 +212,18 @@ let main _ =
             source.Replace("    receive (None)", "    let absent = None\n    let alias = absent\n" + uses)
             |> transform)
 
+    let returnedOptionalCheck present calls transform =
+        absenceCheck present true (fun source ->
+            let constructor = if present then "Some (FnPtr.ofFunction callback)" else "None"
+            let helper = if present then "let choose () = " + constructor else "let choose () : option<FnPtr<int -> int>> = None"
+            source.Replace("[<EntryPoint>]", helper + "\n[<EntryPoint>]")
+                  .Replace("let selected: option<FnPtr<int -> int>> = " + constructor,
+                           "let selected: option<FnPtr<int -> int>> = choose ()")
+                  .Replace("    receive selected",
+                           "    receive selected" +
+                           (if calls=2 then "\n    let second: option<FnPtr<int -> int>> = choose ()\n    receive second" else ""))
+            |> transform)
+
     let inferredAbsenceClaims (graph: SemanticGraph) =
         graph.Nodes |> Map.toList |> List.choose (fun (id,node) ->
             match node.Kind with
@@ -1130,18 +1142,169 @@ type ClosedCallbackTests() =
         let result = ClosedCallbackCases.optionalCheck true true (fun source -> source.Replace("let selected:", "let mutable selected:"))
         Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
 
+    [<Fact>]
+    member _.``Optional Some conversion refuses branch alias transport``() =
+        let result = ClosedCallbackCases.optionalCheck true true (fun source ->
+            source.Replace("let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)",
+                           "let selected: option<FnPtr<int -> int>> = if true then Some (FnPtr.ofFunction callback) else None"))
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
+        Assert.Empty((read result.Graph).OptionalReceiving)
+
+    [<Theory>]
+    [<InlineData(false, "branch")>]
+    [<InlineData(true, "branch")>]
+    [<InlineData(false, "mutable")>]
+    [<InlineData(true, "mutable")>]
+    [<InlineData(false, "parameter")>]
+    [<InlineData(true, "parameter")>]
+    member _.``Optional closed unit Result refuses branch mutable and parameter forwarding``(present, shape) =
+        let result=ClosedCallbackCases.returnedOptionalCheck present 1 (fun source->
+            let constructor=if present then "Some (FnPtr.ofFunction callback)" else "None"
+            let original=if present then "let choose () = "+constructor else "let choose () : option<FnPtr<int -> int>> = None"
+            match shape with
+            | "branch" -> source.Replace(original,"let choose () : option<FnPtr<int -> int>> = if true then "+constructor+" else None")
+            | "mutable" -> source.Replace(original,"let mutable choose: unit -> option<FnPtr<int -> int>> = fun () -> "+constructor)
+            | "parameter" -> source.Replace(original,"let choose (value: option<FnPtr<int -> int>>) = value").Replace("choose ()","choose ("+constructor+")")
+            | _ -> failwith "Unknown forwarding shape")
+        Assert.Contains(result.Diagnostics,fun diagnostic->diagnostic.Code="CCS8207" && diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
+        Assert.Empty((read result.Graph).OptionalReceiving)
+        Assert.DoesNotContain(result.Graph.Codata.Value.CallableAggregateValues.Values |> Seq.collect id,fun row->row.Operation=CallableAggregateOperation.Result)
+
+    [<Theory>]
+    [<InlineData(false, 1)>]
+    [<InlineData(true, 1)>]
+    [<InlineData(false, 2)>]
+    [<InlineData(true, 2)>]
+    member _.``Optional closed unit helper publishes distinct Result instances and exact accounts``(present, calls) =
+        let result = ClosedCallbackCases.returnedOptionalCheck present calls id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph = result.Graph
+        let selections = (read graph).OptionalReceiving |> List.sortBy _.Call
+        Assert.Equal(calls, selections.Length)
+        let results = selections |> List.map(fun selection ->
+            let account = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph selection.Operand
+                          |> Result.defaultWith failwith
+            let row = account.Values |> List.filter(fun row->row.Operation=CallableAggregateOperation.Result) |> Assert.Single
+            let original = account.Values |> List.filter(fun row->row.Operation=CallableAggregateOperation.Construct) |> Assert.Single
+            let own = account.Values |> List.filter(fun row->row.Occurrence=selection.Operand) |> Assert.Single
+            Assert.Equal(selection.Construction, original.Occurrence)
+            Assert.Equal(row.Occurrence, row.Aggregate)
+            Assert.NotEqual(selection.Construction, row.Occurrence)
+            Assert.NotEqual(selection.Operand, row.Occurrence)
+            Assert.Equal(CallableAggregateOperation.Transport, own.Operation)
+            Assert.Equal(row.Occurrence, own.Aggregate)
+            Assert.Contains(row.Occurrence, own.FormationInputs)
+            Assert.Equal(original.Tag, row.Tag)
+            Assert.Equal<CallableAggregateAlternative list>(original.Alternatives, row.Alternatives)
+            match row.FormationInputs, graph.Nodes[row.Occurrence].Kind with
+            | callee::argument::implementation::formal::body::construction::payload,
+              SemanticKind.Application(heldCallee,[heldArgument]) ->
+                Assert.Equal(callee, heldCallee)
+                Assert.Equal(argument, heldArgument)
+                Assert.Equal(selection.Construction, construction)
+                Assert.Equal<NodeId list>(Option.toList selection.Payload, payload)
+                Assert.Contains(implementation, account.Symbols |> List.map fst)
+                Assert.Contains(account.Participants, fun part->part.Role=ParticipantRole.CallableImplementation && part.Node=implementation)
+                match graph.Nodes[implementation].Kind with
+                | SemanticKind.Lambda([(_,_,heldFormal)],heldBody,[],_,_) ->
+                    Assert.Equal(formal, heldFormal)
+                    Assert.Equal(body, heldBody)
+                | other -> failwithf "The helper is not the exact closed unit declaration: %A" other
+            | other -> failwithf "The result lost its ordered call/return relation: %A" other
+            Assert.Equal(Some EscapeKind.EscapesViaReturn, graph.Codata.Value.Escapes.TryFind selection.Construction)
+            row.Occurrence)
+        Assert.Equal(calls, results |> List.distinct |> List.length)
+        Assert.Single(selections |> List.map _.Construction |> List.distinct) |> ignore
+        let claims = graph.Nodes.Values |> Seq.choose(fun node->
+            match node.Kind with SemanticKind.Obligation info when info.Kind.StartsWith("foreign-optional-entry-conversion-")->Some info | _->None) |> Seq.toList
+        Assert.Equal(calls, claims.Length)
+        Assert.Equal(calls, claims |> List.map _.Id |> List.distinct |> List.length)
+        let revision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures->failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let limits : Fidelity.PSG.Binary.Limits =
+            {MaxBytes=8*1024*1024;MaxCollectionLength=100000;MaxDepth=128
+             MaxStringBytes=1024*1024;MaxBigIntegerBytes=4096;MaxValues=2000000}
+        let bytes = Fidelity.PSG.Binary.encode limits revision |> Result.defaultWith(fun error->failwithf "%A" error)
+        let copy = Fidelity.PSG.Binary.decode limits bytes |> Result.defaultWith(fun error->failwithf "%A" error)
+        Assert.Empty(Fidelity.PSG.Integrity.check copy)
+        Assert.Equal(39, copy.Header.Schema)
+        for site in results do
+            let published = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId site
+            Assert.Equal<Fidelity.PSG.CallableAggregateValue list>(revision.Emission.Callable.AggregateValues[published], copy.Emission.Callable.AggregateValues[published])
+
     [<Theory>]
     [<InlineData(false)>]
     [<InlineData(true)>]
-    member _.``Optional Some conversion refuses branch and function result alias transport``(functionResult) =
-        let result = ClosedCallbackCases.optionalCheck true true (fun source ->
-            if functionResult then
-                source.Replace("[<EntryPoint>]", "let choose () = Some (FnPtr.ofFunction callback)\n[<EntryPoint>]")
-                      .Replace("let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)", "let selected: option<FnPtr<int -> int>> = choose ()")
-            else source.Replace("let selected: option<FnPtr<int -> int>> = Some (FnPtr.ofFunction callback)",
-                                "let selected: option<FnPtr<int -> int>> = if true then Some (FnPtr.ofFunction callback) else None"))
-        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("literal nominal Option constructor and immutable aliases"))
-        Assert.Empty((read result.Graph).OptionalReceiving)
+    member _.``Optional closed unit Result currentness separates applications and retains shared return support``(present) =
+        let result = ClosedCallbackCases.returnedOptionalCheck present 2 id
+        ClosedCallbackCases.absenceNoErrors result
+        let graph = result.Graph
+        let selections = (read graph).OptionalReceiving |> List.sortBy _.Call
+        let first,second = selections[0],selections[1]
+        let account (selection:OptionalReceivingCallback) = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph selection.Operand |> Result.defaultWith failwith
+        let firstAccount = account first
+        let resultRow = firstAccount.Values |> List.filter(fun row->row.Operation=CallableAggregateOperation.Result) |> Assert.Single
+        let callee,implementation,body = match resultRow.FormationInputs with callee::_::implementation::_::body::_ -> callee,implementation,body | other->failwithf "%A" other
+        let stale changed (selection:OptionalReceivingCallback) =
+            match Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed selection.Operand with
+            | Result.Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).", reason)
+            | Ok _ -> failwith "Changed application or return support retained a current account"
+        let mutate site kind children = {graph with Nodes=graph.Nodes.Add(site,{graph.Nodes[site] with Kind=kind;Children=children})}
+        let callNode = graph.Nodes[resultRow.Occurrence]
+        let actualNode = graph.Nodes[first.Operand]
+        let calleeNode = graph.Nodes[callee]
+        let ownChanges =
+            [ mutate callNode.Id callNode.Kind (List.rev callNode.Children)
+              mutate actualNode.Id (SemanticKind.VarRef("changed",Some implementation)) actualNode.Children
+              mutate calleeNode.Id (SemanticKind.VarRef("changed",Some implementation)) calleeNode.Children ]
+        for changed in ownChanges do
+            stale changed first
+            Assert.Equal(account second, Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed second.Operand |> Result.defaultWith failwith)
+        let helper = graph.Nodes[implementation]
+        let changedReturn =
+            match helper.Kind with
+            | SemanticKind.Lambda(parameters,_,captures,enclosing,context) ->
+                mutate helper.Id (SemanticKind.Lambda(parameters,resultRow.Occurrence,captures,enclosing,context)) helper.Children
+            | _ -> failwith "Expected the helper Lambda"
+        let construction = graph.Nodes[first.Construction]
+        let binding = match calleeNode.Kind with SemanticKind.VarRef(_,Some binding)->graph.Nodes[binding] | _->failwith "Expected the exact callee binding"
+        let changedBinding =
+            match binding.Kind with
+            | SemanticKind.Binding(name,_,recursive,declaration) -> mutate binding.Id (SemanticKind.Binding(name,true,recursive,declaration)) binding.Children
+            | _ -> failwith "Expected the immutable helper binding"
+        let changedTag =
+            match construction.Kind with
+            | SemanticKind.DUConstruct(name,ordinal,payload,arena) -> mutate construction.Id (SemanticKind.DUConstruct(name,1-ordinal,payload,arena)) construction.Children
+            | SemanticKind.UnionCase(name,ordinal,payload) -> mutate construction.Id (SemanticKind.UnionCase(name,1-ordinal,payload)) construction.Children
+            | _ -> failwith "Expected the original nominal constructor"
+        for changed in [changedReturn;changedTag;changedBinding;mutate body (SemanticKind.Sequential [body]) [body]] do
+            stale changed first
+            stale changed second
+        let facts=graph.Codata.Value
+        let withdrawn={graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Remove first.Operand}}
+        Assert.Equal(Result.Error "Callable aggregate lacks its published source dependency account (CCS8414).", Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current withdrawn first.Operand)
+        Assert.True(Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current withdrawn second.Operand |> Result.isOk)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional closed unit Result public law refuses counterfeit incidence even without representation``(present) =
+        let result = ClosedCallbackCases.returnedOptionalCheck present 1 id
+        ClosedCallbackCases.absenceNoErrors result
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.defaultWith(fun errors->failwithf "%A" errors)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let callable=revision.Emission.Callable
+        let site,rows=callable.AggregateValues |> Map.toList |> List.filter(fun(_,rows)->rows |> List.exists(fun row->row.Operation=Fidelity.PSG.CallableAggregateOperation.Result)) |> Assert.Single
+        let original=rows |> Assert.Single
+        let changed={original with FormationInputs=List.rev original.FormationInputs}
+        let malformed={revision with Emission={revision.Emission with Callable={callable with AggregateValues=callable.AggregateValues.Add(site,[changed])}}}
+        let expected (violation:Fidelity.PSG.IntegrityViolation)=violation.Part="Emission.Callable.Aggregates.I5" && violation.Reason="The aggregate result differs from its exact closed application, return or original constructor."
+        Assert.Contains(Fidelity.PSG.Integrity.check malformed, expected)
+        let unsettled={malformed with Emission={malformed.Emission with Numeric={malformed.Emission.Numeric with OccurrenceRepresentations=malformed.Emission.Numeric.OccurrenceRepresentations.Add(site,Result.Error "Withdrawn representation")}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check unsettled, expected)
+        let counterfeit={original with Operation=Fidelity.PSG.CallableAggregateOperation.Transport}
+        let changed={revision with Emission={revision.Emission with Callable={callable with AggregateValues=callable.AggregateValues.Add(site,[counterfeit])}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check changed,fun violation->violation.Part="Emission.Callable.Aggregates.I5" && violation.Reason="The immutable aggregate transport differs from its exact source path or supplying construction.")
 
     [<Theory>]
     [<InlineData(false)>]

@@ -36,6 +36,8 @@ type WorkGroup = {
     AggregateType: TypeIdentity
     Path: CallableAggregatePathStep list
     Rows: (NodeId * AggregateTypes.Slot * Origins.AggregateResolution) list
+    /// Reuse the completed call reading; result admission never re-enters Origins.
+    Calls: Map<NodeId, Origins.ResolvedCall>
 }
 
 let prepareWork (resolution: Origins.Resolution) (graph: SemanticGraph) =
@@ -47,7 +49,7 @@ let prepareWork (resolution: Origins.Resolution) (graph: SemanticGraph) =
                 (reading.AggregateType, slot.Path), (site, slot, reading)))
     |> List.groupBy fst
     |> List.map (fun ((aggregateType, path), rows) ->
-        { AggregateType = aggregateType; Path = path; Rows = List.map snd rows })
+        { AggregateType = aggregateType; Path = path; Rows = List.map snd rows; Calls = resolution.Calls })
 
 /// Only actual stored callable receiving signatures create scheduling edges.
 /// The aggregate occurrence itself is not a receiving dependency.
@@ -232,10 +234,10 @@ let private formationInputs (graph: SemanticGraph) (reading: Origins.AggregateRe
 
 /// Consume the existing origin owner's ordered immutable edges. Whole-value
 /// aliases preserve a construction; they are neither a new write nor a field read.
-let private transportInputs (graph: SemanticGraph) (reading: Origins.AggregateResolution) site construction =
+let private transportInputs (graph: SemanticGraph) (reading: Origins.AggregateResolution) site construction results =
     let step state _ =
         state |> Result.bind (fun (current, reversed, seen) ->
-            if current = construction then Ok(current,reversed,seen) else
+            if current = construction || Set.contains current results then Ok(current,reversed,seen) else
             match reading.Dependencies.TryFind current, graph.Nodes.TryFind current with
             | Some [source], Some node when Identity.ofType node.Type = reading.AggregateType ->
                 let agrees =
@@ -253,8 +255,63 @@ let private transportInputs (graph: SemanticGraph) (reading: Origins.AggregateRe
     // discovers a successor from syntax or repeats an origin/compiler pass.
     reading.Dependencies |> Map.toList |> List.fold step (Ok(site,[],Set.singleton site))
     |> Result.bind (fun (last,reversed,_) ->
-        if last=construction && (graph.Nodes.TryFind construction |> Option.exists (fun node -> Identity.ofType node.Type=reading.AggregateType)) then Ok(List.rev reversed)
+        if (last=construction || Set.contains last results) && (graph.Nodes.TryFind last |> Option.exists (fun node -> Identity.ofType node.Type=reading.AggregateType)) then Ok(last,List.rev reversed)
         else Error "The immutable aggregate transport does not reach its declared supplying construction.")
+
+/// One completed closed unit call produces a new aggregate instance. The
+/// constructor identifies its static formation, never the application's token.
+let private resultInputs (graph: SemanticGraph) (calls:Map<NodeId,Origins.ResolvedCall>) (reading:Origins.AggregateResolution) site construction (payload:NodeId option) =
+    let refused = Error "The aggregate result requires one exact closed unit application and its original returned constructor."
+    let unitType = function NativeType.TApp(constructor,[]) -> constructor.NTUKind=Some NTUKind.NTUunit | _ -> false
+    match graph.Nodes.TryFind site,calls.TryFind site with
+    | Some {Kind=SemanticKind.Application(callee,[argument]);Children=children;Type=ty},
+      Some {Complete=true;Unknown=false;Targets=[called]}
+        when children=[callee;argument] &&
+             (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.optionalEntrySignature ty |> Option.isSome) ->
+        match called.Parameters,graph.Nodes.TryFind called.Lambda,graph.Nodes.TryFind callee with
+        | [(_,parameterType,formal)],
+          Some {Kind=SemanticKind.Lambda([(_,_,heldFormal)],body,[],_,_);Children=lambdaChildren},
+          Some {Kind=SemanticKind.VarRef(_,Some binding)}
+            when called.Arguments=[argument] && formal=heldFormal && body=called.Body &&
+                 lambdaChildren=[formal;body] &&
+                 unitType parameterType &&
+                 (graph.Nodes.TryFind argument |> Option.exists(fun value->unitType value.Type)) &&
+                 (graph.Nodes.TryFind binding |> Option.exists(fun definition->
+                     match definition.Kind,definition.Children with
+                     | SemanticKind.Binding(_,false,false,_),[implementation] -> implementation=called.Lambda
+                     | _ -> false)) &&
+                 reading.Dependencies.TryFind site=Some[callee;argument;called.Lambda;formal;body] ->
+            let returned =
+                body=construction ||
+                (graph.Nodes.TryFind body |> Option.exists(fun value->
+                    match value.Kind,value.Children with
+                    | SemanticKind.TypeAnnotation(actual,declared),[child] ->
+                        actual=construction && child=actual && Identity.ofType declared=reading.AggregateType &&
+                        reading.Dependencies.TryFind body=Some[construction]
+                    | _ -> false))
+            let nominal =
+                graph.Nodes.TryFind construction |> Option.exists(fun node->
+                    Identity.ofType node.Type=reading.AggregateType &&
+                    match node.Kind with
+                    | SemanticKind.UnionCase("None",0,None) | SemanticKind.DUConstruct("None",0,None,_) -> payload.IsNone
+                    | SemanticKind.UnionCase("Some",1,Some value) | SemanticKind.DUConstruct("Some",1,Some value,_) -> payload=Some value
+                    | _ -> false)
+            if not returned || not nominal then refused else
+            let ordered=[callee;argument;called.Lambda;formal;body;construction] @ Option.toList payload
+            let roles =
+                [ participant site ParticipantRole.Site 0 site
+                  participant site ParticipantRole.Path 0 callee
+                  participant site ParticipantRole.Path 1 binding
+                  participant site ParticipantRole.CalleeArgument 0 argument
+                  participant site ParticipantRole.Callee 0 called.Lambda
+                  participant site ParticipantRole.CallableImplementation 0 called.Lambda
+                  participant site ParticipantRole.CalleeParameter 0 formal
+                  participant called.Lambda ParticipantRole.CalleeBody 0 body
+                  participant site ParticipantRole.AggregateConstructor 0 construction ] @
+                (payload |> Option.map(fun value->participant site ParticipantRole.AggregatePayload 0 value) |> Option.toList)
+            Ok(ordered,roles)
+        | _ -> refused
+    | _ -> refused
 
 /// Resolve direct fields/payloads with one closed formation per component.
 /// Wider families remain residuals until their source selector/adapter/storage
@@ -380,7 +437,26 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
             formation.Tag = row.Tag && formation.Bytes = row.Bytes && formation.Alignment = row.Alignment))
         if not formed then refuse site Codes.CCS8414_CallableAggregateEvidence "The inherited callable copy has no matching admitted supplying constructor row."
         formed)) |> Map.filter (fun _ rows -> not rows.IsEmpty)
-    // Install transport only after the supplying Construct survives retirement.
+    // Result rows retain their own application identity and its complete source
+    // incidence. They share static callable formation, not runtime token identity.
+    for work in groups do
+        let slot = slots.Values |> Seq.filter(fun slot->slot.AggregateType=work.AggregateType && slot.Path=work.Path) |> Seq.toList
+        for site,_,reading in work.Rows do
+            match slot,reading.Alternatives,graph.Nodes[site].Kind with
+            | [slot],[formation],SemanticKind.Application _ when reading.UnknownOrigins.IsEmpty && reading.AbsentOrigins.IsEmpty ->
+                match values.TryFind formation.Construction |> Option.defaultValue []
+                      |> List.filter(fun row->row.Slot=slot.Identity && row.Operation=CallableAggregateOperation.Construct) with
+                | [source] ->
+                    match resultInputs graph work.Calls reading site formation.Construction source.Value with
+                    | Ok(ordered,roles) ->
+                        let carrier=source.Value |> Option.bind inputs.Carriers.TryFind
+                        let row=valueRow slot.Identity site site CallableAggregateOperation.Result ordered source.Value
+                                         source.SelectedAlternative source.Tag carrier roles
+                        addValue {row with Alternatives=source.Alternatives;Selector=source.Selector;Bytes=source.Bytes;Alignment=source.Alignment}
+                    | Error reason -> refuse site Codes.CCS8414_CallableAggregateEvidence reason
+                | _ -> refuse site Codes.CCS8414_CallableAggregateEvidence "The aggregate result has no admitted original constructor row."
+            | _ -> ()
+    // Install transport only after the supplying Construct or Result survives.
     // Exact component facts are copied; no representation or selection is inferred.
     let transports =
         groups |> List.collect (fun work ->
@@ -389,13 +465,23 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
                 match slot, reading.Alternatives, graph.Nodes[site].Kind with
                 | [slot], [formation], (SemanticKind.VarRef _ | SemanticKind.Binding(_,false,_,_) | SemanticKind.TypeAnnotation _)
                     when site<>formation.Construction && reading.UnknownOrigins.IsEmpty && reading.AbsentOrigins.IsEmpty ->
-                    transportInputs graph reading site formation.Construction
+                    let results = values |> Map.toList |> List.choose(fun(id,rows)->
+                        if rows |> List.exists(fun row->row.Slot=slot.Identity && row.Operation=CallableAggregateOperation.Result) then Some id else None) |> Set.ofList
+                    transportInputs graph reading site formation.Construction results
                     |> Result.toOption
-                    |> Option.map (fun path -> site,slot.Identity,formation.Construction,path,sourceSupport reading site)
+                    |> Option.map (fun (supplier,path) ->
+                        let support =
+                            if results.Contains supplier then
+                                [ for ordinal,source in (site::path |> List.indexed) do
+                                      yield participant site ParticipantRole.Source ordinal source
+                                  for source,target in (site::path |> List.pairwise) do
+                                      yield participant source ParticipantRole.Path 0 target ]
+                            else sourceSupport reading site
+                        site,slot.Identity,supplier,path,support)
                 | _ -> None))
     for site,slot,construction,path,support in transports do
         match values.TryFind construction |> Option.defaultValue []
-              |> List.filter (fun row -> row.Slot = slot && row.Operation = CallableAggregateOperation.Construct) with
+              |> List.filter (fun row -> row.Slot = slot && (row.Operation = CallableAggregateOperation.Construct || row.Operation=CallableAggregateOperation.Result)) with
         | [source] ->
             let formationInputs = path @ Option.toList source.Value
             let carrier = source.Value |> Option.bind inputs.Carriers.TryFind
@@ -410,7 +496,7 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
         let path = if row.Value.IsSome then row.FormationInputs |> List.rev |> List.tail |> List.rev else row.FormationInputs
         let formed = path |> List.tryLast |> Option.exists (fun construction ->
             values.TryFind construction |> Option.defaultValue [] |> List.exists (fun source ->
-                source.Operation=CallableAggregateOperation.Construct && source.Slot=row.Slot && source.Value=row.Value &&
+                (source.Operation=CallableAggregateOperation.Construct || source.Operation=CallableAggregateOperation.Result) && source.Slot=row.Slot && source.Value=row.Value &&
                 source.Alternatives=row.Alternatives && source.Selector=row.Selector &&
                 source.SelectedAlternative=row.SelectedAlternative && source.Tag=row.Tag &&
                 source.Bytes=row.Bytes && source.Alignment=row.Alignment))

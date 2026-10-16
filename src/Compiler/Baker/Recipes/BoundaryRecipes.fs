@@ -626,6 +626,27 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
                     do! require (construction.Value=selected.Payload &&
                                  (construction.Tag |> Option.exists(fun tag -> tag.Constructor=selected.Construction && tag.CaseOrdinal=selected.CaseOrdinal && tag.Payload=selected.Payload)))
                             "The optional callback case ordinal or payload differs from its current Option account."
+                    let own = account.Values |> List.filter(fun row->row.Occurrence=actual && row.Slot=construction.Slot)
+                    let instance =
+                        match own with
+                        | [row] when row.Aggregate=selected.Construction -> true
+                        | [row] ->
+                            let supplier = if row.Operation=CallableAggregateOperation.Result then Some row.Occurrence
+                                           elif row.Operation=CallableAggregateOperation.Transport then Some row.Aggregate else None
+                            match supplier |> Option.map(fun supplier->account.Values |> List.filter(fun result->
+                                result.Occurrence=supplier && result.Aggregate=supplier && result.Slot=construction.Slot &&
+                                result.Operation=CallableAggregateOperation.Result)) with
+                            | Some [result] ->
+                                let returned =
+                                    match result.FormationInputs,selected.Payload with
+                                    | [_;_;_;_;_;original],None -> original=selected.Construction
+                                    | [_;_;_;_;_;original;payload],Some expected -> original=selected.Construction && payload=expected
+                                    | _ -> false
+                                returned && result.Value=construction.Value && result.Tag=construction.Tag &&
+                                result.Alternatives=construction.Alternatives && row.Tag=result.Tag && row.Alternatives=result.Alternatives
+                            | _ -> false
+                        | _ -> false
+                    do! require instance "The optional callback lost its exact application result instance account."
                     let! formation =
                         match selected.Payload, selected.Receiving with
                         | None, None -> Ok None

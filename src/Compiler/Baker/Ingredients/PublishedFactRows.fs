@@ -606,6 +606,7 @@ and mapCallableAggregateOperation (value: S.CallableAggregateOperation) : Fideli
     | S.CallableAggregateOperation.Assign -> Fidelity.PSG.CallableAggregateOperation.Assign
     | S.CallableAggregateOperation.Snapshot -> Fidelity.PSG.CallableAggregateOperation.Snapshot
     | S.CallableAggregateOperation.Transport -> Fidelity.PSG.CallableAggregateOperation.Transport
+    | S.CallableAggregateOperation.Result -> Fidelity.PSG.CallableAggregateOperation.Result
 
 and mapCallableAggregatePathStep (value: S.CallableAggregatePathStep) : Fidelity.PSG.CallableAggregatePathStep =
     match value with

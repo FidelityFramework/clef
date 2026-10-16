@@ -186,6 +186,45 @@ let private readUncached (graph: SemanticGraph) : Reading =
     let mutable optionalReceiving = []
     let aggregateOrigins = lazy (CallableOrigins.resolve graph)
 
+    // A completed ordinary call may identify the source constructor for
+    // declaration discovery. Only the later aggregate recipe authors its
+    // distinct result instance and current dependency account.
+    let optionalValue actual =
+        valuePath graph actual |> Option.bind (fun (node, path) ->
+            match node.Kind with
+            | SemanticKind.Application(callee, [argument]) ->
+                let origins = aggregateOrigins.Value
+                match origins.Calls.TryFind node.Id, origins.Aggregates.TryFind node.Id with
+                | Some { Complete=true; Unknown=false; Targets=[called] }, Some aggregate
+                    when aggregate.UnknownOrigins.IsEmpty && aggregate.AbsentOrigins.IsEmpty ->
+                    match called.Parameters, aggregate.Alternatives,
+                          graph.Nodes.TryFind called.Lambda, graph.Nodes.TryFind callee with
+                    | [(_, parameterType, formal)], [formation],
+                      Some { Kind=SemanticKind.Lambda([(_, _, heldFormal)],body,[],_,_) },
+                      Some { Kind=SemanticKind.VarRef(_,Some binding) }
+                        when formal=heldFormal && body=called.Body && called.Arguments=[argument] &&
+                             Types.tryGetNTUKind parameterType=Some NTUKind.NTUunit &&
+                             (graph.Nodes.TryFind argument |> Option.exists(fun actual->Types.tryGetNTUKind actual.Type=Some NTUKind.NTUunit)) &&
+                             (graph.Nodes.TryFind binding |> Option.exists(fun definition->
+                                 match definition.Kind,definition.Children with
+                                 | SemanticKind.Binding(_,false,false,_),[implementation] -> implementation=called.Lambda
+                                 | _ -> false)) ->
+                        let returned =
+                            body=formation.Construction ||
+                            (graph.Nodes.TryFind body |> Option.exists(fun returned->
+                                match returned.Kind,returned.Children with
+                                | SemanticKind.TypeAnnotation(value,ty),[child] ->
+                                    value=formation.Construction && child=value &&
+                                    Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty=aggregate.AggregateType
+                                | _ -> false))
+                        graph.Nodes.TryFind formation.Construction |> Option.filter(fun construction->
+                            returned && (optionalEntrySignature construction.Type |> Option.isSome))
+                        |> Option.map(fun construction->
+                            construction,List.distinct(path @ [callee;binding;argument;called.Lambda;formal;body;construction.Id]))
+                    | _ -> None
+                | _ -> None
+            | _ -> Some(node,path))
+
     for call in graph.Nodes.Values do
         match call.Kind with
         | SemanticKind.Application(callee, actuals) when call.IsReachable ->
@@ -200,7 +239,7 @@ let private readUncached (graph: SemanticGraph) : Reading =
                         let optional = optionalEntrySignature graph.Nodes[invocation.Formal].Type |> Option.isSome
                         let selection =
                             if not optional then None else
-                            match valuePath graph actual with
+                            match optionalValue actual with
                             | Some(construction, path) when optionalEntrySignature construction.Type |> Option.isSome ->
                                 let immutable = path |> List.forall (fun id ->
                                     match graph.Nodes[id].Kind with SemanticKind.Binding(_, true, _, _) -> false | _ -> true)
