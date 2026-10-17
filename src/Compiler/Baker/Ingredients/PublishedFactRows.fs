@@ -1964,12 +1964,21 @@ and mapMemoryCheckedResultLifetime (value:S.MemoryCheckedResultLifetime) : Fidel
 
 and mapMemoryUtf8ValidationWitness (value: S.MemoryUtf8ValidationWitness) : Fidelity.PSG.MemoryUtf8ValidationWitness =
     { Site = nodeId value.Site; Construction = mapCheckedStringConstruction value.Construction
-      Copy = mapMemoryArrayCopyWitness value.Copy; Allocation = mapMemoryArrayAllocationWitness value.Allocation
+      Copy = mapMemoryArrayCopyWitness value.Copy; Storage = mapMemoryCheckedSnapshotStorage value.Storage
       SourceCarrier = mapValueRepresentation value.SourceCarrier }
+
+and mapMemoryEmptySnapshotWitness (value:S.MemoryEmptySnapshotWitness) : Fidelity.PSG.MemoryEmptySnapshotWitness =
+    {Site=nodeId value.Site;Snapshot=nodeId value.Snapshot;Owner=nodeId value.Owner;Count=nodeId value.Count
+     SourceType=mapTypeIdentity value.SourceType;Declaration=nodeId value.Declaration}
+
+and mapMemoryCheckedSnapshotStorage (value:S.MemoryCheckedSnapshotStorage) : Fidelity.PSG.MemoryCheckedSnapshotStorage =
+    match value with
+    | S.MemoryCheckedSnapshotStorage.Allocated row -> Fidelity.PSG.MemoryCheckedSnapshotStorage.Allocated(mapMemoryArrayAllocationWitness row)
+    | S.MemoryCheckedSnapshotStorage.Empty row -> Fidelity.PSG.MemoryCheckedSnapshotStorage.Empty(mapMemoryEmptySnapshotWitness row)
 
 and mapMemorySnapshotRetirementWitness (value: S.MemorySnapshotRetirementWitness) : Fidelity.PSG.MemorySnapshotRetirementWitness =
     { Site = nodeId value.Site; Construction = mapCheckedStringConstruction value.Construction
-      Allocation = mapMemoryArrayAllocationWitness value.Allocation }
+      Storage = mapMemoryCheckedSnapshotStorage value.Storage }
 
 and mapMemoryConstructedValueWitness (value: S.MemoryConstructedValueWitness) : Fidelity.PSG.MemoryConstructedValueWitness =
     { Site = nodeId value.Site; Owner = nodeId value.Owner; SourceType = mapTypeIdentity value.SourceType
@@ -1980,7 +1989,8 @@ and mapMemoryConstructedValueWitness (value: S.MemoryConstructedValueWitness) : 
 and mapMemoryCheckedResultRetirementWitness (value:S.MemoryCheckedResultRetirementWitness) : Fidelity.PSG.MemoryCheckedResultRetirementWitness =
     { Site=nodeId value.Site; Value=nodeId value.Value; Construction=mapCheckedStringConstruction value.Construction
       Target=match value.Target with S.MemoryCheckedRetirementTarget.Backing -> Fidelity.PSG.MemoryCheckedRetirementTarget.Backing
-                                   | S.MemoryCheckedRetirementTarget.Carrier -> Fidelity.PSG.MemoryCheckedRetirementTarget.Carrier }
+                                   | S.MemoryCheckedRetirementTarget.Carrier -> Fidelity.PSG.MemoryCheckedRetirementTarget.Carrier
+                                   | S.MemoryCheckedRetirementTarget.EmptyBacking -> Fidelity.PSG.MemoryCheckedRetirementTarget.EmptyBacking }
 
 and mapMemoryStringViewWitness (value: S.MemoryStringViewWitness) : Fidelity.PSG.MemoryStringViewWitness =
     ({
@@ -2012,6 +2022,7 @@ and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.M
     | S.MemoryWitnessOperation.SnapshotRetirement value -> Fidelity.PSG.MemoryWitnessOperation.SnapshotRetirement(mapMemorySnapshotRetirementWitness value)
     | S.MemoryWitnessOperation.ConstructedValue value -> Fidelity.PSG.MemoryWitnessOperation.ConstructedValue(mapMemoryConstructedValueWitness value)
     | S.MemoryWitnessOperation.CheckedResultRetirement value -> Fidelity.PSG.MemoryWitnessOperation.CheckedResultRetirement(mapMemoryCheckedResultRetirementWitness value)
+    | S.MemoryWitnessOperation.EmptySnapshot value -> Fidelity.PSG.MemoryWitnessOperation.EmptySnapshot(mapMemoryEmptySnapshotWitness value)
 
 and mapMemoryWitnessProjection (value: S.MemoryWitnessProjection) : Fidelity.PSG.MemoryWitnessProjection =
     ({

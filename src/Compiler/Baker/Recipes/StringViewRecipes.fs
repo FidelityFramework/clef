@@ -167,11 +167,21 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                 demand (zero graph copy.SourceOffset && zero graph copy.DestinationOffset && completeCount graph copy.Source copy.Count)
                     "A string snapshot must copy the entire source extent from zero to zero."
                 let allocation=copy.Allocation |> needed "A string snapshot copy lacks its independent source allocation."
-                let allocationFact=
+                let snapshotStorage,storageCount,storageParticipants=
                     match operations.TryFind allocation with
-                    | Some(MemoryWitnessOperation.ArrayAllocation fact) when fact.Site=allocation -> fact
+                    | Some(MemoryWitnessOperation.ArrayAllocation fact) when fact.Site=allocation ->
+                        MemoryCheckedSnapshotStorage.Allocated fact,fact.Count,fact.Participants
+                    | Some(MemoryWitnessOperation.EmptySnapshot fact) when fact.Site=allocation ->
+                        demand (direction=MemoryStringViewDirection.FromBytes &&
+                                (checkedText |> Option.exists(fun (_,construction)->
+                                    construction.Returned.IsSome && fact.Owner=construction.Owner && fact.Snapshot=construction.Snapshot)))
+                            "The empty snapshot lacks its exact returned checked construction."
+                        demand (fact.Count=copy.CountOperand.Reference && copy.CountCarrier.Range=ValueRange.point 0I &&
+                                fact.SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType (live graph allocation).Type)
+                            "The empty snapshot lost its exact zero count or producer identity."
+                        MemoryCheckedSnapshotStorage.Empty fact,fact.Count,Clef.Compiler.Baker.Ingredients.MemoryValues.emptySnapshotIds fact
                     | _ -> raise(MissingContract "The string snapshot allocation has no validated source allocation operation.")
-                demand (endpoint graph allocationFact.Count=endpoint graph copy.Count &&
+                demand (endpoint graph storageCount=endpoint graph copy.Count &&
                         endpoint graph allocation=endpoint graph copy.Destination &&
                         endpoint graph copy.Source<>endpoint graph copy.Destination)
                     "The string snapshot does not retain an independent allocation for its complete copied extent."
@@ -195,6 +205,11 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                 demand (storageRow.Class=EdgeClass.Range && storageRow.Ordinal=0 && name=representation.Name &&
                         0I<=lo && lo<=hi && hi<=255I && List.contains declaration storageRow.Sources)
                     "The string view's storage range or representation declaration is inconsistent."
+                match snapshotStorage with
+                | MemoryCheckedSnapshotStorage.Empty empty ->
+                    demand (empty.Declaration=declaration)
+                        "The empty snapshot's octet declaration changed."
+                | _ -> ()
                 let textRows=
                     match direction,checkedText with
                     | MemoryStringViewDirection.FromBytes,Some(row,_) -> [row]
@@ -228,7 +243,7 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                      yield! snapshotRow.Sources; yield! storageRow.Sources
                      for row in textRows do yield row.Target; yield! row.Sources]
                     |> Set.ofList |> Set.union copy.Participants |> Set.union copy.CountCarrier.Participants
-                    |> Set.union allocationFact.Participants
+                    |> Set.union storageParticipants
                 let fact:MemoryStringViewWitness=
                     {Site=node.Id;Source=source;Owner=owner;Snapshot=snapshot;Direction=direction
                      Checked=checkedText |> Option.map snd
@@ -241,13 +256,19 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                 | Some(_,construction) ->
                     required<-required |> Set.add construction.Validation |> Set.add construction.Retirement
                     let returned=try StringByteStorageRecipes.returnedLifetime graph construction with :? System.InvalidOperationException as error -> raise(MissingContract error.Message)
-                    let residence=match returned with
-                                  | None -> match allocationFact.Residence with MemoryResidence.Stack _ -> allocationFact.Residence | _ -> raise(MissingContract "The checked snapshot lacks its existing source-authorized stack-scope retirement.")
-                                  | Some(life,space) ->
+                    let residence=match returned,snapshotStorage with
+                                  | None,MemoryCheckedSnapshotStorage.Allocated allocationFact ->
+                                      match allocationFact.Residence with MemoryResidence.Stack _ -> allocationFact.Residence | _ -> raise(MissingContract "The checked snapshot lacks its existing source-authorized stack-scope retirement.")
+                                  | Some(life,space),MemoryCheckedSnapshotStorage.Allocated allocationFact ->
                                       let expected=MemoryResidence.Heap(life.Application,space.Node)
                                       demand (allocationFact.Residence=expected && copy.CountCarrier.Range |> function ValueRange.Bounded(lo,_) -> lo>0I | _ -> false)
                                           "The returned checked snapshot lacks its exact positive heap instance."
                                       expected
+                                  | Some(life,space),MemoryCheckedSnapshotStorage.Empty _ ->
+                                      demand (copy.CountCarrier.Range=ValueRange.point 0I)
+                                          "The no-backing checked snapshot requires its exact zero extent."
+                                      MemoryResidence.Heap(life.Application,space.Node)
+                                  | _ -> raise(MissingContract "A no-backing snapshot lacks its returned-instance authority.")
                     for site in [construction.Success;construction.Failure] do
                         match operations.TryFind site with
                         | Some(MemoryWitnessOperation.ConstructedValue value) when value.Site=site && value.Owner=construction.Owner &&
@@ -255,25 +276,28 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                             value.Residence=residence -> ()
                         | _ -> raise(MissingContract "The checked native outcome lacks its exact source-authorized local constructed-value storage.")
                     let validator:MemoryUtf8ValidationWitness=
-                        {Site=construction.Validation;Construction=construction;Copy=copy;Allocation=allocationFact
+                        {Site=construction.Validation;Construction=construction;Copy=copy;Storage=snapshotStorage
                          SourceCarrier=sourceCarrier}
                     let retirement:MemorySnapshotRetirementWitness=
-                        {Site=construction.Retirement;Construction=construction;Allocation=allocationFact}
+                        {Site=construction.Retirement;Construction=construction;Storage=snapshotStorage}
                     admitted<-(construction.Validation,MemoryWitnessOperation.Utf8Validation validator)::
                               (construction.Retirement,MemoryWitnessOperation.SnapshotRetirement retirement)::admitted
                     failures<-failures |> Map.remove construction.Validation |> Map.remove construction.Retirement
                     match returned with
                     | None -> ()
                     | Some(life,_) ->
-                        for site,target in [life.SomeBackingRetirement,MemoryCheckedRetirementTarget.Backing
+                        let backingTarget=match snapshotStorage with
+                                          | MemoryCheckedSnapshotStorage.Allocated _ -> MemoryCheckedRetirementTarget.Backing
+                                          | MemoryCheckedSnapshotStorage.Empty _ -> MemoryCheckedRetirementTarget.EmptyBacking
+                        for site,target in [life.SomeBackingRetirement,backingTarget
                                             life.SomeCarrierRetirement,MemoryCheckedRetirementTarget.Carrier
                                             life.NoneCarrierRetirement,MemoryCheckedRetirementTarget.Carrier] do
                             let value=match (live graph site).Kind with
                                       | SemanticKind.Application(_,[value]) -> value
                                       | _ -> raise(MissingContract "The returned checked cleanup has no exact source actual.")
-                            demand (target=MemoryCheckedRetirementTarget.Backing || value=life.Actual)
+                            demand (target<>MemoryCheckedRetirementTarget.Carrier || value=life.Actual)
                                 "The checked carrier cleanup names a different actual instance."
-                            if target=MemoryCheckedRetirementTarget.Backing then
+                            if target<>MemoryCheckedRetirementTarget.Carrier then
                                 demand (match (live graph life.SomeUse).Kind with SemanticKind.Application(_,[payload]) -> payload=value | _ -> false)
                                     "The checked backing cleanup names a different scalar payload."
                             required<-Set.add site required

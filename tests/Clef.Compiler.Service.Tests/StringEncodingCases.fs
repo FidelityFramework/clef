@@ -747,13 +747,14 @@ type CheckedStringEncodingCases() =
         Assert.Equal("RFC3629-v1", construction.Validator)
         Assert.NotEqual(construction.Input, construction.Snapshot)
         Assert.Equal(validator.Copy, memory.ArrayCopies[construction.Snapshot])
-        Assert.Equal(Some validator.Allocation.Site, validator.Copy.Allocation)
+        let allocation=match validator.Storage with MemoryCheckedSnapshotStorage.Allocated row -> row | _ -> failwith "Expected local allocated snapshot"
+        Assert.Equal(Some allocation.Site, validator.Copy.Allocation)
         Assert.Equal(SemanticKind.DUConstruct("ValueSome",1,Some construction.Text,None), graph.Nodes[construction.Success].Kind)
         Assert.Equal(SemanticKind.DUConstruct("ValueNone",0,None,None), graph.Nodes[construction.Failure].Kind)
         DimensionalCases.same (NativeType.TApp(Types.voptionTyCon,[Types.stringType])) graph.Nodes[construction.Success].Type
         let retirement = match memory.Operations[construction.Retirement] with MemoryWitnessOperation.SnapshotRetirement value -> value | other -> failwithf "%A" other
         Assert.Equal(construction, retirement.Construction)
-        Assert.Equal(validator.Allocation, retirement.Allocation)
+        Assert.Equal(validator.Storage, retirement.Storage)
         let revision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
         Assert.Empty(Fidelity.PSG.Integrity.check revision)
 
@@ -956,10 +957,11 @@ type CheckedStringEncodingCases() =
         let life=validation.Construction.Returned |> Option.defaultWith(fun()->failwith "Missing authored returned lifetime")
         Assert.NotEqual(life.Application,validation.Construction.Owner)
         Assert.NotEqual(life.Actual,validation.Construction.Success)
-        Assert.Equal(MemoryResidence.Heap(life.Application,life.Space),validation.Allocation.Residence)
+        let allocation=match validation.Storage with MemoryCheckedSnapshotStorage.Allocated row -> row | _ -> failwith "Expected positive allocated snapshot"
+        Assert.Equal(MemoryResidence.Heap(life.Application,life.Space),allocation.Residence)
         let carriers=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.ConstructedValue row -> Some row | _ -> None) |> Seq.toList
         Assert.Equal(2,carriers.Length)
-        for row in carriers do Assert.Equal(validation.Allocation.Residence,row.Residence)
+        for row in carriers do Assert.Equal(allocation.Residence,row.Residence)
         let cleanup=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.CheckedResultRetirement row -> Some row | _ -> None) |> Seq.toList
         Assert.Equal(3,cleanup.Length)
         Assert.Equal(Set.ofList[life.SomeBackingRetirement;life.SomeCarrierRetirement;life.NoneCarrierRetirement],cleanup |> List.map _.Site |> Set.ofList)
@@ -982,9 +984,64 @@ type CheckedStringEncodingCases() =
         Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains("no captured project memory policy"))
 
     [<Fact>]
-    member _.``Returned checked text keeps zero count outside its heap profile``() =
+    member _.``Returned empty checked text owns no backing and positive carrier cleanup``() =
         let result=EncodingFixture.returned "standard" true 4096 (CheckedStringEncodingCases.ReturnedProgram "[||]")
-        Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains("zero remains local-only"))
+        Assert.False(CheckResult.hasErrors result,sprintf "%A" result.Diagnostics)
+        let graph=result.Graph
+        let memory=EncodingFixture.memory graph
+        let validation=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Utf8Validation row -> Some row | _ -> None) |> Assert.Single
+        let empty=match validation.Storage with MemoryCheckedSnapshotStorage.Empty row -> row | _ -> failwith "Expected affirmative empty storage"
+        let life=Option.get validation.Construction.Returned
+        Assert.Equal(Some empty.Site,validation.Copy.Allocation)
+        Assert.Equal(empty.Count,validation.Copy.CountOperand.Reference)
+        Assert.Equal(ValueRange.point 0I,validation.Copy.CountCarrier.Range)
+        Assert.Equal(validation.Construction.Snapshot,empty.Snapshot)
+        Assert.Equal(validation.Construction.Owner,empty.Owner)
+        Assert.Equal(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[empty.Site].Type,empty.SourceType)
+        Assert.Equal(SemanticKind.ArrayAllocate empty.Count,graph.Nodes[empty.Site].Kind)
+        Assert.Equal(MemoryWitnessOperation.EmptySnapshot empty,memory.Operations[empty.Site])
+        let view=match memory.Operations[validation.Construction.Text] with MemoryWitnessOperation.StringView row -> row | _ -> failwith "Expected string view"
+        Assert.Equal(view.Declaration,empty.Declaration)
+        let retirement=match memory.Operations[validation.Construction.Retirement] with MemoryWitnessOperation.SnapshotRetirement row -> row | _ -> failwith "Expected snapshot retirement"
+        Assert.Equal(validation.Storage,retirement.Storage)
+        let carriers=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.ConstructedValue row -> Some row | _ -> None) |> Seq.toList
+        Assert.Equal(2,carriers.Length)
+        for row in carriers do Assert.Equal(MemoryResidence.Heap(life.Application,life.Space),row.Residence)
+        let cleanup=match memory.Operations[life.SomeBackingRetirement] with MemoryWitnessOperation.CheckedResultRetirement row -> row | _ -> failwith "Expected empty discard"
+        Assert.Equal(MemoryCheckedRetirementTarget.EmptyBacking,cleanup.Target)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures->failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Theory>]
+    [<InlineData("stack_only",true,4096,"forbids returned checked storage")>]
+    [<InlineData("standard",false,4096,"exactly one declared writable heap")>]
+    [<InlineData("standard",true,47,"combined returned checked live extent")>]
+    member _.``Returned empty checked text retains positive carrier allocation authority``(model:string,heap:bool,capacity:int,reason:string) =
+        let result=EncodingFixture.returned model heap capacity (CheckedStringEncodingCases.ReturnedProgram "[||]")
+        Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains(reason))
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("count")>]
+    [<InlineData("producer")>]
+    [<InlineData("declaration")>]
+    member _.``Returned empty checked text refuses withdrawn exact source authority``(change:string) =
+        let result=EncodingFixture.returned "standard" true 4096 (CheckedStringEncodingCases.ReturnedProgram "[||]")
+        Assert.False(CheckResult.hasErrors result,sprintf "%A" result.Diagnostics)
+        let graph=result.Graph
+        let memory=EncodingFixture.memory graph
+        let empty=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.EmptySnapshot row -> Some row | _ -> None) |> Assert.Single
+        let site=match change with "count" -> empty.Count | "producer" -> empty.Site | _ -> empty.Declaration
+        let changed={graph with Nodes=graph.Nodes.Remove site}
+        let failure=Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project changed
+        Assert.True(Result.isError failure)
+        let retained=changed.Edges |> List.choose(fun edge->match edge.Role with EdgeRole.MemoryDomain domain -> Some domain.Required | _ -> None) |> List.exactlyOne
+        Assert.True(retained.Contains empty.Site,"Withdrawing authority must retain the independent empty producer demand")
+        let reason=
+            if change="declaration" then "source, guard, meet or declaration premises changed"
+            else "the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof"
+        Assert.Contains(reason,sprintf "%A" failure)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project graph |> Result.isOk)
 
     [<Theory>]
     [<InlineData(false)>]

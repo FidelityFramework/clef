@@ -651,7 +651,11 @@ let finalizeReturned (graph:SemanticGraph) (numeric:NumericWitnessProjection) =
                         | _ -> None)
                     |> function [row]->row | _ -> pending "The returned checked snapshot has no unique source allocation."
                 let maximum=match numeric.Values.TryFind allocation.Count.Reference with
-                            | Some carrier -> match carrier.Range with ValueRange.Bounded(lo,hi) when lo>0I -> hi | _ -> pending "The returned checked snapshot requires a positive count."
+                            | Some carrier ->
+                                match carrier.Range with
+                                | ValueRange.Bounded(lo,hi) when lo>0I -> hi
+                                | ValueRange.Bounded(lo,hi) when lo=0I && hi=0I -> 0I
+                                | _ -> pending "The returned checked snapshot requires a positive or exactly zero count."
                             | None -> pending "The returned checked snapshot lacks its settled count carrier."
                 let bytes=match numeric.Elements.TryFind allocation.Site |> Option.bind(Clef.Compiler.PSGSaturation.SemanticGraph.Placement.extentOfSlot graph) with
                           | Some(bytes,_) -> bigint bytes | None -> pending "The returned checked element extent is missing."

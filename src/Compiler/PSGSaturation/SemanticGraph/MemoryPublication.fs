@@ -4,6 +4,7 @@
 module Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.NativeTypedTree.NativeTypes
 module Memory = Clef.Compiler.Baker.Ingredients.MemoryValues
 module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
 
@@ -65,8 +66,41 @@ let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessPr
             reject (Some anchor) participants "The checked memory support lacks its exact current source string view."
         elif (domain.Operations |> List.map fst |> List.sort) <> Set.toList domain.Required then
             reject (Some anchor) participants "A required source memory operation is absent or duplicated."
+        elif domain.Operations |> List.exists(fun (_,operation) ->
+            let storage =
+                match operation with
+                | MemoryWitnessOperation.Utf8Validation row -> Some row.Storage
+                | MemoryWitnessOperation.SnapshotRetirement row -> Some row.Storage
+                | _ -> None
+            storage |> Option.exists(fun storage ->
+                let site,expected =
+                    match storage with
+                    | MemoryCheckedSnapshotStorage.Allocated row -> row.Site,MemoryWitnessOperation.ArrayAllocation row
+                    | MemoryCheckedSnapshotStorage.Empty row -> row.Site,MemoryWitnessOperation.EmptySnapshot row
+                not(domain.Required.Contains site) || Map.tryFind site (Map.ofList domain.Operations) <> Some expected)) then
+            reject (Some anchor) participants "The checked snapshot lost its exact current allocated or empty storage operation."
+        elif (domain.AllocationConstructions |> List.map _.Site |> List.filter(Memory.executable graph excluded) |> List.sort) <>
+             (domain.Operations |> List.choose(fun (_,operation) ->
+                match operation with
+                | MemoryWitnessOperation.ArrayAllocation row -> Some row.Site
+                | MemoryWitnessOperation.EmptySnapshot row -> Some row.Site
+                | _ -> None) |> List.sort) then
+            reject (Some anchor) participants "A required source array producer has no unique allocated or empty storage receipt."
         elif domain.Operations |> List.exists (fun (_,operation) ->
             match operation with
+            | MemoryWitnessOperation.EmptySnapshot empty ->
+                match domain.AllocationConstructions |> List.filter(fun row -> row.Site=empty.Site) with
+                | [construction] ->
+                    construction.Owner<>empty.Snapshot || construction.Count.Reference<>empty.Count ||
+                    not(domain.Operations |> List.exists(fun (_,operation) ->
+                        match operation with
+                        | MemoryWitnessOperation.Utf8Validation validation ->
+                            validation.Storage=MemoryCheckedSnapshotStorage.Empty empty &&
+                            validation.Construction.Owner=empty.Owner && validation.Construction.Snapshot=empty.Snapshot &&
+                            validation.Construction.Returned.IsSome && validation.Copy.CountOperand.Reference=empty.Count &&
+                            validation.Copy.CountCarrier.Range=ValueRange.point 0I
+                        | _ -> false))
+                | _ -> true
             | MemoryWitnessOperation.ArrayAllocation allocation ->
                 let construction=allocation.Construction
                 (domain.AllocationConstructions |> List.filter (fun value -> value.Site=allocation.Site)) <> [construction] ||

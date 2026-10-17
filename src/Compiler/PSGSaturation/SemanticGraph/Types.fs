@@ -1715,11 +1715,27 @@ type CheckedStringConstruction = {
     Returned: MemoryCheckedResultLifetime option
 }
 
+/// Affirmative nonallocation at the existing Array.sub value producer.
+/// Snapshot and Owner retain their distinct source-construction roles.
+type MemoryEmptySnapshotWitness = {
+    Site: NodeId
+    Snapshot: NodeId
+    Owner: NodeId
+    Count: NodeId
+    SourceType: TypeIdentity
+    Declaration: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type MemoryCheckedSnapshotStorage =
+    | Allocated of MemoryArrayAllocationWitness
+    | Empty of MemoryEmptySnapshotWitness
+
 type MemoryUtf8ValidationWitness = {
     Site: NodeId
     Construction: CheckedStringConstruction
     Copy: MemoryArrayCopyWitness
-    Allocation: MemoryArrayAllocationWitness
+    Storage: MemoryCheckedSnapshotStorage
     SourceCarrier: ValueRepresentation
 }
 
@@ -1728,11 +1744,11 @@ type MemoryUtf8ValidationWitness = {
 type MemorySnapshotRetirementWitness = {
     Site: NodeId
     Construction: CheckedStringConstruction
-    Allocation: MemoryArrayAllocationWitness
+    Storage: MemoryCheckedSnapshotStorage
 }
 
 [<RequireQualifiedAccess>]
-type MemoryCheckedRetirementTarget = Backing | Carrier
+type MemoryCheckedRetirementTarget = Backing | Carrier | EmptyBacking
 
 /// Value names the caller's actual payload or returned carrier, never a callee
 /// allocation SSA. Baker owns the cleanup occurrence and its order.
@@ -1786,6 +1802,7 @@ type MemoryWitnessOperation =
     | SnapshotRetirement of MemorySnapshotRetirementWitness
     | ConstructedValue of MemoryConstructedValueWitness
     | CheckedResultRetirement of MemoryCheckedResultRetirementWitness
+    | EmptySnapshot of MemoryEmptySnapshotWitness
 
 type MemoryProof = {
     Site: NodeId; Obligation: NodeId; Body: ObligationBody

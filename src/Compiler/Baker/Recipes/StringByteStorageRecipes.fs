@@ -626,8 +626,8 @@ let returnedExpansions (graph:SemanticGraph) =
                     | EdgeRole.StringByteSnapshot,[input;snapshot] when row.Target=construction.Owner && snapshot=construction.Snapshot -> Some input
                     | _ -> None)
                 |> only "The returned checked construction lost its original snapshot input."
-            demand (match (live original).Kind with SemanticKind.ArrayExpr values -> not values.IsEmpty | _ -> false)
-                "The returned checked profile requires a positive literal snapshot count; zero remains local-only."
+            demand (match (live original).Kind with SemanticKind.ArrayExpr _ -> true | _ -> false)
+                "The returned checked profile requires its exact literal snapshot input."
             let policy=graph.Platform |> Option.bind _.ProjectMemoryPolicy
                        |> Option.defaultWith(fun()->fail "Returned checked storage has no captured project memory policy.")
             let path,version,model,allowed=policy

@@ -75,6 +75,10 @@ let private viewSupport (operations:Map<NodeId,MemoryWitnessOperation>) construc
     match operations.TryFind construction.Text with
     | Some(MemoryWitnessOperation.StringView view) when view.Checked=Some construction -> view.Participants
     | _ -> invalidOp "The checked memory support lacks its exact current source string view."
+let emptySnapshotIds (row:MemoryEmptySnapshotWitness) = Set.ofList[row.Site;row.Snapshot;row.Owner;row.Count;row.Declaration]
+let snapshotStorageIds = function
+    | MemoryCheckedSnapshotStorage.Allocated row -> row.Participants
+    | MemoryCheckedSnapshotStorage.Empty row -> emptySnapshotIds row
 let participants operations = function
     | MemoryWitnessOperation.BufferExtent fact -> fact.Participants
     | MemoryWitnessOperation.ArrayExtent fact -> fact.Participants
@@ -85,13 +89,14 @@ let participants operations = function
     | MemoryWitnessOperation.StringView fact -> fact.Participants
     | MemoryWitnessOperation.Utf8Validation fact ->
         Set.unionMany [constructionIds fact.Construction;fact.Copy.Participants;fact.Copy.CountCarrier.Participants
-                       fact.Allocation.Participants;viewSupport operations fact.Construction]
+                       snapshotStorageIds fact.Storage;viewSupport operations fact.Construction]
     | MemoryWitnessOperation.SnapshotRetirement fact ->
-        Set.unionMany [constructionIds fact.Construction;fact.Allocation.Participants;viewSupport operations fact.Construction]
+        Set.unionMany [constructionIds fact.Construction;snapshotStorageIds fact.Storage;viewSupport operations fact.Construction]
     | MemoryWitnessOperation.ConstructedValue fact ->
         let residence=match fact.Residence with MemoryResidence.Stack(scope,space) | MemoryResidence.Heap(scope,space) -> [scope;space] | MemoryResidence.ImmutableProgram space -> [space] | MemoryResidence.Program _ -> []
         Set.unionMany [fact.Uses;constructionIds fact.Construction;Set.ofList(fact.Site::fact.Owner::fact.Platform::fact.Layout::fact.Capacity::residence)]
     | MemoryWitnessOperation.CheckedResultRetirement fact -> Set.add fact.Site (Set.add fact.Value (constructionIds fact.Construction))
+    | MemoryWitnessOperation.EmptySnapshot fact -> emptySnapshotIds fact
 let operands = function
     | MemoryWitnessOperation.BufferExtent fact -> [fact.Source]
     | MemoryWitnessOperation.ArrayExtent fact -> [fact.Source]
@@ -103,6 +108,7 @@ let operands = function
     | MemoryWitnessOperation.SnapshotRetirement fact -> [fact.Construction.Snapshot]
     | MemoryWitnessOperation.ConstructedValue _ -> []
     | MemoryWitnessOperation.CheckedResultRetirement fact -> [fact.Value]
+    | MemoryWitnessOperation.EmptySnapshot fact -> [fact.Count]
     | MemoryWitnessOperation.Address fact ->
         match fact.Place with
         | MemoryPlace.MutableCell id | MemoryPlace.ExistingReference id -> [id]

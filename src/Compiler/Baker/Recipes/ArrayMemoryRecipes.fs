@@ -305,17 +305,35 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
                        "An uninitialized array allocation lacks its complete source copy construction."
             | None,Some _ -> raise(MissingContract "An array initializer has no source default-value authority.")
             let declared=platform.Value
-            let returned=
+            let returnedConstruction=
                 graph.Edges |> List.choose(fun edge->
                     match edge.Role with
                     | EdgeRole.StringCheckedConstruction row when row.Snapshot=construction.Owner && row.Returned.IsSome -> Some row
                     | _ -> None)
                 |> function
                    | [] -> None
-                   | [row] -> try StringByteStorageRecipes.returnedLifetime graph row with :? System.InvalidOperationException as error -> raise(MissingContract error.Message)
+                   | [row] -> Some row
                    | _ -> raise(MissingContract "The returned snapshot has ambiguous lifetime accounts.")
-            let _,closed,uses=MemoryAccessRecipes.arrayUses graph construction.Site
-            let scope,space,residence,uses=
+            let returned=
+                returnedConstruction |> Option.bind(fun row ->
+                    try StringByteStorageRecipes.returnedLifetime graph row
+                    with :? System.InvalidOperationException as error -> raise(MissingContract error.Message))
+            let empty=
+                match returnedConstruction,returned with
+                | Some checkedConstruction,Some _ when count.Range=ValueRange.point 0I ->
+                    let representation,declaration=
+                        Clef.Compiler.Baker.Ingredients.StringBytes.byteRepresentation graph
+                        |> needed "An empty checked snapshot lacks its declared octet representation."
+                    demand (minimum=0I && maximum=0I && slot=SettledSlot.Integer(8,Some representation.Name))
+                        "An empty checked snapshot lacks its exact zero count and octet element."
+                    Some {Site=node.Id;Snapshot=construction.Owner;Owner=checkedConstruction.Owner;Count=construction.Count.Reference
+                          SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type;Declaration=declaration}
+                | _ -> None
+            match empty with
+            | Some empty -> admitted<-(node.Id,MemoryWitnessOperation.EmptySnapshot empty)::admitted
+            | None ->
+              let _,closed,uses=MemoryAccessRecipes.arrayUses graph construction.Site
+              let scope,space,residence,uses=
                 match returned with
                 | Some(life,space) -> life.Application,space,MemoryResidence.Heap(life.Application,space.Node),Set.union uses (Memory.resultIds life)
                 | None ->
@@ -326,40 +344,40 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
                     let space=match declared.Spaces |> List.filter(fun space -> space.Kind="stack" && space.Access.Contains("w")) with
                               | [space] -> space | _ -> raise(MissingContract "A dynamic array requires exactly one declared writable stack space.")
                     scope,space,MemoryResidence.Stack(scope,space.Node),uses
-            demand (space.Alignment>=alignment && space.Alignment%alignment=0) "The declared stack cannot satisfy the array element alignment."
-            let core=declared.Core |> needed "An array allocation needs the selected core's declared Pointer dimension."
-            let pointer=match core.Widths |> List.filter(fun width -> width.Name="Pointer" && width.Bits>0) with
-                        | [width] -> width | _ -> raise(MissingContract "Array storage has no unique positive declared Pointer dimension.")
-            let capacity=ValueRange.unsignedOf pointer.Bits
-            let indexMaximum=match capacity with ValueRange.Bounded(_,hi) -> hi | _ -> invalidOp "A finite declared pointer capacity was expected."
-            let unsigned=ValueRange.isNonNegative count.Range
-            let countCapacity=if unsigned then capacity else ValueRange.twosComplement pointer.Bits
-            let countMinimum,countMaximum=match countCapacity with ValueRange.Bounded(lo,hi) -> lo,hi | _ -> invalidOp "A finite declared count capacity was expected."
-            let extent=maximum*bigint bytes
-            demand (extent<=bigint System.Int64.MaxValue && extent<=indexMaximum && maximum<=countMaximum)
-                   "The array's maximum byte extent exceeds the declared index/address domain."
-            demand (extent<=bigint space.Capacity) "The array's complete maximum byte extent exceeds its declared stack capacity."
-            let participants=construction.Participants |> Set.union initializationParticipants |> Set.union uses |> Set.union count.Participants
-                             |> Set.union(Set.ofList(requirement.Participants@[declared.Node;space.Node;core.Node;pointer.Node;scope]))
-            let mutable own=Enrichment.empty
-            let proof label body =
-                let info={Id=sprintf "array_%d_%s" (NodeId.value node.Id) label;Kind="array-"+label;Logic="QF_LIA"
-                          Statement="Source array construction extent and layout fit their exact declared storage authority."
-                          Source=fmtRange node.Range;Refs=[];Body=body}
-                let citizen=obligationNode node (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) info |> Memory.markOwned
-                let receipt:MemoryProof={Site=node.Id;Obligation=citizen.Id;Body=body;Participants=participants;Proven=true}
-                own<-Enrichment.combine own {NewNodes=[citizen];NewEdges=Memory.proofRows receipt;Annotated=[]}
-                citizen.Id
-            let layout=proof "element_layout" (ObligationBody.ContinuationLayout([0,bytes,alignment],bytes,alignment))
-            let capacity=proof "capacity" (ObligationBody.CapacityFits(int64 extent,space.Capacity))
-            let index=proof "index" (ObligationBody.IntegerRepresentationCoverage(minimum,maximum,countMinimum,countMaximum))
-            let address=proof "address" (ObligationBody.IntegerRepresentationCoverage(0I,extent,0I,indexMaximum))
-            let value={Site=node.Id;Count=construction.Count.Reference;CountCarrier=count;IndexUnsigned=unsigned
-                       Element=slot;ElementBytes=bytes;Alignment=alignment;Residence=residence
-                       MinimumCount=minimum;MaximumCount=maximum;Requirement=requirement;Construction=construction
-                       Participants=participants |> Set.add layout |> Set.add capacity |> Set.add index |> Set.add address}
-            admitted<-(node.Id,MemoryWitnessOperation.ArrayAllocation value)::admitted
-            enrichment<-Enrichment.combine enrichment own
+              demand (space.Alignment>=alignment && space.Alignment%alignment=0) "The declared stack cannot satisfy the array element alignment."
+              let core=declared.Core |> needed "An array allocation needs the selected core's declared Pointer dimension."
+              let pointer=match core.Widths |> List.filter(fun width -> width.Name="Pointer" && width.Bits>0) with
+                          | [width] -> width | _ -> raise(MissingContract "Array storage has no unique positive declared Pointer dimension.")
+              let capacity=ValueRange.unsignedOf pointer.Bits
+              let indexMaximum=match capacity with ValueRange.Bounded(_,hi) -> hi | _ -> invalidOp "A finite declared pointer capacity was expected."
+              let unsigned=ValueRange.isNonNegative count.Range
+              let countCapacity=if unsigned then capacity else ValueRange.twosComplement pointer.Bits
+              let countMinimum,countMaximum=match countCapacity with ValueRange.Bounded(lo,hi) -> lo,hi | _ -> invalidOp "A finite declared count capacity was expected."
+              let extent=maximum*bigint bytes
+              demand (extent<=bigint System.Int64.MaxValue && extent<=indexMaximum && maximum<=countMaximum)
+                     "The array's maximum byte extent exceeds the declared index/address domain."
+              demand (extent<=bigint space.Capacity) "The array's complete maximum byte extent exceeds its declared stack capacity."
+              let participants=construction.Participants |> Set.union initializationParticipants |> Set.union uses |> Set.union count.Participants
+                               |> Set.union(Set.ofList(requirement.Participants@[declared.Node;space.Node;core.Node;pointer.Node;scope]))
+              let mutable own=Enrichment.empty
+              let proof label body =
+                  let info={Id=sprintf "array_%d_%s" (NodeId.value node.Id) label;Kind="array-"+label;Logic="QF_LIA"
+                            Statement="Source array construction extent and layout fit their exact declared storage authority."
+                            Source=fmtRange node.Range;Refs=[];Body=body}
+                  let citizen=obligationNode node (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) info |> Memory.markOwned
+                  let receipt:MemoryProof={Site=node.Id;Obligation=citizen.Id;Body=body;Participants=participants;Proven=true}
+                  own<-Enrichment.combine own {NewNodes=[citizen];NewEdges=Memory.proofRows receipt;Annotated=[]}
+                  citizen.Id
+              let layout=proof "element_layout" (ObligationBody.ContinuationLayout([0,bytes,alignment],bytes,alignment))
+              let capacity=proof "capacity" (ObligationBody.CapacityFits(int64 extent,space.Capacity))
+              let index=proof "index" (ObligationBody.IntegerRepresentationCoverage(minimum,maximum,countMinimum,countMaximum))
+              let address=proof "address" (ObligationBody.IntegerRepresentationCoverage(0I,extent,0I,indexMaximum))
+              let value={Site=node.Id;Count=construction.Count.Reference;CountCarrier=count;IndexUnsigned=unsigned
+                         Element=slot;ElementBytes=bytes;Alignment=alignment;Residence=residence
+                         MinimumCount=minimum;MaximumCount=maximum;Requirement=requirement;Construction=construction
+                         Participants=participants |> Set.add layout |> Set.add capacity |> Set.add index |> Set.add address}
+              admitted<-(node.Id,MemoryWitnessOperation.ArrayAllocation value)::admitted
+              enrichment<-Enrichment.combine enrichment own
         with MissingContract reason -> failures<-Map.add construction.Site reason failures
     for construction in constructions do
         try copies<-validateCopy construction::copies
