@@ -65,6 +65,29 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image;stack|]; 
 
     let check body = checkWith (Some platform) body
 
+    // A real selected project supplies the captured parsed policy. The fixture
+    // never injects a permission tuple or constructs a Ready memory account.
+    let returned model heap capacity body =
+        let root=System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__,"../../artifacts/utf8-checked-20261016/returned-probe/cases",System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory root |> ignore
+        let authority=
+            (declaration platform)
+                .Replace("type TargetCore = { Widths:","type TargetCore = { Arch: string; Os: string; Runtime: string; Triple: string; Widths:")
+                .Replace("let core: TargetCore = { Widths", "let core: TargetCore = { Arch=\"x86_64\"; Os=\"linux\"; Runtime=\"freestanding\"; Triple=\"x86_64-unknown-linux-gnu\"; Widths")
+        let authority=
+            if heap then
+                authority.Replace("let core:",sprintf "let heap = { Name=\"encoding-heap\"; Kind=\"heap\"; Capacity=%d; Alignment=16; Granularity=16; Growth=\"dynamic\"; Access=\"rw\"; Base=None }\nlet core:" capacity)
+                         .Replace("Spaces=[|image;stack|]","Spaces=[|image;stack;heap|]")
+            else authority
+        System.IO.File.WriteAllText(System.IO.Path.Combine(root,"Platform.clef"),authority)
+        System.IO.File.WriteAllText(System.IO.Path.Combine(root,"Main.clef"),prelude+body)
+        let project=System.IO.Path.Combine(root,"CheckedReturn.fidproj")
+        let text=sprintf "[package]\nname=\"CheckedReturn\"\nversion=\"0.1.0\"\n[compilation]\ntarget=\"cpu\"\nmemory_model=\"%s\"\n[build]\noutput_kind=\"console\"\nsources=[\"Platform.clef\",\"Main.clef\"]\n[platform]\ndescription=\"EncodingPlatform.description\"\nruntime_model=\"freestanding\"\nos=\"linux\"\narch=\"x86_64\"\n" model
+        System.IO.File.WriteAllText(project,text)
+        Clef.Compiler.Project.ProjectChecker.checkProject project
+        |> Result.defaultWith(fun error->failwithf "Returned checked fixture project failed: %A" error)
+        |> fun result->result.CheckResult
+
     let admitted body =
         let result = check body
         Assert.False(CheckResult.hasErrors result, sprintf "%A" result.Diagnostics)
@@ -916,3 +939,122 @@ type CheckedStringEncodingCases() =
         let body=match claim.Body with Fidelity.PSG.ObligationBody.CapacityFits(bytes,capacity) -> Fidelity.PSG.ObligationBody.CapacityFits(bytes,capacity+1L) | _ -> failwith "capacity claim"
         let changed={revision with CurrentClaims=revision.CurrentClaims.Add(row.Capacity,{claim with Body=body})}
         Assert.Contains("The same-space source allocation capacity claims disagree.",sprintf "%A" (Fidelity.PSG.Integrity.check changed))
+
+    static member private ReturnedProgram bytes =
+        "let checked () = String.tryFromBytes " + bytes + "\n[<EntryPoint>]\nlet main _ =\n    match checked () with\n    | ValueSome text -> String.length text\n    | ValueNone -> 0\n"
+
+    [<Theory>]
+    [<InlineData("[| 65; 66 |]")>]
+    [<InlineData("[| 0 |]")>]
+    [<InlineData("[| 255 |]")>]
+    member _.``Returned checked text owns exact helper instance and ordered cleanup``(bytes:string) =
+        let result=EncodingFixture.returned "standard" true 4096 (CheckedStringEncodingCases.ReturnedProgram bytes)
+        Assert.False(CheckResult.hasErrors result,sprintf "%A" result.Diagnostics)
+        let graph=result.Graph
+        let memory=EncodingFixture.memory graph
+        let validation=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Utf8Validation row -> Some row | _ -> None) |> Assert.Single
+        let life=validation.Construction.Returned |> Option.defaultWith(fun()->failwith "Missing authored returned lifetime")
+        Assert.NotEqual(life.Application,validation.Construction.Owner)
+        Assert.NotEqual(life.Actual,validation.Construction.Success)
+        Assert.Equal(MemoryResidence.Heap(life.Application,life.Space),validation.Allocation.Residence)
+        let carriers=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.ConstructedValue row -> Some row | _ -> None) |> Seq.toList
+        Assert.Equal(2,carriers.Length)
+        for row in carriers do Assert.Equal(validation.Allocation.Residence,row.Residence)
+        let cleanup=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.CheckedResultRetirement row -> Some row | _ -> None) |> Seq.toList
+        Assert.Equal(3,cleanup.Length)
+        Assert.Equal(Set.ofList[life.SomeBackingRetirement;life.SomeCarrierRetirement;life.NoneCarrierRetirement],cleanup |> List.map _.Site |> Set.ofList)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures->failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        Assert.True(revision.CurrentClaims.ContainsKey(Fidelity.PSG.NodeId(NodeId.value life.Capacity)))
+
+    [<Theory>]
+    [<InlineData("stack_only",true,4096,"forbids returned checked storage")>]
+    [<InlineData("standard",false,4096,"exactly one declared writable heap")>]
+    [<InlineData("standard",true,50,"combined returned checked live extent")>]
+    member _.``Returned checked text requires actual policy heap and combined capacity``(model:string,heap:bool,capacity:int,reason:string) =
+        let result=EncodingFixture.returned model heap capacity (CheckedStringEncodingCases.ReturnedProgram "[| 65; 0; 66 |]")
+        Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains(reason))
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> Result.isError)
+
+    [<Fact>]
+    member _.``Returned checked text has no standalone allocation permission``() =
+        let result=EncodingFixture.check (CheckedStringEncodingCases.ReturnedProgram "[| 65 |]")
+        Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains("no captured project memory policy"))
+
+    [<Fact>]
+    member _.``Returned checked text keeps zero count outside its heap profile``() =
+        let result=EncodingFixture.returned "standard" true 4096 (CheckedStringEncodingCases.ReturnedProgram "[||]")
+        Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains("zero remains local-only"))
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Returned checked text refuses a second application or captured instance``(capture:bool) =
+        let body=
+            if capture then
+                "let checked () = String.tryFromBytes [|65|]\n[<EntryPoint>]\nlet main _ =\n    let value = checked ()\n    let observe () = match value with | ValueSome text -> String.length text | ValueNone -> 0\n    observe ()\n"
+            else
+                "let checked () = String.tryFromBytes [|65|]\n[<EntryPoint>]\nlet main _ =\n    let first = checked ()\n    let second = checked ()\n    let a = match first with | ValueSome text -> String.length text | ValueNone -> 0\n    let b = match second with | ValueSome text -> String.length text | ValueNone -> 0\n    a + b\n"
+        let reason=if capture then "requires its exact Some elimination" else "exactly one complete helper application"
+        let result=EncodingFixture.returned "standard" true 4096 body
+        Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains(reason))
+
+    [<Theory>]
+    [<InlineData("policy")>]
+    [<InlineData("call")>]
+    [<InlineData("formal")>]
+    [<InlineData("cleanup")>]
+    [<InlineData("body")>]
+    [<InlineData("case")>]
+    [<InlineData("capacity")>]
+    [<InlineData("capacity-body")>]
+    [<InlineData("capacity-support")>]
+    [<InlineData("case-arm")>]
+    member _.``Returned checked current account refuses withdrawn source incidence``(change:string) =
+        let result=EncodingFixture.returned "standard" true 4096 (CheckedStringEncodingCases.ReturnedProgram "[|65|]")
+        Assert.False(CheckResult.hasErrors result,sprintf "%A" result.Diagnostics)
+        let graph=result.Graph
+        let memory=EncodingFixture.memory graph
+        let validation=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Utf8Validation row -> Some row | _ -> None) |> Assert.Single
+        let life=Option.get validation.Construction.Returned
+        let changed=
+            match change with
+            | "policy" -> {graph with Platform=graph.Platform |> Option.map(fun context->{context with ProjectMemoryPolicy=None})}
+            | "capacity-support" ->
+                {graph with Edges=graph.Edges |> List.filter(fun edge->not(edge.Target=life.Capacity && edge.Role=EdgeRole.Constrains))}
+            | "capacity-body" ->
+                let citizen=graph.Nodes[life.Capacity]
+                let info=match citizen.Kind with SemanticKind.Obligation info->info | _ -> failwith "Missing capacity citizen"
+                {graph with Nodes=graph.Nodes.Add(citizen.Id,{citizen with Kind=SemanticKind.Obligation{info with Body=ObligationBody.CapacityFits(0L,0L)}})}
+            | "case-arm" ->
+                let node=graph.Nodes[life.Elimination]
+                let kind=match node.Kind with SemanticKind.CaseElimination(value,arms)->SemanticKind.CaseElimination(value,List.rev arms) | _ -> failwith "Missing caller cases"
+                {graph with Nodes=graph.Nodes.Add(node.Id,{node with Kind=kind})}
+            | _ ->
+                let id=match change with
+                       | "call"->life.Application | "formal"->life.Formal | "body"->life.Body
+                       | "case"->validation.Construction.Success | "capacity"->life.Capacity | _ -> life.SomeBackingRetirement
+                {graph with Nodes=graph.Nodes.Remove id}
+        let failure=Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project changed
+        Assert.True(Result.isError failure)
+        let reason=
+            match change with
+            | "policy" -> "allocation permission"
+            | "capacity-support" -> "exact owning source support"
+            | "capacity" | "capacity-body" -> "source, guard, meet or declaration premises changed"
+            | _ -> "the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof"
+        Assert.Contains(reason,sprintf "%A" failure)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project graph |> Result.isOk)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Returned checked text refuses loop placement and repeated consumers``(loop:bool) =
+        let body=
+            if loop then
+                "let checked () = String.tryFromBytes [|65|]\n[<EntryPoint>]\nlet main _ =\n    let mutable remaining = 2\n    let mutable answer = 0\n    while remaining > 0 do\n        answer <- match checked () with | ValueSome text -> String.length text | ValueNone -> 0\n        remaining <- remaining - 1\n    answer\n"
+            else
+                "let checked () = String.tryFromBytes [|65|]\n[<EntryPoint>]\nlet main _ =\n    let value = checked ()\n    let a = match value with | ValueSome text -> String.length text | ValueNone -> 0\n    let b = match value with | ValueSome text -> String.length text | ValueNone -> 0\n    a + b\n"
+        let result=EncodingFixture.returned "standard" true 4096 body
+        let reason=if loop then "conditional, captured or inside a loop" else "exact Some elimination"
+        Assert.Contains(CheckResult.errors result,fun diagnostic->diagnostic.Code="CCS8403" && diagnostic.Message.Contains(reason))

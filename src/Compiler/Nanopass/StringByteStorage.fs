@@ -52,7 +52,17 @@ let private settle (graph: SemanticGraph) =
 let private normalizeCore (graph: SemanticGraph) =
     match graph.Platform with
     | None -> graph, []
-    | Some _ -> settle graph
+    | Some _ ->
+        let graph,diagnostics=settle graph
+        let annotated,expansions,returnedDiagnostics=Recipes.returnedExpansions graph
+        if expansions.IsEmpty then annotated,diagnostics@returnedDiagnostics else
+        let create (node:SemanticNode) _ =
+            let root,nodes,edges=expansions[node.Id]
+            RecipeCreated{OriginalNodeId=node.Id;ReplacementRootId=root;NewNodes=nodes;NewEdges=edges
+                          ElaborationKind="Baker";ElaborationSource="StringCheckedResult"}
+        let recipes=FanOut.fanOut "StringCheckedResult" (fun node->expansions.ContainsKey node.Id) create annotated
+        FoldIn.foldIn recipes annotated |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable,
+        diagnostics@returnedDiagnostics
 
 let normalize graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

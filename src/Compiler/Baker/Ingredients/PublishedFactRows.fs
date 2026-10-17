@@ -1916,6 +1916,7 @@ and mapMemoryResidence (value: S.MemoryResidence) : Fidelity.PSG.MemoryResidence
     | S.MemoryResidence.Stack(a0, a1) -> Fidelity.PSG.MemoryResidence.Stack(nodeId a0, nodeId a1)
     | S.MemoryResidence.Program(a0) -> Fidelity.PSG.MemoryResidence.Program(mapProgramStorageIdentity a0)
     | S.MemoryResidence.ImmutableProgram(a0) -> Fidelity.PSG.MemoryResidence.ImmutableProgram(nodeId a0)
+    | S.MemoryResidence.Heap(application,space) -> Fidelity.PSG.MemoryResidence.Heap(nodeId application,nodeId space)
 
 and mapMemoryStringPremise (value: S.MemoryStringPremise) : Fidelity.PSG.MemoryStringPremise =
     match value with
@@ -1949,7 +1950,17 @@ and mapCheckedStringConstruction (value: S.CheckedStringConstruction) : Fidelity
     { Owner = nodeId value.Owner; Input = nodeId value.Input; Snapshot = nodeId value.Snapshot; Length = nodeId value.Length
       Validation = nodeId value.Validation; Decision = nodeId value.Decision; Text = nodeId value.Text
       Success = nodeId value.Success; Failure = nodeId value.Failure; Retirement = nodeId value.Retirement
-      Validator = value.Validator }
+      Validator = value.Validator; Returned = Option.map mapMemoryCheckedResultLifetime value.Returned }
+
+and mapMemoryCheckedResultLifetime (value:S.MemoryCheckedResultLifetime) : Fidelity.PSG.MemoryCheckedResultLifetime =
+    { Application=nodeId value.Application; Callee=nodeId value.Callee; Declaration=nodeId value.Declaration
+      Implementation=nodeId value.Implementation; Argument=nodeId value.Argument; Formal=nodeId value.Formal
+      Body=nodeId value.Body; Caller=nodeId value.Caller; Actual=nodeId value.Actual; Elimination=nodeId value.Elimination
+      SomeUse=nodeId value.SomeUse; NoneUse=nodeId value.NoneUse
+      SomeBackingRetirement=nodeId value.SomeBackingRetirement; SomeCarrierRetirement=nodeId value.SomeCarrierRetirement
+      NoneCarrierRetirement=nodeId value.NoneCarrierRetirement; Uses=List.map nodeId value.Uses
+      Policy={ProjectPath=value.Policy.ProjectPath;SourceVersion=value.Policy.SourceVersion;Model=value.Policy.Model}
+      Platform=nodeId value.Platform; Space=nodeId value.Space; MaximumLiveBytes=value.MaximumLiveBytes; Capacity=nodeId value.Capacity }
 
 and mapMemoryUtf8ValidationWitness (value: S.MemoryUtf8ValidationWitness) : Fidelity.PSG.MemoryUtf8ValidationWitness =
     { Site = nodeId value.Site; Construction = mapCheckedStringConstruction value.Construction
@@ -1965,6 +1976,11 @@ and mapMemoryConstructedValueWitness (value: S.MemoryConstructedValueWitness) : 
       Residence = mapMemoryResidence value.Residence; Uses = Set.map nodeId value.Uses
       Construction = mapCheckedStringConstruction value.Construction; Platform = nodeId value.Platform
       Layout = nodeId value.Layout; Capacity = nodeId value.Capacity }
+
+and mapMemoryCheckedResultRetirementWitness (value:S.MemoryCheckedResultRetirementWitness) : Fidelity.PSG.MemoryCheckedResultRetirementWitness =
+    { Site=nodeId value.Site; Value=nodeId value.Value; Construction=mapCheckedStringConstruction value.Construction
+      Target=match value.Target with S.MemoryCheckedRetirementTarget.Backing -> Fidelity.PSG.MemoryCheckedRetirementTarget.Backing
+                                   | S.MemoryCheckedRetirementTarget.Carrier -> Fidelity.PSG.MemoryCheckedRetirementTarget.Carrier }
 
 and mapMemoryStringViewWitness (value: S.MemoryStringViewWitness) : Fidelity.PSG.MemoryStringViewWitness =
     ({
@@ -1995,6 +2011,7 @@ and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.M
     | S.MemoryWitnessOperation.Utf8Validation value -> Fidelity.PSG.MemoryWitnessOperation.Utf8Validation(mapMemoryUtf8ValidationWitness value)
     | S.MemoryWitnessOperation.SnapshotRetirement value -> Fidelity.PSG.MemoryWitnessOperation.SnapshotRetirement(mapMemorySnapshotRetirementWitness value)
     | S.MemoryWitnessOperation.ConstructedValue value -> Fidelity.PSG.MemoryWitnessOperation.ConstructedValue(mapMemoryConstructedValueWitness value)
+    | S.MemoryWitnessOperation.CheckedResultRetirement value -> Fidelity.PSG.MemoryWitnessOperation.CheckedResultRetirement(mapMemoryCheckedResultRetirementWitness value)
 
 and mapMemoryWitnessProjection (value: S.MemoryWitnessProjection) : Fidelity.PSG.MemoryWitnessProjection =
     ({

@@ -473,14 +473,24 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                 match numeric.Layouts.TryFind sourceType with
                 | Some(SettledLayout.Union(_,_,Some bytes,Some alignment)) when bytes>0 && alignment>0 -> bytes,alignment
                 | _ -> raise(MissingContract "The constructed value lacks its complete settled union storage layout.")
+            let returned=try StringByteStorageRecipes.returnedLifetime graph construction with :? System.InvalidOperationException as error -> raise(MissingContract error.Message)
             let _,closed,uses=arrayUses graph node.Id
-            demand closed "The constructed value's complete use family escapes or has an unsupported consumer."
-            let scope=nearestLambda graph node.Id |> needed "The constructed value has no source lexical activation scope."
-            demand (uses |> Set.forall(fun id ->
-                match (live graph id).Kind with SemanticKind.ModuleDef _ -> true | _ -> nearestLambda graph id=Some scope))
-                "A constructed-value alias or access crosses its proposed stack activation."
-            let stack=platform.Value.Spaces |> List.filter(fun space -> space.Kind="stack" && space.Access.Contains("w")) |> function
-                      | [stack] -> stack | _ -> raise(MissingContract "A local constructed value requires one declared writable stack space.")
+            let scope,stack,residence,uses=
+                match returned with
+                | Some(life,space) ->
+                    // Uses names program consumers. The exact logical capacity
+                    // target is supported separately through its named role.
+                    let executableUses=Set.union uses (Set.ofList life.Uses) |> Set.remove life.Capacity
+                    life.Application,space,MemoryResidence.Heap(life.Application,space.Node),executableUses
+                | None ->
+                    demand closed "The constructed value's complete use family escapes or has an unsupported consumer."
+                    let scope=nearestLambda graph node.Id |> needed "The constructed value has no source lexical activation scope."
+                    demand (uses |> Set.forall(fun id ->
+                        match (live graph id).Kind with SemanticKind.ModuleDef _ -> true | _ -> nearestLambda graph id=Some scope))
+                        "A constructed-value alias or access crosses its proposed stack activation."
+                    let stack=platform.Value.Spaces |> List.filter(fun space -> space.Kind="stack" && space.Access.Contains("w")) |> function
+                              | [stack] -> stack | _ -> raise(MissingContract "A local constructed value requires one declared writable stack space.")
+                    scope,stack,MemoryResidence.Stack(scope,stack.Node),uses
             demand (stack.Alignment>=alignment && stack.Alignment%alignment=0)
                 "The declared stack space does not satisfy the constructed-value layout alignment."
             let incidence=[construction.Owner;construction.Input;construction.Snapshot;construction.Length;construction.Validation
@@ -489,7 +499,7 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
             let layoutProof=proof (ObligationBody.ContinuationLayout([0,bytes,alignment],bytes,alignment)) participants "constructed_layout"
             let capacityProof=proof (ObligationBody.CapacityFits(int64 bytes,stack.Capacity)) participants "constructed_capacity"
             MemoryWitnessOperation.ConstructedValue
-                {Site=node.Id;Owner=construction.Owner;SourceType=sourceType;Residence=MemoryResidence.Stack(scope,stack.Node)
+                {Site=node.Id;Owner=construction.Owner;SourceType=sourceType;Residence=residence
                  Uses=uses;Construction=construction;Platform=platform.Value.Node;Layout=layoutProof;Capacity=capacityProof}
           | SemanticKind.ArrayExpr elements ->
             let slot = element numeric node.Id
@@ -617,6 +627,61 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                 try operations <- (node.Id, settleNode node) :: operations
                 with MissingContract reason -> unresolved <- Map.add node.Id reason unresolved
     enrichment, List.rev operations, unresolved, required
+
+/// Finalize the source-authored logical live budget after the existing numeric
+/// owner has settled the exact element and native union layouts.
+let finalizeReturned (graph:SemanticGraph) (numeric:NumericWitnessProjection) =
+    let mutable nodes=graph.Nodes
+    let mutable proofEdges=[]
+    let finish edge =
+      try
+        match edge.Role with
+        | EdgeRole.StringCheckedConstruction construction ->
+            match construction.Returned with
+            | None -> edge
+            | Some lifetime ->
+                let pending reason=invalidOp reason
+                let platform=Platform.resolve graph |> Option.defaultWith(fun()->pending "The returned checked platform was withdrawn.")
+                let space=platform.Spaces |> List.tryFind(fun space->space.Node=lifetime.Space && space.Kind="heap" && space.Access.Contains("w"))
+                          |> Option.defaultWith(fun()->pending "The returned checked heap declaration was withdrawn.")
+                let allocation=
+                    graph.Edges |> List.choose(fun row->
+                        match row.Role with
+                        | EdgeRole.ArrayAllocationConstruction row when row.Owner=construction.Snapshot -> Some row
+                        | _ -> None)
+                    |> function [row]->row | _ -> pending "The returned checked snapshot has no unique source allocation."
+                let maximum=match numeric.Values.TryFind allocation.Count.Reference with
+                            | Some carrier -> match carrier.Range with ValueRange.Bounded(lo,hi) when lo>0I -> hi | _ -> pending "The returned checked snapshot requires a positive count."
+                            | None -> pending "The returned checked snapshot lacks its settled count carrier."
+                let bytes=match numeric.Elements.TryFind allocation.Site |> Option.bind(Clef.Compiler.PSGSaturation.SemanticGraph.Placement.extentOfSlot graph) with
+                          | Some(bytes,_) -> bigint bytes | None -> pending "The returned checked element extent is missing."
+                let carrierBytes=match numeric.Layouts.TryFind(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[construction.Success].Type) with
+                                 | Some(SettledLayout.Union(_,_,Some bytes,_)) -> bigint bytes | _ -> pending "The returned checked native carrier layout is missing."
+                let total=maximum*bytes+carrierBytes
+                if total>bigint space.Capacity || total>bigint System.Int64.MaxValue then pending "The combined returned checked live extent exceeds its declared heap capacity."
+                let lifetime={lifetime with MaximumLiveBytes=int64 total}
+                let construction={construction with Returned=Some lifetime}
+                let sources=[lifetime.Application;lifetime.Callee;lifetime.Declaration;lifetime.Implementation;lifetime.Argument;lifetime.Formal;lifetime.Body
+                             lifetime.Caller;lifetime.Actual;lifetime.Elimination;lifetime.SomeUse;lifetime.NoneUse;lifetime.SomeBackingRetirement
+                             lifetime.SomeCarrierRetirement;lifetime.NoneCarrierRetirement;lifetime.Platform;lifetime.Space]@lifetime.Uses
+                let citizen=nodes[lifetime.Capacity]
+                let info=match citizen.Kind with SemanticKind.Obligation info->info | _ -> pending "The returned checked capacity citizen was withdrawn."
+                nodes<-nodes.Add(citizen.Id,{citizen with Kind=SemanticKind.Obligation{info with Body=ObligationBody.CapacityFits(int64 total,space.Capacity)}})
+                proofEdges<-constrains sources {citizen with Kind=SemanticKind.Obligation{info with Body=ObligationBody.CapacityFits(int64 total,space.Capacity)}}::proofEdges
+                {edge with Role=EdgeRole.StringCheckedConstruction construction;Sources=List.distinct(edge.Sources@sources@[lifetime.Capacity])}
+        | _ -> edge
+      with :? System.InvalidOperationException as error ->
+        match edge.Role with
+        | EdgeRole.StringCheckedConstruction {Returned=Some life} ->
+            match nodes.TryFind life.Capacity with
+            | Some citizen -> match citizen.Kind with
+                              | SemanticKind.Obligation info -> nodes<-nodes.Add(citizen.Id,{citizen with Kind=SemanticKind.Obligation{info with Body=ObligationBody.Pending[error.Message]}})
+                              | _ -> ()
+            | None -> ()
+        | _ -> ()
+        edge
+    let edges=graph.Edges |> List.map finish
+    {graph with Nodes=nodes;Edges=edges@proofEdges}
 
 let settle graph numeric =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore graph numeric)

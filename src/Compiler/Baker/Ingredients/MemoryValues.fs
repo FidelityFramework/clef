@@ -21,8 +21,28 @@ let excluded graph =
     | Error failures -> invalidOp(sprintf "Source memory demand premises are unsettled: %A" failures)
 let executable (graph:SemanticGraph) excluded id =
     not(Set.contains id excluded) && (graph.Nodes.TryFind id |> Option.exists _.IsReachable)
-let premises (graph: SemanticGraph) = graph.Nodes |> Map.fold (fun values id node ->
-    if owned node || Boundaries.ownedNode node || node.Metadata.ContainsKey "Baker.SpatialPublicationOwned" then values else Map.add id (Boundaries.premise node) values) Map.empty
+let premises (graph: SemanticGraph) =
+    let returnedCapacities =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.StringCheckedConstruction {Returned=Some lifetime} -> Some lifetime.Capacity
+            | _ -> None) |> Set.ofList
+    graph.Nodes |> Map.fold (fun values id node ->
+        if returnedCapacities.Contains id then
+            // This exact logical role is not an executable value. Retain its
+            // authored body through the same immutable source-premise owner.
+            let held = Boundaries.premise node
+            let form,text,numbers =
+                match node.Kind with
+                | SemanticKind.Obligation info ->
+                    let text=[info.Id;info.Kind;info.Logic;info.Statement;info.Source] @ info.Refs
+                    match info.Body with
+                    | ObligationBody.CapacityFits(bytes,capacity) -> "checked-result-capacity",text,[bigint bytes;bigint capacity]
+                    | _ -> "unsettled-checked-result-capacity",text,[]
+                | _ -> "missing-checked-result-capacity",[],[]
+            Map.add id {held with Shape={held.Shape with Form=form;Text=text;Numbers=numbers}} values
+        elif owned node || Boundaries.ownedNode node || node.Metadata.ContainsKey "Baker.SpatialPublicationOwned" then values
+        else Map.add id (Boundaries.premise node) values) Map.empty
 let guards (graph: SemanticGraph) = graph.Edges |> List.choose (fun edge ->
     match edge.Role with EdgeRole.MemoryAccessGuard -> Some(edge.Target, edge.Sources) | _ -> None)
 let requirements (graph: SemanticGraph) = graph.Edges |> List.choose (fun edge ->
@@ -44,8 +64,13 @@ let stringRelations (graph: SemanticGraph) = graph.Edges |> List.choose (fun edg
         | _ -> None
     premise |> Option.map (fun premise ->
         { Class=edge.Class; Premise=premise; Ordinal=edge.Ordinal; Sources=edge.Sources; Target=edge.Target }))
+let resultIds (row:MemoryCheckedResultLifetime) =
+    Set.ofList([row.Application;row.Callee;row.Declaration;row.Implementation;row.Argument;row.Formal;row.Body;row.Caller
+                row.Actual;row.Elimination;row.SomeUse;row.NoneUse;row.SomeBackingRetirement;row.SomeCarrierRetirement
+                row.NoneCarrierRetirement;row.Platform;row.Space;row.Capacity]@row.Uses)
 let constructionIds (row:CheckedStringConstruction) =
-    Set.ofList [row.Owner;row.Input;row.Snapshot;row.Length;row.Validation;row.Decision;row.Text;row.Success;row.Failure;row.Retirement]
+    Set.union (Set.ofList [row.Owner;row.Input;row.Snapshot;row.Length;row.Validation;row.Decision;row.Text;row.Success;row.Failure;row.Retirement])
+        (row.Returned |> Option.map resultIds |> Option.defaultValue Set.empty)
 let private viewSupport (operations:Map<NodeId,MemoryWitnessOperation>) construction =
     match operations.TryFind construction.Text with
     | Some(MemoryWitnessOperation.StringView view) when view.Checked=Some construction -> view.Participants
@@ -64,8 +89,9 @@ let participants operations = function
     | MemoryWitnessOperation.SnapshotRetirement fact ->
         Set.unionMany [constructionIds fact.Construction;fact.Allocation.Participants;viewSupport operations fact.Construction]
     | MemoryWitnessOperation.ConstructedValue fact ->
-        let residence=match fact.Residence with MemoryResidence.Stack(scope,space) -> [scope;space] | MemoryResidence.ImmutableProgram space -> [space] | MemoryResidence.Program _ -> []
+        let residence=match fact.Residence with MemoryResidence.Stack(scope,space) | MemoryResidence.Heap(scope,space) -> [scope;space] | MemoryResidence.ImmutableProgram space -> [space] | MemoryResidence.Program _ -> []
         Set.unionMany [fact.Uses;constructionIds fact.Construction;Set.ofList(fact.Site::fact.Owner::fact.Platform::fact.Layout::fact.Capacity::residence)]
+    | MemoryWitnessOperation.CheckedResultRetirement fact -> Set.add fact.Site (Set.add fact.Value (constructionIds fact.Construction))
 let operands = function
     | MemoryWitnessOperation.BufferExtent fact -> [fact.Source]
     | MemoryWitnessOperation.ArrayExtent fact -> [fact.Source]
@@ -76,6 +102,7 @@ let operands = function
     | MemoryWitnessOperation.Utf8Validation fact -> [fact.Construction.Snapshot]
     | MemoryWitnessOperation.SnapshotRetirement fact -> [fact.Construction.Snapshot]
     | MemoryWitnessOperation.ConstructedValue _ -> []
+    | MemoryWitnessOperation.CheckedResultRetirement fact -> [fact.Value]
     | MemoryWitnessOperation.Address fact ->
         match fact.Place with
         | MemoryPlace.MutableCell id | MemoryPlace.ExistingReference id -> [id]

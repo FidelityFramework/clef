@@ -304,14 +304,28 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
                 demand (constructions |> List.exists(fun copy -> copy.Allocation=Some construction.Site && copy.Count=construction.Count))
                        "An uninitialized array allocation lacks its complete source copy construction."
             | None,Some _ -> raise(MissingContract "An array initializer has no source default-value authority.")
-            let _,closed,uses=MemoryAccessRecipes.arrayUses graph construction.Site
-            demand closed "The dynamic array's complete use family has no admitted local storage lifetime."
-            let scope=MemoryAccessRecipes.nearestLambda graph construction.Site |> needed "A dynamic array lacks a lexical activation scope."
-            demand (uses |> Set.forall(fun id -> match (live graph id).Kind with SemanticKind.ModuleDef _ -> true | _ -> MemoryAccessRecipes.nearestLambda graph id=Some scope))
-                   "A dynamic array alias or access escapes its stack activation."
             let declared=platform.Value
-            let space=match declared.Spaces |> List.filter(fun space -> space.Kind="stack" && space.Access.Contains("w")) with
-                      | [space] -> space | _ -> raise(MissingContract "A dynamic array requires exactly one declared writable stack space.")
+            let returned=
+                graph.Edges |> List.choose(fun edge->
+                    match edge.Role with
+                    | EdgeRole.StringCheckedConstruction row when row.Snapshot=construction.Owner && row.Returned.IsSome -> Some row
+                    | _ -> None)
+                |> function
+                   | [] -> None
+                   | [row] -> try StringByteStorageRecipes.returnedLifetime graph row with :? System.InvalidOperationException as error -> raise(MissingContract error.Message)
+                   | _ -> raise(MissingContract "The returned snapshot has ambiguous lifetime accounts.")
+            let _,closed,uses=MemoryAccessRecipes.arrayUses graph construction.Site
+            let scope,space,residence,uses=
+                match returned with
+                | Some(life,space) -> life.Application,space,MemoryResidence.Heap(life.Application,space.Node),Set.union uses (Memory.resultIds life)
+                | None ->
+                    demand closed "The dynamic array's complete use family has no admitted local storage lifetime."
+                    let scope=MemoryAccessRecipes.nearestLambda graph construction.Site |> needed "A dynamic array lacks a lexical activation scope."
+                    demand (uses |> Set.forall(fun id -> match (live graph id).Kind with SemanticKind.ModuleDef _ -> true | _ -> MemoryAccessRecipes.nearestLambda graph id=Some scope))
+                           "A dynamic array alias or access escapes its stack activation."
+                    let space=match declared.Spaces |> List.filter(fun space -> space.Kind="stack" && space.Access.Contains("w")) with
+                              | [space] -> space | _ -> raise(MissingContract "A dynamic array requires exactly one declared writable stack space.")
+                    scope,space,MemoryResidence.Stack(scope,space.Node),uses
             demand (space.Alignment>=alignment && space.Alignment%alignment=0) "The declared stack cannot satisfy the array element alignment."
             let core=declared.Core |> needed "An array allocation needs the selected core's declared Pointer dimension."
             let pointer=match core.Widths |> List.filter(fun width -> width.Name="Pointer" && width.Bits>0) with
@@ -341,7 +355,7 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
             let index=proof "index" (ObligationBody.IntegerRepresentationCoverage(minimum,maximum,countMinimum,countMaximum))
             let address=proof "address" (ObligationBody.IntegerRepresentationCoverage(0I,extent,0I,indexMaximum))
             let value={Site=node.Id;Count=construction.Count.Reference;CountCarrier=count;IndexUnsigned=unsigned
-                       Element=slot;ElementBytes=bytes;Alignment=alignment;Residence=MemoryResidence.Stack(scope,space.Node)
+                       Element=slot;ElementBytes=bytes;Alignment=alignment;Residence=residence
                        MinimumCount=minimum;MaximumCount=maximum;Requirement=requirement;Construction=construction
                        Participants=participants |> Set.add layout |> Set.add capacity |> Set.add index |> Set.add address}
             admitted<-(node.Id,MemoryWitnessOperation.ArrayAllocation value)::admitted

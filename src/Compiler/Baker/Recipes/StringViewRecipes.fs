@@ -133,7 +133,8 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                 required<-Set.add node.Id required
                 failures<-Map.add node.Id "The demanded String.tryFromBytes lacks proved byte storage and its private snapshot/validation/outcome construction." failures
             | Some(info,[_]) when info.Module=IntrinsicModule.String &&
-                                   (info.Operation="validateUtf8" || info.Operation="retireSnapshot") ->
+                                   (info.Operation="validateUtf8" || info.Operation="retireSnapshot" ||
+                                    info.Operation="retireCheckedBacking" || info.Operation="retireCheckedCarrier") ->
                 required<-Set.add node.Id required
                 failures<-Map.add node.Id "The checked string operation lacks its complete current snapshot/validation/outcome construction." failures
             | _ -> ()
@@ -239,13 +240,19 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                 | None -> ()
                 | Some(_,construction) ->
                     required<-required |> Set.add construction.Validation |> Set.add construction.Retirement
-                    demand (match allocationFact.Residence with MemoryResidence.Stack _ -> true | _ -> false)
-                        "The checked snapshot lacks its existing source-authorized stack-scope retirement."
+                    let returned=try StringByteStorageRecipes.returnedLifetime graph construction with :? System.InvalidOperationException as error -> raise(MissingContract error.Message)
+                    let residence=match returned with
+                                  | None -> match allocationFact.Residence with MemoryResidence.Stack _ -> allocationFact.Residence | _ -> raise(MissingContract "The checked snapshot lacks its existing source-authorized stack-scope retirement.")
+                                  | Some(life,space) ->
+                                      let expected=MemoryResidence.Heap(life.Application,space.Node)
+                                      demand (allocationFact.Residence=expected && copy.CountCarrier.Range |> function ValueRange.Bounded(lo,_) -> lo>0I | _ -> false)
+                                          "The returned checked snapshot lacks its exact positive heap instance."
+                                      expected
                     for site in [construction.Success;construction.Failure] do
                         match operations.TryFind site with
                         | Some(MemoryWitnessOperation.ConstructedValue value) when value.Site=site && value.Owner=construction.Owner &&
                             value.SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType (live graph site).Type &&
-                            (match value.Residence with MemoryResidence.Stack _ -> true | _ -> false) -> ()
+                            value.Residence=residence -> ()
                         | _ -> raise(MissingContract "The checked native outcome lacks its exact source-authorized local constructed-value storage.")
                     let validator:MemoryUtf8ValidationWitness=
                         {Site=construction.Validation;Construction=construction;Copy=copy;Allocation=allocationFact
@@ -255,6 +262,23 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                     admitted<-(construction.Validation,MemoryWitnessOperation.Utf8Validation validator)::
                               (construction.Retirement,MemoryWitnessOperation.SnapshotRetirement retirement)::admitted
                     failures<-failures |> Map.remove construction.Validation |> Map.remove construction.Retirement
+                    match returned with
+                    | None -> ()
+                    | Some(life,_) ->
+                        for site,target in [life.SomeBackingRetirement,MemoryCheckedRetirementTarget.Backing
+                                            life.SomeCarrierRetirement,MemoryCheckedRetirementTarget.Carrier
+                                            life.NoneCarrierRetirement,MemoryCheckedRetirementTarget.Carrier] do
+                            let value=match (live graph site).Kind with
+                                      | SemanticKind.Application(_,[value]) -> value
+                                      | _ -> raise(MissingContract "The returned checked cleanup has no exact source actual.")
+                            demand (target=MemoryCheckedRetirementTarget.Backing || value=life.Actual)
+                                "The checked carrier cleanup names a different actual instance."
+                            if target=MemoryCheckedRetirementTarget.Backing then
+                                demand (match (live graph life.SomeUse).Kind with SemanticKind.Application(_,[payload]) -> payload=value | _ -> false)
+                                    "The checked backing cleanup names a different scalar payload."
+                            required<-Set.add site required
+                            admitted<-(site,MemoryWitnessOperation.CheckedResultRetirement{Site=site;Value=value;Target=target;Construction=construction})::admitted
+                            failures<-Map.remove site failures
             with MissingContract reason -> failures<-Map.add node.Id reason failures
     List.rev admitted,failures,required
 

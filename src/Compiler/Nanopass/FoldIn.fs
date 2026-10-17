@@ -345,7 +345,15 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
                                                     Snapshot=current construction.Snapshot;Length=current construction.Length
                                                     Validation=current construction.Validation;Decision=current construction.Decision
                                                     Text=current construction.Text;Success=current construction.Success
-                                                    Failure=current construction.Failure;Retirement=current construction.Retirement }
+                                                    Failure=current construction.Failure;Retirement=current construction.Retirement
+                                                    Returned=construction.Returned |> Option.map(fun life ->
+                                                        {life with Application=current life.Application;Callee=current life.Callee;Declaration=current life.Declaration
+                                                                   Implementation=current life.Implementation;Argument=current life.Argument;Formal=current life.Formal
+                                                                   Body=current life.Body;Caller=current life.Caller;Actual=current life.Actual;Elimination=current life.Elimination
+                                                                   SomeUse=current life.SomeUse;NoneUse=current life.NoneUse
+                                                                   SomeBackingRetirement=current life.SomeBackingRetirement;SomeCarrierRetirement=current life.SomeCarrierRetirement
+                                                                   NoneCarrierRetirement=current life.NoneCarrierRetirement;Uses=List.map current life.Uses
+                                                                   Platform=current life.Platform;Space=current life.Space;Capacity=current life.Capacity}) }
                         | role -> role
                     Sources =
                         if historical e then e.Sources

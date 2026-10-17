@@ -18,6 +18,7 @@ let private normalizeCore (graph: SemanticGraph) =
     match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
     | Error _ -> graph
     | Ok numeric ->
+        let graph=Clef.Compiler.Baker.Recipes.MemoryAccessRecipes.finalizeReturned graph numeric
         let anchor = Boundary.anchor (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId ()) graph
                      |> fun node -> { node with Metadata = node.Metadata.Remove "Baker.BoundaryOwned" } |> Memory.markOwned
         let extentOperations, extentFailures, extentRequired = Clef.Compiler.Baker.Recipes.MemoryExtentRecipes.settle graph numeric

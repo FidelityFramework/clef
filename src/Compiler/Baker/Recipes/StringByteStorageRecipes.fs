@@ -462,7 +462,7 @@ let private expandCore (graph: SemanticGraph) (plan: Plan) =
             let construction =
                 { Owner = plan.Site.Id; Input = input; Snapshot = snapshot; Length = length
                   Validation = validation; Decision = decision; Text = text; Success = success
-                  Failure = failure; Retirement = retirement; Validator = "RFC3629-v1" }
+                  Failure = failure; Retirement = retirement; Validator = "RFC3629-v1"; Returned = None }
             return root, snapshot, Some construction
         else
             let! result = intrinsic IntrinsicModule.String "fromBytes" [snapshot] [sourceType] Types.stringType
@@ -554,3 +554,240 @@ let private expandToBytesCore (graph: SemanticGraph) (source: SemanticNode) inpu
 
 let expandToBytes graph source input =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> expandToBytesCore graph source input)
+
+/// Plan only this complete unit-helper result. Ordinary local constructions
+/// retain their existing residence; a return never acquires a stack lifetime
+/// merely because its caller consumes the value locally.
+let returnedExpansions (graph:SemanticGraph) =
+    let nodes=graph.Nodes |> Map.filter(fun _ node->node.IsReachable)
+    let live id=nodes[id]
+    let scope start =
+        [1..nodes.Count] |> List.fold(fun (found,current) _ ->
+            match found,current |> Option.bind nodes.TryFind with
+            | Some _,_ | _,None -> found,None
+            | None,Some node -> match node.Kind with SemanticKind.Lambda _ -> Some node.Id,None | _ -> None,node.Parent)
+            (None,Some start) |> fst
+    let straight start owner =
+        [1..nodes.Count] |> List.fold(fun (okay,current) _ ->
+            match current |> Option.bind nodes.TryFind with
+            | None -> okay,None
+            | Some node when node.Id=owner -> okay,None
+            | Some node ->
+                let allowed=match node.Kind with
+                            | SemanticKind.Binding(_,false,false,_) | SemanticKind.Sequential _ | SemanticKind.TypeAnnotation _
+                            | SemanticKind.EagerExpr _ | SemanticKind.Application _ -> true | _ -> false
+                okay && allowed,node.Parent) (true,Some start) |> fst
+    let aliases (initial:NodeId) =
+        [1..nodes.Count] |> List.fold(fun family _ ->
+            nodes.Values |> Seq.fold(fun (family:Set<NodeId>) node->
+                let input=match node.Kind,node.Children with
+                          | SemanticKind.Binding(_,false,false,_),[value] -> Some value
+                          | SemanticKind.VarRef(_,Some definition),_ -> Some definition
+                          | SemanticKind.TypeAnnotation(value,_),_ | SemanticKind.EagerExpr value,_ -> Some value
+                          | _ -> None
+                if input |> Option.exists family.Contains then Set.add node.Id family else family) family) (Set.singleton initial)
+    let fail reason = raise(System.InvalidOperationException reason)
+    let demand okay reason = if not okay then fail reason
+    let only reason = function [value] -> value | _ -> fail reason
+    let resolution=lazy(Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph)
+    let mutable expansions=[]
+    let mutable annotations=[]
+    let mutable edges=graph.Edges
+    let mutable diagnostics=[]
+    for edge in graph.Edges do
+      match edge.Role with
+      | EdgeRole.StringCheckedConstruction construction when construction.Returned.IsNone && nodes.ContainsKey construction.Owner ->
+        let helper=scope construction.Owner
+        let calls=resolution.Value.Calls |> Map.toList |> List.filter(fun (_,call)->
+            call.Targets |> List.exists(fun target->Some target.Lambda=helper && target.Body=construction.Owner))
+        if not calls.IsEmpty then
+          try
+            let application,resolved=only "A returned checked string requires exactly one complete helper application." calls
+            demand (resolved.Complete && not resolved.Unknown) "The checked helper call has unresolved alternatives."
+            let target=only "A returned checked string requires one exact helper implementation." resolved.Targets
+            let declaration,callee,argument,formal=
+                match (live application).Kind,target.Parameters,(live target.Lambda).Kind with
+                | SemanticKind.Application(callee,[argument]),[(_,parameterType,formal)],SemanticKind.Lambda([(_,_,held)],body,[],_,_)
+                    when held=formal && body=construction.Owner && target.Arguments=[argument] &&
+                         applySubst parameterType=Types.unitType && applySubst (live argument).Type=Types.unitType ->
+                    match (live callee).Kind with
+                    | SemanticKind.VarRef(_,Some declaration) ->
+                        demand (match (live declaration).Kind,(live declaration).Children with
+                                | SemanticKind.Binding(_,false,false,_),[implementation] -> implementation=target.Lambda | _ -> false)
+                            "The checked helper has no exact immutable implementation declaration."
+                        declaration,callee,argument,formal
+                    | _ -> fail "The checked helper call requires its exact immutable declaration reference."
+                | _ -> fail "The returned checked profile requires one noncapturing unit helper and its exact returned body."
+            let caller=scope application |> Option.defaultWith(fun()->fail "The returned checked call lacks its caller activation.")
+            demand (caller<>target.Lambda && straight application caller) "The returned checked application is conditional, captured or inside a loop."
+            let original=
+                graph.Edges |> List.choose(fun row->
+                    match row.Role,row.Sources with
+                    | EdgeRole.StringByteSnapshot,[input;snapshot] when row.Target=construction.Owner && snapshot=construction.Snapshot -> Some input
+                    | _ -> None)
+                |> only "The returned checked construction lost its original snapshot input."
+            demand (match (live original).Kind with SemanticKind.ArrayExpr values -> not values.IsEmpty | _ -> false)
+                "The returned checked profile requires a positive literal snapshot count; zero remains local-only."
+            let policy=graph.Platform |> Option.bind _.ProjectMemoryPolicy
+                       |> Option.defaultWith(fun()->fail "Returned checked storage has no captured project memory policy.")
+            let path,version,model,allowed=policy
+            demand allowed "The selected project memory policy forbids returned checked storage."
+            let platform=PlatformResolution.resolve graph |> Option.defaultWith(fun()->fail "Returned checked storage has no selected platform declaration.")
+            let heap=platform.Spaces |> List.filter(fun space->space.Kind="heap" && space.Access.Contains("w"))
+                     |> only "Returned checked storage requires exactly one declared writable heap space."
+            let family=aliases application
+            demand (family |> Set.forall(fun id->scope id=Some caller)) "A returned checked alias crosses its caller activation."
+            let cases=
+                nodes.Values |> Seq.choose(fun node->
+                    match node.Kind with
+                    | SemanticKind.CaseElimination(value,arms) when family.Contains value && Types.isIntegerType node.Type -> Some(node,value,arms)
+                    | _ -> None) |> Seq.toList
+            let arm name tag (_,_,arms)=arms |> List.tryFind(fun arm->match arm.Pattern with Pattern.Union(actual,index,_,_) -> actual=name && index=tag && arm.Guard.IsNone | _ -> false)
+            let someCase,actual,someArms=cases |> List.filter(fun entry->(arm "ValueSome" 1 entry).IsSome) |> only "The returned checked value requires its exact Some elimination."
+            let noneCase,_,noneArms=cases |> List.filter(fun entry->(arm "ValueNone" 0 entry).IsSome) |> only "The returned checked value requires its exact None elimination."
+            let someArm=arm "ValueSome" 1 (someCase,actual,someArms) |> Option.get
+            let noneArm=noneArms |> List.find(fun arm->match arm.Pattern with Pattern.Union("ValueNone",0,_,_) -> true | _ -> false)
+            let remainder=
+                match someArms,noneArms with
+                | [{Pattern=Pattern.Union("ValueSome",1,Some Pattern.Wildcard,_);Guard=None};{Pattern=Pattern.Wildcard;Guard=None;Body=remainder}],
+                  [{Pattern=Pattern.Union("ValueNone",0,None,_);Guard=None}] -> remainder
+                | _ -> fail "The returned checked caller lost its exact closed Some/None case family."
+            let nonePath=
+                [1..nodes.Count] |> List.fold(fun (path,current) _ ->
+                    match current |> Option.bind nodes.TryFind with
+                    | Some node when node.Id<>someCase.Id -> Set.add node.Id path,node.Parent
+                    | _ -> path,None) (Set.empty,Some noneCase.Id) |> fst
+            demand (nonePath.Contains remainder && not(nonePath.Contains someArm.Body))
+                "The returned checked None cleanup is not inside the same Some/None elimination."
+            let someUse,payload,payloadBinding=
+                match (live someArm.Body).Kind with
+                | SemanticKind.Sequential [binding;body] ->
+                    match (live binding).Kind,(live binding).Children,(live body).Kind with
+                    | SemanticKind.Binding(_,false,false,_),[projection],SemanticKind.Application(fn,[payload]) ->
+                        demand (match (live projection).Kind with SemanticKind.DUEliminate(value,1,"ValueSome",_) -> family.Contains value | _ -> false)
+                            "The returned checked Some payload lost its exact elimination."
+                        demand (match (live fn).Kind with SemanticKind.Intrinsic{Module=IntrinsicModule.String;Operation="length"} -> true | _ -> false)
+                            "The returned checked Some arm must consume its payload through String.length."
+                        demand (match (live payload).Kind with SemanticKind.VarRef(_,Some definition) -> definition=binding | _ -> false)
+                            "The returned checked scalar consumes a different payload."
+                        body,payload,binding
+                    | _ -> fail "The returned checked Some arm has unsupported consumers."
+                | _ -> fail "The returned checked Some arm requires one bound payload and one scalar length."
+            let noneUse=noneArm.Body
+            demand (match (live noneUse).Kind with SemanticKind.Literal(NativeLiteral.Int _) -> true | _ -> false)
+                "The returned checked None arm requires one scalar literal result."
+            let payloadFamily=aliases payload
+            for node in nodes.Values do
+                let referenced=node.Children |> List.filter(fun id->family.Contains id || payloadFamily.Contains id)
+                if not referenced.IsEmpty && not(family.Contains node.Id || payloadFamily.Contains node.Id) then
+                    demand (scope node.Id=Some caller) "A returned checked value is captured by another activation."
+                    demand (match node.Kind with
+                            | SemanticKind.CaseElimination(_,arms) -> arms |> List.forall(fun arm->arm.Guard.IsNone)
+                            | SemanticKind.DUEliminate(_,1,"ValueSome",_) | SemanticKind.DUGetTag _ | SemanticKind.Sequential _ -> true
+                            | SemanticKind.Application _ -> node.Id=someUse
+                            | _ -> false) "The returned checked value has an extra or unsupported consumer."
+            let makeArm original armBody backing =
+                let source=live original
+                let state=SaturationState.create source.Range "String.checkedResultRetirement" (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) source.Id graph.Platform
+                let retire name value ty = saturation {
+                    let info={Module=IntrinsicModule.String;Operation=name;FullName="String."+name;Category=IntrinsicCategory.Memory}
+                    let! fn=createAndEmit (SemanticKind.Intrinsic info) (NativeType.TFun(ty,Types.unitType))
+                    return! app fn [value] Types.unitType }
+                let parser=saturation {
+                    // The length operation already owns settled string-borrow
+                    // evidence. Wrap its arm without replacing that operation.
+                    let! scalar=
+                        if original=armBody then createWithChildren source.Kind source.Type source.Children
+                        else saturation {return original}
+                    let! saved=letBind "__checked_scalar" scalar source.Type
+                    let! backingSite=
+                        if backing then saturation {
+                            let! site=retire "retireCheckedBacking" payload Types.stringType
+                            return Some site }
+                        else saturation {return None}
+                    let! carrierSite=retire "retireCheckedCarrier" actual (live actual).Type
+                    let! result=varRef "__checked_scalar" (Some saved) source.Type
+                    let items=[saved]@Option.toList backingSite@[carrierSite;result]
+                    let! cleanup=createWithChildren (SemanticKind.Sequential items) source.Type items
+                    let! root=
+                        if backing then createWithChildren (SemanticKind.Sequential[payloadBinding;cleanup]) source.Type [payloadBinding;cleanup]
+                        else saturation {return cleanup}
+                    return root,scalar,backingSite,carrierSite }
+                match run state parser with
+                | Matched(root,scalar,backingSite,carrierSite),created ->
+                    let created=created |> List.map(fun node->if node.Id=scalar then {node with ValueRange=source.ValueRange} else node)
+                    expansions<-(armBody,(root,created,[]))::expansions
+                    scalar,backingSite,carrierSite
+                | NoMatch reason,_ -> fail reason
+            let someScalar,backingRetirement,someRetirement=makeArm someUse someArm.Body true
+            let noneScalar,_,noneRetirement=makeArm noneUse noneArm.Body false
+            let capacity=obligationNode (live construction.Owner) (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId())
+                            {Id="checked-result-"+string(NodeId.value application);Kind="checked-result-capacity";Logic="QF_LIA"
+                             Statement="The simultaneously live checked snapshot and native outcome fit their declared heap space."
+                             Source=fmtRange (live application).Range;Refs=[];Body=ObligationBody.Pending["The returned checked storage awaits its settled extent and layout."]}
+            let lifetime={Application=application;Callee=callee;Declaration=declaration;Implementation=target.Lambda;Argument=argument;Formal=formal
+                          Body=construction.Owner;Caller=caller;Actual=actual;Elimination=someCase.Id;SomeUse=someScalar;NoneUse=noneScalar
+                          SomeBackingRetirement=Option.get backingRetirement;SomeCarrierRetirement=someRetirement;NoneCarrierRetirement=noneRetirement
+                          Uses=Set.toList family;Policy={ProjectPath=path;SourceVersion=version;Model=model};Platform=platform.Node;Space=heap.Node
+                          MaximumLiveBytes=0L;Capacity=capacity.Id}
+            annotations<-capacity::annotations
+            let construction={construction with Returned=Some lifetime}
+            let support=Clef.Compiler.Baker.Ingredients.MemoryValues.resultIds lifetime |> Set.remove capacity.Id |> Set.toList
+            edges<-edges |> List.map(fun old->
+                if old.Target=edge.Target && old.Role=edge.Role && old.Sources=edge.Sources && old.Ordinal=edge.Ordinal then
+                    {old with Role=EdgeRole.StringCheckedConstruction construction;Sources=List.distinct(old.Sources@support@[capacity.Id])}
+                else old)
+            edges<-constrains support capacity::edges
+          with :? System.InvalidOperationException as error ->
+            diagnostics<-{Severity=NativeDiagnosticSeverity.Error;Code="CCS8403";Message=error.Message;Range=(live construction.Owner).Range
+                          RelatedNodes=[construction.Owner];Reachability=ReachabilityContext.Reachable}::diagnostics
+      | _ -> ()
+    {graph with Edges=edges;Nodes=annotations |> List.fold(fun all node->Map.add node.Id node all) graph.Nodes},Map.ofList expansions,List.rev diagnostics
+
+/// Current reading of this recipe's own returned-instance contract. It does
+/// not widen ordinary array use closure or manufacture a missing lifetime.
+let returnedLifetime (graph:SemanticGraph) (construction:CheckedStringConstruction) =
+    match construction.Returned with
+    | None -> None
+    | Some life ->
+        let demand okay reason=if not okay then invalidOp reason
+        let live id=graph.Nodes.TryFind id |> Option.filter _.IsReachable |> Option.defaultWith(fun()->invalidOp (sprintf "A returned checked lifetime participant %A was withdrawn." id))
+        let current=graph.Platform |> Option.bind _.ProjectMemoryPolicy
+        demand (current=Some(life.Policy.ProjectPath,life.Policy.SourceVersion,life.Policy.Model,true))
+            "The returned checked allocation permission or captured policy changed."
+        let platform=PlatformResolution.resolve graph |> Option.defaultWith(fun()->invalidOp "The returned checked platform is missing.")
+        let space=platform.Spaces |> List.tryFind(fun row->row.Node=life.Space && row.Kind="heap" && row.Access.Contains("w"))
+                  |> Option.defaultWith(fun()->invalidOp "The returned checked heap declaration changed.")
+        if life.MaximumLiveBytes<=0L then
+            match graph.Nodes.TryFind life.Capacity with
+            | Some{Kind=SemanticKind.Obligation{Body=ObligationBody.Pending reasons}} -> invalidOp(String.concat "; " reasons)
+            | _ -> invalidOp "The returned checked instance has no current positive settled lifetime."
+        demand (platform.Node=life.Platform && life.Body=construction.Owner)
+            "The returned checked instance has no current positive settled lifetime."
+        // Proof citizens are held logical support, not executable values.
+        // This exact role still needs its own current body and source incidence.
+        demand (match graph.Nodes.TryFind life.Capacity with
+                | Some{Kind=SemanticKind.Obligation info} -> info.Body=ObligationBody.CapacityFits(life.MaximumLiveBytes,space.Capacity)
+                | _ -> false) "The returned checked combined capacity citizen changed."
+        demand (graph.Edges |> List.exists(fun edge->
+                    edge.Target=life.Capacity && edge.Role=EdgeRole.Constrains &&
+                    ([life.Application;life.Platform;life.Space] |> List.forall(fun source->List.contains source edge.Sources))))
+            "The returned checked capacity citizen lost its exact owning source support."
+        let resolution=Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+        demand (match resolution.Calls.TryFind life.Application with
+                | Some{Complete=true;Unknown=false;Targets=[target]} ->
+                    target.Lambda=life.Implementation && target.Body=life.Body && target.Arguments=[life.Argument] &&
+                    (match target.Parameters with [(_,_,formal)] -> formal=life.Formal | _ -> false)
+                | _ -> false) "The returned checked application lost its exact complete helper target."
+        demand (match (live life.Application).Kind with SemanticKind.Application(fn,[argument]) -> fn=life.Callee && argument=life.Argument | _ -> false)
+            "The returned checked application changed its callee or argument."
+        demand (match (live life.Callee).Kind,(live life.Declaration).Kind,(live life.Declaration).Children,(live life.Implementation).Kind with
+                | SemanticKind.VarRef(_,Some declaration),SemanticKind.Binding(_,false,false,_),[implementation],SemanticKind.Lambda([(_,_,formal)],body,[],_,_) ->
+                    declaration=life.Declaration && implementation=life.Implementation && formal=life.Formal && body=life.Body
+                | _ -> false) "The returned checked declaration, formal or body changed."
+        for site,name in [life.SomeBackingRetirement,"retireCheckedBacking";life.SomeCarrierRetirement,"retireCheckedCarrier";life.NoneCarrierRetirement,"retireCheckedCarrier"] do
+            match (live site).Kind with
+            | SemanticKind.Application(fn,[_]) -> demand (match (live fn).Kind with SemanticKind.Intrinsic{Module=IntrinsicModule.String;Operation=actual} -> actual=name | _ -> false)
+                                                    "The returned checked cleanup operation changed."
+            | _ -> invalidOp "The returned checked cleanup citizen was withdrawn."
+        Some(life,space)

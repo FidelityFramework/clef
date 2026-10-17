@@ -40,6 +40,22 @@ let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessPr
                         Reason = "MemoryPublication: " + reason
                     })
             )
+        elif domain.StringRelations |> List.exists(fun row ->
+            match row.Premise with
+            | MemoryStringPremise.Checked {Returned=Some life} ->
+                (graph.Platform |> Option.bind _.ProjectMemoryPolicy) <>
+                    Some(life.Policy.ProjectPath,life.Policy.SourceVersion,life.Policy.Model,true)
+            | _ -> false) then
+            reject (Some anchor) participants "The returned checked project allocation permission or captured policy changed; source settlement is required."
+        elif domain.StringRelations |> List.exists(fun row ->
+            match row.Premise with
+            | MemoryStringPremise.Checked {Returned=Some life} ->
+                not(graph.Edges |> List.exists(fun edge ->
+                    edge.Target=life.Capacity && edge.Role=EdgeRole.Constrains &&
+                    ([life.Application;life.Platform;life.Space;life.SomeBackingRetirement;life.SomeCarrierRetirement;life.NoneCarrierRetirement]
+                     |> List.forall(fun source->List.contains source edge.Sources))))
+            | _ -> false) then
+            reject (Some anchor) participants "The returned checked capacity citizen lost its exact owning source support; source settlement is required."
         elif domain.Operations |> List.exists(fun (_,operation) ->
             let construction=match operation with MemoryWitnessOperation.Utf8Validation row -> Some row.Construction | MemoryWitnessOperation.SnapshotRetirement row -> Some row.Construction | _ -> None
             construction |> Option.exists(fun construction ->
