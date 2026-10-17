@@ -84,6 +84,7 @@ let private analyze renew (graph: SemanticGraph) =
             | SemanticKind.VarRef(_, Some definition) -> origin seen definition
             | SemanticKind.Binding(_, false, _, _) when node.Children.Length = 1 -> origin seen node.Children.Head
             | SemanticKind.TypeAnnotation(inner, _) -> origin seen inner
+            | SemanticKind.EagerExpr inner -> origin seen inner
             | SemanticKind.Sequential values -> List.tryLast values |> Option.bind (origin seen)
             | SemanticKind.Application _ ->
                 match calls.TryFind id with
@@ -174,7 +175,7 @@ let private analyze renew (graph: SemanticGraph) =
                 match writable.TryFind node.Id with
                 | Some(Ok application) -> directArgs |> List.iteri(fun ordinal actual -> if ordinal<>application.Declaration.Parameter then block actual)
                 | _ -> directArgs |> List.iter block
-        | SemanticKind.Binding(_, false, _, _) | SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ | SemanticKind.Sequential _ -> ()
+        | SemanticKind.Binding(_, false, _, _) | SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _ | SemanticKind.Sequential _ -> ()
         | SemanticKind.IndexGet _ | SemanticKind.IndexSet _ -> ()
         // Length observes the extent of this current native-array family; it
         // neither writes its storage nor passes it through another call's ABI.

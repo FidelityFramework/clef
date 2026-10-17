@@ -225,6 +225,21 @@ let readResultRange : Expr<ResultRangeDescriptor> = <@ {
         Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
         Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith)
 
+    let checkedPrefixBody =
+        """    let buffer = Array.zeroCreate 1024
+    let answer = Test.Native.read 0 buffer 3
+    if answer < 0 then 11
+    elif answer = 0 then 12
+    else
+        let prefix = eager (Array.sub buffer 0 answer)
+        match String.tryFromBytes prefix with
+        | ValueSome text -> text.Length
+        | ValueNone -> 14
+"""
+
+    let checkedPrefix =
+        lazy (writableVoidApplication writablePosixSource checkedPrefixBody)
+
     let writableProof expected (info:ObligationInfo) =
         let query=Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib [info]
                   |> Result.defaultWith(fun unavailable -> failwithf "A concrete writable coverage body was unavailable: %A" unavailable)
@@ -342,6 +357,156 @@ let main _ = 0
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ForeignReferences")>]
 type ForeignReferenceTests() =
+    [<Fact>]
+    member _.``Writable checked prefix retains eager copy snapshot and current refined count``() =
+        let result = ForeignCases.checkedPrefix.Value
+
+        Assert.False(
+            Clef.Compiler.Project.ProjectChecker.hasErrors result,
+            String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result)
+        )
+
+        let revision =
+            Clef.Compiler.Project.ProjectChecker.publish result
+            |> Result.defaultWith failwith
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+        let checkedText =
+            revision.Emission.Memory.Operations.Values
+            |> Seq.choose (function
+                | Fidelity.PSG.MemoryWitnessOperation.Utf8Validation row -> Some row
+                | _ -> None)
+            |> Assert.Single
+
+        Assert.Equal("RFC3629-v1", checkedText.Construction.Validator)
+        let copies = revision.Emission.Memory.ArrayCopies.Values |> Seq.toList
+        Assert.Equal(2, copies.Length)
+        Assert.Equal(2, copies |> List.choose _.Allocation |> List.distinct |> List.length)
+        Assert.Contains(copies, fun copy -> copy.Site = checkedText.Construction.Snapshot)
+
+        let prefix =
+            copies
+            |> List.filter (fun copy -> copy.Site <> checkedText.Construction.Snapshot)
+            |> Assert.Single
+
+        let snapshot =
+            copies
+            |> List.filter (fun copy -> copy.Site = checkedText.Construction.Snapshot)
+            |> Assert.Single
+
+        let source = revision.Emission.Callable.AliasTargets[snapshot.Source]
+
+        let copiedSite =
+            match revision.Nodes[source].Kind, revision.Nodes[source].Children with
+            | Fidelity.PSG.SemanticKind.EagerExpr copied, [ child ] when copied = child -> copied
+            | _ -> failwith "Expected the checked snapshot's exact eager copied-prefix source"
+
+        Assert.Equal(prefix.Site, copiedSite)
+        Assert.True(prefix.Allocation.IsSome)
+        Assert.Equal(prefix.Allocation, revision.Emission.Memory.ArrayCopies[copiedSite].Allocation)
+        Assert.NotEqual(prefix.Allocation, Some revision.Emission.Callable.AliasTargets[prefix.Source])
+
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(1I, 3I), snapshot.CountCarrier.Range)
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(0I, 3I), prefix.CountCarrier.Range)
+
+        Assert.Equal(
+            Fidelity.PSG.ValueRange.Bounded(1I, 3I),
+            revision.Emission.Numeric.Values[prefix.CountOperand.Reference].Range
+        )
+
+        Assert.Contains(
+            revision.Nodes.Values,
+            fun node ->
+                match node.Kind with
+                | Fidelity.PSG.SemanticKind.EagerExpr _ -> true
+                | _ -> false
+        )
+
+        Assert.Single(revision.Emission.Boundary.WritableBufferUses.Values) |> ignore
+
+    [<Theory>]
+    [<InlineData("count")>]
+    [<InlineData("allocation")>]
+    member _.``Writable checked prefix withdraws changed call support``(shape: string) =
+        let graph = ForeignCases.checkedPrefix.Value.CheckResult.Graph
+
+        let application =
+            Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph
+            |> Map.toList
+            |> Assert.Single
+            |> snd
+            |> Result.defaultWith (fun failure -> failwith failure.Reason)
+
+        let site =
+            if shape = "count" then
+                application.Count
+            else
+                application.Allocation
+
+        let node = graph.Nodes[site]
+
+        let changedNode =
+            if shape = "count" then
+                match node.Kind with
+                | SemanticKind.Literal(NativeLiteral.Int(_, kind)) ->
+                    { node with
+                        Kind = SemanticKind.Literal(NativeLiteral.Int(4L, kind))
+                    }
+                | _ -> failwith "Expected the exact writable count literal"
+            else
+                { node with Children = [] }
+
+        Assert.NotEqual(node, changedNode)
+
+        let changed =
+            { graph with
+                Nodes = graph.Nodes.Add(site, changedNode)
+            }
+
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
+        | Error failures ->
+            Assert.Contains(
+                failures,
+                fun failure ->
+                    failure.Reason.Contains
+                        "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed"
+            )
+        | Ok _ -> failwith "A changed checked-prefix source support retained its writable account"
+
+    [<Fact>]
+    member _.``Writable checked prefix rejects an unaccounted copied array consumer``() =
+        let source =
+            ForeignCases.checkedPrefixBody
+                .Replace(
+                    "        match String.tryFromBytes prefix with",
+                    "        let touch (values:int array) = values[0]\n        let observed = touch prefix\n        match String.tryFromBytes prefix with"
+                )
+                .Replace("ValueSome text -> text.Length", "ValueSome text -> text.Length + observed")
+
+        Assert.NotEqual<string>(ForeignCases.checkedPrefixBody, source)
+
+        let result =
+            ForeignCases.writableVoidApplication ForeignCases.writablePosixSource source
+
+        let errors = Clef.Compiler.Project.ProjectChecker.getErrorMessages result
+
+        Assert.True(
+            errors
+            |> List.exists (fun reason ->
+                reason.Contains
+                    "the array must have a closed allocation and known writes; an unknown origin or escaping alias is not admitted."),
+            String.concat "\n" errors
+        )
+
+        Assert.DoesNotContain(
+            result.CheckResult.Graph.Edges,
+            fun edge ->
+                match edge.Role with
+                | EdgeRole.StringCheckedConstruction _ -> true
+                | _ -> false
+        )
+
     [<Fact>]
     member _.``Writable buffer generated declaration publishes provenance without call authority``() =
         let graph=ForeignCases.writableGraph.Value
