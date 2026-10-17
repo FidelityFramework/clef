@@ -371,7 +371,29 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                         let ownTypes = own |> Set.map (fun id -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[id].Type)
                         let ownFacts = Set.union own (contractNames.Keys |> Set.ofSeq)
                         let scope value = scoped ownFacts ownTypes encode value
-                        let witnessInputs = { witnessInputs with Callable = { witnessInputs.Callable with Contracts = contractInterface } }
+                        // List-shaped boundary rows are selected by their owner, as the
+                        // NodeId-keyed domains are selected by membership: a result
+                        // hypothesis belongs to its declaration and a foreign result use to
+                        // its application call. A row this candidate does not own is not
+                        // its interface and is excluded; a row it owns is retained whole, so
+                        // any participant outside the admitted identities still refuses the
+                        // candidate through the ordinary identity encoder. Without this
+                        // selection every declared hypothesis in the program, including a
+                        // platform library's, refused every scalar region.
+                        let ownedHypotheses =
+                            witnessInputs.Boundary.ResultHypotheses |> List.filter (fun row -> own.Contains row.Declaration)
+                        let ownedUses =
+                            witnessInputs.Numeric.ForeignResultUses |> List.filter (fun row -> members.Contains row.Application.Call)
+                        // Link requirements belong to the declarations that import them.
+                        let ownedLinks =
+                            witnessInputs.Boundary.Imports.Values
+                            |> Seq.filter (fun import -> own.Contains import.Binding)
+                            |> Seq.map _.Library |> Set.ofSeq
+                        let witnessInputs =
+                            { witnessInputs with
+                                Callable = { witnessInputs.Callable with Contracts = contractInterface }
+                                Boundary = { witnessInputs.Boundary with ResultHypotheses = ownedHypotheses; Links = ownedLinks }
+                                Numeric = { witnessInputs.Numeric with ForeignResultUses = ownedUses } }
                         let localCodata = { localCodata with CallableContracts = contractInterface }
                         let inputs =
                             [ (if comparisons.IsEmpty then "scalar-v1" else "scalar-comparison-v1"); moduleName; name

@@ -17,6 +17,48 @@ module private ComparisonRegionFixture =
         |> List.map (fun region -> region.Identity, region) |> Map.ofList
     let first = "callable:ComparisonRegions:first"
     let second = "callable:ComparisonRegions:second"
+
+    // A declared extern with an explicit result hypothesis, in its own source
+    // unit beside the comparison program. Nothing in the comparison program
+    // calls it unless a case says so. This is the platform-library shape that
+    // left every default-profile program without scalar regions.
+    let foreignDeclarations = """module Foreign
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Pointer of int | Void
+type PassBy = Value | Reference
+type CallConv = | CDecl
+type Transfer = Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ResultBound = Constant of int | Argument of int
+type ResultRole = | ReturnValue
+type ExternalExecutionHypothesis = { Identity:string; Version:string; Source:string }
+type ResultRangeDescriptor = { Binding:string; Role:ResultRole; Hypothesis:ExternalExecutionHypothesis; Lower:ResultBound; Upper:ResultBound }
+[<FidelityExtern("c", "native_read")>]
+let read (count: int) : int = NativeDefault.zeroed ()
+let readDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName="native_read"; Parameters=[| {Name="count";Type=Integer(Unsigned,32);PassBy=Value} |]
+    ReturnType=Integer(Signed,64); CallingConvention=CDecl; OwnershipTransfer=Undeclared } @>
+let readRange: Expr<ResultRangeDescriptor> = <@ {
+    Binding="Foreign.read"; Role=ResultRole.ReturnValue
+    Hypothesis={Identity="fixture.read";Version="1";Source="foreign.clef:synthetic-pilot"}
+    Lower=Constant (-1); Upper=Argument 0 } @>
+"""
+    let prepareBeside authority (declarations: string option) source =
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
+        let platform =
+            { IntrinsicWriteFixture.platform with
+                Representations = IntrinsicWriteFixture.platform.Representations.Add(RealComparisonFixture.representation.Name, RealComparisonFixture.representation) }
+        let inputs =
+            [ parse authority "write-authority.clef" ]
+            @ (declarations |> Option.map (fun text -> [ parse text "foreign.clef" ]) |> Option.defaultValue [])
+            @ [ parse source "real-comparison.clef" ]
+        let result = Clef.Compiler.NativeService.checkParsedInputsWithPlatform inputs (Some platform)
+        DimensionalCases.noErrors result
+        RegionEmission.prepare result.Graph |> Result.defaultWith (sprintf "%A" >> failwith)
     let get name graph =
         let rows = regions graph
         Assert.True(rows.ContainsKey name, sprintf "Missing independent region %s: %A" name rows.Keys)
@@ -172,6 +214,34 @@ type ComparisonRegionCases() =
         let result = RealComparisonFixture.check RealComparisonFixture.authority source
         let graph = RegionEmission.prepare result.Graph |> Result.defaultWith (sprintf "%A" >> failwith)
         Assert.False((ComparisonRegionFixture.regions graph).ContainsKey ComparisonRegionFixture.first)
+
+    [<Fact>]
+    member _.``Unrelated boundary declarations preserve scalar regions and their fingerprints`` () =
+        let authority = RealComparisonFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+        let source = ComparisonRegionFixture.source "" "<"
+        let alone = ComparisonRegionFixture.prepareBeside authority None source
+        let beside = ComparisonRegionFixture.prepareBeside authority (Some ComparisonRegionFixture.foreignDeclarations) source
+        // The declaration's hypothesis is published for the whole program.
+        Assert.NotEmpty beside.Codata.Value.WitnessEmission.Value.Boundary.ResultHypotheses
+        for name in [ComparisonRegionFixture.first; ComparisonRegionFixture.second] do
+            let original = ComparisonRegionFixture.get name alone
+            let current = ComparisonRegionFixture.get name beside
+            Assert.Equal(original.Fingerprint, current.Fingerprint)
+
+    [<Fact>]
+    member _.``A foreign call stays in the common region without refusing a sibling scalar region`` () =
+        let authority = RealComparisonFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+        let source = "module ComparisonRegions\nlet first (left: float) (right: float) = left < right\nlet probe (count: int) = Foreign.read count\n[<EntryPoint>]\nlet main _ = if first 1.25 2.5 && probe 3 >= 0 then 0 else 1\n"
+        let graph = ComparisonRegionFixture.prepareBeside authority (Some ComparisonRegionFixture.foreignDeclarations) source
+        let regions = ComparisonRegionFixture.regions graph
+        Assert.True(regions.ContainsKey ComparisonRegionFixture.first, sprintf "Missing region beside a foreign call: %A" regions.Keys)
+        Assert.False(regions.ContainsKey "callable:ComparisonRegions:probe")
+        let probeCall =
+            graph.Codata.Value.WitnessEmission.Value.Numeric.ForeignResultUses
+            |> List.map (fun row -> row.Application.Call)
+        Assert.NotEmpty probeCall
+        for call in probeCall do
+            Assert.Contains(call, regions["common"].Members)
 
     [<Fact>]
     member _.``Callable support changes retain scalar fingerprints and current support`` () =
