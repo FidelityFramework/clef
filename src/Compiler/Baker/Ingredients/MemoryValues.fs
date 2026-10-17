@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 module Clef.Compiler.Baker.Ingredients.MemoryValues
 
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 let owned (node: SemanticNode) = node.Metadata.ContainsKey "Baker.MemoryPublicationOwned"
@@ -30,6 +31,7 @@ let stringRelations (graph: SemanticGraph) = graph.Edges |> List.choose (fun edg
     let premise =
         match edge.Role with
         | EdgeRole.StringByteSnapshot -> Some MemoryStringPremise.Snapshot
+        | EdgeRole.StringCheckedConstruction value -> Some(MemoryStringPremise.Checked value)
         | EdgeRole.StringToBytesSnapshot -> Some MemoryStringPremise.ToBytesSnapshot
         | EdgeRole.CopyFrom -> Some MemoryStringPremise.Copy
         | EdgeRole.StringByteStorage(lo,hi,representation) -> Some(MemoryStringPremise.Storage(lo,hi,representation))
@@ -42,7 +44,13 @@ let stringRelations (graph: SemanticGraph) = graph.Edges |> List.choose (fun edg
         | _ -> None
     premise |> Option.map (fun premise ->
         { Class=edge.Class; Premise=premise; Ordinal=edge.Ordinal; Sources=edge.Sources; Target=edge.Target }))
-let participants = function
+let constructionIds (row:CheckedStringConstruction) =
+    Set.ofList [row.Owner;row.Input;row.Snapshot;row.Length;row.Validation;row.Decision;row.Text;row.Success;row.Failure;row.Retirement]
+let private viewSupport (operations:Map<NodeId,MemoryWitnessOperation>) construction =
+    match operations.TryFind construction.Text with
+    | Some(MemoryWitnessOperation.StringView view) when view.Checked=Some construction -> view.Participants
+    | _ -> invalidOp "The checked memory support lacks its exact current source string view."
+let participants operations = function
     | MemoryWitnessOperation.BufferExtent fact -> fact.Participants
     | MemoryWitnessOperation.ArrayExtent fact -> fact.Participants
     | MemoryWitnessOperation.ArrayAccess fact -> fact.Participants
@@ -50,6 +58,14 @@ let participants = function
     | MemoryWitnessOperation.ArrayAllocation fact -> fact.Participants
     | MemoryWitnessOperation.Address fact -> fact.Participants
     | MemoryWitnessOperation.StringView fact -> fact.Participants
+    | MemoryWitnessOperation.Utf8Validation fact ->
+        Set.unionMany [constructionIds fact.Construction;fact.Copy.Participants;fact.Copy.CountCarrier.Participants
+                       fact.Allocation.Participants;viewSupport operations fact.Construction]
+    | MemoryWitnessOperation.SnapshotRetirement fact ->
+        Set.unionMany [constructionIds fact.Construction;fact.Allocation.Participants;viewSupport operations fact.Construction]
+    | MemoryWitnessOperation.ConstructedValue fact ->
+        let residence=match fact.Residence with MemoryResidence.Stack(scope,space) -> [scope;space] | MemoryResidence.ImmutableProgram space -> [space] | MemoryResidence.Program _ -> []
+        Set.unionMany [fact.Uses;constructionIds fact.Construction;Set.ofList(fact.Site::fact.Owner::fact.Platform::fact.Layout::fact.Capacity::residence)]
 let operands = function
     | MemoryWitnessOperation.BufferExtent fact -> [fact.Source]
     | MemoryWitnessOperation.ArrayExtent fact -> [fact.Source]
@@ -57,12 +73,15 @@ let operands = function
     | MemoryWitnessOperation.ArrayLiteral fact -> fact.Elements |> List.map fst
     | MemoryWitnessOperation.ArrayAllocation fact -> [fact.Count]
     | MemoryWitnessOperation.StringView fact -> [fact.Source]
+    | MemoryWitnessOperation.Utf8Validation fact -> [fact.Construction.Snapshot]
+    | MemoryWitnessOperation.SnapshotRetirement fact -> [fact.Construction.Snapshot]
+    | MemoryWitnessOperation.ConstructedValue _ -> []
     | MemoryWitnessOperation.Address fact ->
         match fact.Place with
         | MemoryPlace.MutableCell id | MemoryPlace.ExistingReference id -> [id]
         | MemoryPlace.ArrayElement(buffer, index, _) -> [buffer; index]
         | MemoryPlace.RecordField(receiver, _, _) -> [receiver]
-let operationRow (site, operation) = NumericValues.row (EdgeRole.MemoryOperation operation) (operands operation @ Set.toList(participants operation)) site
+let operationRow operations (site, operation) = NumericValues.row (EdgeRole.MemoryOperation operation) (operands operation @ Set.toList(participants operations operation)) site
 let allocationConstructions (graph: SemanticGraph) = graph.Edges |> List.choose (fun edge ->
     match edge.Role with EdgeRole.ArrayAllocationConstruction construction -> Some construction | _ -> None)
 let copyConstructions (graph: SemanticGraph) = graph.Edges |> List.choose (fun edge ->

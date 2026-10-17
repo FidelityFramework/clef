@@ -41,7 +41,7 @@ let private normalizeCore (graph: SemanticGraph) =
               Unresolved = merge (merge (merge failures extentFailures) arrayFailures) viewFailures }
         let enrichment = Enrichment.combine enrichment
                             { NewNodes = [anchor]; Annotated = []
-                              NewEdges = Memory.domainRow anchor.Id domain :: Memory.domainRewrite anchor.Id domain :: (domain.Operations |> List.map Memory.operationRow) @ (copies |> List.map Memory.copyRow) }
+                              NewEdges = Memory.domainRow anchor.Id domain :: Memory.domainRewrite anchor.Id domain :: (domain.Operations |> List.map (Memory.operationRow (Map.ofList domain.Operations))) @ (copies |> List.map Memory.copyRow) }
         ObligationElaboration.foldIn enrichment graph
 
 let normalize graph =

@@ -40,6 +40,13 @@ let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessPr
                         Reason = "MemoryPublication: " + reason
                     })
             )
+        elif domain.Operations |> List.exists(fun (_,operation) ->
+            let construction=match operation with MemoryWitnessOperation.Utf8Validation row -> Some row.Construction | MemoryWitnessOperation.SnapshotRetirement row -> Some row.Construction | _ -> None
+            construction |> Option.exists(fun construction ->
+                match Map.tryFind construction.Text (Map.ofList domain.Operations) with
+                | Some(MemoryWitnessOperation.StringView view) when view.Checked=Some construction -> false
+                | _ -> true)) then
+            reject (Some anchor) participants "The checked memory support lacks its exact current source string view."
         elif (domain.Operations |> List.map fst |> List.sort) <> Set.toList domain.Required then
             reject (Some anchor) participants "A required source memory operation is absent or duplicated."
         elif domain.Operations |> List.exists (fun (_,operation) ->
@@ -62,7 +69,7 @@ let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessPr
             let proofsValid = domain.Proofs |> List.forall (fun proof ->
                 proof.Proven && (graph.Nodes.TryFind proof.Obligation |> Option.exists (fun node ->
                     Memory.owned node && (match node.Kind with SemanticKind.Obligation info -> info.Body = proof.Body | _ -> false))))
-            let expected = Memory.domainRow anchor domain :: Memory.domainRewrite anchor domain :: (domain.Operations |> List.map Memory.operationRow) @ (domain.Proofs |> List.collect Memory.proofRows) @ (domain.ArrayCopies |> List.map Memory.copyRow)
+            let expected = Memory.domainRow anchor domain :: Memory.domainRewrite anchor domain :: (domain.Operations |> List.map (Memory.operationRow (Map.ofList domain.Operations))) @ (domain.Proofs |> List.collect Memory.proofRows) @ (domain.ArrayCopies |> List.map Memory.copyRow)
                            @ (domain.AllocationConstructions |> List.map Memory.allocationConstructionRow) @ (domain.CopyConstructions |> List.map Memory.copyConstructionRow)
             let actual = graph.Edges |> List.filter (fun edge ->
                 match edge.Role with

@@ -697,3 +697,222 @@ type LogicalStringExtentCases() =
     member _.``A fresh logical payload changes the observed length``() =
         LogicalEncodingFixture.admitted "[| 65 |]" 1I |> ignore
         LogicalEncodingFixture.admitted "[| 65; 66 |]" 2I |> ignore
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "StringEncoding")>]
+type CheckedStringEncodingCases() =
+    static member private Program bytes =
+        "[<EntryPoint>]\nlet main _ =\n    let bytes = " + bytes + "\n    let checkedText = String.tryFromBytes bytes\n    match checkedText with\n    | ValueSome text -> String.length text\n    | ValueNone -> 0\n"
+
+    [<Theory>]
+    [<InlineData("[| |]")>]
+    [<InlineData("[| 65; 0; 66 |]")>]
+    [<InlineData("[| 194; 128 |]")>]
+    [<InlineData("[| 224; 160; 128 |]")>]
+    [<InlineData("[| 240; 144; 128; 128 |]")>]
+    [<InlineData("[| 244; 143; 191; 191 |]")>]
+    [<InlineData("[| 128 |]")>]
+    [<InlineData("[| 192; 128 |]")>]
+    [<InlineData("[| 224; 128; 128 |]")>]
+    [<InlineData("[| 237; 160; 128 |]")>]
+    [<InlineData("[| 244; 144; 128; 128 |]")>]
+    [<InlineData("[| 226; 130 |]")>]
+    member _.``Checked text authors one private snapshot and native value outcomes``(bytes: string) =
+        let graph = EncodingFixture.admitted (CheckedStringEncodingCases.Program bytes)
+        let memory = EncodingFixture.memory graph
+        let validator = memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Utf8Validation value -> Some value | _ -> None) |> Assert.Single
+        let construction = validator.Construction
+        Assert.Equal("RFC3629-v1", construction.Validator)
+        Assert.NotEqual(construction.Input, construction.Snapshot)
+        Assert.Equal(validator.Copy, memory.ArrayCopies[construction.Snapshot])
+        Assert.Equal(Some validator.Allocation.Site, validator.Copy.Allocation)
+        Assert.Equal(SemanticKind.DUConstruct("ValueSome",1,Some construction.Text,None), graph.Nodes[construction.Success].Kind)
+        Assert.Equal(SemanticKind.DUConstruct("ValueNone",0,None,None), graph.Nodes[construction.Failure].Kind)
+        DimensionalCases.same (NativeType.TApp(Types.voptionTyCon,[Types.stringType])) graph.Nodes[construction.Success].Type
+        let retirement = match memory.Operations[construction.Retirement] with MemoryWitnessOperation.SnapshotRetirement value -> value | other -> failwithf "%A" other
+        Assert.Equal(construction, retirement.Construction)
+        Assert.Equal(validator.Allocation, retirement.Allocation)
+        let revision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Theory>]
+    [<InlineData("validation-snapshot")>]
+    [<InlineData("success-case")>]
+    [<InlineData("failure-retirement")>]
+    [<InlineData("missing-construction")>]
+    member _.``Checked text refuses changed snapshot validation and outcome facts``(mutation: string) =
+        let graph = EncodingFixture.admitted (CheckedStringEncodingCases.Program "[| 65; 255 |]")
+        let memory = EncodingFixture.memory graph
+        let validator = memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Utf8Validation value -> Some value | _ -> None) |> Assert.Single
+        let construction = validator.Construction
+        let replace id kind = {graph with Nodes=graph.Nodes.Add(id,{graph.Nodes[id] with Kind=kind})}
+        let changed =
+            match mutation with
+            | "validation-snapshot" ->
+                match graph.Nodes[construction.Validation].Kind with
+                | SemanticKind.Application(fn,_) -> replace construction.Validation (SemanticKind.Application(fn,[construction.Input]))
+                | other -> failwithf "%A" other
+            | "success-case" -> replace construction.Success (SemanticKind.DUConstruct("ValueSome",1,Some construction.Input,None))
+            | "failure-retirement" ->
+                match graph.Nodes[construction.Decision].Kind with
+                | SemanticKind.IfThenElse(guard,success,_) -> replace construction.Decision (SemanticKind.IfThenElse(guard,success,Some construction.Failure))
+                | other -> failwithf "%A" other
+            | "missing-construction" -> {graph with Edges=graph.Edges |> List.filter(fun edge -> match edge.Role with EdgeRole.StringCheckedConstruction _ -> false | _ -> true)}
+            | _ -> failwith mutation
+        let numeric = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project changed |> Result.isError)
+        // The complete use change first revokes ordinary-demand exclusion.
+        // Renew only that owner before discriminating this recipe's own guard.
+        let current = Clef.Compiler.Nanopass.OrdinaryDemand.normalize changed
+        let admitted, failures, _ = Clef.Compiler.Baker.Recipes.StringViewRecipes.settle current numeric memory.Operations memory.ArrayCopies
+        Assert.DoesNotContain(admitted,fun (_,operation) -> match operation with MemoryWitnessOperation.Utf8Validation _ -> true | _ -> false)
+        Assert.Contains(failures.Values,fun reason -> reason.Contains("checked string") || reason.Contains("UTF-8 validity premise"))
+
+    [<Fact>]
+    member _.``Checked text stale owner never supplies current outcome authority``() =
+        let graph = EncodingFixture.admitted (CheckedStringEncodingCases.Program "[| 65 |]")
+        let memory = EncodingFixture.memory graph
+        let changed = {graph with Edges=graph.Edges |> List.map(fun edge -> match edge.Role with EdgeRole.StringCheckedConstruction c -> {edge with Role=EdgeRole.StringCheckedConstruction {c with Owner=c.Input}} | _ -> edge)}
+        let numeric = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
+        let _,failures,_ = Clef.Compiler.Baker.Recipes.StringViewRecipes.settle changed numeric memory.Operations memory.ArrayCopies
+        Assert.Contains(failures.Values,fun reason -> reason="The checked string lost its exact snapshot/validator/outcome construction relation.")
+
+    [<Fact>]
+    member _.``Checked text incompatible integers refuse before runtime absence``() =
+        let result = EncodingFixture.check (CheckedStringEncodingCases.Program "[| 256 |]")
+        Assert.Contains(CheckResult.errors result,fun diagnostic -> diagnostic.Code="CCS8404" && diagnostic.Message.EndsWith(EncodingFixture.byteReason))
+        Assert.DoesNotContain(result.Graph.Edges,fun edge -> match edge.Role with EdgeRole.StringCheckedConstruction _ -> true | _ -> false)
+
+    [<Fact>]
+    member _.``Checked text without octet authority stays logical``() =
+        let body = (CheckedStringEncodingCases.Program "[| 65 |]").Replace("String.length text", "0")
+        let result = EncodingFixture.checkWith None body
+        Assert.False(CheckResult.hasErrors result,sprintf "%A" result.Diagnostics)
+        Assert.DoesNotContain(result.Graph.Edges,fun edge -> match edge.Role with EdgeRole.StringCheckedConstruction _ -> true | _ -> false)
+        let site = EncodingFixture.value "checkedText" result.Graph
+        match site.Kind with
+        | SemanticKind.Application(fn,_) ->
+            match result.Graph.Nodes[fn].Kind with
+            | SemanticKind.Intrinsic info -> Assert.Equal("tryFromBytes",info.Operation)
+            | other -> failwithf "%A" other
+        | other -> failwithf "%A" other
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Checked text backing cannot return or cross a captured activation``(capture: bool) =
+        let body =
+            if capture then
+                "[<EntryPoint>]\nlet main _ =\n    let bytes = [| 65 |]\n    let checkedText = String.tryFromBytes bytes\n    let observe () = match checkedText with | ValueSome text -> String.length text | ValueNone -> 0\n    observe ()\n"
+            else
+                "let choose () =\n    let bytes = [| 65 |]\n    let checkedText = String.tryFromBytes bytes\n    match checkedText with\n    | ValueSome text -> text\n    | ValueNone -> \"\"\n[<EntryPoint>]\nlet main _ = String.length (choose ())\n"
+        let result = EncodingFixture.check body
+        Assert.Contains(CheckResult.errors result,fun diagnostic -> diagnostic.Code="CCS8403" && diagnostic.Message.Contains("complete use family"))
+
+    [<Fact>]
+    member _.``Checked text validates private copy despite a later original alias write``() =
+        let body = "[<EntryPoint>]\nlet main _ =\n    let bytes = [| 65 |]\n    let alias = bytes\n    let checkedText = String.tryFromBytes bytes\n    alias.[0] <- 255\n    match checkedText with | ValueSome text -> String.length text | ValueNone -> 0\n"
+        let graph = EncodingFixture.admitted body
+        let memory = EncodingFixture.memory graph
+        let validator = memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Utf8Validation value -> Some value | _ -> None) |> Assert.Single
+        Assert.NotEqual(validator.Construction.Input,validator.Construction.Snapshot)
+        Assert.NotEqual(validator.Copy.Source,validator.Copy.Destination)
+
+    [<Theory>]
+    [<InlineData("input")>]
+    [<InlineData("length")>]
+    member _.``Checked text passive copy incidence refuses metadata withdrawal``(field: string) =
+        let graph=EncodingFixture.admitted (CheckedStringEncodingCases.Program "[| 65 |]")
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let operations=revision.Emission.Memory.Operations |> Map.map(fun _ operation ->
+            match operation with
+            | Fidelity.PSG.MemoryWitnessOperation.Utf8Validation row ->
+                let construction=if field="input" then {row.Construction with Input=row.Construction.Snapshot} else {row.Construction with Length=row.Construction.Snapshot}
+                Fidelity.PSG.MemoryWitnessOperation.Utf8Validation {row with Construction=construction}
+            | _ -> operation)
+        let changed={revision with Emission={revision.Emission with Memory={revision.Emission.Memory with Operations=operations}}}
+        Assert.Contains("The UTF-8 copy source/count differs from its exact construction input/length.",sprintf "%A" (Fidelity.PSG.Integrity.check changed))
+
+    [<Fact>]
+    member _.``Demanded parameter checked text requires explicit unsettled memory authority``() =
+        let file=System.IO.Path.GetFullPath "string-encoding-demanded.clef"
+        let source="module DemandedCheckedText\nlet decode (bytes:array<int>) =\n    match String.tryFromBytes bytes with\n    | ValueSome _ -> 1\n    | ValueNone -> 0\n"
+        let parse path text=match parseStringWithDefaults text path with ParseSuccess value -> value | ParseError errors -> failwithf "%A" errors
+        let result=checkParsedInputsWithDeclarations
+                       [parse "encoding-platform.clef" (EncodingFixture.declaration EncodingFixture.platform);parse file source]
+                       (Some EncodingFixture.platform) Set.empty (Some(Set.singleton file)) None
+        let site=result.Graph.Nodes.Values |> Seq.filter(fun node ->
+            node.IsReachable && match node.Kind with
+                                | SemanticKind.Application(fn,[_]) ->
+                                    match result.Graph.Nodes[fn].Kind with SemanticKind.Intrinsic info -> info.Module=IntrinsicModule.String && info.Operation="tryFromBytes" | _ -> false
+                                | _ -> false) |> Assert.Single
+        let domains=result.Graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.MemoryDomain domain -> Some domain | _ -> None)
+        Assert.Contains(domains,fun domain -> domain.Required.Contains site.Id && domain.Unresolved.TryFind site.Id=Some "The demanded String.tryFromBytes lacks proved byte storage and its private snapshot/validation/outcome construction.")
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.isError)
+
+    [<Fact>]
+    member _.``Checked native cases own exact local stack storage and layout``() =
+        let graph=EncodingFixture.admitted (CheckedStringEncodingCases.Program "[| 65; 0; 66 |]")
+        let memory=EncodingFixture.memory graph
+        let validator=memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Utf8Validation row -> Some row | _ -> None) |> Assert.Single
+        let rows=[validator.Construction.Success;validator.Construction.Failure] |> List.map(fun site ->
+            Assert.Contains(site,memory.Required)
+            Assert.False(memory.Unresolved.ContainsKey site)
+            match memory.Operations[site] with
+            | MemoryWitnessOperation.ConstructedValue row ->
+                Assert.Equal(site,row.Site)
+                Assert.Equal(validator.Construction.Owner,row.Owner)
+                Assert.Equal(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[site].Type,row.SourceType)
+                Assert.Contains(site,row.Uses)
+                let support=Clef.Compiler.Baker.Ingredients.MemoryValues.participants memory.Operations (MemoryWitnessOperation.ConstructedValue row)
+                Assert.True(Set.isSubset row.Uses support)
+                match row.Residence with
+                | MemoryResidence.Stack(scope,space) ->
+                    Assert.Equal(Some scope,Clef.Compiler.Baker.Recipes.MemoryAccessRecipes.nearestLambda graph site)
+                    Assert.Contains(scope,support)
+                    Assert.Contains(space,support)
+                | other -> failwithf "Expected source stack authority, got %A" other
+                row
+            | other -> failwithf "Expected constructed-instance authority, got %A" other)
+        Assert.Equal(rows[0].Residence,rows[1].Residence)
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        for operation in revision.Emission.Memory.Operations.Values do
+            match operation with
+            | Fidelity.PSG.MemoryWitnessOperation.ConstructedValue row -> Assert.True(revision.Emission.Numeric.Layouts.ContainsKey row.SourceType)
+            | _ -> ()
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("scope")>]
+    [<InlineData("layout")>]
+    [<InlineData("capacity")>]
+    member _.``Checked native storage refuses missing instance or forged scope``(change:string) =
+        let graph=EncodingFixture.admitted (CheckedStringEncodingCases.Program "[| 65 |]")
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
+        let row=revision.Emission.Memory.Operations.Values |> Seq.choose(function Fidelity.PSG.MemoryWitnessOperation.ConstructedValue row -> Some row | _ -> None) |> Seq.head
+        let operations=
+            if change="missing" then revision.Emission.Memory.Operations.Remove row.Site
+            elif change="layout" || change="capacity" then
+                let changed=if change="layout" then {row with Layout=row.Site} else {row with Capacity=row.Site}
+                revision.Emission.Memory.Operations.Add(row.Site,Fidelity.PSG.MemoryWitnessOperation.ConstructedValue changed)
+            else
+                let residence=match row.Residence with Fidelity.PSG.MemoryResidence.Stack(_,space) -> Fidelity.PSG.MemoryResidence.Stack(row.Site,space) | _ -> failwith "stack"
+                revision.Emission.Memory.Operations.Add(row.Site,Fidelity.PSG.MemoryWitnessOperation.ConstructedValue {row with Residence=residence})
+        let changed={revision with Emission={revision.Emission with Memory={revision.Emission.Memory with Operations=operations}}}
+        let reason=match change with
+                   | "missing" -> "exact source-authorized checked native-case storage"
+                   | "layout" -> "The constructed instance lost its exact current layout proof supported by this site."
+                   | "capacity" -> "The constructed instance lost its exact declared-space capacity proof supported by this site."
+                   | _ -> "The constructed instance's stack lifetime has no exact activation scope."
+        Assert.Contains(reason,sprintf "%A" (Fidelity.PSG.Integrity.check changed))
+
+    [<Fact>]
+    member _.``Checked native storage refuses disagreement with snapshot space capacity``() =
+        let graph=EncodingFixture.admitted (CheckedStringEncodingCases.Program "[| 65 |]")
+        let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(fun failures -> failwithf "%A" failures)
+        let row=revision.Emission.Memory.Operations.Values |> Seq.choose(function Fidelity.PSG.MemoryWitnessOperation.ConstructedValue row -> Some row | _ -> None) |> Seq.head
+        let claim=revision.CurrentClaims[row.Capacity]
+        let body=match claim.Body with Fidelity.PSG.ObligationBody.CapacityFits(bytes,capacity) -> Fidelity.PSG.ObligationBody.CapacityFits(bytes,capacity+1L) | _ -> failwith "capacity claim"
+        let changed={revision with CurrentClaims=revision.CurrentClaims.Add(row.Capacity,{claim with Body=body})}
+        Assert.Contains("The same-space source allocation capacity claims disagree.",sprintf "%A" (Fidelity.PSG.Integrity.check changed))

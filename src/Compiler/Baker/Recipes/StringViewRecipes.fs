@@ -77,6 +77,47 @@ let private excluded (graph:SemanticGraph) =
         match edge.Role with EdgeRole.BoundaryDeclaration declaration -> collect found declaration.Binding | _ -> found) Set.empty
     Set.union declarations (Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.project graph).DeferredOnly
 
+let private checkedConstruction (graph:SemanticGraph) owner text snapshot =
+    let rows = graph.Edges |> List.choose (fun edge ->
+        match edge.Role with
+        | EdgeRole.StringCheckedConstruction construction when edge.Target=owner -> Some(edge,construction)
+        | _ -> None)
+    match rows with
+    | [] -> None
+    | [(row,construction)] ->
+        let incidence = [construction.Owner;construction.Input;construction.Snapshot;construction.Length
+                         construction.Validation;construction.Decision;construction.Text;construction.Success
+                         construction.Failure;construction.Retirement]
+        demand (row.Class=EdgeClass.Provenance && row.Ordinal=0 && construction.Owner=owner &&
+                construction.Text=text && construction.Snapshot=snapshot && construction.Validator="RFC3629-v1" &&
+                (incidence |> List.forall (fun id -> List.contains id row.Sources)))
+            "The checked string lost its exact snapshot/validator/outcome construction relation."
+        incidence |> List.iter (live graph >> ignore)
+        let intrinsic site operation =
+            match application graph site with
+            | Some(info,[actual]) -> info.Module=IntrinsicModule.String && info.Operation=operation && actual=snapshot
+            | _ -> false
+        demand (intrinsic construction.Validation "validateUtf8" && intrinsic construction.Retirement "retireSnapshot" &&
+                intrinsic text "fromBytes") "The checked string validator, retirement or text view uses another snapshot."
+        demand (completeCount graph construction.Input construction.Length)
+            "The checked string no longer retains its complete original input extent."
+        demand ((live graph construction.Validation).Type=Types.boolType)
+            "The checked string validator result is not the native Boolean decision."
+        let valueType=NativeType.TApp(Types.voptionTyCon,[Types.stringType])
+        demand ((live graph construction.Success).Type=valueType && (live graph construction.Failure).Type=valueType)
+            "The checked string outcome no longer has its exact native value-option carrier."
+        demand (match (live graph construction.Success).Kind,(live graph construction.Failure).Kind with
+                | SemanticKind.DUConstruct("ValueSome",1,Some payload,None),SemanticKind.DUConstruct("ValueNone",0,None,None) -> payload=text
+                | _ -> false) "The checked string changed its native success or failure case."
+        demand (match (live graph construction.Decision).Kind with
+                | SemanticKind.IfThenElse(guard,success,Some failure) when guard=construction.Validation && success=construction.Success ->
+                    match (live graph failure).Kind with
+                    | SemanticKind.Sequential [retirement;none] -> retirement=construction.Retirement && none=construction.Failure
+                    | _ -> false
+                | _ -> false) "The checked string outcome is not guarded by its exact validator and failure retirement."
+        Some(row,construction)
+    | _ -> raise(MissingContract "The checked string construction relation is ambiguous.")
+
 /// Basic memory access and array-copy owners run first. Their immutable rows
 /// authorize this final view; this recipe never reconstructs a missing copy.
 let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
@@ -85,6 +126,17 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
     let mutable failures=Map.empty
     let mutable required=Set.empty
     let excluded=excluded graph
+    for node in graph.Nodes.Values do
+        if node.IsReachable && not(excluded.Contains node.Id) then
+            match application graph node.Id with
+            | Some(info,[_]) when info.Module=IntrinsicModule.String && info.Operation="tryFromBytes" ->
+                required<-Set.add node.Id required
+                failures<-Map.add node.Id "The demanded String.tryFromBytes lacks proved byte storage and its private snapshot/validation/outcome construction." failures
+            | Some(info,[_]) when info.Module=IntrinsicModule.String &&
+                                   (info.Operation="validateUtf8" || info.Operation="retireSnapshot") ->
+                required<-Set.add node.Id required
+                failures<-Map.add node.Id "The checked string operation lacks its complete current snapshot/validation/outcome construction." failures
+            | _ -> ()
     for node in graph.Nodes.Values do
         if node.IsReachable && not(excluded.Contains node.Id) then
           match view graph node with
@@ -106,6 +158,7 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                     "The string snapshot relation has changed its source role."
                 let owner=snapshotRow.Target
                 live graph owner |> ignore
+                let checkedText=checkedConstruction graph owner node.Id snapshot
                 let copySite=snapshot
                 let copy=copies.TryFind copySite |> needed "The string snapshot has no validated source array-copy construction."
                 demand (copy.Site=copySite && copy.CountCarrier.Site=copy.Count)
@@ -142,9 +195,10 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                         0I<=lo && lo<=hi && hi<=255I && List.contains declaration storageRow.Sources)
                     "The string view's storage range or representation declaration is inconsistent."
                 let textRows=
-                    match direction with
-                    | MemoryStringViewDirection.ToBytes -> []
-                    | MemoryStringViewDirection.FromBytes ->
+                    match direction,checkedText with
+                    | MemoryStringViewDirection.FromBytes,Some(row,_) -> [row]
+                    | MemoryStringViewDirection.ToBytes,_ -> []
+                    | MemoryStringViewDirection.FromBytes,None ->
                         let text=
                             graph.Edges |> List.filter (fun edge ->
                                 edge.Target=owner && (match edge.Role with EdgeRole.StringAscii | EdgeRole.StringUtf8Constant _ -> true | _ -> false))
@@ -176,10 +230,31 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
                     |> Set.union allocationFact.Participants
                 let fact:MemoryStringViewWitness=
                     {Site=node.Id;Source=source;Owner=owner;Snapshot=snapshot;Direction=direction
+                     Checked=checkedText |> Option.map snd
                      SourceCarrier=sourceCarrier;ResultCarrier=resultCarrier
                      Element=SettledSlot.Integer(8,Some representation.Name);Representation=representation;Declaration=declaration
                      Extent=copy.CountCarrier;Participants=participants}
                 admitted<-(node.Id,MemoryWitnessOperation.StringView fact)::admitted
+                match checkedText with
+                | None -> ()
+                | Some(_,construction) ->
+                    required<-required |> Set.add construction.Validation |> Set.add construction.Retirement
+                    demand (match allocationFact.Residence with MemoryResidence.Stack _ -> true | _ -> false)
+                        "The checked snapshot lacks its existing source-authorized stack-scope retirement."
+                    for site in [construction.Success;construction.Failure] do
+                        match operations.TryFind site with
+                        | Some(MemoryWitnessOperation.ConstructedValue value) when value.Site=site && value.Owner=construction.Owner &&
+                            value.SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType (live graph site).Type &&
+                            (match value.Residence with MemoryResidence.Stack _ -> true | _ -> false) -> ()
+                        | _ -> raise(MissingContract "The checked native outcome lacks its exact source-authorized local constructed-value storage.")
+                    let validator:MemoryUtf8ValidationWitness=
+                        {Site=construction.Validation;Construction=construction;Copy=copy;Allocation=allocationFact
+                         SourceCarrier=sourceCarrier}
+                    let retirement:MemorySnapshotRetirementWitness=
+                        {Site=construction.Retirement;Construction=construction;Allocation=allocationFact}
+                    admitted<-(construction.Validation,MemoryWitnessOperation.Utf8Validation validator)::
+                              (construction.Retirement,MemoryWitnessOperation.SnapshotRetirement retirement)::admitted
+                    failures<-failures |> Map.remove construction.Validation |> Map.remove construction.Retirement
             with MissingContract reason -> failures<-Map.add node.Id reason failures
     List.rev admitted,failures,required
 

@@ -184,6 +184,13 @@ let private resolveStringOp (op: string) (_range: SourceRange) : IntrinsicResolu
         // array whose storage also covers subsequent ordinary integer writes.
         let ty = NativeType.TFun(stringType, NativeType.TApp(Types.arrayTyCon, [Types.intType]))
         Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
+    | "tryFromBytes" ->
+        // Checked text is a native discriminated value; no host runtime type
+        // participates in its representation or success/failure semantics.
+        let bytesType = NativeType.TApp(Types.arrayTyCon, [Types.intType])
+        let resultType = NativeType.TApp(Types.voptionTyCon, [stringType])
+        let ty = NativeType.TFun(bytesType, resultType)
+        Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
     | "fromBytes" ->
         // Integer code units -> string. Byte storage and text validity are
         // admitted jointly by Baker, not by a width-spelled source type.

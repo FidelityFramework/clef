@@ -2128,7 +2128,7 @@ module Types =
 
     // ValueOption type constructor (arity 1)
     // Usage: NativeType.TApp(Types.voptionTyCon, [elemType])
-    let voptionTyCon = mkTypeConRef "ValueOption" 1 (TypeLayout.Inline(-1, -1))
+    let voptionTyCon = mkTypeConRef "voption" 1 TypeLayout.Opaque
 
     // FnPtr type constructor (arity 1)
     // Usage: NativeType.TApp(Types.fnPtrTyCon, [funcType])

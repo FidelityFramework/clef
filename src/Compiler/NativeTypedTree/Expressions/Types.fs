@@ -297,7 +297,7 @@ type CheckerCallbacks = {
 /// a second constructor with another layout identity defeats typed recipe matching.
 let internal optionTycon : TypeConRef = NativeTypes.Types.optionTyCon
 /// Canonical TypeConRef for voption<'T>.
-let internal voptionTycon : TypeConRef = mkTypeConRef "voption" 1 TypeLayout.Opaque
+let internal voptionTycon : TypeConRef = NativeTypes.Types.voptionTyCon
 /// Canonical TypeConRef for Result<'T,'E>. Capital R — matches F# annotation syntax.
 let internal resultTycon  : TypeConRef = mkTypeConRef "Result"  2 TypeLayout.Opaque
 

@@ -321,6 +321,14 @@ let private closedLocalReference graph scope root =
 /// escape prevents this finite local residence proof.
 let arrayUses graph site =
     let nodes = graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.toList
+    let checkedStrings = graph.Edges |> List.choose(fun edge ->
+        match edge.Role with
+        | EdgeRole.StringCheckedConstruction construction when edge.Target=construction.Owner -> Some construction
+        | _ -> None)
+    let checkedOption id =
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst (live graph id).Type with
+        | NativeType.TApp(constructor,[element]) -> constructor=Types.voptionTyCon && element=Types.stringType
+        | _ -> false
     let internalView (node:SemanticNode) =
         match intrinsic graph node.Id [] with
         | Some({Module=IntrinsicModule.String;Operation="fromBytes"},[input]) when
@@ -342,6 +350,17 @@ let arrayUses graph site =
                     | SemanticKind.TypeAnnotation(value, _), _ | SemanticKind.EagerExpr value, _
                     | SemanticKind.StringByteBorrow value, _ -> Set.contains value aliases
                     | SemanticKind.Sequential items, _ -> List.tryLast items |> Option.exists (fun value -> Set.contains value aliases)
+                    // A checked native value contains this backing; it is not
+                    // a second allocation or permission to escape the scope.
+                    | SemanticKind.DUConstruct("ValueSome",1,Some text,None), _ ->
+                        aliases.Contains text && checkedStrings |> List.exists(fun construction -> construction.Success=node.Id && construction.Text=text)
+                    | SemanticKind.IfThenElse(guard,success,Some failure), _ ->
+                        let contained id = aliases.Contains id ||
+                                           (match (live graph id).Kind with SemanticKind.Sequential items -> List.tryLast items |> Option.exists aliases.Contains | _ -> false)
+                        (contained success || contained failure) && checkedStrings |> List.exists(fun construction -> construction.Decision=node.Id && construction.Validation=guard && construction.Success=success)
+                    | SemanticKind.DUEliminate(value,1,"ValueSome",_), _ -> aliases.Contains value
+                    | SemanticKind.CaseElimination(value,arms), _ when aliases.Contains value && checkedOption value ->
+                        arms |> List.exists(fun arm -> aliases.Contains arm.Body)
                     | _ -> internalView node |> Option.exists(fun value -> Set.contains value aliases)
                 if aliasesInput then Some node.Id else None) |> Set.ofList |> Set.union aliases
         if more = aliases then aliases else close more
@@ -367,10 +386,16 @@ let arrayUses graph site =
                     closed <- closed && safe
                 | None -> closed <- false
             | SemanticKind.FieldGet(buffer, "Length") when aliases.Contains buffer -> ()
+            | SemanticKind.DUGetTag(value,_) when aliases.Contains value -> ()
+            | SemanticKind.CaseElimination(value,arms) when aliases.Contains value && checkedOption value &&
+                                                          arms |> List.forall(fun arm -> arm.Guard.IsNone) -> ()
             | SemanticKind.Sequential items when items |> List.tryLast |> Option.exists (fun last -> not (aliases.Contains last)) -> ()
             | SemanticKind.Application(callee,actuals) ->
                 match intrinsic graph target.Id [] with
                 | Some(info, [buffer]) when (info.Module = IntrinsicModule.Array || info.Module = IntrinsicModule.String) && info.Operation = "length" && aliases.Contains buffer -> ()
+                | Some({Module=IntrinsicModule.String;Operation=("validateUtf8" | "retireSnapshot")},[buffer])
+                    when aliases.Contains buffer && checkedStrings |> List.exists(fun construction ->
+                        construction.Snapshot=buffer && (construction.Validation=target.Id || construction.Retirement=target.Id)) -> ()
                 | Some({Module=IntrinsicModule.Sys;Operation="write"},[_;buffer;_])
                     when aliases.Contains buffer &&
                          (match (live graph buffer).Kind with SemanticKind.StringByteBorrow _ -> true | _ -> false) &&
@@ -415,6 +440,11 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
     let mutable required = Set.empty
     let excluded = Memory.excluded graph
     let platform = lazy (Platform.resolve graph |> needed "A memory residence requires the selected source platform declaration.")
+    let checkedCase site =
+        graph.Edges |> List.choose(fun edge ->
+            match edge.Role with
+            | EdgeRole.StringCheckedConstruction row when edge.Target=row.Owner && (row.Success=site || row.Failure=site) -> Some row
+            | _ -> None) |> function [row] -> Some row | _ -> None
     let settleNode (node: SemanticNode) =
         let mutable proofs = Enrichment.empty
         let enrichmentId = Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId ()
@@ -430,6 +460,37 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
             citizen.Id
         let operation =
           match node.Kind with
+          | SemanticKind.DUConstruct _ when (checkedCase node.Id).IsSome ->
+            let construction=checkedCase node.Id |> Option.get
+            demand (match node.Kind with
+                    | SemanticKind.DUConstruct("ValueSome",1,Some text,None) -> node.Id=construction.Success && text=construction.Text
+                    | SemanticKind.DUConstruct("ValueNone",0,None,None) -> node.Id=construction.Failure
+                    | _ -> false) "The checked carrier allocation changed its exact native case."
+            demand (applySubst node.Type=NativeType.TApp(Types.voptionTyCon,[Types.stringType]))
+                "The checked carrier allocation lacks its native value-option source type."
+            let sourceType=TypeIdentity.ofType node.Type
+            let bytes,alignment=
+                match numeric.Layouts.TryFind sourceType with
+                | Some(SettledLayout.Union(_,_,Some bytes,Some alignment)) when bytes>0 && alignment>0 -> bytes,alignment
+                | _ -> raise(MissingContract "The constructed value lacks its complete settled union storage layout.")
+            let _,closed,uses=arrayUses graph node.Id
+            demand closed "The constructed value's complete use family escapes or has an unsupported consumer."
+            let scope=nearestLambda graph node.Id |> needed "The constructed value has no source lexical activation scope."
+            demand (uses |> Set.forall(fun id ->
+                match (live graph id).Kind with SemanticKind.ModuleDef _ -> true | _ -> nearestLambda graph id=Some scope))
+                "A constructed-value alias or access crosses its proposed stack activation."
+            let stack=platform.Value.Spaces |> List.filter(fun space -> space.Kind="stack" && space.Access.Contains("w")) |> function
+                      | [stack] -> stack | _ -> raise(MissingContract "A local constructed value requires one declared writable stack space.")
+            demand (stack.Alignment>=alignment && stack.Alignment%alignment=0)
+                "The declared stack space does not satisfy the constructed-value layout alignment."
+            let incidence=[construction.Owner;construction.Input;construction.Snapshot;construction.Length;construction.Validation
+                           construction.Decision;construction.Text;construction.Success;construction.Failure;construction.Retirement]
+            let participants=Set.union uses (Set.ofList(platform.Value.Node::stack.Node::scope::incidence))
+            let layoutProof=proof (ObligationBody.ContinuationLayout([0,bytes,alignment],bytes,alignment)) participants "constructed_layout"
+            let capacityProof=proof (ObligationBody.CapacityFits(int64 bytes,stack.Capacity)) participants "constructed_capacity"
+            MemoryWitnessOperation.ConstructedValue
+                {Site=node.Id;Owner=construction.Owner;SourceType=sourceType;Residence=MemoryResidence.Stack(scope,stack.Node)
+                 Uses=uses;Construction=construction;Platform=platform.Value.Node;Layout=layoutProof;Capacity=capacityProof}
           | SemanticKind.ArrayExpr elements ->
             let slot = element numeric node.Id
             let bytes, alignment = size graph slot
@@ -547,6 +608,7 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                 match node.Kind with
                 | SemanticKind.ArrayExpr _ | SemanticKind.AddressOf _ | SemanticKind.CellAddress _
                 | SemanticKind.ElementAddress _ | SemanticKind.FieldAddress _ | SemanticKind.Reborrow _ -> true
+                | SemanticKind.DUConstruct _ when (checkedCase node.Id).IsSome -> true
                 | SemanticKind.IndexGet(buffer,_) | SemanticKind.IndexSet(buffer,_,_) -> isArray graph buffer
                 | SemanticKind.FieldGet(buffer,"Pointer") -> isArray graph buffer
                 | _ -> (arrayLength graph node).IsSome || (pendingArrayConstruction graph node).IsSome

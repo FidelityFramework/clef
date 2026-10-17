@@ -336,6 +336,17 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
             (graph.Edges @ (recipeSet.Recipes.Values |> Seq.collect _.NewEdges |> Seq.toList))
             |> List.map (fun e ->
                 { e with
+                    Role =
+                        match e.Role with
+                        | EdgeRole.StringCheckedConstruction construction when not(historical e) ->
+                            let current = updateRef replacementMap
+                            EdgeRole.StringCheckedConstruction
+                                { construction with Owner=current construction.Owner;Input=current construction.Input
+                                                    Snapshot=current construction.Snapshot;Length=current construction.Length
+                                                    Validation=current construction.Validation;Decision=current construction.Decision
+                                                    Text=current construction.Text;Success=current construction.Success
+                                                    Failure=current construction.Failure;Retirement=current construction.Retirement }
+                        | role -> role
                     Sources =
                         if historical e then e.Sources
                         else e.Sources |> List.map (updateRef replacementMap)

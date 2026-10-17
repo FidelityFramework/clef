@@ -1670,12 +1670,53 @@ type MemoryAddressWitness = { Site: NodeId; Place: MemoryPlace; Element: Settled
 
 [<RequireQualifiedAccess>]
 type MemoryStringViewDirection = FromBytes | ToBytes
+/// Baker's exact snapshot, validator and native value-option outcome incidence.
+/// UTF-8 validity supplies no element bounds or allocation permission.
+type CheckedStringConstruction = {
+    /// Exact emitted copy-input occurrence; original actual remains in the snapshot provenance row.
+    Owner: NodeId; Input: NodeId; Snapshot: NodeId; Length: NodeId
+    Validation: NodeId; Decision: NodeId; Text: NodeId
+    Success: NodeId; Failure: NodeId; Retirement: NodeId
+    Validator: string
+}
+
+type MemoryUtf8ValidationWitness = {
+    Site: NodeId
+    Construction: CheckedStringConstruction
+    Copy: MemoryArrayCopyWitness
+    Allocation: MemoryArrayAllocationWitness
+    SourceCarrier: ValueRepresentation
+}
+
+/// Discards an unsuccessful private snapshot under its authored residence.
+/// A stack residence does not authorize a heap free.
+type MemorySnapshotRetirementWitness = {
+    Site: NodeId
+    Construction: CheckedStringConstruction
+    Allocation: MemoryArrayAllocationWitness
+}
+
+/// One exact constructed instance with source-authorized local stack storage.
+/// SourceType references the existing settled layout; Uses closes its activation.
+type MemoryConstructedValueWitness = {
+    Site: NodeId
+    Owner: NodeId
+    SourceType: TypeIdentity
+    Residence: MemoryResidence
+    Uses: Set<NodeId>
+    Construction: CheckedStringConstruction
+    Platform: NodeId
+    Layout: NodeId
+    Capacity: NodeId
+}
+
 type MemoryStringViewWitness = {
     Site: NodeId
     Source: NodeId
     Owner: NodeId
     Snapshot: NodeId
     Direction: MemoryStringViewDirection
+    Checked: CheckedStringConstruction option
     SourceCarrier: ValueRepresentation
     ResultCarrier: ValueRepresentation
     Element: SettledSlot
@@ -1694,6 +1735,9 @@ type MemoryWitnessOperation =
     | ArrayAllocation of MemoryArrayAllocationWitness
     | Address of MemoryAddressWitness
     | StringView of MemoryStringViewWitness
+    | Utf8Validation of MemoryUtf8ValidationWitness
+    | SnapshotRetirement of MemorySnapshotRetirementWitness
+    | ConstructedValue of MemoryConstructedValueWitness
 
 type MemoryProof = {
     Site: NodeId; Obligation: NodeId; Body: ObligationBody
@@ -1703,6 +1747,7 @@ type MemoryProof = {
 [<RequireQualifiedAccess>]
 type MemoryStringPremise =
     | Snapshot
+    | Checked of CheckedStringConstruction
     | ToBytesSnapshot
     | Copy
     | Storage of lower: bigint * upper: bigint * representation: string
@@ -1970,6 +2015,8 @@ type EdgeRole =
     | StringByteRange of lower: bigint * upper: bigint
     /// [original input; fresh copy] -> conversion; copy preserves string immutability.
     | StringByteSnapshot
+    /// Exact private-copy/validator/native-outcome/retirement incidence.
+    | StringCheckedConstruction of CheckedStringConstruction
     /// [immutable string; internal byte view; fresh copy] -> public array conversion.
     | StringToBytesSnapshot
     /// Complete storage range establishes ASCII text.

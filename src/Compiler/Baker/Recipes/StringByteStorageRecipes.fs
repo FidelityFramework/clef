@@ -16,7 +16,7 @@ open Clef.Compiler.Baker.Recipes.Decomposition
 module C = Clef.Compiler.Baker.Ingredients.Continuations
 module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 
-type Plan = { Site: SemanticNode; Input: NodeId; Origin: NodeId; Members: NodeId list; Premises: NodeId list; Range: ValueRange; Representation: string; Text: EdgeRole }
+type Plan = { Site: SemanticNode; Input: NodeId; Origin: NodeId; Members: NodeId list; Premises: NodeId list; Range: ValueRange; Representation: string; Text: EdgeRole option; Checked: bool }
 
 /// Applied source evidence only. Physical reference/count/result adapters remain
 /// separate requirements; a declared foreign byte ingress does not establish text.
@@ -167,7 +167,7 @@ let private analyze renew (graph: SemanticGraph) =
                 let allowed =
                     match info.Module, info.Operation, args.Length with
                     | IntrinsicModule.Array, ("get" | "set" | "length" | "sub"), _ -> true
-                    | IntrinsicModule.String, "fromBytes", 1 -> true
+                    | IntrinsicModule.String, ("fromBytes" | "tryFromBytes" | "validateUtf8" | "retireSnapshot"), 1 -> true
                     | _ -> false
                 args |> List.iteri (fun index arg -> if not allowed || index <> 0 then block arg)
             | None ->
@@ -344,7 +344,7 @@ let private analyze renew (graph: SemanticGraph) =
     let sites =
         nodes.Values |> Seq.choose (fun node ->
             match calls.TryFind node.Id with
-            | Some({ Module = IntrinsicModule.String; Operation = "fromBytes" }, [input])
+            | Some({ Module = IntrinsicModule.String; Operation = ("fromBytes" | "tryFromBytes") }, [input])
                 when not (graph.Edges |> List.exists (fun edge ->
                     edge.Role = EdgeRole.StringByteSnapshot && (match edge.Sources with [_; copy] -> copy = input | _ -> false))) -> Some(node, input)
             | _ -> None)
@@ -358,16 +358,26 @@ let writableApplications graph =
 let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list =
     let nodes, origins, members, blocked, ranges, representation, validText, premises, sites, readInput, writable = analyze false graph
     let plans, diagnostics = sites |> List.fold (fun (plans, diagnostics) (site, input) ->
+        let checkedText =
+            match site.Kind with
+            | SemanticKind.Application(fn, _) ->
+                match nodes.TryFind fn with
+                | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.String; Operation = "tryFromBytes" } } -> true
+                | _ -> false
+            | _ -> false
         match origins.TryFind input, representation with
         | Some root, Some(rep, declaration) when not (blocked.Contains root) ->
             let range = match ranges[root] with ValueRange.Empty -> ValueRange.point 0I | actual -> actual
             let text = validText input range
-            if ValueRange.isObservable range && ValueRange.contains (ValueRange.bounded 0I 255I) range && text.IsSome then
+            if ValueRange.isObservable range && ValueRange.contains (ValueRange.bounded 0I 255I) range && (checkedText || text.IsSome) then
                 let family = members root
-                { Site = site; Input = input; Origin = root; Members = family; Premises = declaration :: premises root; Range = range; Representation = rep.Name; Text = text.Value } :: plans, diagnostics
+                { Site = site; Input = input; Origin = root; Members = family; Premises = declaration :: premises root; Range = range; Representation = rep.Name; Text = text; Checked = checkedText } :: plans, diagnostics
             elif ValueRange.isObservable range && ValueRange.contains (ValueRange.bounded 0I 255I) range then
                 plans, diagnostic site [input; root] "text must be proved ASCII or an immutable constant valid UTF-8 sequence." :: diagnostics
+            elif checkedText && not(ValueRange.isObservable range) then plans, diagnostics
             else plans, diagnostic site [input; root] "every stored integer must be proved within 0..255." :: diagnostics
+        | _, None when checkedText -> plans, diagnostics
+        | _ when checkedText && (origins.TryFind input |> Option.isNone) -> plans, diagnostics
         | _, None -> plans, diagnostic site [input] "the platform must offer an unsigned 8-bit representation." :: diagnostics
         | _ -> plans, diagnostic site [input] "the array must have a closed allocation and known writes; an unknown origin or escaping alias is not admitted." :: diagnostics) ([], [])
     let admitted = Set.union
@@ -439,11 +449,27 @@ let private expandCore (graph: SemanticGraph) (plan: Plan) =
         let! length = intrinsic IntrinsicModule.Array "length" [input] [sourceType] Types.intType
         let! zero = intLit 0
         let! snapshot = intrinsic IntrinsicModule.Array "sub" [input; zero; length] [sourceType; Types.intType; Types.intType] sourceType
-        let! result = intrinsic IntrinsicModule.String "fromBytes" [snapshot] [sourceType] Types.stringType
-        let! root = evaluateBefore [binding; length; snapshot] result Types.stringType
-        return root, snapshot }
+        if plan.Checked then
+            let resultType = NativeType.TApp(Types.voptionTyCon, [Types.stringType])
+            let! validation = intrinsic IntrinsicModule.String "validateUtf8" [snapshot] [sourceType] Types.boolType
+            let! text = intrinsic IntrinsicModule.String "fromBytes" [snapshot] [sourceType] Types.stringType
+            let! success = duConstruct "ValueSome" 1 (Some text) None resultType
+            let! retirement = intrinsic IntrinsicModule.String "retireSnapshot" [snapshot] [sourceType] Types.unitType
+            let! failure = duConstruct "ValueNone" 0 None None resultType
+            let! failed = evaluateBefore [retirement] failure resultType
+            let! decision = createWithChildren (SemanticKind.IfThenElse(validation, success, Some failed)) resultType [validation; success; failed]
+            let! root = evaluateBefore [binding; length; snapshot] decision resultType
+            let construction =
+                { Owner = plan.Site.Id; Input = input; Snapshot = snapshot; Length = length
+                  Validation = validation; Decision = decision; Text = text; Success = success
+                  Failure = failure; Retirement = retirement; Validator = "RFC3629-v1" }
+            return root, snapshot, Some construction
+        else
+            let! result = intrinsic IntrinsicModule.String "fromBytes" [snapshot] [sourceType] Types.stringType
+            let! root = evaluateBefore [binding; length; snapshot] result Types.stringType
+            return root, snapshot, None }
     match run state parser with
-    | Matched(root, snapshot), created ->
+    | Matched(root, snapshot, checkedConstruction), created ->
         let created = created |> List.map (fun node ->
             let range =
                 match node.Kind with
@@ -467,8 +493,16 @@ let private expandCore (graph: SemanticGraph) (plan: Plan) =
                               Statement = "Every reachable stored value in this closed array family fits its byte-unit storage."
                               Source = fmtRange plan.Site.Range; Refs = []
                               Body = ObligationBody.IntegerRepresentationCoverage(lo, hi, 0I, 255I) }
-        let textEdge = { Class = EdgeClass.Range; Role = plan.Text; Sources = participants; Target = plan.Site.Id; Ordinal = 0 }
-        root, created @ [obligation], storage @ [snapshotEdge; textEdge; constrains participants obligation]
+        let textEdges =
+            if plan.Checked then [] else
+            plan.Text |> Option.map (fun role -> { Class = EdgeClass.Range; Role = role; Sources = participants; Target = plan.Site.Id; Ordinal = 0 }) |> Option.toList
+        let checkedEdges = checkedConstruction |> Option.map (fun construction ->
+            let incidence = [construction.Owner; construction.Input; construction.Snapshot; construction.Length
+                             construction.Validation; construction.Decision; construction.Text; construction.Success
+                             construction.Failure; construction.Retirement]
+            { Class = EdgeClass.Provenance; Role = EdgeRole.StringCheckedConstruction construction
+              Sources = List.distinct(incidence @ participants); Target = plan.Site.Id; Ordinal = 0 }) |> Option.toList
+        root, created @ [obligation], storage @ [snapshotEdge; constrains participants obligation] @ textEdges @ checkedEdges
     | NoMatch reason, _ -> failwithf "String byte storage recipe failed: %s" reason
 
 let expand graph plan =

@@ -69,7 +69,7 @@ let private payloadType (graph: SemanticGraph) unionType tag : Result<NativeType
         | [field] -> Ok(applySubst field)
         | fields -> Ok(NativeType.TTuple(List.map applySubst fields, false))
     match applySubst unionType with
-    | NativeType.TApp(constructor, [element]) when (constructor.Name = "option" || constructor.Name = "voption") && tag = 1 -> Ok element
+    | NativeType.TApp(constructor, [element]) when (constructor = Types.optionTyCon || constructor = Types.voptionTyCon) && tag = 1 -> Ok element
     | NativeType.TApp(constructor, [ok; error]) when constructor.Name = "Result" || constructor.Name = "result" ->
         match tag with 0 -> Ok ok | 1 -> Ok error | _ -> missing "Result has no case at this tag"
     | NativeType.TUnion(_, cases) ->

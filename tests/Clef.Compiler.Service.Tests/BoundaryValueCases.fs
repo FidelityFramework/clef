@@ -355,3 +355,14 @@ let main _ =
             Assert.True(Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed site |> Result.isError)
         Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare changed |> Result.isError)
         Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish changed |> Result.isError)
+
+    [<Fact>]
+    member _.``Native value option annotations and helper returns share the source constructor``() =
+        for value in ["ValueSome 7"; "ValueNone"] do
+            let result = BoundaryValuesFixture.check ("let choose () : voption<int> = " + value + "\n[<EntryPoint>]\nlet main _ =\n    let selected: voption<int> = choose ()\n    match selected with | ValueSome payload -> payload | ValueNone -> 0\n")
+            DimensionalCases.noErrors result
+            let selected = result.Graph.Nodes.Values |> Seq.filter(fun node -> match node.Kind with SemanticKind.Binding("selected",_,_,_) -> true | _ -> false) |> Assert.Single
+            DimensionalCases.same (NativeType.TApp(Types.voptionTyCon,[Types.intType])) selected.Type
+            let payloads=result.Graph.Nodes.Values |> Seq.choose(fun node -> match node.Kind with SemanticKind.DUEliminate(_,1,"ValueSome",payload) -> Some payload | _ -> None) |> Seq.toList
+            Assert.NotEmpty payloads
+            for payload in payloads do DimensionalCases.same Types.intType payload

@@ -1107,6 +1107,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.StringByteRead -> Fidelity.PSG.EdgeRole.StringByteRead
     | S.EdgeRole.StringByteRange(a0, a1) -> Fidelity.PSG.EdgeRole.StringByteRange(a0, a1)
     | S.EdgeRole.StringByteSnapshot -> Fidelity.PSG.EdgeRole.StringByteSnapshot
+    | S.EdgeRole.StringCheckedConstruction value -> Fidelity.PSG.EdgeRole.StringCheckedConstruction(mapCheckedStringConstruction value)
     | S.EdgeRole.StringToBytesSnapshot -> Fidelity.PSG.EdgeRole.StringToBytesSnapshot
     | S.EdgeRole.StringAscii -> Fidelity.PSG.EdgeRole.StringAscii
     | S.EdgeRole.StringUtf8Constant(a0) -> Fidelity.PSG.EdgeRole.StringUtf8Constant(a0)
@@ -1919,6 +1920,7 @@ and mapMemoryResidence (value: S.MemoryResidence) : Fidelity.PSG.MemoryResidence
 and mapMemoryStringPremise (value: S.MemoryStringPremise) : Fidelity.PSG.MemoryStringPremise =
     match value with
     | S.MemoryStringPremise.Snapshot -> Fidelity.PSG.MemoryStringPremise.Snapshot
+    | S.MemoryStringPremise.Checked value -> Fidelity.PSG.MemoryStringPremise.Checked(mapCheckedStringConstruction value)
     | S.MemoryStringPremise.ToBytesSnapshot -> Fidelity.PSG.MemoryStringPremise.ToBytesSnapshot
     | S.MemoryStringPremise.Copy -> Fidelity.PSG.MemoryStringPremise.Copy
     | S.MemoryStringPremise.Storage(a0, a1, a2) -> Fidelity.PSG.MemoryStringPremise.Storage(a0, a1, a2)
@@ -1943,6 +1945,27 @@ and mapMemoryStringViewDirection (value: S.MemoryStringViewDirection) : Fidelity
     | S.MemoryStringViewDirection.FromBytes -> Fidelity.PSG.MemoryStringViewDirection.FromBytes
     | S.MemoryStringViewDirection.ToBytes -> Fidelity.PSG.MemoryStringViewDirection.ToBytes
 
+and mapCheckedStringConstruction (value: S.CheckedStringConstruction) : Fidelity.PSG.CheckedStringConstruction =
+    { Owner = nodeId value.Owner; Input = nodeId value.Input; Snapshot = nodeId value.Snapshot; Length = nodeId value.Length
+      Validation = nodeId value.Validation; Decision = nodeId value.Decision; Text = nodeId value.Text
+      Success = nodeId value.Success; Failure = nodeId value.Failure; Retirement = nodeId value.Retirement
+      Validator = value.Validator }
+
+and mapMemoryUtf8ValidationWitness (value: S.MemoryUtf8ValidationWitness) : Fidelity.PSG.MemoryUtf8ValidationWitness =
+    { Site = nodeId value.Site; Construction = mapCheckedStringConstruction value.Construction
+      Copy = mapMemoryArrayCopyWitness value.Copy; Allocation = mapMemoryArrayAllocationWitness value.Allocation
+      SourceCarrier = mapValueRepresentation value.SourceCarrier }
+
+and mapMemorySnapshotRetirementWitness (value: S.MemorySnapshotRetirementWitness) : Fidelity.PSG.MemorySnapshotRetirementWitness =
+    { Site = nodeId value.Site; Construction = mapCheckedStringConstruction value.Construction
+      Allocation = mapMemoryArrayAllocationWitness value.Allocation }
+
+and mapMemoryConstructedValueWitness (value: S.MemoryConstructedValueWitness) : Fidelity.PSG.MemoryConstructedValueWitness =
+    { Site = nodeId value.Site; Owner = nodeId value.Owner; SourceType = mapTypeIdentity value.SourceType
+      Residence = mapMemoryResidence value.Residence; Uses = Set.map nodeId value.Uses
+      Construction = mapCheckedStringConstruction value.Construction; Platform = nodeId value.Platform
+      Layout = nodeId value.Layout; Capacity = nodeId value.Capacity }
+
 and mapMemoryStringViewWitness (value: S.MemoryStringViewWitness) : Fidelity.PSG.MemoryStringViewWitness =
     ({
         Site = nodeId value.Site
@@ -1950,6 +1973,7 @@ and mapMemoryStringViewWitness (value: S.MemoryStringViewWitness) : Fidelity.PSG
         Owner = nodeId value.Owner
         Snapshot = nodeId value.Snapshot
         Direction = mapMemoryStringViewDirection value.Direction
+        Checked = Option.map mapCheckedStringConstruction value.Checked
         SourceCarrier = mapValueRepresentation value.SourceCarrier
         ResultCarrier = mapValueRepresentation value.ResultCarrier
         Element = mapSettledSlot value.Element
@@ -1968,6 +1992,9 @@ and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.M
     | S.MemoryWitnessOperation.ArrayAllocation(a0) -> Fidelity.PSG.MemoryWitnessOperation.ArrayAllocation(mapMemoryArrayAllocationWitness a0)
     | S.MemoryWitnessOperation.Address(a0) -> Fidelity.PSG.MemoryWitnessOperation.Address(mapMemoryAddressWitness a0)
     | S.MemoryWitnessOperation.StringView(a0) -> Fidelity.PSG.MemoryWitnessOperation.StringView(mapMemoryStringViewWitness a0)
+    | S.MemoryWitnessOperation.Utf8Validation value -> Fidelity.PSG.MemoryWitnessOperation.Utf8Validation(mapMemoryUtf8ValidationWitness value)
+    | S.MemoryWitnessOperation.SnapshotRetirement value -> Fidelity.PSG.MemoryWitnessOperation.SnapshotRetirement(mapMemorySnapshotRetirementWitness value)
+    | S.MemoryWitnessOperation.ConstructedValue value -> Fidelity.PSG.MemoryWitnessOperation.ConstructedValue(mapMemoryConstructedValueWitness value)
 
 and mapMemoryWitnessProjection (value: S.MemoryWitnessProjection) : Fidelity.PSG.MemoryWitnessProjection =
     ({
