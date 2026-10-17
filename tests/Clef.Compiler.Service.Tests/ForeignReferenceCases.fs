@@ -518,7 +518,6 @@ type ForeignReferenceTests() =
 
     [<Theory>]
     [<InlineData("relation")>]
-    [<InlineData("count")>]
     member _.``Writable relational source requires exact result relation and count domain``(shape:string) =
         let source,body,reason=
             match shape with
@@ -526,10 +525,7 @@ type ForeignReferenceTests() =
                 let source=ForeignCases.writableRelationalSource.Replace("Lower = Constant (-1)","Lower = Constant 0")
                 Assert.NotEqual<string>(ForeignCases.writableRelationalSource,source)
                 source,ForeignCases.writableRelationalBody,"The writable result hypothesis or ordered actuals differ from this call's exact -1..count relation."
-            | _ ->
-                let body=ForeignCases.writableRelationalBody.Replace("Test.Native.read buffer 3","Test.Native.read buffer 2")
-                Assert.NotEqual<string>(ForeignCases.writableRelationalBody,body)
-                ForeignCases.writableRelationalSource,body,"The first relational writable result requires its exact count3 source domain."
+            | _ -> failwith "Unknown relational premise change"
         let graph=(ForeignCases.writableVoidApplication source body).CheckResult.Graph
         Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
         Assert.Contains(graph.Nodes.Values,fun node->
@@ -537,6 +533,20 @@ type ForeignReferenceTests() =
             | SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-adapter" ->
                 match info.Body with ObligationBody.Pending reasons->List.contains reason reasons | _->false
             | _->false)
+
+    [<Fact>]
+    member _.``Writable relational count two retains its exact current result account``() =
+        let body=ForeignCases.writableRelationalBody.Replace("Test.Native.read buffer 3","Test.Native.read buffer 2")
+        let program=ForeignCases.writableVoidApplication ForeignCases.writableRelationalSource body
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors program,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages program))
+        let revision=Clef.Compiler.Project.ProjectChecker.publish program |> Result.defaultWith failwith
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let row=Assert.Single revision.Emission.Boundary.WritableBufferUses.Values
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(2I,2I),revision.Emission.Numeric.Values[row.Count].Range)
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(-1I,2I),revision.Emission.Numeric.Values[row.Call].Range)
+        let result=revision.Emission.Numeric.ForeignResultUses |> List.filter(fun use'->use'.Application.Call=row.Call) |> Assert.Single
+        Assert.Equal(2,result.Claims |> List.map snd |> List.distinct |> List.length)
+        Assert.Equal<Fidelity.PSG.ForeignResultProofRole list>([Fidelity.PSG.ForeignResultProofRole.LogicalCoverage;Fidelity.PSG.ForeignResultProofRole.AbiNarrowing],result.Claims |> List.map fst)
 
     [<Theory>]
     [<InlineData("version")>]
@@ -593,6 +603,78 @@ type ForeignReferenceTests() =
         let claims=graph.Nodes.Values |> Seq.choose(fun node->match node.Kind with SemanticKind.Obligation info when info.Kind.StartsWith "foreign-writable-buffer-" -> Some info | _->None) |> Seq.toList
         Assert.DoesNotContain(claims,fun info->info.Kind="foreign-writable-buffer-storage")
         Assert.Contains(claims,fun info->info.Kind="foreign-writable-buffer-adapter" && (match info.Body with ObligationBody.Pending reasons -> reasons |> List.exists(fun reason->reason.Contains "within 0..255") | _->false))
+
+    [<Theory>]
+    [<InlineData(4, 3)>]
+    [<InlineData(1024, 1024)>]
+    member _.``Writable extent observation retains initialized storage and exact count support``(capacity:int,count:int) =
+        let countActual=if count=capacity then "requested" else "(requested - 1)"
+        let body=
+            sprintf "    let buffer = Array.zeroCreate %d\n    let requested = buffer.Length\n    let result = Test.Native.read 0 buffer %s\n    if result < 0 then 11\n    elif result = 0 then 12\n    else\n        let prefix = eager (Array.sub buffer 0 result)\n        prefix.Length\n" capacity countActual
+        let program=ForeignCases.writableVoidApplication ForeignCases.writablePosixSource body
+        let graph=program.CheckResult.Graph
+        let application=
+            Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph
+            |> Map.toList |> Assert.Single |> snd
+            |> Result.defaultWith(fun failure->failwith failure.Reason)
+        Assert.Equal(ValueRange.point(bigint count),application.CountRange)
+        Assert.Equal(ValueRange.point(bigint capacity),application.CapacityRange)
+        Assert.Equal(ValueRange.bounded 0I 255I,application.StorageRange)
+        let extent=graph.Nodes.Values |> Seq.filter(fun node->
+            node.IsReachable && (match node.Kind with
+                                 | SemanticKind.FieldGet(_,"Length") -> node.Range.Start.Line=5
+                                 | _ -> false)) |> Assert.Single
+        let input=match extent.Kind with SemanticKind.FieldGet(input,_) -> input | _ -> failwith "Expected extent observation"
+        Assert.Contains(extent.Id,application.Participants)
+        Assert.Contains(input,application.Participants)
+        let changed={graph with Nodes=graph.Nodes.Add(extent.Id,{extent with Kind=SemanticKind.FieldGet(input,"UnownedField")})}
+        match Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications changed |> Map.toList |> Assert.Single |> snd with
+        | Error failure -> Assert.Equal("The writable count domain must be finite, nonnegative and contained in the actual allocation's byte-slot capacity domain.",failure.Reason)
+        | Ok _ -> failwith "An unowned member access retained writable storage authority"
+        Assert.Contains(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors program,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages program))
+        let revision=Clef.Compiler.Project.ProjectChecker.publish program |> Result.defaultWith failwith
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let row=Assert.Single revision.Emission.Boundary.WritableBufferUses.Values
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(bigint count,bigint count),revision.Emission.Numeric.Values[row.Count].Range)
+        Assert.Equal(Fidelity.PSG.ValueRange.Bounded(-1I,bigint count),revision.Emission.Numeric.Values[row.Call].Range)
+
+    [<Fact>]
+    member _.``Writable extent observation does not grant captured storage``() =
+        let body="    let buffer = Array.zeroCreate 4\n    let requested = buffer.Length\n    let peek () = buffer[0]\n    let result = Test.Native.read 0 buffer (requested - 1)\n    if result < 0 then peek () else requested\n"
+        let graph=(ForeignCases.writableVoidApplication ForeignCases.writablePosixSource body).CheckResult.Graph
+        match Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.toList |> Assert.Single |> snd with
+        | Error failure -> Assert.Contains("complete local write family is not established within 0..255",failure.Reason)
+        | Ok _ -> failwith "An extent observation admitted captured writable storage"
+        Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+
+    [<Fact>]
+    member _.``Writable unit adapter retains its original four slot profile``() =
+        let program=ForeignCases.writableVoidApplication ForeignCases.writableVoidSource "    let buffer = Array.zeroCreate 1024\n    Test.Native.read buffer 1024\n    0\n"
+        let graph=program.CheckResult.Graph
+        Assert.DoesNotContain(graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        Assert.Contains(graph.Nodes.Values,fun node->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-adapter" ->
+                match info.Body with
+                | ObligationBody.Pending reasons -> List.contains "The first writable adapter requires its original four explicitly unsigned-8 byte slots." reasons
+                | _ -> false
+            | _ -> false)
+
+    [<Fact>]
+    member _.``Writable relational capacity must remain fixed for its own call``() =
+        let body="    let seed = Array.zeroCreate 4\n    let first = Test.Native.read 0 seed 3\n    let capacity = if first < 0 then 4 else 5\n    let buffer = Array.zeroCreate capacity\n    Test.Native.read 0 buffer 3\n"
+        let graph=(ForeignCases.writableVoidApplication ForeignCases.writablePosixSource body).CheckResult.Graph
+        let uses=graph.Edges |> List.choose(fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse row->Some row | _->None)
+        Assert.Single uses |> ignore
+        Assert.Equal(2,Clef.Compiler.Baker.Recipes.StringByteStorageRecipes.writableApplications graph |> Map.count)
+        Assert.Contains(graph.Nodes.Values,fun node->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind="foreign-writable-buffer-adapter" ->
+                match info.Body with
+                | ObligationBody.Pending reasons -> List.contains "The relational writable adapter requires its exact fixed positive initialized unsigned-8 byte capacity." reasons
+                | _ -> false
+            | _ -> false)
 
     [<Theory>]
     [<InlineData("count")>]
@@ -828,14 +910,14 @@ type ForeignReferenceTests() =
     [<InlineData("missing")>]
     [<InlineData("upper")>]
     [<InlineData("lower")>]
-    [<InlineData("count")>]
+    [<InlineData("zero")>]
     member _.``Writable POSIX result requires its current declared count relation``(shape:string) =
         let source,body,reason=
             match shape with
             | "missing" ->
                 let source=ForeignCases.writablePosixSource
                 source.Substring(0,source.IndexOf("let readResultRange",System.StringComparison.Ordinal)),ForeignCases.writablePosixBody,"The writable result requires its current declared -1..count behavior hypothesis."
-            | "count" -> ForeignCases.writablePosixSource,ForeignCases.writablePosixBody.Replace("Test.Native.read 0 buffer 3","Test.Native.read 0 buffer 2"),"The first relational writable result requires its exact count3 source domain."
+            | "zero" -> ForeignCases.writablePosixSource,"    let buffer = Array.zeroCreate 4\n    Test.Native.read 0 buffer 0\n","The relational writable adapter requires one exact positive count within its initialized byte capacity."
             | _ ->
                 let before,after=if shape="upper" then "Upper = Argument 2","Upper = Argument 0" else "Lower = Constant (-1)","Lower = Constant 0"
                 let body=if shape="upper" then ForeignCases.writablePosixBody.Replace("Test.Native.read 0 buffer 3","Test.Native.read 4 buffer 3") else ForeignCases.writablePosixBody

@@ -1189,16 +1189,11 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
             (NumericPublication.project graph
              |> Result.mapError (fun _ -> "A closed C entry requires current source numeric carrier and proof settlement."))
     let writableApplications = StringByteStorageRecipes.writableApplications graph
-    let writableResult (application:StringByteStorageRecipes.WritableApplication) = checked' {
-        let! _,fields=Declarations.recordOf graph application.Declaration.AbiDescriptor
-                      |> needed "The writable result lost its current FunctionDescriptor."
-        let! returnId=field "ReturnType" fields |> needed "The writable result declaration lacks ReturnType."
-        let! result=typeRef graph returnId
+    let writableResult (application:StringByteStorageRecipes.WritableApplication) result resultCount = checked' {
         match result with
         | None -> return Set.empty
         | Some(BoundaryScalar.Integer(64,true)) ->
-            do! require (application.CountRange=ValueRange.point 3I)
-                    "The first relational writable result requires its exact count3 source domain."
+            let! count=resultCount |> needed "The relational writable result lacks its checked positive singleton count."
             let! projection=numeric.Value |> Result.mapError(fun _->"The writable result requires its current numeric application and proof inventory.")
             let! account=projection.ForeignResultUses |> List.filter(fun account->
                 account.Application.Call=application.Site && account.Application.Declaration=application.Declaration.Declaration.Binding)
@@ -1220,7 +1215,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                      | ObligationBody.ForeignResultCoverage model ->
                                          info.Kind="foreign-result-coverage" && model.Application=account.Application && model.Role=role &&
                                          model.Abi=Some application.Declaration.AbiDescriptor && model.AbiRange=ValueRange.twosComplement 64 &&
-                                         model.ResultRange=ValueRange.bounded -1I 3I
+                                         model.ResultRange=ValueRange.bounded -1I count
                                      | _ -> false
                                  | _ -> false))))
                     "The writable result lacks its own current logical coverage and signed ABI narrowing claim citizens."
@@ -1240,13 +1235,31 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         let! memory=MemoryPublication.project graph |> Result.mapError(fun failures->failures |> List.map _.Reason |> String.concat "; ")
         let! storage=memory.Operations.TryFind application.Allocation |> Option.bind(function MemoryWitnessOperation.ArrayAllocation row->Some row | _->None)
                      |> needed "The writable application lacks its current source allocation witness."
-        do! require (storage.Element=SettledSlot.Integer(8,Some rep.Name) && storage.ElementBytes=1 &&
-                     storage.MinimumCount=4I && storage.MaximumCount=4I && storage.Construction.Count.Actual=application.Capacity)
-                "The first writable adapter requires its original four explicitly unsigned-8 byte slots."
-        do! match application.CountRange with
-            | ValueRange.Bounded(lo,hi) when lo=hi && 0I<=lo && hi<=4I -> Ok()
-            | _ -> Error "The first writable adapter requires one exact nonnegative count within four byte slots."
-        let! resultSupport=writableResult application
+        let! _,fields=Declarations.recordOf graph application.Declaration.AbiDescriptor
+                      |> needed "The writable result lost its current FunctionDescriptor."
+        let! returnId=field "ReturnType" fields |> needed "The writable result declaration lacks ReturnType."
+        let! result=typeRef graph returnId
+        let originalStorage=
+            storage.Element=SettledSlot.Integer(8,Some rep.Name) && storage.ElementBytes=1 &&
+            storage.Construction.Count.Actual=application.Capacity
+        let! resultCount=
+            match result with
+            | Some(BoundaryScalar.Integer(64,true)) -> checked' {
+                let capacity=storage.MinimumCount
+                do! require (originalStorage && capacity>0I && storage.MaximumCount=capacity &&
+                             application.CapacityRange=ValueRange.point capacity)
+                        "The relational writable adapter requires its exact fixed positive initialized unsigned-8 byte capacity."
+                match application.CountRange with
+                | ValueRange.Bounded(lo,hi) when lo=hi && 0I<lo && hi<=capacity -> return Some lo
+                | _ -> return! Error "The relational writable adapter requires one exact positive count within its initialized byte capacity." }
+            | _ -> checked' {
+                do! require (originalStorage && storage.MinimumCount=4I && storage.MaximumCount=4I)
+                        "The first writable adapter requires its original four explicitly unsigned-8 byte slots."
+                do! match application.CountRange with
+                    | ValueRange.Bounded(lo,hi) when lo=hi && 0I<=lo && hi<=4I -> Ok()
+                    | _ -> Error "The first writable adapter requires one exact nonnegative count within four byte slots."
+                return None }
+        let! resultSupport=writableResult application result resultCount
         return format,storage,resultSupport }
     // Coverage citizens retain the source effect account independently of the
     // physical adapter. Only the complete finite direct profile drops Pending.

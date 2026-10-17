@@ -176,6 +176,12 @@ let private analyze renew (graph: SemanticGraph) =
                 | _ -> directArgs |> List.iter block
         | SemanticKind.Binding(_, false, _, _) | SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ | SemanticKind.Sequential _ -> ()
         | SemanticKind.IndexGet _ | SemanticKind.IndexSet _ -> ()
+        // Length observes the extent of this current native-array family; it
+        // neither writes its storage nor passes it through another call's ABI.
+        | SemanticKind.FieldGet(input, "Length")
+            when origins.ContainsKey input &&
+                 (nodes.TryFind input |> Option.bind arrayElement |> Option.isSome) &&
+                 Types.isIntegerType (applySubst node.Type) -> ()
         | SemanticKind.Lambda(_, body, captures, _, _) ->
             block body
             captures |> List.iter (fun capture -> capture.SourceNodeId |> Option.iter block)
