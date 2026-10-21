@@ -9,6 +9,23 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Mmio
 
+/// Reobserve selected settled operations under their source owner before publication.
+let checkSelected (graph: SemanticGraph) (selected: Map<NodeId, MmioAccessEvidence>) : WitnessProjectionFailure list =
+    selected
+    |> Map.toList
+    |> List.choose (fun (id, held) ->
+        let reason =
+            match operation graph id with
+            | None -> Some "Selected MMIO evidence has no source MMIO operation."
+            | Some (current, _) when current <> held.Operation ->
+                Some (sprintf "Selected MMIO operation '%s' differs from source operation '%s'." held.Operation current)
+            | Some _ -> None
+        reason |> Option.map (fun message ->
+            { Kind = WitnessProjectionFailureKind.Settlement
+              Occurrence = Some id
+              Participants = Set.singleton id
+              Reason = message }))
+
 exception private InvalidDeclaration of NodeId * string
 
 type private Register = {

@@ -6,6 +6,9 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module PreparedEmission = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission
 module PreparedScopes = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes
 module PreparedRows = Clef.Compiler.Baker.Recipes.WitnessForeignDemandRecipes
+module SelectedRows = Clef.Compiler.Baker.Recipes.WitnessLiveRowsRecipes
+module DeviceAccess = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess
+module Mmio = Clef.Compiler.PSGSaturation.SemanticGraph.Mmio
 module Publication = Clef.Compiler.PSGSaturation.Publication.RevisionPublication
 module SourceGraph = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph
 
@@ -40,8 +43,116 @@ module private PreparedScopeFixture =
         PreparedEmission.tryRead result.Graph |> Result.defaultWith failwith |> ignore
         result.Graph
 
+    // Composer/tests/Mmio/Program.fs positive source, checked through the real
+    // project owner. Publication diagnostics must not hide the final source facts.
+    let mmioGraph = lazy (
+        let directory = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013/mmio-source-agreement", System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory directory |> ignore
+        let platform = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../../Fidelity.Platform/Profiles/EK_RA6M5_HelloBlinky/Fidelity.Platform.fidproj"))
+        let body = String.concat "\n    " [
+            "let r8 = Mmio.reg8 0x40080D03"
+            "let r16 = Mmio.reg16 0x4008081A"
+            "let r32 = Mmio.reg32 0x40080818"
+            "Mmio.write8 r8 255"
+            "Mmio.write16 r16 65535"
+            "Mmio.write32 r32 4294967295"
+            "let _ = Mmio.read8 r8"
+            "let _ = Mmio.read16 r16"
+            "let _ = Mmio.read32 r32"
+            "let mutable attempts = 0"
+            "while attempts < 4 && Mmio.read8 r8 = 0 do"
+            "    attempts <- attempts + 1" ]
+        System.IO.File.WriteAllText(System.IO.Path.Combine(directory, "Main.clef"), "module MmioCheck\n[<EntryPoint>]\nlet main _ =\n    " + body + "\n    0\n")
+        let project = System.IO.Path.Combine(directory, "Test.fidproj")
+        System.IO.File.WriteAllText(project, String.concat "\n" [
+            "[package]"; "name=\"MmioCheck\""; "version=\"0.1.0\""
+            "[compilation]"; "target=\"mcu\""
+            "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; "arch=\"arm_cortex_m33\""
+            "[dependencies]"; sprintf "platform={path=%A}" platform
+            "[build]"; "sources=[\"Main.clef\"]"; "output=\"test.elf\""; "output_kind=\"embedded\"" ])
+        let result = Clef.Compiler.Project.ProjectChecker.checkProject project
+                     |> Result.defaultWith (fun failures -> failwithf "Real MMIO project failed before returning its final graph: %A" failures)
+        result.CheckResult.Graph)
+
+    let selectedRows (graph: SemanticGraph) =
+        let facts = graph.Codata.Value
+        SelectedRows.project graph facts.WitnessEmission.Value facts.WitnessLiveScope.Value
+            facts.WitnessPreparedRows.Value facts.WitnessSegmentation.Value
+
+    let withMmio id row (graph: SemanticGraph) =
+        { graph with Codata = lazy { graph.Codata.Value with Mmio = graph.Codata.Value.Mmio.Add(id, row) } }
+
+    let unresolvedRow : MmioAccessEvidence =
+        { Operation = "read8"; Address = bigint 0x40080D03; Bits = 8; Binding = None }
+
+    let assertFailure id reason (failures: WitnessProjectionFailure list) =
+        let failure = Assert.Single failures
+        Assert.Equal(reason, failure.Reason)
+        Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+        Assert.Equal(Some id, failure.Occurrence)
+        Assert.Equal<Set<_>>(Set.singleton id, failure.Participants)
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "WitnessPreparedScope")>]
 type WitnessPreparedScopeTests() =
+    [<Fact>]
+    member _.``Real MMIO source retains nonempty settled operation agreement on its final graph``() =
+        let graph = PreparedScopeFixture.mmioGraph.Value
+        let rows = graph.Codata.Value.Mmio
+        Assert.NotEmpty rows
+        Assert.Empty(DeviceAccess.checkSelected graph rows)
+
+    [<Fact>]
+    member _.``Real MMIO source refuses a different retained operation at the same occurrence``() =
+        let graph = PreparedScopeFixture.mmioGraph.Value
+        let rows = graph.Codata.Value.Mmio
+        Assert.NotEmpty rows
+        let id, row = rows |> Map.toSeq |> Seq.head
+        let replacement = if row.Operation = "read8" then "write8" else "read8"
+        let changed = rows.Add(id, { row with Operation = replacement })
+        DeviceAccess.checkSelected graph changed
+        |> PreparedScopeFixture.assertFailure id (sprintf "Selected MMIO operation '%s' differs from source operation '%s'." replacement row.Operation)
+
+    [<Fact>]
+    member _.``Preparation refuses a selected MMIO row without a source operation``() =
+        let graph = PreparedScopeFixture.graph ()
+        let id = graph.Codata.Value.WitnessLiveRows.Value.FactIdentities
+                 |> Seq.find (fun id -> graph.Nodes.ContainsKey id && (Mmio.operation graph id |> Option.isNone))
+        let changed = PreparedScopeFixture.withMmio id PreparedScopeFixture.unresolvedRow graph
+        Assert.True((PreparedScopeFixture.selectedRows changed).Codata.Mmio.ContainsKey id)
+        match PreparedEmission.prepare changed with
+        | Error failures -> PreparedScopeFixture.assertFailure id "Selected MMIO evidence has no source MMIO operation." failures
+        | Ok _ -> failwith "Preparation admitted a selected non-MMIO source occurrence."
+
+    [<Fact>]
+    member _.``Admission reobserves MMIO operations even when retained and current selected rows agree``() =
+        let graph = PreparedScopeFixture.graph ()
+        let id = graph.Codata.Value.WitnessLiveRows.Value.FactIdentities
+                 |> Seq.find (fun id -> graph.Nodes.ContainsKey id && (Mmio.operation graph id |> Option.isNone))
+        let changed = PreparedScopeFixture.withMmio id PreparedScopeFixture.unresolvedRow graph
+        let projection = changed.Codata.Value.WitnessEmission.Value
+        let scope = PreparedScopes.projectWithEmission projection changed |> Result.defaultWith (sprintf "%A" >> failwith)
+        let segmentation = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed projection scope
+        let changed = { changed with Codata = lazy { changed.Codata.Value with WitnessLiveScope = Some scope; WitnessSegmentation = Some segmentation } }
+        let selected = PreparedScopeFixture.selectedRows changed
+        Assert.True(selected.Codata.Mmio.ContainsKey id)
+        let held = { changed with Codata = lazy { changed.Codata.Value with WitnessLiveRows = Some selected } }
+        Assert.True(SelectedRows.matches selected (PreparedScopeFixture.selectedRows held))
+        match PreparedEmission.admit held with
+        | Error failures -> PreparedScopeFixture.assertFailure id "Selected MMIO evidence has no source MMIO operation." failures
+        | Ok () -> failwith "Admission trusted mutually consistent stale MMIO rows."
+
+    [<Fact>]
+    member _.``Unselected MMIO evidence does not enlarge source publication obligations``() =
+        let graph = PreparedScopeFixture.dormantLibraryGraph 1 false
+        let selected = PreparedScopeFixture.selectedRows graph
+        let id = graph.Nodes.Keys |> Seq.find (fun id -> not (selected.FactIdentities.Contains id))
+        let changed = PreparedScopeFixture.withMmio id PreparedScopeFixture.unresolvedRow graph
+        let current = PreparedScopeFixture.selectedRows changed
+        // FactIdentities is the actual closeFacts union valueFacts selection.
+        Assert.False(current.FactIdentities.Contains id)
+        Assert.False(current.Codata.Mmio.ContainsKey id)
+        PreparedEmission.prepare changed |> Result.defaultWith (sprintf "%A" >> failwith) |> ignore
+
     [<Fact>]
     member _.``Demanded occurrence diagnostics retain source scope without dormant graph inventory``() =
         let graph = PreparedScopeFixture.dormantLibraryGraph 64 true

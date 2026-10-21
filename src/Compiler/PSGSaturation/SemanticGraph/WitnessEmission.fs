@@ -170,7 +170,11 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
             let preparedRows = PreparedRows.project graph
             let segmentation = WitnessSegmentation.project graph projection liveScope
             let liveRows = LiveRows.project graph projection liveScope preparedRows segmentation
-            match PublishedRows.project graph liveScope liveRows dispatch with
+            let publication =
+                match DeviceAccess.checkSelected graph liveRows.Codata.Mmio with
+                | [] -> PublishedRows.project graph liveScope liveRows dispatch
+                | failures -> Error failures
+            match publication with
             | Error failures -> Error failures
             | Ok publishedRows ->
               let facts = {
@@ -301,19 +305,23 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
              | _ -> false) |> not then
             Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Baker-selected live fact rows differ from the current source snapshot." }]
-        elif not (isMaterialized graph) then
-            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
-                     Reason = "Witness input contains deferred source computations." }]
-        elif
-            (match facts.WitnessLiveScope, facts.WitnessLiveRows, facts.WitnessPublishedRows with
-             | Some scope, Some rows, Some held ->
-                 match PublishedRows.project graph scope rows dispatch with
-                 | Ok current -> PublishedRows.matches held current
-                 | Error _ -> false
-             | _ -> false) |> not then
-            Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
-                     Reason = "Baker-frozen publication rows differ from the current source snapshot." }]
-        else Ok ()
+        else
+            match DeviceAccess.checkSelected graph facts.WitnessLiveRows.Value.Codata.Mmio with
+            | _ :: _ as failures -> Error failures
+            | [] when not (isMaterialized graph) ->
+                Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
+                         Reason = "Witness input contains deferred source computations." }]
+            | [] ->
+                if
+                    (match facts.WitnessLiveScope, facts.WitnessLiveRows, facts.WitnessPublishedRows with
+                     | Some scope, Some rows, Some held ->
+                         match PublishedRows.project graph scope rows dispatch with
+                         | Ok current -> PublishedRows.matches held current
+                         | Error _ -> false
+                     | _ -> false) |> not then
+                    Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
+                             Reason = "Baker-frozen publication rows differ from the current source snapshot." }]
+                else Ok ()
 
 let tryOrdinary graph = tryRead graph |> Result.map _.Ordinary
 let tryCallable graph = tryRead graph |> Result.map _.Callable
