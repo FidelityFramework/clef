@@ -132,6 +132,62 @@ type NumericPublicationCases() =
             Assert.Equal(ValueRange.point expected, facts.Values[RangeContext.Shared, call])
             Assert.Equal(ValueRange.point expected, numeric.Values[binding.Id].Range)
 
+    [<Fact>]
+    member _.``Settled numeric census retains source identity after claim and requirement deletion`` () =
+        let graph = NumericCaptureFixture.contextGraph.Value
+        NumericCaptureFixture.admitted graph |> ignore
+        let validate = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness
+        Assert.Empty(validate graph)
+        let claim, info = graph.Nodes |> Map.toList |> List.pick (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind = "numeric-carrier-coverage" -> Some(id, info)
+            | _ -> None)
+        match info.Body with
+        | ObligationBody.Pending _ -> failwith "The admitted source fixture has a Pending carrier claim"
+        | _ -> ()
+        let incidence = graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = claim)
+        let domain = NumericCaptureFixture.domain graph
+        let site = incidence.Sources |> List.find domain.Required.Contains
+        let withoutIncidence =
+            { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.Constrains || edge.Target <> claim) }
+        Assert.Contains(validate withoutIncidence, fun (actualSite, reason) ->
+            actualSite = site && reason = "Numeric obligation completeness: missing or duplicate source incidence for " + info.Id)
+        let withoutBoth =
+            { graph with
+                Nodes = graph.Nodes.Remove claim
+                Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> claim && not (List.contains claim edge.Sources))
+                        |> List.map (fun edge ->
+                            match edge.Role with
+                            | EdgeRole.NumericDomain domain -> { edge with Role = EdgeRole.NumericDomain { domain with Required = domain.Required.Remove site } }
+                            | _ -> edge) }
+        Assert.Contains(validate withoutBoth, fun (actualSite, reason) ->
+            actualSite = site && reason = "Numeric obligation completeness: missing or duplicate claim " + info.Id)
+        match NumericPublication.project withoutBoth with
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Reason = "NumericPublication: A required source scalar carrier is absent or duplicated.")
+        | Result.Ok _ -> failwith "Deleting a source claim and requirement fabricated numeric publication"
+        let withoutClaim =
+            { graph with
+                Nodes = graph.Nodes.Remove claim
+                Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> claim && not (List.contains claim edge.Sources)) }
+        Assert.True(domain.Required = (NumericCaptureFixture.domain withoutClaim).Required, "Claim-only deletion changed Required")
+        Assert.Contains(validate withoutClaim, fun (actualSite, reason) ->
+            actualSite = site && reason = "Numeric obligation completeness: missing or duplicate claim " + info.Id)
+        let anchor =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.NumericDomain _ -> Some edge.Target | _ -> None)
+            |> List.exactlyOne
+        match NumericPublication.project withoutClaim with
+        | Result.Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.Types.WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some anchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent.", failure.Reason)
+            Assert.True(failure.Participants = (domain.Premises |> Map.keys |> Set.ofSeq), "Claim-only deletion changed the refusal's premise participants")
+            // NUMERIC-STRICT-COMPLETENESS-UNREACHED: projectDomain rejects before strict completeness.
+        | Result.Ok _ -> failwith "Claim-only deletion fabricated strict numeric publication"
+
     [<Theory>]
     [<InlineData("actual")>]
     [<InlineData("literal")>]

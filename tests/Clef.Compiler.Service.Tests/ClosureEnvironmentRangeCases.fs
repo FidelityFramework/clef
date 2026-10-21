@@ -291,10 +291,12 @@ type ClosureEnvironmentRangeCases() =
                 |> List.filter (fun (_, rows) -> (rows |> List.map _.Caller |> List.distinct).Length > 1)
                 |> List.collect snd
             Assert.NotEmpty merged
-            Assert.Contains(merged, fun row ->
+            for row in merged do
                 match facts.Values.TryFind(row.Context, row.Body) with
-                | Some range -> range <> ValueRange.Empty && not (ValueRange.isObservable range)
-                | None -> false)
+                | Some ValueRange.Empty -> ()
+                | Some range ->
+                    Assert.False(ValueRange.isObservable range, sprintf "A recursive cycle fabricated a finite body result: %A %A" row range)
+                | None -> failwithf "The recursive cycle lost its contextual Body cell: %A" row
             Assert.Contains(result.Diagnostics, fun diagnostic ->
                 diagnostic.Code = "CCS8011" && diagnostic.Message.Contains("merged invocation contexts") &&
                 (merged |> List.exists (fun row ->
@@ -303,12 +305,41 @@ type ClosureEnvironmentRangeCases() =
             Assert.DoesNotContain(result.Diagnostics, fun diagnostic ->
                 diagnostic.Code = "CCS8011" && diagnostic.Message.Contains("application-specific transfer exhausted"))
             match observed.ValueRange with
+            | Some ValueRange.Empty -> ()
             | Some range ->
-                Assert.NotEqual(ValueRange.Empty, range)
                 Assert.False(ValueRange.isObservable range, sprintf "A recursive cycle fabricated an observable result %A" range)
             | None -> failwith "The recursion control did not reach range analysis."
         | Success result -> failwithf "An unbounded recursive cycle was admitted: %A" result.Diagnostics
         | ParseFailure errors -> failwithf "Expected a parsed recursion control: %A" errors
+
+    [<Fact>]
+    member _.``Recursive returning edge retains a nonempty range containing its result`` () =
+        let source = """    let rec grow (input: int) : int = if input = 0 then 0 else input + grow (input + 1)
+    let observed = grow (-1)
+    observed
+"""
+        let graph = EnvironmentRangeFixture.check source
+        match (EnvironmentRangeFixture.binding "observed" graph).ValueRange with
+        | Some range ->
+            Assert.NotEqual(ValueRange.Empty, range)
+            Assert.True(ValueRange.contains range (ValueRange.point -1I), sprintf "The returning recursive edge lost its actual result: %A" range)
+        | None -> failwith "The returning recursive edge lost its observed range"
+
+    [<Fact>]
+    member _.``Recursive base case retains its exact returning value instead of Empty`` () =
+        let source = """    let rec grow (input: int) : int = if input = 0 then 0 else input + grow (input + 1)
+    let observed = grow 0
+    observed
+"""
+        let graph = EnvironmentRangeFixture.check source
+        let observed = EnvironmentRangeFixture.binding "observed" graph
+        Assert.Equal(Some(ValueRange.point 0I), observed.ValueRange)
+        let call = Assert.Single observed.Children
+        let facts = graph.RangeContextFacts |> Option.defaultWith (fun () -> failwith "The returning recursion control lost its context facts.")
+        let rows = facts.Invocations |> List.filter (fun row -> row.Call = call)
+        Assert.NotEmpty rows
+        for row in rows do
+            Assert.Equal(Some(ValueRange.point 0I), facts.Values.TryFind(row.Context, row.Body))
 
     [<Theory>]
     [<InlineData(false, 50)>]

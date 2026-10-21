@@ -329,6 +329,14 @@ let main _ = true
         match info.Body with
         | ObligationBody.Pending _ -> ()
         | body -> failwithf "An open exported input acquired a ready width claim: %A" body
+        let unsettledReason = "NumericPublication: The required integer carrier has no finite observable range and settled positive width."
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+        | Result.Error failures ->
+            if not (failures |> List.exists (fun failure -> failure.Reason = unsettledReason)) then
+                failwithf "The open input lost its currentness-first refusal: %A" failures
+            if not (failures |> List.exists (fun failure -> failure.Occurrence = Some claim && failure.Reason.StartsWith("NumericPublication: Pending claim " + info.Id + ": "))) then
+                failwithf "The open input lost its exact Pending claim identity: %A" failures
+        | Result.Ok _ -> failwith "An open Pending input granted strict numeric publication"
         let incidence = graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = claim)
         let domain = graph.Edges |> List.pick (fun edge ->
             match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None)
@@ -348,8 +356,12 @@ let main _ = true
         if not (validate withoutBoth |> List.exists (fun (_, reason) -> reason.Contains "missing or duplicate claim" && reason.Contains info.Id)) then
             failwith "Deleting both the claim and its recorded requirement fabricated a complete ledger"
         match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project withoutBoth with
-        | Result.Error failures when failures |> List.exists (fun failure -> failure.Reason.Contains "completeness" && failure.Reason.Contains info.Id) -> ()
-        | result -> failwithf "Strict publication did not preserve the completeness refusal: %A" result
+        | Result.Error failures ->
+            if not (failures |> List.exists (fun failure -> failure.Reason = unsettledReason)) then
+                failwithf "Claim deletion hid the earlier unsettled-domain refusal: %A" failures
+            if failures |> List.exists (fun failure -> failure.Reason.Contains "completeness") then
+                failwithf "Strict publication consulted completeness before currentness: %A" failures
+        | Result.Ok _ -> failwith "Claim deletion admitted an unsettled source domain"
 
     "retained division owes separate Pending capacity and nonzero claims", fun () ->
         let input =
