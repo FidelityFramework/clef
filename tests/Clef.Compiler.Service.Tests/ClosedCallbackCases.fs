@@ -2631,8 +2631,16 @@ let main _ =
     [<Theory>]
     [<InlineData("ExitBinding = None", "ExitBinding = Some \"ReceivingCallback.absent\"", "ProcessExitCallbackDescriptor ExitBinding must resolve one current immutable declaration.")>]
     [<InlineData("SuccessStatus = 0", "SuccessStatus = 2147483648", "ProcessExitCallbackDescriptor requires signed32 SuccessStatus and an explicit optional ExitBinding.")>]
+    [<InlineData("SuccessStatus = 0", "SuccessStatus = 18446744073709551615", "ProcessExitCallbackDescriptor requires signed32 SuccessStatus and an explicit optional ExitBinding.")>]
     member _.``Process exit source refuses malformed exact declaration premises``(before: string, after: string, reason: string) =
         let result=ClosedCallbackCases.receivingProcessCheckWith(fun source -> source.Replace(before,after))
+        if after = "SuccessStatus = 18446744073709551615" then
+            Assert.DoesNotContain(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8401")
+            Assert.Contains(result.Graph.Nodes.Values, fun node ->
+                match node.Kind with
+                | SemanticKind.Literal(NativeLiteral.UInt(value, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))) ->
+                    value = System.UInt64.MaxValue && Clef.Compiler.NativeTypedTree.UnionFind.applySubst node.Type = Types.intType
+                | _ -> false)
         let declarations=Clef.Compiler.PSGSaturation.SemanticGraph.ScopedDeclarations.read result.Graph
         Assert.Contains(declarations.Findings, fun finding -> finding.Message=reason)
 

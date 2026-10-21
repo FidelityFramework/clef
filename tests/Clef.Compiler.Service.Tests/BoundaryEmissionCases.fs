@@ -81,7 +81,7 @@ type PlatformDescription = { Id: string; Core: TargetCore option }
         declarations + sprintf "let description = { Id = %A; Core = Some { Runtime = \"libc\"; Widths = [| %s |]; Representations = [| %s |] } }\n"
                            context.PlatformId widths representations
 
-    let check context body =
+    let checkWithAuthority transform context body =
         let parse source path =
             match parseStringWithDefaults source path with
             | ParseSuccess input -> input
@@ -90,11 +90,13 @@ type PlatformDescription = { Id: string; Core: TargetCore option }
         match context with
         | None -> checkParsedInputsWithPlatform [input] None
         | Some context ->
-            let authority = parse (authority context) "boundary-authority.clef"
+            let authority = parse (transform (authority context)) "boundary-authority.clef"
             let selected =
                 { context with PlatformDescription = Some "BoundaryAuthority.description"
                                PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "boundary-authority.clef") }
             checkParsedInputsWithPlatform [authority; input] (Some selected)
+
+    let check context body = checkWithAuthority id context body
 
     let checkedGraph body =
         let result = check (Some platform) body
@@ -124,6 +126,119 @@ type PlatformDescription = { Id: string; Core: TargetCore option }
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BoundaryEmission")>]
 type BoundaryEmissionCases() =
+    [<Fact>]
+    member _.``Declared integer reads retain exact unary values before signed64 admission``() =
+        // Owner-level reader controls: reuse checked unary nodes without claiming
+        // these edited graphs are admitted source/publication fixtures.
+        let checked = DimensionalCases.check "let negate (value: int) = -(-value)\n"
+        DimensionalCases.noErrors checked
+        let graph = checked.Graph
+        let unary (node: SemanticNode) =
+            match node.Kind with
+            | SemanticKind.Application(funcId, [arg]) ->
+                match BoundaryDeclarations.valueOf graph funcId with
+                | Some { Kind = SemanticKind.Intrinsic { Operation = "op_UnaryNegation" } } -> Some arg
+                | _ -> None
+            | _ -> None
+        let outer, inner, operand =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                unary node |> Option.bind (fun innerId ->
+                    graph.Nodes.TryFind innerId |> Option.bind (fun inner ->
+                        unary inner |> Option.map (fun operand -> node, inner, graph.Nodes[operand]))))
+            |> Assert.Single
+        let kind = NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)
+        let cases =
+            [ NativeLiteral.Int(System.Int64.MinValue, kind), 0, Some System.Int64.MinValue
+              NativeLiteral.Int(System.Int64.MaxValue, kind), 0, Some System.Int64.MaxValue
+              NativeLiteral.UInt(0UL, kind), 0, Some 0L
+              NativeLiteral.UInt(uint64 System.Int64.MaxValue, kind), 0, Some System.Int64.MaxValue
+              NativeLiteral.UInt(9223372036854775808UL, kind), 0, None
+              NativeLiteral.UInt(System.UInt64.MaxValue, kind), 0, None
+              NativeLiteral.UInt(9223372036854775808UL, kind), 1, Some System.Int64.MinValue
+              NativeLiteral.Int(System.Int64.MinValue, kind), 1, None
+              NativeLiteral.UInt(System.UInt64.MaxValue, kind), 1, None
+              NativeLiteral.Int(5L, kind), 2, Some 5L
+              NativeLiteral.Int(System.Int64.MinValue, kind), 2, Some System.Int64.MinValue ]
+        for literal, depth, expected in cases do
+            let leaf = { operand with Kind = SemanticKind.Literal literal; Type = Types.intType; Children = [] }
+            let changed = { graph with Nodes = graph.Nodes.Add(leaf.Id, leaf) }
+            let id = if depth = 0 then leaf.Id elif depth = 1 then inner.Id else outer.Id
+            let actual = BoundaryDeclarations.int64Of changed id
+            Assert.True((actual = expected), sprintf "Exact unary reader literal=%A depth=%d expected=%A actual=%A" literal depth expected actual)
+
+    [<Theory>]
+    [<InlineData("absent")>]
+    [<InlineData("equal")>]
+    [<InlineData("mismatch")>]
+    [<InlineData("unreadable")>]
+    member _.``WordSize presence preserves exact declarations and refuses unreadable fields`` shape =
+        let transform (source: string) =
+            if shape = "absent" then source
+            else source.Replace("type TargetCore = {", "type TargetCore = { WordSizeBits: int;").Replace("Core = Some {", "Core = Some { WordSizeBits = 32;")
+        let checked = BoundaryEmissionFixture.checkWithAuthority transform (Some BoundaryEmissionFixture.platform) "[<EntryPoint>]\nlet main _ = 0\n"
+        DimensionalCases.noErrors checked
+        let original = checked.Graph
+        let graph, field =
+            if shape = "absent" then original, None
+            else
+                let core = original.Nodes.Values |> Seq.find (fun node -> BoundaryDeclarations.typeName node = Some "TargetCore" && match node.Kind with SemanticKind.RecordExpr _ -> true | _ -> false)
+                let _, fields = BoundaryDeclarations.recordOf original core.Id |> Option.get
+                let fieldId = fields |> List.find (fst >> (=) "WordSizeBits") |> snd
+                let value = BoundaryDeclarations.valueOf original fieldId |> Option.get
+                let changed =
+                    match value.Kind with
+                    | SemanticKind.Literal(NativeLiteral.Int(_, kind)) ->
+                        let literal = if shape = "unreadable" then NativeLiteral.UInt(System.UInt64.MaxValue, kind) elif shape = "mismatch" then NativeLiteral.Int(64L, kind) else NativeLiteral.Int(32L, kind)
+                        { value with Kind = SemanticKind.Literal literal }
+                    | _ -> failwith "Expected the declared WordSize literal."
+                { original with Nodes = original.Nodes.Add(value.Id, changed) }, Some value.Id
+        let findings = (BoundaryDeclarations.read graph).Findings
+        match shape with
+        | "unreadable" -> Assert.Contains(findings, fun finding -> finding.Node = field.Value && finding.Defect = BoundaryDeclarations.DeclarationDefect.Malformed && finding.Message = "a TargetCore's WordSizeBits must be an exact signed 64-bit integer declaration")
+        | "mismatch" -> Assert.Contains(findings, fun finding -> finding.Defect = BoundaryDeclarations.DeclarationDefect.Invalid && finding.Message = "the declared Register width 32 disagrees with WordSizeBits 64")
+        | _ -> Assert.Empty findings
+
+    [<Theory>]
+    [<InlineData("PointerBits", "uint-overflow")>]
+    [<InlineData("ScalarAggregateRegisterBytes", "uint-overflow")>]
+    [<InlineData("PointerBits", "int32-overflow")>]
+    [<InlineData("ScalarAggregateRegisterBytes", "int32-overflow")>]
+    [<InlineData("PointerBits", "missing")>]
+    [<InlineData("Name", "missing")>]
+    member _.``Malformed selected C ABI refuses before valid descriptor cardinality``(field: string, defect: string) =
+        let declarations = "\ntype CAbiDescriptor = { Name: string; PointerBits: int; ScalarAggregateRegisterBytes: int }\nlet firstAbi = { Name = \"first\"; PointerBits = 32; ScalarAggregateRegisterBytes = 16 }\nlet secondAbi = { Name = \"second\"; PointerBits = 64; ScalarAggregateRegisterBytes = 16 }\n"
+        let checked = BoundaryEmissionFixture.checkWithAuthority (fun source -> source + declarations) (Some BoundaryEmissionFixture.platform) "[<EntryPoint>]\nlet main _ = 0\n"
+        DimensionalCases.noErrors checked
+        let graph = checked.Graph
+        Assert.Equal(Ok [("first", 32, 16); ("second", 64, 16)], BoundaryDeclarations.cAbiOfGraph graph)
+        let binding = BoundaryEmissionFixture.binding "firstAbi" graph
+        let record, fields = BoundaryDeclarations.recordOf graph (binding.Children |> List.last) |> Option.get
+        let fieldId = fields |> List.find (fst >> (=) field) |> snd
+        let value = BoundaryDeclarations.valueOf graph fieldId |> Option.get
+        let changed =
+            if defect = "missing" then
+                match record.Kind with
+                | SemanticKind.RecordExpr(_, info) ->
+                    let revised = { record with Kind = SemanticKind.RecordExpr(fields |> List.filter (fst >> (<>) field), info) }
+                    { graph with Nodes = graph.Nodes.Add(record.Id, revised) }
+                | _ -> failwith "Expected a C ABI record."
+            else
+                match value.Kind with
+                | SemanticKind.Literal(NativeLiteral.Int(_, kind)) ->
+                    let literal = if defect = "uint-overflow" then NativeLiteral.UInt(System.UInt64.MaxValue, kind) else NativeLiteral.Int(4294967328L, kind)
+                    { graph with Nodes = graph.Nodes.Add(value.Id, { value with Kind = SemanticKind.Literal literal }) }
+                | _ -> failwith "Expected a C ABI numeric field."
+        let reason = if field = "Name" then "CAbiDescriptor 'firstAbi' Name must be a string declaration." else sprintf "CAbiDescriptor 'firstAbi' %s must be an exact signed 32-bit integer declaration." field
+        Assert.Equal(Error reason, BoundaryDeclarations.cAbiOfGraph changed)
+        let layout : Clef.Compiler.PSGSaturation.SemanticGraph.BorrowedViews.Layout =
+            { Schema = "byte"; ElementBits = 8; Range = ValueRange.unsignedOf 8; Alignment = 1; Access = "ReadOnly" }
+        Assert.Equal(Error reason, Clef.Compiler.PSGSaturation.SemanticGraph.MappedSpans.forLayout changed layout)
+        Assert.Equal(Error "Mapped span requires one supported declared C pointer representation.", Clef.Compiler.PSGSaturation.SemanticGraph.MappedSpans.forLayout graph layout)
+        let onlySecond = { graph with Nodes = graph.Nodes.Remove(binding.Id) }
+        Assert.Equal(Ok [("second", 64, 16)], BoundaryDeclarations.cAbiOfGraph onlySecond)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MappedSpans.forLayout onlySecond layout |> Result.isOk)
+
     [<Theory>]
     [<InlineData("integer")>]
     [<InlineData("boolean")>]

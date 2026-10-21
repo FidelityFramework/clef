@@ -234,16 +234,20 @@ let stringOf (graph: SemanticGraph) (id: NodeId) : string option =
     | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String s) } : SemanticNode) -> Some s
     | _ -> None
 
-/// An integer as declared: a literal, or the negation of one (`-4095L`, a floor).
-let rec int64Of (graph: SemanticGraph) (id: NodeId) : int64 option =
-    match valueOf graph id with
-    | Some ({ Kind = SemanticKind.Literal (NativeLiteral.Int (v, _)) } : SemanticNode) -> Some v
-    | Some ({ Kind = SemanticKind.Literal (NativeLiteral.UInt (v, _)) } : SemanticNode) -> Some (int64 v)
-    | Some ({ Kind = SemanticKind.Application (funcId, [ arg ]) } : SemanticNode) ->
-        match valueOf graph funcId with
-        | Some ({ Kind = SemanticKind.Intrinsic { Operation = "op_UnaryNegation" } } : SemanticNode) -> int64Of graph arg |> Option.map (fun v -> -v)
+/// An integer as declared: a literal, or its unary negation, within signed64.
+let int64Of (graph: SemanticGraph) (id: NodeId) : int64 option =
+    let rec exact id =
+        match valueOf graph id with
+        | Some ({ Kind = SemanticKind.Literal (NativeLiteral.Int (v, _)) } : SemanticNode) -> Some (bigint v)
+        | Some ({ Kind = SemanticKind.Literal (NativeLiteral.UInt (v, _)) } : SemanticNode) -> Some (bigint v)
+        | Some ({ Kind = SemanticKind.Application (funcId, [ arg ]) } : SemanticNode) ->
+            match valueOf graph funcId with
+            | Some ({ Kind = SemanticKind.Intrinsic { Operation = "op_UnaryNegation" } } : SemanticNode) -> exact arg |> Option.map (~-)
+            | _ -> None
         | _ -> None
-    | _ -> None
+    exact id |> Option.bind (fun value ->
+        if value < bigint System.Int64.MinValue || value > bigint System.Int64.MaxValue then None
+        else Some (int64 value))
 
 let private boolOf (graph: SemanticGraph) (id: NodeId) : bool option =
     match valueOf graph id with
@@ -429,10 +433,15 @@ let private readCore (graph: SemanticGraph) (id: NodeId) : DeclaredCore option *
             // The word size and a declared Register width state one fact; they must agree
             // (BAREWire Check.run refuses the same disagreement for a description it runs on).
             let wordSizeFindings =
-                match field "WordSizeBits" fields |> Option.bind (int64Of graph), widths |> List.tryFind (fun w -> w.Name = "Register") with
-                | Some wordSize, Some register when int64 register.Bits <> wordSize ->
-                    [ findingAt node DeclarationDefect.Invalid (sprintf "the declared Register width %d disagrees with WordSizeBits %d" register.Bits wordSize) ]
-                | _ -> []
+                match field "WordSizeBits" fields with
+                | None -> []
+                | Some wordSizeId ->
+                    match int64Of graph wordSizeId, widths |> List.tryFind (fun w -> w.Name = "Register") with
+                    | None, _ ->
+                        [ findingOn graph wordSizeId DeclarationDefect.Malformed "a TargetCore's WordSizeBits must be an exact signed 64-bit integer declaration" ]
+                    | Some wordSize, Some register when int64 register.Bits <> wordSize ->
+                        [ findingAt node DeclarationDefect.Invalid (sprintf "the declared Register width %d disagrees with WordSizeBits %d" register.Bits wordSize) ]
+                    | _ -> []
             let text name = field name fields |> Option.bind (stringOf graph) |> Option.defaultValue ""
             let optionalText name = field name fields |> Option.bind (optionOf graph) |> Option.flatten |> Option.bind (stringOf graph) |> Option.defaultValue ""
             let triple = if text "Triple" <> "" then text "Triple" else optionalText "TripleOverride"
@@ -2295,18 +2304,29 @@ let returnOfCall (graph: SemanticGraph) (funcId: NodeId) =
         |> List.tryPick (fun f -> if f.Body = Some body then f.Return else None))
 
 /// The target declares which C ABI its foreign aggregate calls use.
-let cAbiOfGraph (graph: SemanticGraph) =
-    graph.Nodes |> Map.toSeq |> Seq.choose (fun (_, node) ->
-        match node.Kind with
-        | SemanticKind.Binding _ when isSelectedPlatformDeclaration graph node ->
-            node.Children |> List.tryLast |> Option.bind (recordOf graph)
-            |> Option.bind (fun (record, fields) ->
-                if typeName record <> Some "CAbiDescriptor" then None
-                else
-                    match field "Name" fields |> Option.bind (stringOf graph), field "PointerBits" fields |> Option.bind (int64Of graph), field "ScalarAggregateRegisterBytes" fields |> Option.bind (int64Of graph) with
-                    | Some name, Some bits, Some registerBytes -> Some (name, int bits, int registerBytes)
-                    | _ -> None)
-        | _ -> None) |> Seq.distinct |> Seq.toList
+let cAbiOfGraph (graph: SemanticGraph) : Result<(string * int * int) list, string> =
+    let integer descriptor fields name =
+        match field name fields |> Option.bind (int64Of graph) with
+        | Some value when value >= int64 System.Int32.MinValue && value <= int64 System.Int32.MaxValue -> Ok (int value)
+        | _ -> Error (sprintf "CAbiDescriptor '%s' %s must be an exact signed 32-bit integer declaration." descriptor name)
+    graph.Nodes |> Map.toList |> List.fold (fun state (_, node) ->
+        state |> Result.bind (fun declarations ->
+            let selected =
+                match node.Kind with
+                | SemanticKind.Binding(name, _, _, _) when isSelectedPlatformDeclaration graph node ->
+                    node.Children |> List.tryLast |> Option.bind (recordOf graph)
+                    |> Option.map (fun (record, fields) -> name, record, fields)
+                | _ -> None
+            match selected with
+            | Some (descriptor, record, fields) when typeName record = Some "CAbiDescriptor" ->
+                match field "Name" fields |> Option.bind (stringOf graph) with
+                | None -> Error (sprintf "CAbiDescriptor '%s' Name must be a string declaration." descriptor)
+                | Some name ->
+                    integer descriptor fields "PointerBits" |> Result.bind (fun bits ->
+                        integer descriptor fields "ScalarAggregateRegisterBytes" |> Result.map (fun registerBytes ->
+                            (name, bits, registerBytes) :: declarations))
+            | _ -> Ok declarations)) (Ok [])
+    |> Result.map (List.rev >> List.distinct)
 
 /// Only these parameters allow a temporary native record projection without write-back.
 let readOnlyRecordReferenceArguments graph funcId args =

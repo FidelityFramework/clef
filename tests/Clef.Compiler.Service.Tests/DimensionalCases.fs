@@ -1116,8 +1116,9 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
     "width-bearing literal suffixes are diagnosed", fun () ->
         for literal in ["1L"; "1u"; "1uy"; "1s"; "1n"; "1.0f"; "1L<m>"; "1.0f<m>"] do
             let result = check $"let value = {literal}\n"
-            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8018" && d.Severity = NativeDiagnosticSeverity.Error && d.Range.File = "dimensions.clef")) then
-                failwithf "Width-bearing suffix was not diagnosed: %s" literal
+            let reason = "Numeric literal suffixes cannot select a width or representation in Clef; use an unsuffixed int or float literal."
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8018" && d.Severity = NativeDiagnosticSeverity.Error && d.Range.File = "dimensions.clef" && d.Message = reason)) then
+                failwithf "Width-bearing suffix lost its exact refusal: %s %A" literal result.Diagnostics
 
     "numeric kind mismatch has its specified diagnostic", fun () ->
         let result = check "let value: float<m> = 1<m>\n"
@@ -1260,22 +1261,32 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
                 failwithf "Unsupported comprehension fabricated an element type: %A" result.Diagnostics
 
     "wide unsuffixed integer literals preserve exact values in the general integer kind", fun () ->
-        for source, expected in ["2147483648", 2147483648L; "-2147483649", -2147483649L;
-                                 "0x80000000", 2147483648L; "140737488351232", 140737488351232L;
-                                 "-9223372036854775808", System.Int64.MinValue] do
+        for source, expected in ["2147483648", 2147483648I; "-2147483649", -2147483649I;
+                                 "0x80000000", 2147483648I; "140737488351232", 140737488351232I;
+                                 "-9223372036854775808", bigint System.Int64.MinValue;
+                                 "9223372036854775807", bigint System.Int64.MaxValue;
+                                 "9223372036854775808", 9223372036854775808I;
+                                 "18446744073709551615", bigint System.UInt64.MaxValue;
+                                 "0xFFFFFFFFFFFFFFFC", 18446744073709551612I] do
             let result = check $"let value = {source}\n"
             noErrors result
             same Types.intType (bindingType "value" result)
             let literals = result.Graph.Nodes.Values |> Seq.choose (fun node ->
-                match node.Kind with SemanticKind.Literal(NativeLiteral.Int(value, _)) -> Some value | _ -> None) |> Seq.toList
-            if literals <> [expected] then failwithf "Integer %s lost its exact value: %A" source literals
+                match node.Kind with
+                | SemanticKind.Literal(NativeLiteral.Int(value, kind)) -> Some (applySubst node.Type, kind, false, bigint value)
+                | SemanticKind.Literal(NativeLiteral.UInt(value, kind)) -> Some (applySubst node.Type, kind, true, bigint value)
+                | _ -> None) |> Seq.toList
+            let expectedLiteral = Types.intType, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register), expected > bigint System.Int64.MaxValue, expected
+            if literals <> [expectedLiteral] then failwithf "Integer %s lost its source type, storage kind or exact value: %A" source literals
 
     "integers beyond hosted literal storage are explicitly rejected", fun () ->
-        for source in ["9223372036854775808"; "-9223372036854775809"] do
+        for source in ["18446744073709551616"; "-9223372036854775809"] do
             let result = check $"let value = {source}\n"
             if not (result.Diagnostics |> List.exists (fun diagnostic ->
-                diagnostic.Code = "CCS8401" && diagnostic.Severity = NativeDiagnosticSeverity.Error)) then
-                failwithf "Oversized hosted literal %s was not rejected: %A" source result.Diagnostics
+                diagnostic.Code = "CCS8401" && diagnostic.Severity = NativeDiagnosticSeverity.Error
+                && diagnostic.Range.File = "dimensions.clef"
+                && diagnostic.Message = "This integer literal exceeds the current hosted graph's exact literal storage; larger integer literals require compiler support.")) then
+                failwithf "Oversized hosted literal %s was not rejected for exact storage: %A" source result.Diagnostics
 
     "large unsuffixed range endpoints parse without integer overflow", fun () ->
         match parseStringWithDefaults "module Ranges\nlet values = [140737488351232..140737488351234]\n" "ranges.clef" with

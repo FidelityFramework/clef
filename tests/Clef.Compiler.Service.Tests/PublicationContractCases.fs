@@ -87,6 +87,33 @@ module private PublicationFixture =
         settled, node.Id
 
 type PublicationContractCases() =
+    [<Theory>]
+    [<InlineData("18446744073709551615", "18446744073709551615")>]
+    [<InlineData("0xFFFFFFFFFFFFFFFC", "18446744073709551612")>]
+    member _.``High source int retains its exact point and offered representation through passive publication``(literal: string, decimalValue: string) =
+        let expected = System.Numerics.BigInteger.Parse(decimalValue, System.Globalization.CultureInfo.InvariantCulture)
+        let graph = PublicationFixture.check "high-integer-publication" ($"module HighInteger\n[<EntryPoint>]\nlet main _ =\n    let value = {literal}\n    if value = 0 then 0 else 1\n")
+        let site = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with
+            | SemanticKind.Literal(NativeLiteral.UInt(value, kind)) ->
+                bigint value = expected && kind = NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)
+            | _ -> false) |> Assert.Single
+        Assert.Equal(Types.intType, Clef.Compiler.NativeTypedTree.UnionFind.applySubst site.Type)
+        let numeric = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let value = numeric.Values[site.Id]
+        Assert.Equal(ValueRange.point expected, value.Range)
+        Assert.Equal(SettledSlot.Integer(64, Some "unsigned64"), value.Slot)
+        Assert.Equal(Some graph.Platform.Value.Representations["unsigned64"], value.Representation)
+        let held = graph.Codata.Value.WitnessPublishedRows |> Option.defaultWith (fun () -> failwith "Frozen source rows absent")
+        let revision = PublicationFixture.publish graph
+        Assert.Same(held.Nodes, revision.Nodes)
+        Assert.Same(held.Codata, revision.Codata)
+        let published = revision.Nodes[Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId site.Id]
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.freeze site.Type, published.Type)
+        match published.Kind with
+        | Fidelity.PSG.SemanticKind.Literal(Fidelity.PSG.NativeLiteral.UInt(value, Fidelity.PSG.NTUKind.NTUint (Fidelity.PSG.NTUWidth.Resolved Fidelity.PSG.WidthDimension.Register))) -> Assert.Equal(expected, bigint value)
+        | other -> failwithf "Passive publication changed the exact source literal: %A" other
+
     [<Fact>]
     member _.``Changed source physical authority requires preparation even when its target name is unchanged``() =
         let graph = PublicationFixture.check "target-identity" PublicationFixture.programs["scalar"]

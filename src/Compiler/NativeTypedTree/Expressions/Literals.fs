@@ -71,8 +71,8 @@ let rec checkConst (env: TypeEnv) (c: SynConst) : Result<NativeType * NativeLite
                 Error (ConstFailure.Measure (MeasureFailure.NoDimension(formatType other, synMeasure.Range))))
     | SynConst.UserNum(text, "") ->
         // Empty suffix is the parser's lossless unsuffixed-integer path. This
-        // hosted graph currently stores integer literal values in an Int64;
-        // reject a larger value explicitly instead of truncating or wrapping it.
+        // hosted graph retains exact values in its existing Int/UInt storage;
+        // storage does not change the source int type or select a representation.
         let negative = text.StartsWith("-", System.StringComparison.Ordinal)
         let magnitude = if negative then text.Substring(1) else text
         let radix, digits =
@@ -85,9 +85,14 @@ let rec checkConst (env: TypeEnv) (c: SynConst) : Result<NativeType * NativeLite
                 let number = if digit >= '0' && digit <= '9' then int digit - int '0' else int (System.Char.ToLowerInvariant digit) - int 'a' + 10
                 value * bigint radix + bigint number) System.Numerics.BigInteger.Zero
         let value = if negative then -magnitude else magnitude
-        if value < bigint System.Int64.MinValue || value > bigint System.Int64.MaxValue then
+        if value < bigint System.Int64.MinValue || value > bigint System.UInt64.MaxValue then
             Error (ConstFailure.UnsupportedInteger "This integer literal exceeds the current hosted graph's exact literal storage; larger integer literals require compiler support.")
-        else Ok (Types.intType, NativeLiteral.Int(int64 value, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)))
+        else
+            let kind = NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)
+            let literal =
+                if value <= bigint System.Int64.MaxValue then NativeLiteral.Int(int64 value, kind)
+                else NativeLiteral.UInt(uint64 value, kind)
+            Ok (Types.intType, literal)
     | SynConst.UserNum(_, suffix) ->
         Error (ConstFailure.UnsupportedSuffix $"Numeric suffix '{suffix}' is not supported in Clef; use an unsuffixed int or float literal.")
     | SynConst.SourceIdentifier(_, value, _) -> Ok (Types.stringType, NativeLiteral.String value)

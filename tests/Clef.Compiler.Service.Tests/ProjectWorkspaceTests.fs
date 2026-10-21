@@ -140,6 +140,66 @@ type ProjectWorkspaceCollection() = class end
 
 [<Collection("ProjectWorkspace"); Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProjectWorkspace")>]
 type ProjectWorkspaceTests() =
+    [<Theory>]
+    [<InlineData("EK_RA6M5_HelloBlinky", "arm_cortex_m33", "mcu-renesas-ra6m5-ek-ra6m5", "CortexM33")>]
+    [<InlineData("STM32H747I_DISCO_HelloDISCO", "arm_cortex_m7", "stm32h747i-disco-hellodisco-internal", "CortexM7")>]
+    member _.``Tracked profile aliases retain readable source WordSize declarations``(profile: string, architecture: string, identity: string, cpu: string) =
+        let platform = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "../../../Fidelity.Platform/Profiles", profile, "Fidelity.Platform.fidproj"))
+        let description = Path.Combine(Path.GetDirectoryName platform, "Description.clef")
+        let selected = "Fidelity.Platform.Profiles." + profile + ".Description.descriptor"
+        Assert.True(File.Exists platform, "The tracked profile project must exist at its primary-checkout path.")
+        use files = new WorkspaceFiles(scratchRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013/consti-profile-wordsize")))
+        File.WriteAllText(files.Source, "module App\n[<EntryPoint>]\nlet main _ = 0\n")
+        File.WriteAllText(files.Project, String.concat "\n" [
+            "[package]"; "name=\"ProfileWordSize\""; "version=\"0.1.0\""
+            "[compilation]"; "target=\"mcu\""
+            "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; sprintf "arch=%A" architecture
+            "[dependencies]"; sprintf "platform={path=%A}" platform
+            "[build]"; "sources=[\"App.clef\"]"; "output=\"profile.elf\""; "output_kind=\"embedded\"" ])
+        let result = ProjectChecker.checkProject files.Project |> WorkspaceCases.need
+        for diagnostic in result.CheckResult.Diagnostics do
+            printfn "BP1 profile=%s diagnostic=%A" profile diagnostic
+        let graph = result.CheckResult.Graph
+        let context = graph.Platform |> Option.defaultWith (fun () -> failwith "The checked profile lost its platform context.")
+        Assert.Equal(Some selected, context.PlatformDescription)
+        Assert.Contains(Path.GetFullPath description, context.PlatformSourcePaths)
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read graph
+        let declared = reading.Platform |> Option.defaultWith (fun () -> failwithf "Selected profile was not read: %A" reading.Findings)
+        Assert.Equal(identity, declared.Id)
+        let core = declared.Core |> Option.defaultWith (fun () -> failwith "Selected profile has no declared core.")
+        let record, fields = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.recordOf graph core.Node |> Option.defaultWith (fun () -> failwith "Selected core is not a record.")
+        Assert.Equal(Some "TargetCore", Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.typeName record)
+        let _, fieldId = fields |> List.filter (fst >> (=) "WordSizeBits") |> Assert.Single
+        let value, path = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.valuePath graph fieldId |> Option.defaultWith (fun () -> failwith "WordSizeBits alias has no source value path.")
+        let actual = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.int64Of graph fieldId
+        let register = core.Widths |> List.filter (fun width -> width.Name = "Register") |> Assert.Single
+        printfn "BP1 profile=%s project=%s selected=%s identity=%s core=%A field=%A path=%A source=%s value=%A kind=%A register=%d findings=%A" profile platform selected declared.Id core.Node fieldId path value.Range.File actual value.Kind register.Bits reading.Findings
+        Assert.Equal(Some (int64 register.Bits), actual)
+        let suffix = "Hardware/Silicon/CPU/Arm/" + cpu + "/Description.clef"
+        Assert.True(value.Range.File.Replace('\\', '/').EndsWith(suffix, StringComparison.Ordinal), sprintf "The effective WordSizeBits value must originate in %s, got %s" suffix value.Range.File)
+        Assert.DoesNotContain(reading.Findings, fun finding -> finding.Message.Contains("WordSizeBits", StringComparison.Ordinal) || finding.Message.Contains("CAbi", StringComparison.Ordinal))
+        let abiRecords =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.RecordExpr _ -> Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.typeName node = Some "CAbiDescriptor" && context.PlatformSourcePaths.Contains(Path.GetFullPath node.Range.File)
+                | _ -> false)
+            |> Seq.toList
+        printfn "BP1 profile=%s selectedCAbiCount=%d" profile abiRecords.Length
+        if abiRecords.IsEmpty then
+            Assert.Empty abiRecords
+            printfn "BP1 profile=%s no selected CAbi declaration" profile
+        for abi in abiRecords do
+            let _, abiFields = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.recordOf graph abi.Id |> Option.get
+            let field name = abiFields |> List.filter (fst >> (=) name) |> Assert.Single |> snd
+            let name = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.stringOf graph (field "Name")
+            let pointer = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.int64Of graph (field "PointerBits")
+            let registers = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.int64Of graph (field "ScalarAggregateRegisterBytes")
+            printfn "BP1 profile=%s CAbi=%A source=%s Name=%A PointerBits=%A ScalarAggregateRegisterBytes=%A" profile abi.Id abi.Range.File name pointer registers
+            Assert.True(name.IsSome, sprintf "Selected CAbi %A Name is unreadable." abi.Id)
+            for fieldName, value in ["PointerBits", pointer; "ScalarAggregateRegisterBytes", registers] do
+                Assert.True(value |> Option.exists (fun value -> value >= int64 Int32.MinValue && value <= int64 Int32.MaxValue), sprintf "Selected CAbi %A %s must be an exact signed32 value, got %A." abi.Id fieldName value)
+
     [<Fact>]
     member _.``Creation reservation and close perform no project capture or checking``() =
         let missing = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "Missing.fidproj")
