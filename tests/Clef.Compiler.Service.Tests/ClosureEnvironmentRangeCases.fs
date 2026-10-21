@@ -56,6 +56,117 @@ module private EnvironmentRangeFixture =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosureEnvironmentRange")>]
 type ClosureEnvironmentRangeCases() =
+    [<Fact>]
+    member _.``Invocation membership preserves inactive declaration children outside the range domain`` () =
+      // Binding names are source declarations, not executable values. This is
+      // a range-domain control; it does not claim DeviceAccess plan admission.
+      let source = """    let select input =
+        let handle = Mmio.bind8 "range-region" "range-register"
+        input
+    let observed = select 7
+    observed
+"""
+      let graph =
+        match EnvironmentRangeFixture.inspect source with
+        | Success result | CheckFailure result -> result.Graph
+        | ParseFailure errors -> failwithf "Expected parsed invocation source: %A" errors
+      let inactive =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+          match node.Kind with
+          | SemanticKind.Literal(NativeLiteral.String value) -> value = "range-region" || value = "range-register"
+          | _ -> false) |> Seq.toList
+      // Four distinct retained rows exist; the active binding identifies the
+      // two arguments of the actual declaration without conflating IDs.
+      Assert.Equal(4, inactive.Length)
+      let handle = EnvironmentRangeFixture.binding "handle" graph
+      let site = Assert.Single handle.Children
+      let arguments =
+        match Clef.Compiler.PSGSaturation.SemanticGraph.Mmio.operation graph site with
+        | Some("bind8", arguments) -> arguments
+        | other -> failwithf "Expected the real bound MMIO declaration: %A" other
+      Assert.Equal(2, arguments.Length)
+      for argument in arguments do
+        let literal = Clef.Compiler.PSGSaturation.SemanticGraph.Predicates.valueOf graph argument
+                      |> Option.defaultWith (fun () -> failwith "Missing source declaration literal")
+        Assert.Contains(inactive, fun node -> node.Id = literal.Id)
+      for node in inactive do Assert.False(node.IsReachable, "MMIO declaration argument must remain outside executable reachability.")
+      EnvironmentRangeFixture.retainedResult "observed" 7I graph
+      let ranged, _ = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run graph.Platform graph
+      let facts = ranged.RangeContextFacts |> Option.defaultWith (fun () -> failwith "Missing invocation range facts")
+      for node in inactive do
+        Assert.Same(node, ranged.Nodes[node.Id])
+        Assert.False(ranged.Nodes[node.Id].IsReachable)
+        Assert.DoesNotContain(facts.Values.Keys, fun (_, id) -> id = node.Id)
+        Assert.DoesNotContain(facts.Reads.Keys, fun (_, id) -> id = node.Id)
+        Assert.DoesNotContain(facts.Reads.Values |> Seq.collect id, fun (_, id) -> id = node.Id)
+
+    [<Theory>]
+    [<InlineData(false, false)>]
+    [<InlineData(true, false)>]
+    [<InlineData(false, true)>]
+    member _.``Invocation membership traverses retained inactive wrappers without crossing lambdas`` brokenReference inactiveLambda =
+      // A graph-level domain control: independently reachable descendants do
+      // not imply their structural ancestors are executable occurrences.
+      let graph = EnvironmentRangeFixture.check """    let select input =
+        let held = (9: int)
+        let nested value = value + 99
+        let unused = nested 1
+        input
+    let observed = select 7
+    observed
+"""
+      let literal expected =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+          node.IsReachable &&
+            (match node.Kind with
+             | SemanticKind.Literal(NativeLiteral.Int(value, _)) -> value = expected
+             | _ -> false)) |> Assert.Single
+      let child, nestedChild = literal 9L, literal 99L
+      let wrapper =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+          match node.Kind with
+          | SemanticKind.TypeAnnotation _ -> List.contains child.Id node.Children
+          | _ -> false) |> Assert.Single
+      Assert.True(wrapper.IsReachable)
+      let missing = NodeId(System.Int32.MaxValue - 1)
+      Assert.False(graph.Nodes.ContainsKey missing)
+      let inactive =
+        { wrapper with
+            IsReachable = false
+            Children = if brokenReference then wrapper.Children @ [missing] else wrapper.Children }
+      let nestedCall = (EnvironmentRangeFixture.binding "unused" graph).Children |> Assert.Single
+      let nestedInvocation =
+        graph.RangeContextFacts.Value.Invocations |> Seq.filter (fun row -> row.Call = nestedCall) |> Assert.Single
+      let lambda = graph.Nodes[nestedInvocation.Target]
+      match lambda.Kind with
+      | SemanticKind.Lambda _ -> ()
+      | _ -> failwith "Expected the existing nested invocation's lambda target"
+      let nodes =
+        graph.Nodes.Add(wrapper.Id, inactive)
+        |> fun nodes -> if inactiveLambda then nodes.Add(lambda.Id, { lambda with IsReachable = false }) else nodes
+      let changed = { graph with Nodes = nodes; RangeContextFacts = None }
+                    |> Clef.Compiler.Nanopass.OrdinaryDemand.normalize
+      match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+      | Ok _ -> ()
+      | Result.Error failures -> failwithf "Expected current demand after graph-domain mutation: %A" failures
+      if brokenReference then
+        let error = Assert.Throws<System.Collections.Generic.KeyNotFoundException>(fun () ->
+          Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run changed.Platform changed |> ignore)
+        Assert.Contains("RangeAnalysis.walk@", error.StackTrace)
+      else
+        let ranged, _ = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run changed.Platform changed
+        EnvironmentRangeFixture.retainedResult "observed" 7I ranged
+        Assert.Same(inactive, ranged.Nodes[wrapper.Id])
+        let facts = ranged.RangeContextFacts |> Option.defaultWith (fun () -> failwith "Missing invocation range facts")
+        let call = (EnvironmentRangeFixture.binding "observed" ranged).Children |> Assert.Single
+        let invocation = facts.Invocations |> Seq.filter (fun row -> row.Call = call) |> Assert.Single
+        Assert.Equal(ValueRange.point 9I, facts.Values[invocation.Context, child.Id])
+        Assert.False(facts.Values.ContainsKey(invocation.Context, wrapper.Id))
+        Assert.False(facts.Values.ContainsKey(invocation.Context, nestedChild.Id), "Nested lambda body must not become an outer invocation member.")
+        Assert.Contains(facts.Values, fun entry ->
+          let context, id = entry.Key
+          context <> invocation.Context && id = nestedChild.Id && entry.Value = ValueRange.point 99I)
+
     [<Theory>]
     [<InlineData("missing")>]
     [<InlineData("wrong-call")>]

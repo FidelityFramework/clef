@@ -2609,13 +2609,19 @@ let private contextualNode (program: Program) (node: SemanticNode) =
 /// dependency region. CallableOrigins supplies invocation rows, and every fact
 /// retains its actual reads. Nested lambda definitions do not activate bodies.
 let private contextProgram (program: Program) =
-    let rec bodyOccurrences seen id =
-        if Set.contains id seen then seen
-        else
-            let seen = Set.add id seen
-            match program.Reachable.TryFind id with
-            | Some { Kind = SemanticKind.Lambda _ } | None -> seen
-            | Some node -> List.fold bodyOccurrences seen node.Children
+    let bodyOccurrences root =
+        let rec walk (visited, members) id =
+            if Set.contains id visited then visited, members
+            else
+                let node = program.Graph.Nodes[id]
+                let visited = Set.add id visited
+                let members = if program.Reachable.ContainsKey id then Set.add id members else members
+                // Reachability is not downward closed: an inactive retained
+                // wrapper may contain an independently reachable occurrence.
+                match node.Kind with
+                | SemanticKind.Lambda _ -> visited, members
+                | _ -> List.fold walk (visited, members) node.Children
+        walk (Set.empty, Set.empty) root |> snd
     // External execution has no source body activation. Its application stays
     // in the caller's lexical region, where the result contract reads actuals.
     let applications = program.Applications |> Map.map (fun _ targets ->
@@ -2626,7 +2632,7 @@ let private contextProgram (program: Program) =
         | Some { Kind = SemanticKind.Lambda (parameters, _, _, _, _) } -> parameters |> List.map (fun (_, _, id) -> id)
         | _ -> target.Parameters |> List.map (fun (_, _, id) -> id)
     let bodies = targets |> List.map (fun target ->
-        target.Lambda, Set.union (bodyOccurrences Set.empty target.Body) (fullParameters target |> Set.ofList)) |> Map.ofList
+        target.Lambda, Set.union (bodyOccurrences target.Body) (fullParameters target |> Set.ofList)) |> Map.ofList
     let owned = bodies.Values |> Seq.fold Set.union Set.empty
     let rootMembers = Set.difference (program.Reachable.Keys |> Set.ofSeq) owned
     // Intrinsic-owned suppliers and declared ingress remain shared sources.
