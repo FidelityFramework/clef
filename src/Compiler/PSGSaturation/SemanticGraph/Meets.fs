@@ -344,6 +344,24 @@ let private onFabric (context: PlatformContext option) : bool =
 let private wordOf (context: PlatformContext option) : int option =
     context |> Option.bind (fun ctx -> PlatformContext.tryWidth ctx (WidthDimension.name WidthDimension.Register) |> Result.toOption)
 
+/// MMIO writes meet the transaction width already settled by DeviceAccess.
+/// The map is explicit because Codata is still being constructed at this seam.
+let deviceAccess (context: PlatformContext option) (graph: SemanticGraph)
+                 (accesses: Map<NodeId, MmioAccessEvidence>) : Map<NodeId, Meet list> =
+    if onFabric context then Map.empty
+    else
+        accesses
+        |> Map.toList
+        |> List.choose (fun (consumer, access) ->
+            match access.Operation, Mmio.operation graph consumer with
+            | operation, Some (_, [_; value]) when operation.StartsWith("write") ->
+                meetInto graph consumer value (Some access.Bits)
+                |> Option.filter (fun adaptation ->
+                    adaptation.Adapt = MeetKind.ExtendUnsigned && adaptation.From < adaptation.To)
+                |> Option.map (fun adaptation -> consumer, [{ adaptation with Operand = value }])
+            | _ -> None)
+        |> Map.ofList
+
 /// The meets of every reachable consumer, keyed by the consumer.
 let derive (context: PlatformContext option) (graph: SemanticGraph) (curry: CurryInfo) : Map<NodeId, Meet list> =
     if onFabric context then Map.empty

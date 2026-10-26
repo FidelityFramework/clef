@@ -1366,6 +1366,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 Curry = curry
                 Meets = Meets.continuations sequences.Frames sequences.Origins sequences.Storage sequences.Initializers settled
                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) (Meets.derive platformContext settled curry)
+                        |> fun facts -> Meets.deviceAccess platformContext settled mmio
+                                        |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
                         |> fun facts -> Meets.environments environments.Layouts environmentOrigins settled
                                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
                         |> fun facts -> Meets.lazies lazies.Layouts lazies.Origins settled

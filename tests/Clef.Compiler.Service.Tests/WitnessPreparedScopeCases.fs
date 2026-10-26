@@ -306,3 +306,245 @@ type WitnessPreparedScopeTests() =
         Assert.Equal<WitnessPreparedRows option>(Some changedRows, changed.Codata.Value.WitnessPreparedRows)
         Assert.True(Publication.publish changed |> Result.isError)
         Assert.True(Publication.publish graph |> Result.isOk)
+
+open Clef.Compiler.NativeTypedTree.NativeTypes
+
+module private MmioMeetFixture =
+    module Native = Clef.Compiler.NativeTypedTree.NativeTypes
+    module Meets = Clef.Compiler.PSGSaturation.SemanticGraph.Meets
+    module Ranges = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
+    module Numeric = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication
+
+    let check (guest: bool) (declarations: string) (main: string) =
+        let directory = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013/mmio-meets", System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory directory |> ignore
+        let profile = if guest then "RestrictedGuest64" else "EK_RA6M5_HelloBlinky"
+        let platform = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../../Fidelity.Platform/Profiles", profile, "Fidelity.Platform.fidproj"))
+        System.IO.File.WriteAllText(System.IO.Path.Combine(directory, "Declarations.clef"), declarations)
+        System.IO.File.WriteAllText(System.IO.Path.Combine(directory, "Main.clef"), main)
+        let project = System.IO.Path.Combine(directory, "Test.fidproj")
+        System.IO.File.WriteAllText(project, String.concat "\n" [
+            "[package]"; "name=\"DeviceAccessCheck\""; "version=\"0.1.0\""
+            "[compilation]"; "target=\"" + (if guest then "cpu" else "mcu") + "\""
+            "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; "arch=\"" + (if guest then "x86_64" else "arm_cortex_m33") + "\""
+            "[dependencies]"; sprintf "platform={path=%A}" platform
+            "[build]"; "sources=[\"Declarations.clef\",\"Main.clef\"]"; "output=\"test.elf\""; "output_kind=\"embedded\"" ])
+        Clef.Compiler.CheckExecution.synchronized (fun () -> Clef.Compiler.Project.ProjectChecker.checkProject project)
+        |> Result.defaultWith (fun errors -> failwithf "MMIO meet source setup failed: %A" errors)
+
+    let guest =
+        lazy (
+            check true
+                """module DeviceAccessCheck.Declarations
+open Fidelity.Platform.Contracts
+open Fidelity.Platform.Profiles.RestrictedGuest64
+let mapping: DeviceMapping = { Name = "transport-map"; Region = Description.transportRegion; AddressSpace = "cpu-virtual"; Base = Some 8589934592; Lifetime = "image"; Establishment = "boot-contract"; Source = "synthetic boot mapping premise" }
+let grant: DeviceGrant = { Name = "transport"; Mapping = mapping; Registers = [| Description.status; Description.control |]; Access = "rw"; Predicates = [||] }
+let plan: Expr<DeviceAccessPlan> = <@ { Name = "restricted-guest"; Grants = [| grant |] } @>
+"""
+                """module DeviceAccessCheck
+open DeviceAccessCheck.Declarations
+[<EntryPoint>]
+let main _ =
+    let status = Mmio.bind32 "transport" "status"
+    let control = Mmio.bind32 "transport" "control"
+    let _ = Mmio.read32 status
+    Mmio.write32 control 1
+    0
+"""
+        )
+
+    let raw bits shape value =
+        let preparation, argument =
+            match shape with
+            | "direct" -> "", value
+            | "alias" -> "    let value = " + value + "\n", "value"
+            | "annotation" -> "", "(" + value + ": int)"
+            | _ -> failwith "Unknown MMIO source shape"
+        let main =
+            String.concat "" [
+                "module DeviceAccessCheck\n[<EntryPoint>]\nlet main _ =\n"
+                (sprintf "    let handle = Mmio.reg%d 0x40080818\n" bits)
+                preparation
+                (sprintf "    Mmio.write%d handle %s\n    let _ = Mmio.read%d handle\n    0\n" bits argument bits)
+            ]
+        check false "module DeviceAccessCheck.Declarations\n" main
+
+    let write (graph: SemanticGraph) =
+        let site, access = graph.Codata.Value.Mmio |> Map.toSeq |> Seq.filter (fun (_, row) -> row.Operation.StartsWith "write") |> Assert.Single
+        let operand =
+            match Mmio.operation graph site with
+            | Some(operation, [_; value]) when operation = access.Operation -> value
+            | other -> failwithf "MMIO meet fixture lost its exact write arguments: %A" other
+        site, operand, access
+
+    let publishedId (Native.NodeId value) = Fidelity.PSG.NodeId value
+
+    let assertMeet site operand bits (rows: Meet list) =
+        Assert.True(rows.Length = 1, sprintf "MMIO exact-one meet: %A" rows)
+        let row = List.head rows
+        Assert.Equal(site, row.Consumer)
+        Assert.Equal(operand, row.Operand)
+        Assert.Equal(8, row.From)
+        Assert.Equal(bits, row.To)
+        Assert.Equal(MeetKind.ExtendUnsigned, row.Adapt)
+
+    let healthy graph =
+        Numeric.project graph |> Result.defaultWith (sprintf "%A" >> failwith) |> ignore
+        Assert.Empty(Numeric.completeness graph)
+        PreparedEmission.tryRead graph |> Result.defaultWith failwith |> ignore
+
+    let direct (graph: SemanticGraph) accesses = Meets.deviceAccess graph.Platform graph accesses
+
+    let assertNoMeet label (rows: Map<Native.NodeId, Meet list>) =
+        Assert.True(rows.IsEmpty, sprintf "%s unexpectedly emitted Adapt/From/To: %A" label (rows |> Map.toList |> List.collect (snd >> List.map (fun row -> row.Adapt, row.From, row.To))))
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "MmioMeets")>]
+type MmioMeetTests() =
+    [<Fact>]
+    member _.``MMIO guest write preserves exact widening through source selection and publication``() =
+        let result = MmioMeetFixture.guest.Value
+        let graph = result.CheckResult.Graph
+        let site, operand, access = MmioMeetFixture.write graph
+        Assert.Equal("write32", access.Operation)
+        Assert.Equal(32, access.Bits)
+        let beforeRange = graph.Nodes[operand].ValueRange
+        Assert.Equal(Some(ValueRange.point 1I), beforeRange)
+        MmioMeetFixture.assertMeet site operand 32 (graph.Codata.Value.Meets.TryFind site |> Option.defaultValue [])
+        let selected = graph.Codata.Value.WitnessLiveRows.Value
+        MmioMeetFixture.assertMeet site operand 32 (selected.Codata.Meets.TryFind site |> Option.defaultValue [])
+        Assert.False(hasErrors result.CheckResult, result |> Clef.Compiler.Project.ProjectChecker.getErrorMessages |> String.concat "\n")
+        MmioMeetFixture.healthy graph
+        let revision = Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith (sprintf "%A" >> failwith)
+        let key, value = MmioMeetFixture.publishedId site, MmioMeetFixture.publishedId operand
+        let foreign = revision.Foreign.Mmio[key]
+        Assert.Equal(key, foreign.Site)
+        Assert.Equal(value, foreign.Arguments[1])
+        let row = revision.Codata.Meets.TryFind key |> Option.defaultValue [] |> Assert.Single
+        Assert.Equal(key, row.Consumer)
+        Assert.Equal(value, row.Operand)
+        Assert.Equal(8, row.From)
+        Assert.Equal(32, row.To)
+        Assert.Equal(Fidelity.PSG.MeetKind.ExtendUnsigned, row.Adapt)
+        Assert.Equal("write32", revision.Codata.Mmio[key].Operation)
+        Assert.Equal(32, revision.Codata.Mmio[key].Bits)
+        Assert.Equal(beforeRange, graph.Nodes[operand].ValueRange)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Theory>]
+    [<InlineData(8, "direct")>]
+    [<InlineData(16, "direct")>]
+    [<InlineData(16, "alias")>]
+    [<InlineData(16, "annotation")>]
+    member _.``MMIO raw source shapes preserve exact transaction operand identity``(bits: int, shape: string) =
+        let result = MmioMeetFixture.raw bits shape "1"
+        Assert.False(hasErrors result.CheckResult, result |> Clef.Compiler.Project.ProjectChecker.getErrorMessages |> String.concat "\n")
+        let graph = result.CheckResult.Graph
+        let site, operand, access = MmioMeetFixture.write graph
+        Assert.Equal(bits, access.Bits)
+        Assert.True(access.Binding.IsNone, "Raw fixture unexpectedly acquired a declaration plan")
+        let annotationInner =
+            if shape = "annotation" then
+                match graph.Nodes[operand].Kind with
+                | SemanticKind.TypeAnnotation(inner, _) ->
+                    Assert.NotEqual(operand, inner)
+                    Assert.True(graph.Nodes[operand].Children = [inner], "Annotation must retain its exact held child")
+                    let numeric = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph |> Result.defaultWith (sprintf "%A" >> failwith)
+                    let wrapperCarrier = numeric.Values[operand]
+                    let innerCarrier = numeric.Values[inner]
+                    Assert.True(wrapperCarrier.Slot = innerCarrier.Slot,
+                                sprintf "Annotation carrier differs from its held child: %A / %A" wrapperCarrier.Slot innerCarrier.Slot)
+                    Some inner
+                | other -> failwithf "Annotation fixture lost its held TypeAnnotation occurrence: %A" other
+            else None
+        let rows = graph.Codata.Value.Meets.TryFind site |> Option.defaultValue []
+        if bits = 8 then Assert.Empty rows else MmioMeetFixture.assertMeet site operand bits rows
+        MmioMeetFixture.healthy graph
+        let revision = Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith (sprintf "%A" >> failwith)
+        let key, value = MmioMeetFixture.publishedId site, MmioMeetFixture.publishedId operand
+        Assert.Equal(value, revision.Foreign.Mmio[key].Arguments[1])
+        let published = revision.Codata.Meets.TryFind key |> Option.defaultValue []
+        if bits = 8 then Assert.Empty published
+        else
+            let row = Assert.Single published
+            Assert.Equal(value, row.Operand)
+            Assert.Equal(key, row.Consumer)
+            Assert.Equal(8, row.From)
+            Assert.Equal(bits, row.To)
+            Assert.Equal(Fidelity.PSG.MeetKind.ExtendUnsigned, row.Adapt)
+            match annotationInner with
+            | Some inner ->
+                let publishedInner = MmioMeetFixture.publishedId inner
+                match revision.Nodes[value].Kind with
+                | Fidelity.PSG.SemanticKind.TypeAnnotation(actualInner, _) -> Assert.Equal(publishedInner, actualInner)
+                | other -> failwithf "Publication lost the annotation occurrence: %A" other
+                Assert.True(revision.Nodes[value].Children = [publishedInner], "Publication changed the held annotation child")
+                for occurrence in [value; publishedInner] do
+                    match revision.Emission.Callable.ValueShapes.TryFind occurrence with
+                    | Some(Fidelity.PSG.CallableValueShape.Data owner) -> Assert.Equal(occurrence, owner)
+                    | other -> failwithf "Annotation scalar input lacks its exact published Data shape: %A" other
+                let representations = revision.Emission.Numeric.OccurrenceRepresentations
+                Assert.True(representations.TryFind value = representations.TryFind publishedInner,
+                            "Published annotation representation differs from its held child")
+                for occurrence in [value; publishedInner] do
+                    match representations.TryFind occurrence with
+                    | Some(Ok(Fidelity.PSG.ValueRepresentation.Scalar(Fidelity.PSG.SettledSlot.Integer(width, _)))) ->
+                        Assert.Equal(row.From, width)
+                    | other -> failwithf "Annotation consumer input is not an exact published integer carrier: %A" other
+            | None -> ()
+        let nonwrites = graph.Codata.Value.Mmio |> Map.toList |> List.filter (fun (_, row) -> not(row.Operation.StartsWith "write"))
+        Assert.Equal(2, nonwrites.Length)
+        for id, _ in nonwrites do Assert.Empty(graph.Codata.Value.Meets.TryFind id |> Option.defaultValue [])
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``MMIO out of range source remains CCS8210 without an adaptation``() =
+        let result = MmioMeetFixture.raw 8 "direct" "256"
+        Assert.True(hasErrors result.CheckResult)
+        let refusal =
+            result.CheckResult.Diagnostics
+            |> List.exists (fun diagnostic ->
+                let effective = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.Diagnostic.effectiveSeverity diagnostic
+                diagnostic.Code = "CCS8210"
+                && diagnostic.Message = "MMIO write value is not proven within the unsigned register width"
+                && effective = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error)
+        Assert.True(refusal, result |> Clef.Compiler.Project.ProjectChecker.getErrorMessages |> String.concat "\n")
+        let graph = result.CheckResult.Graph
+        let site = graph.Nodes.Keys |> Seq.filter (fun id ->
+            match Mmio.operation graph id with Some("write8", _) -> graph.Nodes[id].IsReachable | _ -> false) |> Assert.Single
+        Assert.False(graph.Codata.Value.Mmio.ContainsKey site)
+        Assert.Empty(graph.Codata.Value.Meets.TryFind site |> Option.defaultValue [])
+
+    [<Fact>]
+    member _.``MMIO forged wider carrier cannot publish a narrowing meet``() =
+        let graph = MmioMeetFixture.guest.Value.CheckResult.Graph
+        let site, operand, access = MmioMeetFixture.write graph
+        let node = graph.Nodes[operand]
+        let kind = NTUKind.NTUuint(NTUWidth.Fixed 64)
+        let carrier = mkNTUTypeConRef "uint64" kind (TypeLayout.Inline(8, 8))
+        let changed = { graph with Nodes = graph.Nodes.Add(operand, { node with Type = NativeType.TApp(carrier, []) }) }
+        Assert.Equal(node.ValueRange, changed.Nodes[operand].ValueRange)
+        Assert.Equal(Some 64, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth changed operand)
+        Assert.Equal(Mmio.operation graph site, Mmio.operation changed site)
+        MmioMeetFixture.direct changed (Map.ofList [site, access]) |> MmioMeetFixture.assertNoMeet "F1 forged wider carrier"
+
+    [<Fact>]
+    member _.``MMIO forged negative range cannot publish a signed extension``() =
+        let graph = MmioMeetFixture.guest.Value.CheckResult.Graph
+        let site, operand, access = MmioMeetFixture.write graph
+        let node = graph.Nodes[operand]
+        let changed = { graph with Nodes = graph.Nodes.Add(operand, { node with ValueRange = Some(ValueRange.point -1I) }) }
+        Assert.Equal(Some 8, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth changed operand)
+        Assert.Equal(Some(ValueRange.point -1I), changed.Nodes[operand].ValueRange)
+        Assert.Equal(Mmio.operation graph site, Mmio.operation changed site)
+        MmioMeetFixture.direct changed (Map.ofList [site, access]) |> MmioMeetFixture.assertNoMeet "F2 forged negative range"
+
+    [<Fact>]
+    member _.``MMIO forged nonwrite account cannot authorize source write adaptation``() =
+        let graph = MmioMeetFixture.guest.Value.CheckResult.Graph
+        let site, operand, access = MmioMeetFixture.write graph
+        Assert.Equal(Some 8, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph operand)
+        Assert.Equal("write32", access.Operation)
+        Assert.Equal(32, access.Bits)
+        MmioMeetFixture.direct graph (Map.ofList [site, { access with Operation = "read32" }])
+        |> MmioMeetFixture.assertNoMeet "F3 forged nonwrite account"
