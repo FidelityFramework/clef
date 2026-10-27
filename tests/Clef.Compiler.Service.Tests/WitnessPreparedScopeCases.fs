@@ -9,6 +9,7 @@ module PreparedRows = Clef.Compiler.Baker.Recipes.WitnessForeignDemandRecipes
 module SelectedRows = Clef.Compiler.Baker.Recipes.WitnessLiveRowsRecipes
 module DeviceAccess = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess
 module Mmio = Clef.Compiler.PSGSaturation.SemanticGraph.Mmio
+module Predicates = Clef.Compiler.PSGSaturation.SemanticGraph.Predicates
 module Publication = Clef.Compiler.PSGSaturation.Publication.RevisionPublication
 module SourceGraph = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph
 
@@ -43,13 +44,26 @@ module private PreparedScopeFixture =
         PreparedEmission.tryRead result.Graph |> Result.defaultWith failwith |> ignore
         result.Graph
 
-    // Composer/tests/Mmio/Program.fs positive source, checked through the real
-    // project owner. Publication diagnostics must not hide the final source facts.
-    let mmioGraph = lazy (
+    let private checkMmioGraph body =
         let directory = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013/mmio-source-agreement", System.Guid.NewGuid().ToString("N")))
         System.IO.Directory.CreateDirectory directory |> ignore
         let platform = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../../Fidelity.Platform/Profiles/EK_RA6M5_HelloBlinky/Fidelity.Platform.fidproj"))
-        let body = String.concat "\n    " [
+        System.IO.File.WriteAllText(System.IO.Path.Combine(directory, "Main.clef"), "module MmioCheck\n[<EntryPoint>]\nlet main _ =\n    " + body + "\n    0\n")
+        let project = System.IO.Path.Combine(directory, "Test.fidproj")
+        System.IO.File.WriteAllText(project, String.concat "\n" [
+            "[package]"; "name=\"MmioCheck\""; "version=\"0.1.0\""
+            "[compilation]"; "target=\"mcu\""
+            "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; "arch=\"arm_cortex_m33\""
+            "[dependencies]"; sprintf "platform={path=%A}" platform
+            "[build]"; "sources=[\"Main.clef\"]"; "output=\"test.elf\""; "output_kind=\"embedded\"" ])
+        let result = Clef.Compiler.Project.ProjectChecker.checkProject project
+                     |> Result.defaultWith (fun failures -> failwithf "Real MMIO project failed before returning its final graph: %A" failures)
+        result.CheckResult.Graph
+
+    // Composer/tests/Mmio/Program.fs positive source, checked through the real
+    // project owner. Publication diagnostics must not hide the final source facts.
+    let mmioGraph = lazy (
+        String.concat "\n    " [
             "let r8 = Mmio.reg8 0x40080D03"
             "let r16 = Mmio.reg16 0x4008081A"
             "let r32 = Mmio.reg32 0x40080818"
@@ -62,17 +76,25 @@ module private PreparedScopeFixture =
             "let mutable attempts = 0"
             "while attempts < 4 && Mmio.read8 r8 = 0 do"
             "    attempts <- attempts + 1" ]
-        System.IO.File.WriteAllText(System.IO.Path.Combine(directory, "Main.clef"), "module MmioCheck\n[<EntryPoint>]\nlet main _ =\n    " + body + "\n    0\n")
-        let project = System.IO.Path.Combine(directory, "Test.fidproj")
-        System.IO.File.WriteAllText(project, String.concat "\n" [
-            "[package]"; "name=\"MmioCheck\""; "version=\"0.1.0\""
-            "[compilation]"; "target=\"mcu\""
-            "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; "arch=\"arm_cortex_m33\""
-            "[dependencies]"; sprintf "platform={path=%A}" platform
-            "[build]"; "sources=[\"Main.clef\"]"; "output=\"test.elf\""; "output_kind=\"embedded\"" ])
-        let result = Clef.Compiler.Project.ProjectChecker.checkProject project
-                     |> Result.defaultWith (fun failures -> failwithf "Real MMIO project failed before returning its final graph: %A" failures)
-        result.CheckResult.Graph)
+        |> checkMmioGraph)
+
+    // The representation prerequisite excludes the unrelated polling loop.
+    // Immutable source aliases need no new address or language admission rule.
+    let mmioPointerGraph = lazy (
+        String.concat "\n    " [
+            "let r8 = Mmio.reg8 0x40080D03"
+            "let r16 = Mmio.reg16 0x4008081A"
+            "let r32 = Mmio.reg32 0x40080818"
+            "let a8 = r8"
+            "let a16 = r16"
+            "let a32 = r32"
+            "Mmio.write8 a8 1"
+            "Mmio.write16 a16 1"
+            "Mmio.write32 a32 1"
+            "let _ = Mmio.read8 a8"
+            "let _ = Mmio.read16 a16"
+            "let _ = Mmio.read32 a32" ]
+        |> checkMmioGraph)
 
     let selectedRows (graph: SemanticGraph) =
         let facts = graph.Codata.Value
@@ -94,6 +116,32 @@ module private PreparedScopeFixture =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "WitnessPreparedScope")>]
 type WitnessPreparedScopeTests() =
+    [<Fact>]
+    member _.``Real MMIO constructors and handle arguments have source pointer representations``() =
+        let graph = PreparedScopeFixture.mmioPointerGraph.Value
+        let rows = graph.Codata.Value.Mmio
+        let constructors = rows |> Map.filter (fun _ row -> row.Operation.StartsWith "reg")
+        let accessors = rows |> Map.filter (fun _ row -> row.Operation.StartsWith "read" || row.Operation.StartsWith "write")
+        Assert.Equal(3, constructors.Count)
+        Assert.Equal(6, accessors.Count)
+        Assert.Equal<Set<int>>(Set.ofList [8; 16; 32], constructors.Values |> Seq.map _.Bits |> Set.ofSeq)
+        let domain = graph.Edges |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None) |> Assert.Single
+        let pointerAt id =
+            Assert.True(domain.Premises.ContainsKey id, sprintf "MMIO occurrence %A has no numeric-domain premise" id)
+            match domain.OccurrenceRepresentations.TryFind id with
+            | Some(Ok(ValueRepresentation.Scalar(SettledSlot.Pointer 1))) -> ()
+            | other -> failwithf "MMIO occurrence %A lacks its source Pointer 1 representation: %A" id other
+        for KeyValue(site, _) in constructors do pointerAt site
+        for KeyValue(site, row) in accessors do
+            match Mmio.operation graph site with
+            | Some(operation, handle :: _) when operation = row.Operation ->
+                pointerAt handle
+                match Predicates.valueOf graph handle with
+                | Some origin -> Assert.True(constructors.ContainsKey origin.Id, "Immutable handle no longer resolves to its real MMIO constructor")
+                | None -> failwithf "MMIO handle occurrence %A has no source value" handle
+            | other -> failwithf "MMIO accessor %A lost its source operation and handle argument: %A" site other
+
     [<Fact>]
     member _.``Real MMIO source retains nonempty settled operation agreement on its final graph``() =
         let graph = PreparedScopeFixture.mmioGraph.Value
