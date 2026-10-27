@@ -1022,7 +1022,17 @@ type BoundaryOptionalEntry = {
     Obligation: NodeId
 }
 
-type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option; OptionalEntry: BoundaryOptionalEntry option }
+[<RequireQualifiedAccess>]
+type BoundaryOptionalEntryChoice =
+    | Direct of BoundaryOptionalEntry
+    | Conditional of selection: NodeId * whenTrue: BoundaryOptionalEntry * whenFalse: BoundaryOptionalEntry
+
+module BoundaryOptionalEntryChoice =
+    let leaves = function
+        | BoundaryOptionalEntryChoice.Direct entry -> [entry]
+        | BoundaryOptionalEntryChoice.Conditional(_, whenTrue, whenFalse) -> [whenTrue; whenFalse]
+
+type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option; OptionalEntry: BoundaryOptionalEntryChoice option }
 
 /// Current source incidence for a separately stated process-link assumption.
 /// Identity/Version/Source belong to Contract, not this revision's node IDs.
@@ -3114,7 +3124,10 @@ type CallableAggregateTag = {
 }
 
 [<RequireQualifiedAccess>]
-type CallableAggregateOperation = Construct | Project | Assign | Snapshot | Transport | Result
+type CallableAggregateOperation = Construct | Project | Assign | Snapshot | Transport | Result | Select
+
+/// Exact source condition and its direct constructor children.
+type CallableAggregateSelection = { Condition: NodeId; WhenTrue: NodeId; WhenFalse: NodeId }
 
 type CallableAggregateValue = {
     Occurrence: NodeId
@@ -3131,6 +3144,7 @@ type CallableAggregateValue = {
     ResultRetirement: Result<CallableAggregateResultRetirement, string> option
     Frontier: NodeId option
     Tag: CallableAggregateTag option
+    Selection: CallableAggregateSelection option
     Bytes: int
     Alignment: int
     Participants: Participant list

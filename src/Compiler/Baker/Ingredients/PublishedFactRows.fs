@@ -363,13 +363,19 @@ and mapBoundaryOptionalEntry (value: S.BoundaryOptionalEntry) : Fidelity.PSG.Bou
       Transport = Set.map nodeId value.Transport
       Obligation = nodeId value.Obligation }
 
+and mapBoundaryOptionalEntryChoice (value: S.BoundaryOptionalEntryChoice) : Fidelity.PSG.BoundaryOptionalEntryChoice =
+    match value with
+    | S.BoundaryOptionalEntryChoice.Direct entry -> Fidelity.PSG.BoundaryOptionalEntryChoice.Direct (mapBoundaryOptionalEntry entry)
+    | S.BoundaryOptionalEntryChoice.Conditional(selection, whenTrue, whenFalse) ->
+        Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(nodeId selection, mapBoundaryOptionalEntry whenTrue, mapBoundaryOptionalEntry whenFalse)
+
 and mapBoundaryOperand (value: S.BoundaryOperand) : Fidelity.PSG.BoundaryOperand =
     ({
         Actual = nodeId value.Actual
         Formal = nodeId value.Formal
         Abi = mapBoundaryScalar value.Abi
         Adaptation = (value.Adaptation |> Option.map (fun x -> mapMeet x))
-        OptionalEntry = Option.map mapBoundaryOptionalEntry value.OptionalEntry
+        OptionalEntry = Option.map mapBoundaryOptionalEntryChoice value.OptionalEntry
     } : Fidelity.PSG.BoundaryOperand)
 
 and mapBoundaryPlatformPremise (value: S.BoundaryPlatformPremise) : Fidelity.PSG.BoundaryPlatformPremise =
@@ -616,6 +622,7 @@ and mapCallableAggregateOperation (value: S.CallableAggregateOperation) : Fideli
     | S.CallableAggregateOperation.Snapshot -> Fidelity.PSG.CallableAggregateOperation.Snapshot
     | S.CallableAggregateOperation.Transport -> Fidelity.PSG.CallableAggregateOperation.Transport
     | S.CallableAggregateOperation.Result -> Fidelity.PSG.CallableAggregateOperation.Result
+    | S.CallableAggregateOperation.Select -> Fidelity.PSG.CallableAggregateOperation.Select
 
 and mapCallableAggregatePathStep (value: S.CallableAggregatePathStep) : Fidelity.PSG.CallableAggregatePathStep =
     match value with
@@ -676,6 +683,9 @@ and mapCallableAggregateValue (value: S.CallableAggregateValue) : Fidelity.PSG.C
         ResultRetirement = value.ResultRetirement |> Option.map (Result.map mapCallableAggregateResultRetirement)
         Frontier = (value.Frontier |> Option.map (fun x -> nodeId x))
         Tag = (value.Tag |> Option.map (fun x -> mapCallableAggregateTag x))
+        Selection = value.Selection |> Option.map (fun selection ->
+            { Fidelity.PSG.CallableAggregateSelection.Condition = nodeId selection.Condition
+              WhenTrue = nodeId selection.WhenTrue; WhenFalse = nodeId selection.WhenFalse })
         Bytes = value.Bytes
         Alignment = value.Alignment
         Participants = (value.Participants |> List.map (fun x -> mapParticipant x))

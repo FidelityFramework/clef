@@ -178,7 +178,7 @@ let private valueRow slot occurrence aggregate operation formationInputs actualV
       Alternatives = alternatives
       Selector = if alternatives.IsEmpty then None else Some { Lower = 0; UpperExclusive = 1; Storage = None; Slot = None; ByteOffset = None }
       FormationInputs = formationInputs; Value = actualValue; SelectedAlternative = selected
-      Operation = operation; ResultRetirement = None; Frontier = None; Tag = tag; Bytes = 0; Alignment = 1
+      Operation = operation; ResultRetirement = None; Frontier = None; Tag = tag; Selection = None; Bytes = 0; Alignment = 1
       Participants =
         [ yield participant occurrence ParticipantRole.AggregateValue 0 occurrence
           yield participant occurrence ParticipantRole.AggregateSource 0 aggregate
@@ -483,6 +483,15 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
                                                 addValue (valueRow identity projection site CallableAggregateOperation.Project inputs None None tag carrier
                                                               (sourceSupport reading projection))
                         | [] -> refuse site Codes.CCS8414_CallableAggregateEvidence "The aggregate occurrence has no current construction evidence."
+                        | [_; _] when graph.Nodes.TryFind site |> Option.exists (fun node ->
+                            match node.Kind with
+                            | SemanticKind.IfThenElse _ | SemanticKind.VarRef _ | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _ -> true
+                            | _ -> false) -> ()
+                        | _ when graph.Nodes.TryFind site |> Option.exists (fun node ->
+                            match node.Kind with
+                            | SemanticKind.IfThenElse _ -> Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.optionalEntrySignature node.Type |> Option.isSome
+                            | _ -> false) ->
+                            refuse site Codes.CCS8414_CallableAggregateEvidence "An optional callback selection with more than two constructor origins is outside the current source profile."
                         | _ -> refuse site Codes.CCS8414_CallableAggregateEvidence "Several constructors reach this aggregate occurrence; a single tag record cannot express the required source selection."
                 if values |> Map.exists (fun _ rows -> rows |> List.exists (fun row -> row.Slot = identity)) then
                     slots <- slots.Add(identity, slot)
@@ -498,6 +507,97 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
             formation.Tag = row.Tag && formation.Bytes = row.Bytes && formation.Alignment = row.Alignment))
         if not formed then refuse site Codes.CCS8414_CallableAggregateEvidence "The inherited callable copy has no matching admitted supplying constructor row."
         formed)) |> Map.filter (fun _ rows -> not rows.IsEmpty)
+    // Admit only a direct Boolean formal selecting two already-admitted union
+    // constructors. The source dependency account retains the condition and
+    // both original formations; it does not synthesize a representative tag.
+    for work in groups do
+        let slot = slots.Values |> Seq.filter (fun row -> row.AggregateType = work.AggregateType && row.Path = work.Path) |> Seq.toList
+        for site, _, reading in work.Rows do
+            match slot, reading.Alternatives, graph.Nodes.TryFind site with
+            | [slot], [first; second], Some node when reading.UnknownOrigins.IsEmpty && reading.AbsentOrigins.IsEmpty &&
+                (match work.Path with [CallableAggregatePathStep.UnionPayload _] -> true | _ -> false) &&
+                (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.optionalEntrySignature node.Type |> Option.isSome) &&
+                not (reading.Dependencies |> Map.exists (fun id _ ->
+                    graph.Nodes.TryFind id |> Option.exists (fun current -> match current.Kind with SemanticKind.FieldSet _ -> true | _ -> false))) ->
+                match node.Kind, node.Children with
+                | SemanticKind.IfThenElse(condition, whenTrue, Some whenFalse), [c; t; f]
+                    when c = condition && t = whenTrue && f = whenFalse && whenTrue <> whenFalse &&
+                         Set.ofList [first.Construction; second.Construction] = Set.ofList [whenTrue; whenFalse] &&
+                         reading.Dependencies.TryFind site = Some [condition; whenTrue; whenFalse] ->
+                    let boolFormal =
+                        match graph.Nodes.TryFind condition with
+                        | Some { Kind = SemanticKind.VarRef(_, Some formal); Type = NativeType.TApp(ty, []); Children = [] }
+                            when ty.NTUKind = Some NTUKind.NTUbool &&
+                                 (graph.Nodes.TryFind formal |> Option.exists (fun parameter -> Identity.ofType parameter.Type = Identity.ofType (NativeType.TApp(ty, [])))) ->
+                            let owners = graph.Nodes.Values |> Seq.choose (fun owner ->
+                                match owner.Kind with
+                                | SemanticKind.Lambda(parameters, _, _, _, _) when parameters |> List.exists (fun (_, _, id) -> id = formal) -> Some owner.Id
+                                | _ -> None) |> Seq.toList
+                            match owners with [owner] -> Some(formal, owner) | _ -> None
+                        | _ -> None
+                    let arm occurrence =
+                        values.TryFind occurrence |> Option.defaultValue []
+                        |> List.filter (fun row -> row.Slot = slot.Identity && row.Operation = CallableAggregateOperation.Construct)
+                    match boolFormal, arm whenTrue, arm whenFalse with
+                    | Some (formal, owner), [left], [right] when left.Bytes = right.Bytes && left.Alignment = right.Alignment &&
+                        (graph.Nodes.TryFind whenTrue |> Option.exists (fun arm -> Identity.ofType arm.Type = slot.AggregateType)) &&
+                        (graph.Nodes.TryFind whenFalse |> Option.exists (fun arm -> Identity.ofType arm.Type = slot.AggregateType)) &&
+                        (left.Tag |> Option.exists (fun tag -> tag.Constructor = whenTrue)) &&
+                        (right.Tag |> Option.exists (fun tag -> tag.Constructor = whenFalse)) &&
+                        Set.ofList [left.Tag.Value.CaseOrdinal; right.Tag.Value.CaseOrdinal] = Set.ofList [0; 1] &&
+                        ((left.Alternatives.Length = 1 && right.Alternatives.IsEmpty) ||
+                         (right.Alternatives.Length = 1 && left.Alternatives.IsEmpty)) ->
+                        let present = if left.Alternatives.IsEmpty then right else left
+                        let absent = if left.Alternatives.IsEmpty then left else right
+                        if present.Tag.Value.CaseOrdinal <> 1 || present.Value.IsNone || absent.Tag.Value.CaseOrdinal <> 0 || absent.Value.IsSome then
+                            refuse site Codes.CCS8414_CallableAggregateEvidence "The optional selection's present and absent arms disagree with their exact constructor tags."
+                        else
+                            let carrier = present.Value |> Option.bind inputs.Carriers.TryFind
+                            let support = sourceSupport reading site @
+                                          [participant site ParticipantRole.Source reading.Dependencies.Count formal
+                                           participant site ParticipantRole.Source (reading.Dependencies.Count + 1) owner]
+                            let row = valueRow slot.Identity site site CallableAggregateOperation.Select
+                                          [condition; whenTrue; whenFalse] None None None carrier support
+                            addValue { row with Alternatives = present.Alternatives; Selector = present.Selector;
+                                                Bytes = present.Bytes; Alignment = present.Alignment;
+                                                Selection = Some { Condition = condition; WhenTrue = whenTrue; WhenFalse = whenFalse } }
+                    | _ -> refuse site Codes.CCS8414_CallableAggregateEvidence "The optional selection requires a Boolean formal and two current, distinct present/absent constructions with the same placement."
+                | SemanticKind.IfThenElse _, _ ->
+                    refuse site Codes.CCS8414_CallableAggregateEvidence "The optional selection lacks its exact condition and direct constructor incidences."
+                | _ -> ()
+            | _, [_; _], Some { Kind = SemanticKind.IfThenElse _ } ->
+                refuse site Codes.CCS8414_CallableAggregateEvidence "The optional selection has unresolved origins, mutation, or no admitted optional-entry slot."
+            | _ -> ()
+    // A two-origin alias is only a transport when its exact immutable path
+    // reaches an admitted Select with the same two original constructors.
+    for work in groups do
+        let slot = slots.Values |> Seq.filter (fun row -> row.AggregateType = work.AggregateType && row.Path = work.Path) |> Seq.toList
+        for site, _, reading in work.Rows do
+            match slot, reading.Alternatives, graph.Nodes.TryFind site with
+            | [slot], [first; second], Some { Kind = (SemanticKind.VarRef _ | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _) }
+                when reading.UnknownOrigins.IsEmpty && reading.AbsentOrigins.IsEmpty &&
+                     not (reading.Dependencies |> Map.exists (fun id _ ->
+                         graph.Nodes.TryFind id |> Option.exists (fun current -> match current.Kind with SemanticKind.FieldSet _ -> true | _ -> false))) ->
+                let candidates =
+                    values |> Map.toList |> List.collect (fun (supplier, rows) ->
+                        rows |> List.choose (fun row ->
+                            match row.Operation, row.Selection with
+                            | CallableAggregateOperation.Select, Some selected when row.Slot = slot.Identity &&
+                                Set.ofList [selected.WhenTrue; selected.WhenFalse] = Set.ofList [first.Construction; second.Construction] ->
+                                match transportInputs graph reading site supplier Set.empty with
+                                | Ok (_, path) when not path.IsEmpty -> Some(row, path)
+                                | _ -> None
+                            | _ -> None))
+                match candidates with
+                | [source, path] ->
+                    let carrier = source.Alternatives |> List.tryHead |> Option.bind (fun alt -> inputs.Carriers.TryFind alt.Carrier)
+                    let row = valueRow slot.Identity site source.Occurrence CallableAggregateOperation.Transport path None None None carrier (sourceSupport reading site)
+                    addValue { row with Alternatives = source.Alternatives; Selector = source.Selector;
+                                        Bytes = source.Bytes; Alignment = source.Alignment }
+                | _ -> refuse site Codes.CCS8414_CallableAggregateEvidence "The optional aggregate alias has no unique exact immutable path to its admitted source selection."
+            | _, [_; _], Some { Kind = (SemanticKind.VarRef _ | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _) } ->
+                refuse site Codes.CCS8414_CallableAggregateEvidence "The optional aggregate alias has unresolved source origins or no admitted slot."
+            | _ -> ()
     // Result rows retain their own application identity and its complete source
     // incidence. They share static callable formation, not runtime token identity.
     for work in groups do
@@ -516,6 +616,9 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
                         addValue {row with Alternatives=source.Alternatives;Selector=source.Selector;Bytes=source.Bytes;Alignment=source.Alignment}
                     | Error reason -> refuse site Codes.CCS8414_CallableAggregateEvidence reason
                 | _ -> refuse site Codes.CCS8414_CallableAggregateEvidence "The aggregate result has no admitted original constructor row."
+            | [_], [_; _], SemanticKind.Application _ when
+                Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.optionalEntrySignature graph.Nodes[site].Type |> Option.isSome ->
+                refuse site Codes.CCS8414_CallableAggregateEvidence "Returning an optional callback selected from multiple constructors is not admitted by the current source profile."
             | _ -> ()
     // Install transport only after the supplying Construct or Result survives.
     // Exact component facts are copied; no representation or selection is inferred.
@@ -557,7 +660,7 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
         let path = if row.Value.IsSome then row.FormationInputs |> List.rev |> List.tail |> List.rev else row.FormationInputs
         let formed = path |> List.tryLast |> Option.exists (fun construction ->
             values.TryFind construction |> Option.defaultValue [] |> List.exists (fun source ->
-                (source.Operation=CallableAggregateOperation.Construct || source.Operation=CallableAggregateOperation.Result) && source.Slot=row.Slot && source.Value=row.Value &&
+                (source.Operation=CallableAggregateOperation.Construct || source.Operation=CallableAggregateOperation.Result || source.Operation=CallableAggregateOperation.Select) && source.Slot=row.Slot && source.Value=row.Value &&
                 source.Alternatives=row.Alternatives && source.Selector=row.Selector &&
                 source.SelectedAlternative=row.SelectedAlternative && source.Tag=row.Tag &&
                 source.Bytes=row.Bytes && source.Alignment=row.Alignment))

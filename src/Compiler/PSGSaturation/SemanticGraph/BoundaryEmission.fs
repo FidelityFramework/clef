@@ -27,7 +27,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
         let stale reason = Error [failure (Some domainRow.Target) participants reason]
         let calls = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some call | _ -> None)
         let optionalClaims =
-            calls |> List.collect (fun call -> call.Arguments |> List.choose _.OptionalEntry |> List.map _.Obligation)
+            calls |> List.collect (fun call -> call.Arguments |> List.choose _.OptionalEntry |> List.collect BoundaryOptionalEntryChoice.leaves |> List.map _.Obligation)
         let optionalClaimRows =
             optionalClaims |> List.distinct |> List.map (fun id ->
                 let rows =

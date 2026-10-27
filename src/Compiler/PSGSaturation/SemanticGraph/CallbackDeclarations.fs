@@ -236,122 +236,152 @@ let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (g
                     then
                         let actual = actuals[invocation.Parameter]
                         let optional = optionalEntrySignature graph.Nodes[invocation.Formal].Type |> Option.isSome
-                        let selection =
-                            if not optional then None else
+                        let selections =
+                            if not optional then [None] else
                             match optionalValue actual with
                             | Some(construction, path) when optionalEntrySignature construction.Type |> Option.isSome ->
                                 let immutable = path |> List.forall (fun id ->
                                     match graph.Nodes[id].Kind with SemanticKind.Binding(_, true, _, _) -> false | _ -> true)
-                                let shape = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes.shape graph construction.Type
-                                match construction.Kind, shape with
-                                | (SemanticKind.UnionCase(name, ordinal, payload) | SemanticKind.DUConstruct(name, ordinal, payload, _)),
-                                  Some(Clef.Compiler.Baker.Ingredients.CallableAggregateTypes.Shape.Union(_, cases)) when immutable ->
-                                    match List.tryItem ordinal cases, payload with
-                                    | Some(expectedName, fields), None when expectedName = name && fields.IsEmpty ->
-                                        Some { Call=call.Id; Operand=actual; Construction=construction.Id; CaseOrdinal=ordinal
-                                               Payload=None; Transport=path; Invocation=invocation; Receiving=None }
-                                    | Some(expectedName, [_, payloadType]), Some payload when expectedName = name &&
-                                        Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[payload].Type = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType payloadType ->
-                                        Some { Call=call.Id; Operand=actual; Construction=construction.Id; CaseOrdinal=ordinal
-                                               Payload=Some payload; Transport=path; Invocation=invocation; Receiving=None }
-                                    | _ -> finding call DeclarationDefect.Invalid "The optional callback requires its exact nominal Option case ordinal and payload."; None
-                                | _ -> finding call DeclarationDefect.Invalid "The optional callback requires a literal nominal Option constructor and immutable aliases."; None
-                            | _ -> finding call DeclarationDefect.Invalid "The optional callback requires a literal nominal Option constructor and immutable aliases."; None
+                                let candidates =
+                                    match construction.Kind, construction.Children with
+                                    | SemanticKind.IfThenElse(condition, whenTrue, Some whenFalse), [c; t; f]
+                                        when c = condition && t = whenTrue && f = whenFalse && whenTrue <> whenFalse &&
+                                             (graph.Nodes.TryFind condition |> Option.exists (fun predicate ->
+                                                 match predicate.Kind, predicate.Children with
+                                                 | SemanticKind.VarRef(_, Some formal), [] when Types.tryGetNTUKind predicate.Type = Some NTUKind.NTUbool ->
+                                                     graph.Nodes.Values |> Seq.exists (fun owner ->
+                                                         match owner.Kind with
+                                                         | SemanticKind.Lambda(parameters, _, _, _, _) -> parameters |> List.exists (fun (_, _, id) -> id = formal)
+                                                         | _ -> false)
+                                                 | _ -> false)) ->
+                                        match aggregateOrigins.Value.Aggregates.TryFind actual with
+                                        | Some reading when reading.UnknownOrigins.IsEmpty && reading.AbsentOrigins.IsEmpty &&
+                                            reading.Alternatives.Length = 2 &&
+                                            (reading.Alternatives |> List.map _.Construction |> Set.ofList) = Set.ofList [whenTrue; whenFalse] &&
+                                            reading.Dependencies.TryFind construction.Id = Some [condition; whenTrue; whenFalse] ->
+                                            match graph.Nodes.TryFind whenTrue, graph.Nodes.TryFind whenFalse with
+                                            | Some left, Some right ->
+                                                [left, List.distinct (path @ [construction.Id; whenTrue])
+                                                 right, List.distinct (path @ [construction.Id; whenFalse])]
+                                            | _ -> []
+                                        | _ -> []
+                                    | _ -> [construction, path]
+                                let selected = candidates |> List.choose (fun (candidate, candidatePath) ->
+                                    let shape = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes.shape graph candidate.Type
+                                    match candidate.Kind, shape with
+                                    | (SemanticKind.UnionCase(name, ordinal, payload) | SemanticKind.DUConstruct(name, ordinal, payload, _)),
+                                      Some(Clef.Compiler.Baker.Ingredients.CallableAggregateTypes.Shape.Union(_, cases)) when immutable ->
+                                        match List.tryItem ordinal cases, payload with
+                                        | Some(expectedName, fields), None when expectedName = name && fields.IsEmpty ->
+                                            Some { Call=call.Id; Operand=actual; Construction=candidate.Id; CaseOrdinal=ordinal
+                                                   Payload=None; Transport=candidatePath; Invocation=invocation; Receiving=None }
+                                        | Some(expectedName, [_, payloadType]), Some payload when expectedName = name &&
+                                            Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[payload].Type = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType payloadType ->
+                                            Some { Call=call.Id; Operand=actual; Construction=candidate.Id; CaseOrdinal=ordinal
+                                                   Payload=Some payload; Transport=candidatePath; Invocation=invocation; Receiving=None }
+                                        | _ -> None
+                                    | _ -> None)
+                                if not candidates.IsEmpty && selected.Length = candidates.Length then selected |> List.map Some
+                                else
+                                    finding call DeclarationDefect.Invalid "The optional callback requires a literal nominal Option constructor and immutable aliases."
+                                    []
+                            | _ -> finding call DeclarationDefect.Invalid "The optional callback requires a literal nominal Option constructor and immutable aliases."; []
 
-                        let source =
-                            (if optional then selection |> Option.bind _.Payload else Some actual)
-                            |> Option.bind (valuePath graph)
-                            |> Option.bind (fun (node, path) ->
-                                match node.Kind with
-                                | SemanticKind.FieldGet _ ->
-                                    let origins = aggregateOrigins.Value
-                                    Clef.Compiler.Baker.Ingredients.CallableAggregateProjections.read origins node.Id
-                                    |> Option.bind (fun projection ->
-                                        match projection.Path, projection.Inputs, origins.Aggregates.TryFind projection.Aggregate with
-                                        | [CallableAggregatePathStep.RecordField _], [input], Some aggregate when
-                                            aggregate.AbsentOrigins.IsEmpty && aggregate.UnknownOrigins.IsEmpty &&
-                                            aggregate.Alternatives.Length = 1 &&
-                                            (aggregate.Alternatives.Head.Slots |> List.filter (fun slot -> slot.Path = projection.Path)
-                                             |> function [slot] -> not slot.Absent && slot.UnknownOrigins.IsEmpty | _ -> false) ->
-                                            valuePath graph input |> Option.map (fun (address, inputPath) ->
-                                                // The aggregate account retains dependency premises. Code
-                                                // transport retains the actual projection and stored value path.
-                                                address, (path @ inputPath @ [projection.Aggregate] @
-                                                          (aggregate.Alternatives |> List.map _.Construction) |> List.distinct))
-                                        | _ -> None)
-                                | _ -> Some(node, path))
-                        match source with
-                        | Some({
-                                   Kind = SemanticKind.Application(fn, [ argument ])
-                               } as address,
-                               path) ->
-                            match valueOf graph fn, target argument with
-                            | Some {
-                                       Kind = SemanticKind.Intrinsic {
-                                                                         Module = IntrinsicModule.FnPtr
-                                                                         Operation = "ofFunction"
-                                                                     }
-                                   },
-                              Some(entry, _, lambda) ->
-                                let immutable =
-                                    path
-                                    |> List.forall (fun id ->
-                                        match graph.Nodes.TryFind id |> Option.map _.Kind with
-                                        | Some(SemanticKind.Binding(_, true, _, _)) -> false
-                                        | _ -> true)
+                        for selection in selections do
+                            let source =
+                                (if optional then selection |> Option.bind _.Payload else Some actual)
+                                |> Option.bind (valuePath graph)
+                                |> Option.bind (fun (node, path) ->
+                                    match node.Kind with
+                                    | SemanticKind.FieldGet _ ->
+                                        let origins = aggregateOrigins.Value
+                                        Clef.Compiler.Baker.Ingredients.CallableAggregateProjections.read origins node.Id
+                                        |> Option.bind (fun projection ->
+                                            match projection.Path, projection.Inputs, origins.Aggregates.TryFind projection.Aggregate with
+                                            | [CallableAggregatePathStep.RecordField _], [input], Some aggregate when
+                                                aggregate.AbsentOrigins.IsEmpty && aggregate.UnknownOrigins.IsEmpty &&
+                                                aggregate.Alternatives.Length = 1 &&
+                                                (aggregate.Alternatives.Head.Slots |> List.filter (fun slot -> slot.Path = projection.Path)
+                                                 |> function [slot] -> not slot.Absent && slot.UnknownOrigins.IsEmpty | _ -> false) ->
+                                                valuePath graph input |> Option.map (fun (address, inputPath) ->
+                                                    // The aggregate account retains dependency premises. Code
+                                                    // transport retains the actual projection and stored value path.
+                                                    address, (path @ inputPath @ [projection.Aggregate] @
+                                                              (aggregate.Alternatives |> List.map _.Construction) |> List.distinct))
+                                            | _ -> None)
+                                    | _ -> Some(node, path))
+                            match source with
+                            | Some({
+                                       Kind = SemanticKind.Application(fn, [ argument ])
+                                   } as address,
+                                   path) ->
+                                match valueOf graph fn, target argument with
+                                | Some {
+                                           Kind = SemanticKind.Intrinsic {
+                                                                             Module = IntrinsicModule.FnPtr
+                                                                             Operation = "ofFunction"
+                                                                         }
+                                       },
+                                  Some(entry, _, lambda) ->
+                                    let immutable =
+                                        path
+                                        |> List.forall (fun id ->
+                                            match graph.Nodes.TryFind id |> Option.map _.Kind with
+                                            | Some(SemanticKind.Binding(_, true, _, _)) -> false
+                                            | _ -> true)
 
-                                match recordOf graph invocation.SignatureNode with
-                                | Some(signatureNode, signatureFields) when immutable ->
-                                    let signature, more =
-                                        readEntrySignatureForBinding graph entry signatureNode signatureFields
+                                    match recordOf graph invocation.SignatureNode with
+                                    | Some(signatureNode, signatureFields) when immutable ->
+                                        let signature, more =
+                                            readEntrySignatureForBinding graph entry signatureNode signatureFields
 
-                                    findings <- List.rev more @ findings
+                                        findings <- List.rev more @ findings
 
-                                    match signature with
-                                    | Some signature when
-                                        more.IsEmpty
-                                        && signature.Body.IsSome
-                                        && (signature.Parameters |> List.forall (snd >> Option.isSome))
-                                        ->
-                                        let evidence =
-                                            {
-                                                Call = call.Id
-                                                Operand = actual
-                                                Lambda = lambda.Id
-                                                Declaration = entry.Id
-                                                Address = address.Id
-                                                Transport = path
-                                                Invocation = invocation
-                                                Signature = signature
-                                            }
-                                        match selection with
-                                        | Some selected -> optionalReceiving <- { selected with Receiving=Some evidence; Transport=List.distinct(selected.Transport @ path) } :: optionalReceiving
-                                        | None -> receiving <- evidence :: receiving
+                                        match signature with
+                                        | Some signature when
+                                            more.IsEmpty
+                                            && signature.Body.IsSome
+                                            && (signature.Parameters |> List.forall (snd >> Option.isSome))
+                                            ->
+                                            let evidence =
+                                                {
+                                                    Call = call.Id
+                                                    Operand = actual
+                                                    Lambda = lambda.Id
+                                                    Declaration = entry.Id
+                                                    Address = address.Id
+                                                    Transport = path
+                                                    Invocation = invocation
+                                                    Signature = signature
+                                                }
+                                            match selection with
+                                            | Some selected -> optionalReceiving <- { selected with Receiving=Some evidence; Transport=List.distinct(selected.Transport @ path) } :: optionalReceiving
+                                            | None -> receiving <- evidence :: receiving
+                                        | _ ->
+                                            finding
+                                                address
+                                                DeclarationDefect.Invalid
+                                                "The receiving entry needs its complete declared scalar signature and source body."
                                     | _ ->
                                         finding
                                             address
                                             DeclarationDefect.Invalid
-                                            "The receiving entry needs its complete declared scalar signature and source body."
+                                            "The receiving entry signature or immutable source transport is absent."
                                 | _ ->
                                     finding
                                         address
                                         DeclarationDefect.Invalid
-                                        "The receiving entry signature or immutable source transport is absent."
+                                        "The receiving entry must be FnPtr.ofFunction of a closed named module function."
+                            | _ when optional ->
+                                match selection with
+                                | Some selected when selected.Payload.IsNone -> optionalReceiving <- selected :: optionalReceiving
+                                | Some _ -> finding call DeclarationDefect.Invalid "The optional Some callback requires its exact closed FnPtr.ofFunction payload."
+                                | None -> ()
                             | _ ->
                                 finding
-                                    address
+                                    call
                                     DeclarationDefect.Invalid
-                                    "The receiving entry must be FnPtr.ofFunction of a closed named module function."
-                        | _ when optional ->
-                            match selection with
-                            | Some selected when selected.Payload.IsNone -> optionalReceiving <- selected :: optionalReceiving
-                            | Some _ -> finding call DeclarationDefect.Invalid "The optional Some callback requires its exact closed FnPtr.ofFunction payload."
-                            | None -> ()
-                        | _ ->
-                            finding
-                                call
-                                DeclarationDefect.Invalid
-                                "The receiving entry needs current FnPtr.ofFunction transport or one immutable record projection with an exact source supplier."
+                                    "The receiving entry needs current FnPtr.ofFunction transport or one immutable record projection with an exact source supplier."
             | _ -> ()
         | _ -> ()
 

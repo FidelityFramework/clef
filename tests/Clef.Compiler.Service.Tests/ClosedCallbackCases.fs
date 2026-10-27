@@ -204,6 +204,14 @@ let main _ =
     let absenceNoErrors result =
         if Clef.Compiler.NativeService.hasErrors result then failwithf "Unexpected blocking errors: %A" result.Diagnostics
 
+    let directOptional = function
+        | BoundaryOptionalEntryChoice.Direct entry -> entry
+        | BoundaryOptionalEntryChoice.Conditional _ -> failwith "Expected a direct optional-entry account."
+
+    let publicDirectOptional = function
+        | Fidelity.PSG.BoundaryOptionalEntryChoice.Direct entry -> entry
+        | Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional _ -> failwith "Expected a direct published optional-entry account."
+
     let absenceDeclaration = "let absence: Expr<BAREWire.Descriptors.CallbackAbsenceContract> = <@ { BAREWire.Descriptors.CallbackAbsenceContract.Binding = \"ReceivingCallback.receive\"; Parameter = 0; Hypothesis = { BAREWire.Descriptors.ExternalExecutionHypothesis.Identity = \"absence-test\"; Version = \"v1\"; Source = \"absence-source\" } } @>"
 
     let absenceCheckPolicy policy present alias transform =
@@ -315,6 +323,221 @@ let main _ =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosedCallbacks")>]
 type ClosedCallbackTests() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Optional callback retains Boolean parameter branch selection at one receiver``(reversed: bool) =
+        let result =
+            ClosedCallbackCases.absenceCheckPolicy (Some "standard") true true (fun source ->
+                let source =
+                    ClosedCallbackCases.zeroSource "unit -> unit" "let callback (u: unit) : unit = u" source
+                let original =
+                    "[<EntryPoint>]\nlet main _ =\n    let selected: option<FnPtr<unit -> unit>> = Some (FnPtr.ofFunction callback)\n    receive selected\n    0"
+                let trueArm, falseArm = if reversed then "None", "Some (FnPtr.ofFunction callback)" else "Some (FnPtr.ofFunction callback)", "None"
+                let branched =
+                    $"let forward (present: bool) : unit =\n    let selected: option<FnPtr<unit -> unit>> =\n        if present then {trueArm} else {falseArm}\n    receive selected\n[<EntryPoint>]\nlet main _ =\n    forward true\n    forward false\n    0"
+                Assert.Contains(original, source)
+                source.Replace(original, branched))
+        let graph = result.Graph
+        let selection, predicate, trueArm, falseArm, formal =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.IfThenElse(predicate, present, Some absent) when node.IsReachable ->
+                    match graph.Nodes[predicate].Kind with
+                    | SemanticKind.VarRef("present", Some formal) -> Some(node.Id, predicate, present, absent, formal)
+                    | _ -> None
+                | _ -> None)
+            |> Assert.Single
+        let present, absent = if reversed then falseArm, trueArm else trueArm, falseArm
+        let case site =
+            match graph.Nodes[site].Kind with
+            | SemanticKind.UnionCase(name, ordinal, payload)
+            | SemanticKind.DUConstruct(name, ordinal, payload, _) -> name, ordinal, payload.IsSome
+            | _ -> failwith "The parameter-dependent branch lost its actual optional constructor"
+        Assert.Equal<string * int * bool>(("Some", 1, true), case present)
+        Assert.Equal<string * int * bool>(("None", 0, false), case absent)
+        printfn "OPTIONAL_BRANCH selection=%A predicate=%A formal=%A present=%A absent=%A diagnostics=%A"
+            selection predicate formal present absent result.Diagnostics
+        let construct site ordinal =
+            let account =
+                Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph site
+                |> Result.defaultWith failwith
+            let row =
+                account.Values
+                |> List.filter (fun row -> row.Occurrence = site && row.Operation = CallableAggregateOperation.Construct)
+                |> Assert.Single
+            Assert.Equal(site, row.Occurrence)
+            Assert.Equal(site, row.Aggregate)
+            let tag = row.Tag |> Option.defaultWith (fun () -> failwith "The arm lost its current constructor tag")
+            Assert.Equal(site, tag.Constructor)
+            Assert.Equal(ordinal, tag.CaseOrdinal)
+            let payload =
+                match graph.Nodes[site].Kind with
+                | SemanticKind.UnionCase(_, _, payload)
+                | SemanticKind.DUConstruct(_, _, payload, _) -> payload
+                | _ -> failwith "The arm is not its current source constructor"
+            Assert.Equal(payload, tag.Payload)
+            Assert.Equal(payload, row.Value)
+            row
+        let presentRow = construct present 1
+        let absentRow = construct absent 0
+        printfn "OPTIONAL_BRANCH_G1 some=(slot=%A bytes=%d alignment=%d) none=(slot=%A bytes=%d alignment=%d)"
+            presentRow.Slot presentRow.Bytes presentRow.Alignment absentRow.Slot absentRow.Bytes absentRow.Alignment
+        Assert.Equal(presentRow.Slot, absentRow.Slot)
+        Assert.Equal(presentRow.Bytes, absentRow.Bytes)
+        Assert.Equal(presentRow.Alignment, absentRow.Alignment)
+        Assert.Equal(0, presentRow.Bytes)
+        Assert.Equal(1, presentRow.Alignment)
+        let selectedRow =
+            graph.Codata.Value.CallableAggregateValues.TryFind selection
+            |> Option.defaultValue []
+            |> List.filter (fun row -> row.Operation = CallableAggregateOperation.Select)
+            |> Assert.Single
+        Assert.Equal(selection, selectedRow.Aggregate)
+        Assert.Equal(Some { Condition = predicate; WhenTrue = trueArm; WhenFalse = falseArm }, selectedRow.Selection)
+        Assert.True(selectedRow.Tag.IsNone)
+        let selectedAccount =
+            Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph selection
+            |> Result.defaultWith failwith
+        Assert.Contains(selectedAccount.Sources, fun source -> source.Node = formal)
+        Assert.Contains(selectedAccount.Sources, fun source ->
+            match source.Kind with
+            | SemanticKind.Lambda(parameters, _, _, _, _) -> parameters |> List.exists (fun (_, _, id) -> id = formal)
+            | _ -> false)
+        let transports =
+            graph.Codata.Value.CallableAggregateValues |> Map.toList |> List.collect snd
+            |> List.filter (fun row -> row.Operation = CallableAggregateOperation.Transport && row.Aggregate = selection)
+        Assert.NotEmpty transports
+        for row in transports do
+            Assert.Equal(Some selection, List.tryLast row.FormationInputs)
+            Assert.True(row.Selection.IsNone)
+        let receiving = Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read graph
+        let arms = receiving.OptionalReceiving |> List.filter (fun entry -> entry.Construction = present || entry.Construction = absent)
+        Assert.Equal<int list>([0; 1], arms |> List.map _.CaseOrdinal |> List.sort)
+        ClosedCallbackCases.absenceNoErrors result
+        let boundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph |> Result.defaultWith (failwithf "%A")
+        let call = boundary.Calls.Values |> Assert.Single
+        let operand = call.Arguments |> Assert.Single
+        match operand.OptionalEntry with
+        | Some (BoundaryOptionalEntryChoice.Conditional(actualSelection, whenTrue, whenFalse)) ->
+            Assert.Equal(selection, actualSelection)
+            Assert.Equal(trueArm, whenTrue.Construction)
+            Assert.Equal(falseArm, whenFalse.Construction)
+            Assert.NotEqual(whenTrue.Obligation, whenFalse.Obligation)
+            for leaf in [whenTrue; whenFalse] do
+                match graph.Nodes[leaf.Obligation].Kind with
+                | SemanticKind.Obligation { Body = ObligationBody.Pending _ } -> failwith "A conditional arm conversion remains Pending."
+                | SemanticKind.Obligation _ -> ()
+                | _ -> failwith "A conditional arm lost its conversion obligation."
+        | _ -> failwith "The receiver lost its exact conditional optional-entry account."
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (failwithf "%A")
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let publicBoundary = revision.Emission.Boundary
+        let publicCall = publicBoundary.Calls.Values |> Assert.Single
+        let publicOperand = publicCall.Arguments |> Assert.Single
+        let publicSelection, publicTrue, publicFalse =
+            match publicOperand.OptionalEntry with
+            | Some (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(selection, whenTrue, whenFalse)) -> selection, whenTrue, whenFalse
+            | _ -> failwith "Published receiver lost its conditional choice."
+        let callable = revision.Emission.Callable
+        let publicRow = callable.AggregateValues[publicSelection] |> List.filter (fun row -> row.Operation = Fidelity.PSG.CallableAggregateOperation.Select) |> Assert.Single
+        let presentLeaf, absentLeaf = if publicTrue.CaseOrdinal = 1 then publicTrue, publicFalse else publicFalse, publicTrue
+        let presentTag = callable.AggregateValues[presentLeaf.Construction] |> List.filter (fun row -> row.Slot = publicRow.Slot) |> Assert.Single |> _.Tag
+        let changedRow change =
+            let values = callable.AggregateValues.Add(publicSelection, [change publicRow])
+            {revision with Emission={revision.Emission with Callable={callable with AggregateValues=values}}}
+        let changedChoice choice =
+            let call = {publicCall with Arguments=[{publicOperand with OptionalEntry=Some choice}]}
+            {revision with Emission={revision.Emission with Boundary={publicBoundary with Calls=publicBoundary.Calls.Add(call.Site, call)}}}
+        let catches part changed =
+            Assert.Contains(Fidelity.PSG.Integrity.check changed, fun violation -> violation.Part = part)
+        let aggregatePart = "Emission.Callable.Aggregates.I5"
+        catches aggregatePart (changedRow (fun row -> {row with Tag=presentTag}))
+        catches aggregatePart (changedRow (fun row -> {row with Slot=presentLeaf.Construction}))
+        catches aggregatePart (changedRow (fun row -> {row with Selection=row.Selection |> Option.map (fun held -> {held with WhenFalse=held.WhenTrue})}))
+        catches aggregatePart (changedRow (fun row -> {row with Aggregate=presentLeaf.Construction}))
+        let absentRows = callable.AggregateValues[absentLeaf.Construction]
+        let changedAbsent = absentRows |> List.map (fun row -> if row.Slot=publicRow.Slot then {row with Bytes=row.Bytes + 1} else row)
+        let unequalPlacement = {revision with Emission={revision.Emission with Callable={callable with AggregateValues=callable.AggregateValues.Add(absentLeaf.Construction, changedAbsent)}}}
+        Assert.Contains(Fidelity.PSG.Integrity.check unequalPlacement, fun violation -> violation.Part = aggregatePart && violation.Node = Some publicSelection)
+        let boundaryPart = "Emission.Boundary.Calls.OptionalEntry"
+        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(publicSelection, publicFalse, publicTrue)))
+        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(presentLeaf.Construction, publicTrue, publicFalse)))
+        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(publicSelection, {publicTrue with Transport=publicTrue.Transport.Remove publicSelection}, publicFalse)))
+        let withoutNone = {revision with CurrentClaims=revision.CurrentClaims.Remove absentLeaf.Obligation}
+        catches (boundaryPart + ".Obligation") withoutNone
+        let account = callable.AggregateDependencies[publicSelection]
+        let condition = publicRow.Selection.Value.Condition
+        let dependencies = callable.AggregateDependencies.Add(publicSelection, {account with Sources=account.Sources |> List.filter (fun source -> source.Node <> condition)})
+        let withoutCondition = {revision with Emission={revision.Emission with Callable={callable with AggregateDependencies=dependencies}}}
+        catches "Emission.Callable.Aggregates.I6" withoutCondition
+        let conversions =
+            revision.CurrentClaims.Values
+            |> Seq.filter (fun info -> info.Kind.StartsWith("foreign-optional-entry-conversion-"))
+            |> Seq.toList
+        Assert.NotEmpty conversions
+        Assert.DoesNotContain(conversions, fun info ->
+            match info.Body with Fidelity.PSG.ObligationBody.Pending _ -> true | _ -> false)
+
+    [<Fact>]
+    member _.``Optional callback refuses a side effecting branch condition outside the formal profile``() =
+        let result =
+            ClosedCallbackCases.absenceCheckPolicy (Some "standard") true true (fun source ->
+                let source = ClosedCallbackCases.zeroSource "unit -> unit" "let callback (u: unit) : unit = u" source
+                let original =
+                    "[<EntryPoint>]\nlet main _ =\n    let selected: option<FnPtr<unit -> unit>> = Some (FnPtr.ofFunction callback)\n    receive selected\n    0"
+                let branched =
+                    "let forward () : unit =\n    let mutable observed = 0\n    let gate () : bool =\n        observed <- observed + 1\n        true\n    let selected: option<FnPtr<unit -> unit>> = if gate () then Some (FnPtr.ofFunction callback) else None\n    receive selected\n[<EntryPoint>]\nlet main _ =\n    forward ()\n    0"
+                Assert.Contains(original, source)
+                source.Replace(original, branched))
+        Assert.Contains(result.Diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8414" && diagnostic.Message.Contains("Boolean formal"))
+
+    [<Fact>]
+    member _.``Optional callback refuses a returned conditional selection``() =
+        let result =
+            ClosedCallbackCases.absenceCheckPolicy (Some "standard") true true (fun source ->
+                let source = ClosedCallbackCases.zeroSource "unit -> unit" "let callback (u: unit) : unit = u" source
+                let original =
+                    "[<EntryPoint>]\nlet main _ =\n    let selected: option<FnPtr<unit -> unit>> = Some (FnPtr.ofFunction callback)\n    receive selected\n    0"
+                let returned =
+                    "let choose (present: bool) : option<FnPtr<unit -> unit>> =\n    if present then Some (FnPtr.ofFunction callback) else None\n[<EntryPoint>]\nlet main _ =\n    let selected: option<FnPtr<unit -> unit>> = choose true\n    receive selected\n    0"
+                Assert.Contains(original, source)
+                source.Replace(original, returned))
+        Assert.Contains(result.Diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8414" && diagnostic.Message = "Returning an optional callback selected from multiple constructors is not admitted by the current source profile.")
+
+    [<Theory>]
+    [<InlineData("nested")>]
+    [<InlineData("two-some")>]
+    [<InlineData("wrapped")>]
+    member _.``Optional callback refuses unsupported conditional shapes``(shape: string) =
+        let result =
+            ClosedCallbackCases.absenceCheckPolicy (Some "standard") true true (fun source ->
+                let source = ClosedCallbackCases.zeroSource "unit -> unit" "let callback (u: unit) : unit = u" source
+                let original =
+                    "[<EntryPoint>]\nlet main _ =\n    let selected: option<FnPtr<unit -> unit>> = Some (FnPtr.ofFunction callback)\n    receive selected\n    0"
+                let branch =
+                    match shape with
+                    | "nested" -> "if present then (if present then Some (FnPtr.ofFunction callback) else None) else None"
+                    | "two-some" -> "if present then Some (FnPtr.ofFunction callback) else Some (FnPtr.ofFunction callback)"
+                    | "wrapped" -> "if present then (Some (FnPtr.ofFunction callback) : option<FnPtr<unit -> unit>>) else None"
+                    | _ -> failwith "Unexpected shape"
+                let replacement =
+                    $"let forward (present: bool) : unit =\n    let selected: option<FnPtr<unit -> unit>> = {branch}\n    receive selected\n[<EntryPoint>]\nlet main _ =\n    forward true\n    forward false\n    0"
+                Assert.Contains(original, source)
+                source.Replace(original, replacement))
+        let code, expected =
+            match shape with
+            | "two-some" -> "CCS8411", "The callable component has multiple source formations and no authored finite selector or adaptation."
+            | "nested" -> "CCS8414", "An optional callback selection with more than two constructor origins is outside the current source profile."
+            | "wrapped" -> "CCS8414", "The optional selection lacks its exact condition and direct constructor incidences."
+            | _ -> failwith "Unexpected shape"
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = code && diagnostic.Message = expected)
+
     [<Theory>]
     [<InlineData(1)>]
     [<InlineData(2)>]
@@ -663,7 +886,7 @@ type ClosedCallbackTests() =
         for id,info,site,ordinal,actual,construction,sourceCase in claims do
             Assert.Equal(call.Site,site)
             Assert.Equal($"foreign-optional-entry-conversion-{ordinal}",info.Kind)
-            let selected=call.Arguments[ordinal].OptionalEntry |> Option.get
+            let selected=call.Arguments[ordinal].OptionalEntry |> Option.get |> ClosedCallbackCases.directOptional
             Assert.Equal(id,selected.Obligation)
             Assert.Equal(actual,call.Arguments[ordinal].Actual)
             Assert.Equal(construction,selected.Construction)
@@ -743,7 +966,7 @@ type ClosedCallbackTests() =
             Assert.Equal(model.Parameter,invocation.Contract.Parameter)
             Assert.Equal(operand.Formal,invocation.Formal)
             Assert.Equal(BoundaryCallbackExtent.DuringCall,invocation.Extent)
-            let selected=operand.OptionalEntry |> Option.get
+            let selected=operand.OptionalEntry |> Option.get |> ClosedCallbackCases.directOptional
             Assert.Equal(id,selected.Obligation)
             Assert.Equal(construction,selected.Construction)
             Assert.Equal(Some formation,selected.Formation)
@@ -798,7 +1021,7 @@ type ClosedCallbackTests() =
         let publicBoundary=revision.Emission.Boundary
         let publicCall=publicBoundary.Calls.Values |> Assert.Single
         let publicEntry=publicBoundary.ClosedEntries.Values |> Assert.Single
-        let second=publicCall.Arguments[1].OptionalEntry |> Option.get
+        let second=publicCall.Arguments[1].OptionalEntry |> Option.get |> ClosedCallbackCases.publicDirectOptional
         let secondClaim=revision.CurrentClaims[second.Obligation]
         let publicModel=match secondClaim.Body with Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion model->model | _->failwith "Missing second published Some plan"
         let receiving=publicBoundary.CallbackInvocations[publicModel.Invocation]
@@ -860,7 +1083,7 @@ type ClosedCallbackTests() =
             let facts=graph.Codata.Value
             let account=facts.CallableAggregateDependencies[model.Actual]
             Assert.Contains(account.Sources,fun source->source.Node=model.Construction)
-            let selected=calls |> List.find(fun call->call.Site=model.Call) |> _.Arguments |> List.item model.Parameter |> _.OptionalEntry |> Option.get
+            let selected=calls |> List.find(fun call->call.Site=model.Call) |> _.Arguments |> List.item model.Parameter |> _.OptionalEntry |> Option.get |> ClosedCallbackCases.directOptional
             Assert.Contains(model.Payload,selected.Transport)
             Assert.Contains(model.Formation,selected.Transport)
             let source=List.head account.Sources
@@ -1014,7 +1237,7 @@ type ClosedCallbackTests() =
             | Result.Error failures -> failwithf "Optional source boundary refused: %A" failures
         let call = boundary.Calls[selection.Call]
         let operand = call.Arguments |> Assert.Single
-        let account = operand.OptionalEntry |> Option.get
+        let account = operand.OptionalEntry |> Option.get |> ClosedCallbackCases.directOptional
         let expectedCase = if present then 1 else 0
         Assert.Equal(expectedCase, account.CaseOrdinal)
         match graph.Nodes[account.Construction].Kind with
@@ -1342,7 +1565,7 @@ type ClosedCallbackTests() =
         for citizen, info, model in claims do
             Assert.True(Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph (Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph) (citizen,info) |> Result.isOk)
             let call = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph |> List.find (fun call -> call.Site=model.Call)
-            Assert.Equal(Some citizen, (List.item model.Parameter call.Arguments).OptionalEntry |> Option.map _.Obligation)
+            Assert.Equal(Some citizen, (List.item model.Parameter call.Arguments).OptionalEntry |> Option.map (ClosedCallbackCases.directOptional >> _.Obligation))
 
     [<Theory>]
     [<InlineData(false)>]
@@ -1401,7 +1624,7 @@ type ClosedCallbackTests() =
         let facts = graph.Codata.Value
         let changed = {graph with Codata=lazy {facts with CallableAggregateDependencies=facts.CallableAggregateDependencies.Remove selection.Operand}}
         let call = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph |> List.find (fun call -> call.Site=selection.Call)
-        let claim = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> _.Obligation
+        let claim = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> ClosedCallbackCases.directOptional |> _.Obligation
         match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed with
         | Result.Error failures ->
             let failure = failures |> Assert.Single
@@ -1431,7 +1654,7 @@ type ClosedCallbackTests() =
             | other -> failwithf "Source payload activation survived the changed Option case: %A" other
             for _, _, formal in formals do Assert.Equal(present, reading.NumericBoundaries.ContainsKey formal)
             let call = boundary.Calls[selection.Call]
-            let selected = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne
+            let selected = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> ClosedCallbackCases.directOptional
             Assert.Equal((if present then 1 else 0), selected.CaseOrdinal)
             let pending = graph.Nodes.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation claim when claim.Kind.StartsWith("foreign-optional-entry-conversion-") -> Some(node.Id, claim) | _ -> None) |> Assert.Single
             let pendingId, claim = pending
@@ -1532,7 +1755,7 @@ type ClosedCallbackTests() =
                 | _ -> None) |> Assert.Single
         let calls = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.boundaryCalls graph
         Assert.True((Clef.Compiler.Baker.Recipes.BoundaryRecipes.optionalEntryClaimRows graph calls (id, info)) |> Result.isOk)
-        let call = calls |> List.find (fun call -> call.Arguments |> List.exists (fun operand -> operand.OptionalEntry |> Option.exists (fun entry -> entry.Obligation=id)))
+        let call = calls |> List.find (fun call -> call.Arguments |> List.exists (fun operand -> operand.OptionalEntry |> Option.exists (fun entry -> (ClosedCallbackCases.directOptional entry).Obligation=id)))
         let operand = call.Arguments |> List.find (fun operand -> operand.OptionalEntry.IsSome)
         let facts = graph.Codata.Value
         let account = facts.CallableAggregateDependencies[operand.Actual]
@@ -1622,10 +1845,11 @@ type ClosedCallbackTests() =
         let call = boundary.Calls[selection.Call]
         let accounts = graph.Codata.Value.CallableAggregateDependencies
         let account = accounts[selection.Operand]
-        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport accounts call 0 with
+        let selected = call.Arguments[0].OptionalEntry |> Option.get |> ClosedCallbackCases.directOptional
+        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport accounts call 0 selected with
         | Result.Error reason -> failwith reason
         | Ok support ->
-            let obligation = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> _.Obligation
+            let obligation = call.Arguments |> List.choose _.OptionalEntry |> List.exactlyOne |> ClosedCallbackCases.directOptional |> _.Obligation
             let edge = graph.Edges |> List.filter (fun edge -> edge.Role=EdgeRole.Constrains && edge.Target=obligation) |> Assert.Single
             Assert.True(Set.isSubset support (Set.ofList edge.Sources))
             Assert.NotEmpty account.Slots
@@ -1658,7 +1882,8 @@ type ClosedCallbackTests() =
                 if changeRole then Some {participant with Role=ParticipantRole.AggregateSource} else None
             else Some participant)
         let changed = accounts.Add(selection.Operand, {account with Participants=participants})
-        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport changed call 0 with
+        let selected = call.Arguments[0].OptionalEntry |> Option.get |> ClosedCallbackCases.directOptional
+        match Clef.Compiler.Baker.Ingredients.Boundaries.optionalEntrySourceSupport changed call 0 selected with
         | Result.Error reason -> Assert.Equal("An optional-entry source account lacks its exact aggregate-slot participant role.", reason)
         | Ok _ -> failwith "An untyped aggregate relation identity entered the semantic source constraint domain"
 

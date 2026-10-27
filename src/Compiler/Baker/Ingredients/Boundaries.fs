@@ -239,8 +239,8 @@ let coverage enrichId graph call ordinal operand input destination =
 
 /// A requirement is a current ledger citizen, not a native adapter or a proof.
 /// Pending has no solver term: its source participants still constrain renewal.
-let requirement enrichId (subject: SemanticNode) role statement reason participants =
-    match sourceClaimId role subject with
+let requirementWithIdentityRole enrichId (subject: SemanticNode) identityRole role statement reason participants =
+    match sourceClaimId identityRole subject with
     | None -> Error "A boundary application requirement lacks its source-owned claim site identity."
     | Some identity ->
         let node =
@@ -254,14 +254,16 @@ let requirement enrichId (subject: SemanticNode) role statement reason participa
                 [ constrains sources node
                   row EdgeRole.EnrichedWith 0 sources node.Id ] }
 
+let requirement enrichId subject role statement reason participants =
+    requirementWithIdentityRole enrichId subject role role statement reason participants
+
 
 /// The aggregate owner separates semantic source incidences from typed relation
 /// participants. Calls constrain the former; the complete typed account stays
 /// with its owner and is never flattened into semantic source identities.
-let optionalEntrySourceSupport (accounts: Map<NodeId, CallableAggregateDependencyAccount>) (call: BoundaryCall) ordinal =
+let optionalEntrySourceSupport (accounts: Map<NodeId, CallableAggregateDependencyAccount>) (call: BoundaryCall) ordinal (selected: BoundaryOptionalEntry) =
     match List.tryItem ordinal call.Arguments with
-    | Some operand when operand.OptionalEntry.IsSome ->
-        let selected = operand.OptionalEntry.Value
+    | Some operand when operand.OptionalEntry |> Option.exists (BoundaryOptionalEntryChoice.leaves >> List.contains selected) ->
         match accounts.TryFind operand.Actual with
         | Some account when account.Occurrence=operand.Actual && not account.Slots.IsEmpty ->
             if account.Slots |> List.forall(fun slot -> account.Participants |> List.exists(fun participant -> participant.Node=slot.Identity && participant.Role=ParticipantRole.AggregateSlot)) then
