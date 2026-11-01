@@ -8,7 +8,7 @@
 
 This is the recommended direction, not an invitation to choose among all surveyed systems later. NFT belongs at the center because restoration, directed computation, value identity and one-shot completion cannot be recovered from ordinary carrier types after inference has finished. Its own elaboration rules are the immediate work. A general adapter/subtyping correspondence is a longer-term opportunity.
 
-F# remains a valuable syntax, tooling and inference starting point. Compatibility with every F# restriction is not the goal. Clef's contract must cover measured computation, native resources, deferred precision, state transitions and proof-preserving realization across CPU, FPGA, accelerators and JavaScript. JavaScript is a demanding early beneficiary, not the sole destination.
+F# remains a valuable syntax, tooling and inference starting point. Compatibility with every F# restriction is not the goal. Clef's contract must cover measured computation, native resources, deferred precision, state transitions and proof-preserving realization across CPU, FPGA, NPU, MCU, other accelerators and even JavaScript targeting through JSIR.
 
 **Richer Tier 1 proof expression is a primary delivery criterion.** The change must make useful native relationships expressible and checkable through ordinary compilation, then retain their derivations for later use. Each experiment compares standard F# tooling, the relevant mechanism in `write-you-an-inference-in-fsharp`, and the proposed Clef contract. The strategy chapter shows the H1.1 language change in code and identifies the extra field, scope and resource statements Clef must establish. Existing F# measure and member-constraint capabilities receive credit in that comparison.
 
