@@ -14,7 +14,7 @@ This chapter makes the strategy's evidence reproducible without requiring the co
 | Farscape | `053206a98240190b43231f901f3e7f3747c4ec16` | TypeMapper, CppParser, BoundaryConformance and README; exact spans/status limits in chapter 2 |
 | Bozzetto | `9e32da285c5a0f73312ea8d0f27deebbf4cdf482` | Indexed historical FFI compendium and current handoff-format owner; local migration changes read separately through diff |
 | write-you-an-inference-in-fsharp | `4a6f852f36115ad45ac9640753a0bd38f551300c` | README, HM implementations, row rewrite/extension and rank-N documentation; chapter 1 |
-| arxiv-papers | `d2bab3376032929dc7a4eca7e0bc807247a88c03` | DTS+DMM, PHG, DBC, NFT and qualified historical notes; chapters 1, 3 and 5 |
+| arxiv-papers | `d2bab3376032929dc7a4eca7e0bc807247a88c03` | DTS+DMM, PHG, DBC, NFT, the coexponential manuscript and named session-inference research; chapters 1, 4 and 5 |
 | beancounter.wiki | `e8182de19b8f12797c63f23034c658f01e03abf5` | `22_javascript_substrate.md:1–149`; selected amount/forecasting contracts |
 | beancounter | `c5f4d2a4a22180830aa63d4f3b6963d210dc6961` | Chapter-linked display oracle and source instructions |
 | Fickl | `2a25774b5926800ea718e49e785684c69b1f3c13` | Exact replacement, Map/Set, record equality and BigInt owners; chapter 2 |
@@ -125,9 +125,21 @@ This follow-up reuses the accepted source packets at the snapshot above. It adds
 
 The subsequent H1.3 examples received separate bounded checks with the same SDK and F# Interactive versions. Let-bound polymorphism and the generic-method callback encoding both passed without warnings, including measured uses of the encoded callback. An ordinary callback parameter used at `int` and `bool` failed with the expected FS0001 diagnostic. Exact fixtures, commands, outputs and hashes are in `artifacts/inference-research-2026-11-01/h13-receipt.md`. The direct higher-rank and polymorphic-field contracts, scope-escape example and invalid shared-cell generalization are explicitly schematic Clef proposals. They were not executed as Clef programs or counted as E05 acceptance.
 
+### Coexponential and implementation follow-up
+
+The later follow-up read `coexponential-exploration.md`, the named `research/coexponential-inference` notes, the ADM and NFT quantum passages, and a quantum research note at the arxiv-papers revision above. It extends the experiment matrix to E01–E52 and records the finite service-inference, AI and quantum proposals, scope and residuals in chapters 4–5. This is a source and design review. It does not turn a written finite-fragment result into an implementation or runtime acceptance receipt.
+
+New indexed implementation checks used fresh/latest generation **72**, with matching snapshot/current ID `be61f1935996a4f043c88e67157135832a3b16ed5787a3ad1e26c61f93b6fb57`. Discovery followed schema → pinned find → pgq → sources. The inspected Clef revision was `e3fbdc71a8d86ad5097f2db767f325d0fafc8b8a`. Exact source paths and spans for union-find, demand, continuations, obligations and boundary premises are in H1.9. The PSG revision at `2a0025ad2176df86acc829121dbfa10fad071548` and Farscape at the revision above supply the other scoped implementation anchors. These code observations do not establish the proposed row/session inference or complete differential reuse.
+
+Fai's [README at the inspected revision](https://github.com/Krzysztof-Cieslak/fai/blob/3e03dd1ce3222dab895a71f4556af5fbff1109a1/README.md) describes open records, effect rows and a demand-driven Salsa engine. It is a comparison source, not a test execution or a claim about every implementation detail. Rust's own query documentation likewise describes on-demand query evaluation. The distinction in this guide is the chosen semantic and evidence unit, with update scheduling and performance left to implementation evidence.
+
+Direct-read exceptions for this follow-up were bounded named files in the outside-index arxiv-papers repository, current uncommitted document diffs and bounded confirmation of retrieval-located document lines. No historical Fable or Sage review was rerun or rebound to the new examples. The coexponential, AI and quantum code sketches and E34–E52 are proposed cases, not executed compiler gates.
+
+One new independent native Claude Code review used `claude-fable-5-1` in session `fe21a50d-088e-4c33-9601-5bf531ad32b0`. Its first submission could not locate the frozen diff because the brief omitted the scratch directory; it did not review or accept that delta. A resumed review received explicit paths, the current owner-edited headings and the bound `coex-review2-input.diff` and `coex-review2-input.sha256`. It accepted the precommit source review with one citation-span follow-up. The final wording cites the retained `Obligations.fs:1–37` excerpt and describes the contract and enrichment combinator actually visible there. The root agent verified the input hashes, the historical growth count and the named F# fixture and arxiv validation-plan evidence. The citation correction, this review record and the explicit closed-circuit wording follow the frozen review input. They do not retroactively change it.
+
 ## Growth and ownership
 
-The source-checkout deliverable consists of eight new files in `docs/ntu-inference-review/`:
+At the original research checkpoint, the source-checkout deliverable consisted of eight new files in `docs/ntu-inference-review/`. The same eight files are present in the later tracked Clef revision `e3fbdc71a8d86ad5097f2db767f325d0fafc8b8a`:
 
 | File | Owner and one-line reason |
 |---|---|
@@ -136,13 +148,13 @@ The source-checkout deliverable consists of eight new files in `docs/ntu-inferen
 | 02-js-numerics-and-interop.md | Inquiry: preserve the concrete JS/Fickl/numeric remit and acceptance obligations. |
 | 03-subtyping-nft-and-transpose.md | Inquiry: retain the competing structural/adapter accounts and source-porting obligations. |
 | 04-horizons-and-experiments.md | Inquiry: own advance/defer/stop recommendations and the shared discriminator matrix. |
-| 05-manuscript-implications.md | Inquiry: review DTS+DMM, PHG and NFT and bind proposed changes to significance thresholds. |
+| 05-manuscript-implications.md | Inquiry: review DTS+DMM, PHG, NFT and coexponential implications and bind proposed changes to significance thresholds. |
 | 06-evidence-and-review.md | Inquiry: retain provenance, adjudication, growth and limitations. |
 | 07-explaining-clefs-departure.md | Inquiry: the explicitly requested final positioning document for F#, Haskell, Scala, Rust and native-language readers. |
 
-These files create no new compiler or language authority. Generated working evidence remained under the primary checkout's ignored `artifacts/` location. No branch/worktree, implementation owner, commit or push was created.
+These files create no new compiler or language authority. Generated working evidence remained under the primary checkout's ignored `artifacts/` location. The original research did not create a branch/worktree, implementation owner, commit or push.
 
-At the source baseline `f8f0aad1dba57fe0dfeef8accd6672a0366fa686`, `git diff --shortstat <base>..HEAD` is empty because no commit was made. The pending growth is the eight explicitly listed documents, reported separately in the final handoff. Ignored research evidence is not presented as tracked source growth.
+At the original handoff, `f8f0aad1dba57fe0dfeef8accd6672a0366fa686..HEAD` was empty. The later tracked revision `e3fbdc71a8d86ad5097f2db767f325d0fafc8b8a` contains those eight files: `git diff --shortstat f8f0aad1dba57fe0dfeef8accd6672a0366fa686..e3fbdc71a8d86ad5097f2db767f325d0fafc8b8a` reports eight files and 1,480 insertions. Subsequent uncommitted follow-up edits are reported separately in their handoffs. Ignored research evidence is not presented as tracked source growth.
 
 The requested historical `Bozzetto/docs/FFI_Increment_Handoff_Template.md` was absent from exact indexed discovery. The current format is owned by `Bozzetto/docs/development.md:158–177` at the revision above and remained unchanged in its observed local diff. The research handoff follows that format while marking gates/mutations unrun or inapplicable. It does not fabricate a pushed head or acceptance receipt.
 
@@ -155,6 +167,9 @@ The requested historical `Bozzetto/docs/FFI_Increment_Handoff_Template.md` was a
 | R-PRINCIPALITY | Separate valid instance checking from principal/complete inference claims. |
 | R-JS | Establish boundary observations, collection/numeric contracts and faithful realization. |
 | R-INCREMENTAL | Demonstrate dependency-complete evidence reuse against full recomputation. |
+| R-SESSION | Specify and implement the finite reconstruction/checking fragment, safe partial composition, and source-to-runtime correspondence. Prove any claimed completeness, principality or recursive validity separately. |
+| R-AI | Bind support, sample and coupling identities, numerical error and update premises across distributed training. Establish the relevant quality, convergence and performance claims with appropriate proof and empirical evidence. |
+| R-QUANTUM | Specify the classical circuit/live-resource interpretation, checked gate and measurement laws, and each simulator or physical-target correspondence. |
 | R-NFT | Establish the finite elaboration/equality/demand fragment. Separately define and prove, or refute, the broader subtype/adapter correspondence. |
 | R-NUMERIC | Retain contextual range, exactness/error, intermediate and selected-platform premises through generalization and realization. |
 | R-STATE | Establish the declared state/output and recovery correspondence across the claimed targets. |

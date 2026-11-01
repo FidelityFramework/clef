@@ -1,12 +1,26 @@
-# Clef: carrying the ML tradition into the native type universe
+# Clef: a concurrent language with its own native type universe
 
 This is the recommended public positioning for the selected architecture. It addresses F#, Haskell and Scala programmers, with sections for Rust, C and C++ developers. Present-tense language about Clef's contract describes its design. Implementation coverage is governed by the [delivery gates](04-horizons-and-experiments.md).
 
 ## The short explanation
 
-Clef carries the ML inference tradition into a native type universe that describes more of what a program means: a quantity's units, a value's identity, who may use a resource, and the precision a calculation must preserve. Familiar generic functions remain useful. Their inferred contracts also record what must be established before a resource can be consumed or a calculation can run faithfully on a particular target.
+Clef is a concurrent programming language with ML-family syntax and its own native type universe. Its inferred contracts describe more of what a program means: a quantity's units, a value's identity, who may use a resource, how services communicate, and the precision a calculation must preserve. Familiar generic functions remain useful. Their contracts also record what must be established before a resource can be consumed or a calculation can run faithfully on a particular target.
 
 The compiler should establish those relationships while it has the relevant information, preserve them as it transforms the program, and connect its guarantees to the code it emits. That is the direction from convenient type inference toward proof-bearing compilation—and ultimately toward a compiler whose own transformations are proved.
+
+Clef is lazy by default: a binding can name shared deferred work, and demand determines when that work occurs. This differs from the eager defaults in F# and many other ML-family languages, while offering Haskell programmers a familiar starting point. It is a choice about execution, not another name for type inference. It changes what the compiler must know about effects, captures, observation and resource use when it infers and generalizes a program.
+
+## Weaving data flow and control flow
+
+A concurrent service can receive a request, own state, call other services, suspend and later return a reply. The data are the request, state, intermediate values and result. The control flow is the particular computation that waits, resumes and completes. Clef's compiler needs both, together with the ownership and identity that connect them.
+
+The coexponential service account describes a service and its client pool. A delimited continuation retains one waiting invocation's return point, live values and resources. In the PSG, weaving the braid means relating these control and data dependencies as independent work is submitted, suspended and joined. A proposed interaction-net interpretation explores how local rewrites can be interleaved with that continuation control. It needs its own preservation and target correspondence. A hyperedge retains the participants of a relationship together, so a change can be traced to the affected judgments and evidence. This is the foundation for Clef's differential compilation, subject to complete dependency recording and valid rechecking. The structure can also guide native realization on a CPU, accelerator, FPGA or JavaScript pathway when that pathway satisfies the corresponding contract.
+
+This is why Clef's reach extends well beyond changing an F# type checker. A function's carrier types may be unchanged while its request identity, wait dependencies or completion authority change. The proposed native inference must preserve those relationships through compilation. The current finite service construction and its conditional results provide a starting point. A general reconstruction algorithm, target correspondence and a mathematical interpretation of the braid remain work to establish. [Service strategy and experiments](04-horizons-and-experiments.md)
+
+The compiler project has already started toward this architecture: native unification, bounded first-demand analysis, continuation ingredients and proof-obligation hyperedges exist alongside Farscape's ABI evidence. The roadmap identifies the next source judgments and connects them to those owners. It does not treat the full inference and proof-reuse path as finished.
+
+The same foundation reaches into learned and quantum computation. A distributed AI update can depend on two observations belonging to the same sampled execution even when their individual types and distributions look correct. A quantum circuit description can be shared as classical data, but executing it requires separately tracked live resources, gate laws and measurement effects. Retaining these distinctions makes useful guarantees expressible across targets. It does not make model convergence, arbitrary unitarity or physical fidelity automatic.
 
 ## A continuation of the ML tradition
 
@@ -18,7 +32,7 @@ For example, a sensor contract that allows values from 1 through 4095 can justif
 
 This is a positive case for a tradition with substantial engineering depth: express the semantics, retain the conditions, automate the supported work, and make the result checkable. We should describe Clef through those capabilities and the lineage that makes them possible.
 
-## What will feel familiar—and what changes
+## Familiarity and changes
 
 **For F# programmers,** functions, algebraic data, records, measures and local inference remain the starting point. Kennedy's dimensional inference is especially important: it demonstrates that useful mathematical relationships can be inferred with very little ceremony. Clef extends that ambition into a native semantic model.
 
@@ -34,7 +48,7 @@ These languages already extend simple Hindley–Milner inference in different wa
 
 **For C and C++ programmers,** the invitation is control over native behavior with stronger retained contracts. Layout, ABI, ownership, intermediate capacity and foreign effects remain concrete engineering concerns. Our Farscape binding generator already separates source numeric spelling from foreign ABI representation evidence. Clef should use that evidence to justify marshaling and native lowering, while keeping the foreign function's behavioral assumptions explicit. A boundary proof is useful precisely because its scope is clear.
 
-## For Rust developers: fearless concurrency and parallelism, with no unsafe
+## The Rust comparisons
 
 Rust has shown the practical value of using ownership and types to make concurrent and parallel code safer to write. Clef extends that ambition through three commitments in its language contract: **fearless concurrency, fearless parallelism, and no `unsafe` anywhere in the language.** The last applies to library code as well as applications. Low-level access needs a supported contract and evidence. There is no source form that waives a missing obligation. [Rust's concurrency model](https://doc.rust-lang.org/book/ch16-00-concurrency.html), [Rust's explicit unsafe boundary](https://doc.rust-lang.org/book/ch20-01-unsafe-rust.html)
 
@@ -78,7 +92,7 @@ That does not turn every program property into a type check. A field relationshi
 
 The [worked F# comparison and experiment criteria](04-horizons-and-experiments.md) make this departure inspectable. They connect standard F# inference, the row and rank-N mechanisms in `write-you-an-inference-in-fsharp`, and the proposed native contract. The same roadmap uses Xantham's binding work, Partas.Solid's transformation boundaries and Ranvier's dependency model to identify practical tests of the design.
 
-## JavaScript is an opportunity for richer numerics
+## JavaScript's richer numerics opportunity
 
 Separating source meaning from a host carrier changes what JavaScript lowering can deliver. An exact integer computation may use ordinary numbers where every intermediate satisfies the required range. A wider exact or scaled computation may need an integer-backed construction. A reduction may require an exact accumulator and deterministic final rounding. A floating computation may require a justified error bound or residual construction.
 
@@ -88,7 +102,7 @@ This connects directly to Beancounter's integrity rules: amounts, currencies, ra
 
 FPGA makes the same separation visible in registers and circuits. A state field remains one field while its proven range determines a physical width. Mealy/Moore dependencies describe how outputs relate to state and input across software as well as hardware. Native, FPGA and JavaScript realizations differ, but that is a reason to preserve the source contract more carefully.
 
-## Rocq/Coq and the proof ecosystem have concrete jobs
+## Rocq/Coq and the proof ecosystem
 
 Rocq, formerly Coq, belongs near the center of this account. It provides a mature setting for formal definitions, reusable theorems and machine-checked proofs, with a kernel implemented in OCaml and extraction routes to OCaml and Haskell. Clef should use that ecosystem to establish reusable laws and check the interpretations connecting them to native compilation. Application authors should receive supported instances through ordinary compilation. They should not have to choose a prover for every expression. [Rocq project](https://rocq-prover.org/)
 

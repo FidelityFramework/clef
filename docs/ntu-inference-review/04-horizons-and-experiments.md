@@ -23,7 +23,7 @@ The native universe determines the language problem. Targets can contribute capa
 | Differential compilation | Stable semantic identities and dependency-complete evidence reuse | Avoids unnecessary rework while retaining required ABI, resource, equality and platform invalidation. |
 | Safety contract | No `unsafe` form or source-level obligation bypass, including library code | Low-level access and foreign integration require admitted contracts and evidence. Missing premises cannot be waived by syntax. |
 
-Implement the evidence/scheme contract and NFT/deferred rules first (H1.4–H1.6), then measured structural interfaces (H1.1), the small annotated higher-rank interface (H1.3), and the shared JS/native-boundary examples (H1.8 and chapter 2). Establish the subtyping boundary in H1.2 and collect H1.7 measurements throughout. These identifiers name work items, not calendar phases.
+Implement the evidence/scheme contract, NFT/deferred rules and bounded service-inference foundation together (H1.4–H1.6 and H1.9). Then extend measured structural interfaces (H1.1), the small annotated higher-rank interface (H1.3), and the shared JS/native-boundary examples (H1.8 and chapter 2). Establish the subtyping boundary in H1.2. Differential compilation is part of the architecture from the start. H1.7 measures whether these inference changes improve it. These identifiers name work items, not calendar phases.
 
 ## What the departure must earn
 
@@ -157,6 +157,8 @@ In both schemes: Value is absent from rho.
 `rho` names the other fields and their types. For the length-shaped input, it contains `Sensor: string`. For the time-shaped input, it contains `Clock: string`. Each call instantiates `a` with its own measured type. The same `mapValue` contract says how the selected field may change while the remaining field types are retained. The existing nominal F# records do not silently become Clef structural records. A structural value or an admitted conversion supplies that boundary.
 
 The distinction from the F# inline projector matters. A requirement for a `Value` member says how to access that member. It does not by itself state a relation between the unknown fields of an input record and an updated output record. F# can express useful alternatives through declared interfaces, operations and encodings. The proposed row rule puts this particular relationship directly in the reusable source scheme, without requiring a separately declared update operation for each nominal shape.
+
+Fai is another relevant comparison: its published language account already includes open structural records and inferred effect rows. Compare those established features with the proposed measured row, lazy demand and live-resource requirements rather than presenting structural records as a Clef invention. [Fai at the inspected revision](https://github.com/Krzysztof-Cieslak/fai/blob/3e03dd1ce3222dab895a71f4556af5fbff1109a1/README.md)
 
 The row scheme constrains field types. The checked replacement rule and its elaboration must additionally establish that untouched field values are carried through. If the remaining fields contain a live completion right, the pure shareable example no longer suffices. E13 must refuse that case until an explicit retention/use rule is admitted.
 
@@ -352,6 +354,115 @@ Admit concurrent workflows only under a complete progress contract. Include bloc
 
 Graph coloring supplies proposed concurrent groups. Validate sound conflict edges and whole-group resource constraints, then establish permitted arithmetic and target profitability separately. E32–E33 make these obligations explicit. [Exact source and implementation-status binding in chapter 7.]
 
+#### Following a universal relationship into parallel lowering
+
+The following F#-style examples are design sketches. Names such as `parallelMap`, `Cl3`, `e1` and `e2` make the relationships readable. They do not declare a settled parser form or claim that these APIs are implemented. The written `float` types are illustrative quantity carriers, not a requirement to use CLR types or binary64 on every target. In particular, an interior label or an inferred relationship can carry a judgment without introducing a new surface-language `forall`.
+
+```fsharp
+// 'u is a measure variable. This is a source type relationship.
+let identityMeasured (x: float<'u>) : float<'u> =
+    x
+
+// The same relationship is instantiated separately at each call.
+let distance: float<m> = identityMeasured 3.0<m>
+let duration: float<s> = identityMeasured 2.0<s>
+```
+
+The generic relationship says that the result has the measure of its argument. It does not request parallel execution. Now consider a separate operation whose admitted contract permits independent element evaluation:
+
+```fsharp
+// parallelMap stands for an admitted parallel operation, not a finalized API.
+let calibrate (gain: float) (samples: float<volt>[]) =
+    samples |> parallelMap (fun sample -> gain * sample)
+```
+
+The relevant index relationship can be inferred and retained inside CCS/Baker:
+
+```fsharp
+// Interior evidence, shown as source-like notation for discussion:
+// forall valid i: result[i] = gain * samples[i]
+// forall distinct valid i, j: writes for i and j are disjoint
+// captured gain and samples satisfy the admitted access and demand contract
+```
+
+CCS/Baker must establish the index bounds, complete participant set, alias/access and effect conditions, and the permitted observation and demand behavior. The algebraic type of `gain` does not establish those properties. A pure-looking callback is not enough if it captures shared state or live resources. Likewise, reordering work must not silently change exceptions, required first-demand effects or a specified arithmetic reduction.
+
+Once the source operation and premises are settled, the PSG retains them. Alex witnesses the settled structure passively. Composer may use `scf.forall` on an appropriate pathway, or another faithful realization on a different target. That decision needs a correspondence to the actual source operation and artifact. Parallel eligibility does not promise simultaneous execution on every device. It also does not turn the type-level measure variable into an execution index.
+
+This control must fail the independence check unless a separately admitted synchronization or reduction contract accounts for the shared update:
+
+```fsharp
+let mutable total = 0.0
+
+samples |> parallelMap (fun sample ->
+    total <- total + sample
+    sample)
+```
+
+For a numerical reduction, race freedom is only the first condition. A different floating-point association can change the answer. Use a declared fixed tree, a supported exact accumulation with adequate capacity and named rounding, or another construction whose error contract admits the change. Merely choosing `scf.forall` proves none of those properties.
+
+#### Geometric algebra and Cayley elimination
+
+The useful result for geometric algebra is **retained structure that selects the computations the declared algebra actually permits**. It is not a claim that row polymorphism or higher-rank callbacks alone discover a geometric theorem.
+
+In a declared three-dimensional Euclidean algebra, suppose `e1` and `e2` name basis vectors:
+
+```fsharp
+// Illustrative algebra values; basis-declaration syntax is not decided here.
+let v = e1 + e2
+let product = e1 * v
+
+// Algebraic result: 1 + e12.
+// Inferred possible output support: { scalar; e12 }.
+```
+
+The signature and basis determine the blade products. The support analysis knows that the input on the right may contain `e1` and `e2`; the two candidate pairs reach the scalar and `e12` components. Baker can settle those contributions and their signs instead of constructing a dense full-multivector product. This is the sense of **Cayley elimination** used here: eliminate structurally impossible product paths, not the algebra's required sign rules or every coefficient that happens to cancel for one input.
+
+For a separate declared degenerate algebra, a null basis vector gives another structural case:
+
+```fsharp
+// e0 belongs to an algebra whose declaration says e0 * e0 = 0.
+let nullSquare = e0 * e0
+```
+
+The declared zero rule can exclude that contribution in the admitted algebra and numeric interpretation. Support is an upper bound on possible nonzero components. A component admitted by the support can still evaluate to zero. Conversely, an excluded component must be absent for all admitted inputs and operations.
+
+The established disciplines are distinct: algebra identity and signature select the product rules; parity is exact for the admitted parity-homogeneous fragment; blade support is a lattice-valued over-approximation; measures, ranges and numeric representations have their own rules. Support constraints may use a separate bitvector procedure. They must not be relabeled Tier 1 simply because inference generated them. Baker settles the sparse product, coefficient signs, layout and joint numeric premises. Publication copies the settled graph, Alex witnesses it, and Composer realizes it on the chosen target. A later stage must not reconstruct missing source semantics.
+
+This gives the new inference strategy a precise job: preserve the algebra identity, supported structural relationships and qualified requirements across generic functions, measured rows and module boundaries. Bind each resulting obligation to its actual context. It may avoid premature specialization or make a previously inexpressible reusable interface possible. **It does not create the blade-support rules or prove their soundness merely by adopting a new HM-family algorithm.**
+
+There is a specific design boundary to test. The current grade specification keeps blade support as a PSG coeffect outside ordinary type generalization and joins the masks at call sites. It does not already provide a freely quantified support variable in a generic type scheme. Retaining that baseline is a valid implementation. Per-call specialization or a qualified support-polymorphic scheme would need a separately specified fragment, bounded compilation policy, soundness and realization evidence. Compare both approaches on the same operations and show exactly what additional relationship survives generalization.
+
+#### A concrete AI training contract
+
+For an ADM parameter restricted to the three bivector coordinates of a 3D Euclidean algebra, the paper's example has three stored coordinates rather than eight full-multivector positions. Two such unrestricted bivector supports present nine candidate coefficient pairs, compared with 64 for a dense eight-by-eight expansion. These are structural counts, not measured speedups. A compiler or hand-written kernel that already exploits the same support can obtain the same exclusions.
+
+```fsharp
+// Schematic types: the parameter and tangent share the admitted support.
+let trainStep (learningRate: Scalar) (weight: Bivector<Cl3>)
+              (gradient: Bivector<Cl3>) =
+    weight - learningRate * gradient
+```
+
+When the tangent directions and their defined scalar combination remain in the admitted support, and the update is dimensionally compatible, the updated parameter stays in that support. This is a bounded structural invariant. It is not a claim that every ambient gradient has that support, that training converges, or that the trained model is accurate or safe.
+
+Dimensions supply a different check. For a dimensionless loss and a parameter measured in meters, a gradient has reciprocal-meter dimension. One possible compatible learning-rate dimension is meters squared:
+
+```fsharp
+// Illustrative source contract for a dimensionless loss.
+let update (rate: float<m^2>) (weight: float<m>)
+           (gradient: float<1/m>) : float<m> =
+    weight - rate * gradient
+```
+
+The inferred product has dimension `m`, so the subtraction is dimensionally meaningful. A rate measured only in `m` would yield a dimensionless update and must not be subtracted from a meter-valued weight. The check says nothing by itself about gradient-estimator variance, value range, rounding error or preservation of a nonlinear rotor constraint.
+
+Forward-mode training adds a concrete resource tradeoff: each tangent can carry the parameter's support, but simultaneous directions need additional live state, while sequential directions need additional work. A quire can accumulate *represented* products exactly within its admitted capacity and round at the declared boundary. Input conversion, nonlinear operations, sampling uncertainty, distributed contribution identity and later updates keep separate obligations. The chosen target needs a valid hardware or software construction; the name of an arithmetic format does not provide one.
+
+**Decision and experiment:** include this as a cross-domain discriminator in E07/E19/E23–E26/E32–E33. Compare the existing inference baseline with the proposed scheme on the same bivector update and parallel element operation. Record retained algebra and support, the dimensional gradient/update derivation, permitted resource uses, selected numeric premises, generated coefficient-pair count, and the target-specific realization. Mutate one support, basis, measure, alias or rounding premise at a time. An unsupported case must remain visible. Report compilation and runtime costs alongside any smaller construction.
+
+**Evidence and status:** `clef-lang-spec@a69ac8a91b49f97bd5a5e7bea2934246c2d54edd`, `spec/grade-discipline.md:17–35,84–100,140–190,218–242`, specifies parity, support, sparse product and target obligations. `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03`, `adaptive-domain-models.md:76–104,477–491`, supplies the training example and bounded support result. `clef-lang-site@15d381634f7a08c2a44884a0598d0e634083b313`, `hugo/content/docs/design/constrained-machine-learning/architecture-and-arithmetic.md:14–76`, distinguishes a justified parameter restriction from the representation a model actually learns. These are design and manuscript statements. The examples above are an implementation agenda, not a claim that the full cross-target path has been executed or proved.
+
 **Deliverable:** explicit interfaces among source inference, relational numeric/transition procedures and target constraints; derivations for the bounded examples; one deliberately stale range, quotation and recovery premise rejected by the appropriate checker. State which judgments are admitted as Tier 1, which require other procedures, and where runtime or host premises enter. A combined source principality claim needs its own theorem. Sound numeric bounds alone do not supply it.
 
 **Advance:** the candidate preserves reusable schemes and justified contextual evidence, supplies a useful precision/automation or design-time gain, and binds each claimed realization to its actual premises.
@@ -378,7 +489,17 @@ Implement the selected NFT rules through existing Baker facts wherever they suff
 
 ### H1.7: Better inference reducing graph work
 
-**Recommend as a measured hypothesis.** More stable schemes, deferred commitments and precise dependencies could produce fewer changed facts and less invalidation for the same edit. That could improve differential compilation. Richer inference can also cost more, reveal additional necessary dependencies or move work to checking. Neither outcome follows from theory elegance alone.
+**Build on differential compilation as a foundational architecture.** The program hypergraph keeps each multi-participant relationship, its roles and supporting evidence together across revisions. A changed type, source participant, protocol, boundary or target premise can therefore identify the judgments and realized fragments that depend on it. Stable identity, complete dependencies and correct retraction are necessary to make that capability sound. A hypergraph alone does not prove that the recorded dependency set is complete.
+
+That foundation already has concrete implementation pieces. Baker's `Ingredients/Obligations.fs:1–37` describes the obligation-node and constraining-hyperedge contract and combines recipe enrichments. `Fidelity.PSG/src/Fidelity.PSG/Revision.fs:1–65` defines revision-carried projections, including explicit demand relations whose frontier can remain pending. These are inspectable mechanisms at the revisions bound in H1.9. They do not by themselves establish complete differential invalidation or a passing end-to-end reuse gate.
+
+The distinction from a query-centered compiler needs precise wording. Fai's own account describes a **demand-driven** Salsa query engine with definition-level incremental work and a warm workspace database. Rust likewise describes a demand-driven query DAG with memoized results. Both are incremental systems, so calling either one simply a push compiler would misstate their documented evaluation model. Clef's chosen unit is a revisioned *semantic relationship*: the graph retains a multi-party judgment and the evidence and realization facts bound to its participants. An edit revises those relationships and revalidates the affected closure. The precise eager, deferred or mixed scheduling of individual updates is a separate implementation question. It must be established from the actual producer and revision contracts, not inferred from the word “differential.”
+
+Compare the same edit across the systems where a faithful case exists. Record query evaluations or graph relations revisited, retained and rechecked evidence, unchanged versus changed semantic results, and time to a valid result. A query system can track dependencies and stop propagation when results are unchanged. The proposed Clef advantage must be demonstrated in the identity, composition and reuse of the relevant multi-participant semantic and proof facts, not claimed merely because one approach is incremental. [Fai at inspected revision](https://github.com/Krzysztof-Cieslak/fai/blob/3e03dd1ce3222dab895a71f4556af5fbff1109a1/README.md), [Rust query evaluation](https://rustc-dev-guide.rust-lang.org/queries/query-evaluation-model-in-detail.html), [Salsa red-green algorithm](https://github.com/salsa-rs/salsa/blob/master/book/src/reference/algorithm.md)
+
+MLKit's region inference and the Scheme Nanopass framework are useful precedents for distinct parts of the design. Clef's specific direction puts small source-owned recipes and native judgments on a revisioned hypergraph, then uses complete dependencies to revalidate affected evidence and realization. The comparison is about the contract chosen here, not a claim that another compiler could not adopt incremental or proof-carrying techniques. [MLKit](https://github.com/melsman/mlkit), [Nanopass framework](https://github.com/nanopass/nanopass-framework-scheme)
+
+**Measure the additional inference hypothesis.** More stable schemes, deferred commitments and precise dependencies could produce fewer changed facts and less invalidation for the same edit. That could improve an already selected differential approach. Richer inference can also cost more, reveal additional necessary dependencies or move work to checking. Neither outcome follows from theory elegance alone.
 
 Compare candidate procedures on their shared admitted corpus, reporting newly admitted programs separately. Start from the same source/configuration binding, apply the same bounded edit sequence and compare each incremental result with full recomputation. Include edits preserving an exported scheme, changes confined to one invocation's range, and changes to a platform, boundary or resource premise that must invalidate evidence. Distinguish source-type stability from layout/protocol stability: an unchanged printed type is not a universal reuse key.
 
@@ -406,7 +527,139 @@ The existing BoundaryConformance driver does not claim all these categories, and
 
 **Defer or reject:** equal spelling/layout/addresses merge distinct declarations or resources; a post-return check is used to justify an earlier foreign write; source width is defaulted from ABI width; or a compiler-only check is described as executed native behavior. Extend C++/callback/ownership coverage only through explicitly admitted cases.
 
-**Horizon 1 exit:** a checked, bounded native elaboration contract, its executable reference, source-facing row/qualified examples, and one JS numeric plus one native-boundary realization case. The handoff must show the additional Tier 1 statements and checked derivations beside the standard F# and inference-corpus results. Publish exact unsupported cases and the graph-work measurements. A failed feature is narrowed or deferred. It does not leave the entire architecture undecided. Revise the foundation only when a counterexample or demonstrably better contract warrants it.
+### H1.9: infer the service and weave its data and control flow
+
+**Select a bounded coexponential service-inference path as part of the native foundation.** A concurrent language needs more than the types of a request and reply. It needs to relate the client pool, the service's state, each invocation, the control waiting for its result, the resources retained while it waits, and the valid way to complete it. These relationships belong in the same CCS/Baker evidence contract as dimensions, NFT and demand.
+
+This continues work already present in the compiler. `NativeTypedTree/UnionFind.fs` uses mutable type-variable links with path compression, giving a concrete point of comparison with the mutable HM examples in `write-you-an-inference-in-fsharp`. `Unify.fs` has native type and measure-specific failure cases. These mechanisms are evidence of an implementation direction, not evidence that Clef already implements the corpus's row or higher-rank systems.
+
+The existing Baker owner goes further than ordinary type unification. `Ingredients/BindingDemand.fs` analyzes a bounded first-demand case for mutable-cell snapshots. `Recipes/BindingDemandRecipes.fs` retains participating identities and rewrites the corresponding source schedule. `Ingredients/Continuations.fs` constructs frame reads, writes and dispatch using settled identities, and `Recipes/ContinuationObligationRecipes.fs` states frame-layout and reservation obligations with their participants. These are concrete ingredients and recipes for Clef's native semantics. They are not a completed coexponential reconstruction or a proof of every runtime behavior.
+
+Farscape gives a corresponding boundary example. Its `TypeMapper.fs` records ABI family, width, provenance stratum and C spelling separately, with profile-dependent widths such as LP64 versus LLP64 `long`. Baker's `Ingredients/Boundaries.fs` captures platform and source premises, including native type identities and operation forms. Extend those existing owners so the same declaration, invocation, frame and proof dependencies remain connected across the marshaled boundary. The inspected implementation is a concrete foundation; it is not a completed proof of an arbitrary foreign body or of all incremental reuse. [Boundary analysis](02-js-numerics-and-interop.md)
+
+| Existing foundation | Connection to the inference work | What remains to establish |
+|---|---|---|
+| Mutable union-find and native unification | A real CCS implementation of mutable substitutions to compare with the corpus's mutable HM variants | Lawful native generalization and the selected row, qualified and higher-rank fragments |
+| Binding-demand ingredient and recipe | A bounded way to retain first-demand participants and settle a source schedule, relevant to inference under laziness | General demand/effect/resource composition and revision-bound rechecking beyond that specific case |
+| Continuation ingredients and obligation recipes | Existing source-identity, frame and multi-participant obligation machinery for the data/control relationship | Service reconstruction, protocol witnesses, completion and runtime correspondence |
+| Farscape descriptors and Baker boundary premises | Declared and measured foreign facts enter native settlement with explicit platform and source identities | Coverage, marshaling, foreign hypotheses and complete invalidation through each admitted target path |
+| PSG hyperedges and revisions | Joint source judgments and evidence have an existing representation to revisit when participants change | Dependency-complete differential reuse and measured edit-to-result behavior |
+
+Xantham's TypeScript declaration and binding work is a complementary comparison on the JavaScript side. Farscape and Xantham address different source ecosystems. Compare the declaration identities, structural contracts and evidence each path can expose; do not assume a shared implementation or that either declaration alone proves runtime behavior.
+
+#### One interaction, two flows, one retained relationship
+
+The following F#-style block is an explanatory sketch. The computation expression and operation names are not a claim about finalized surface syntax. Interior labels and judgments may carry the relationships without appearing in application code.
+
+```fsharp
+let handle state request =
+    service {
+        // When this operation is reached, its admitted contract submits both.
+        let! jobs = submitBoth workerA request.Left workerB request.Right
+        let! left = await jobs.Left
+        let! right = await jobs.Right
+        let reply = combine left right
+        return reply, updateState state reply
+    }
+```
+
+The service invocation is deferred under Clef's lazy-by-default rules until its admitted execution boundary. Creating a binding does not itself prove that either request has started. Once the stated `submitBoth` operation is reached, its contract accounts for both submissions and their distinct identities. The two replies may arrive in either admitted order. The join waits for both before the dependent combination.
+
+The **data flow** carries the request values, state, replies and combined result. The **control flow** carries the suspended invocation, its return point and its remaining computation. Weaving the braid in the PSG means preserving their actual interleaving: each submitted operation, matching reply, captured value, owned resource and wait dependency remains attached to the right invocation. In the paper's initial nonreentrant actor fragment, a suspended handler retains exclusive state ownership. Other actors may run, while another handler of that same actor waits. A reentrant service requires a separately admitted state-sharing contract.
+
+One research direction investigates an interaction-net realization alongside delimited-continuation control: local reductions can expose independent work while continuations represent dependent resumption. The compiler must connect both to the same source interactions and observations. A net implementation that selects one permitted service order has not thereby proved equivalence with every allowed order. Its source-to-net and net-to-target correspondences, including effects and resource use, require their own results. E46 makes that proposed weave a concrete experiment.
+
+For each suspension, retain a frame corresponding to `<invocation, return point, live environment, owned resources>`. Bind the completion authority and its actor generation to the matching request. A duplicate reply or a late reply from an earlier generation must not resume another frame. Sharing a deferred result does not manufacture another completion right. These are proposed extraction and checking obligations tied to the paper's finite construction, not a claim that every production service already has a checked witness.
+
+#### Select a bounded reconstruction and explicit fallback
+
+Start with a fixed finite set of message tags and payload/reply shapes, tracked reply authority, admitted state representation, and a finite control abstraction or explicitly supported recursive combinator. Infer a finite message/ownership/wait summary. Check a supplied finite service derivation in the named protocol fragment. Develop source-to-protocol reconstruction as a separate procedure with its own termination and soundness result.
+
+The result must distinguish:
+
+1. **A complete checked witness for the named fragment**, including the premises required to apply its theorem.
+2. **Checked local facts with residual obligations**, when an explicitly defined composition rule says what follows despite the unknown boundary.
+3. **No service witness from this analysis**, with a diagnostic and any independently established facts retained.
+
+If no sound partial-composition rule exists, retain the independently checked facts and withhold the whole-interface claim. A timeout or supervised operation is a useful protocol outcome under its contract, but it is not by itself a static deadlock-freedom or completion proof. An unknown callback may transfer a resource or introduce a wait; its boundary contract must account for those possibilities.
+
+This is a portfolio of procedures under one native semantics: ordinary type and qualified-scheme inference, finite graph summarization, checking of an explicit service derivation, and a possible reconstruction algorithm. A finite-domain worklist can terminate under stated conditions without proving that protocol reconstruction is complete or principal. A checked source derivation does not by itself establish target progress.
+
+#### Scheduling needs the replies as well as the state
+
+```fsharp
+// Conceptual handler: return the old count, then increment it.
+let next count = count, count + 1
+```
+
+Starting at zero, serving A then B gives final state 2 and replies A=0, B=1. Serving B then A also gives final state 2, but replies A=1, B=0. The updates commute, yet the client-visible results differ. Do not reorder the calls under a claim of equivalent observations unless the state **and each request-labelled reply** are preserved. If reply timing, external effects or sampled values are observable, include their declared relations too. E39 makes this a required negative control.
+
+#### From the finite service to target execution
+
+The H1 result is a checked finite source fragment with an executable reference and explicit unsupported cases. The first realization gate is one small service path that preserves its state, frame, request and reply identities on one named target. H2 carries the same evidence through actual boundary and runtime bindings and compares revised compilation with full recomputation. H3 investigates recursive protocols, reusable mechanized correspondence and other processor classes under their own fairness and resource assumptions.
+
+The coexponential paper's finite service construction and conditional state/reply preservation are the starting evidence. Its finite-batch completion result needs complete blocking dependencies, total correctness of whole continuations, request-selection and scheduling fairness, and required external terminal outcomes. A persistent service need not terminate. Padovani's fair-termination result concerns a specified valid infinitary calculus; runtime scheduler fairness is not automatically the same condition. A source-to-runtime correspondence must establish the transfer. Nor does the metaphor of a braid by itself establish mathematical braid laws or a combined adjoint/coexponential metatheory.
+
+**Advance:** H1's checked witness and controls distinguish complete, partial and unsupported cases, retain first-demand and resource premises, and support one artifact-bound realization without missing wait or identity dependencies.
+
+**Narrow or defer:** reconstruction would require unchecked endpoint provenance, silently generalized live rights, incomplete wait coverage or an unsupported recursion rule. Preserve the sound finite core and its independent local facts. Do not turn unknown behavior into a proof, and do not require arbitrary actor-program inference before shipping a useful admitted fragment.
+
+**Evidence:** `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03`, `coexponential-exploration.md:116–161,196–248,260–355,665–682,729–780,856–879`; `research/coexponential-inference/04-inference-ladder-design.md:7–75`, `05-decidability-map.md:7–72`, `06-validation-plan.md:13–69`, `09-adjoint-logic-and-the-fork.md:23–88`, and `10-strategy-net-substrate-cgra-qkb.md:15–55`. Implementation binding: `clef@e3fbdc71a8d86ad5097f2db767f325d0fafc8b8a`, `src/Compiler/NativeTypedTree/UnionFind.fs:1–48`, `Unify.fs:1–47`, `src/Compiler/Baker/Ingredients/BindingDemand.fs:1–27`, `Recipes/BindingDemandRecipes.fs:1–42`, `Ingredients/Continuations.fs:1–8,55–75`, `Recipes/ContinuationObligationRecipes.fs:1–38`, `Ingredients/Boundaries.fs:1–35,45–85`, and `Ingredients/Obligations.fs:1–37`. Revision binding: `Fidelity.PSG@2a0025ad2176df86acc829121dbfa10fad071548`, `src/Fidelity.PSG/Revision.fs:1–65`. Farscape binding: `Farscape@053206a98240190b43231f901f3e7f3747c4ec16`, `src/Farscape.Core/TypeMapper.fs:21–75,181–194`. These are inspected source mechanisms, not execution or acceptance receipts.
+
+### H1.10: test the foundation against AI and quantum computation
+
+**Use AI and quantum cases to shape the native contract now.** These are not promises that every solver, model or quantum target is already implemented. They are discriminators for the same issues that arise in ordinary concurrent programs: which values are related, which resources are live, what a computation observes, and what must survive specialization and lowering.
+
+The ripple effect is concrete. A single distributed update can relate a particular model revision, sampled execution, two worker requests, their replies, an accumulator and the continuation that consumes the result. The hypergraph can retain those participants together while distinct procedures check types, sample correspondence, ownership, numeric accuracy and progress. If a model or sampling premise changes, differential compilation must revalidate its affected evidence without discarding unrelated established work. That benefit depends on complete dependencies and an actual realization; a shared graph does not collapse the separate proofs into one.
+
+#### AI: preserve the relationship between observations
+
+The bivector and dimensioned-update cases in H1.5 test structural support, arithmetic and target selection. The coexponential paper adds a different failure: two correctly typed worker replies can be combined into the wrong learned metric if they no longer describe the same sampled execution.
+
+```fsharp
+// Schematic: r0 and r1 are independent standard-normal observations
+// from the same admitted execution.
+let offsetScore r0 r1 = r0 + r1
+let gainScore r1 = r1
+
+let crossTerm r0 r1 =
+    offsetScore r0 r1 * gainScore r1
+```
+
+The expectation of `crossTerm` is 1. If the second worker silently substitutes an independently resampled `r1`, the corresponding expectation is 0. Individual values can have the right carrier types and marginal distributions in both cases. The missing fact is the **joint sample identity or an explicitly justified coupling**.
+
+For the distributed case, infer or retain the model and loss versions, parameter point, selected directions, observation, sampling plan, task identities and permitted reduction. A join accepts each assigned contribution once. Its numerical and probability bounds remain separate from that protocol fact. The inference strategy should make those dependencies reusable across service and numerical boundaries. It does not itself establish estimator variance, convergence, model quality or a correct arbitrary training algorithm.
+
+Forward-mode differentiation supplies a second discriminator. A tangent can retain its parameter's dimensional and blade-support contract. Sequential directions can reuse storage, while simultaneous directions require their combined live state. Compare the work, storage, representation and accuracy obligations for the actual workload. No automatic claim follows that forward mode always uses less total memory or work than reverse mode.
+
+#### Quantum: distinguish a circuit description from a live resource
+
+```fsharp
+// Schematic operations, not a claim of a current quantum backend.
+let circuit = buildCircuit gates
+let anotherDescription = circuit
+
+// Executing the description uses separately admitted live resources.
+let! outcome = runCircuit circuit qubits
+```
+
+A closed immutable classical circuit description can be shared as data. That does not duplicate the authority to use an unknown live quantum state as two independent resources. The source and interpretation must retain the identity and permitted use of each execution resource. Preparing two fresh resources from a shared recipe is a different operation from copying an unknown quantum state.
+
+A typed matrix or a negative/fractional type annotation also does not make an arbitrary operation unitary. A checked gate interface needs the appropriate adjoint and inverse equations in its declared ideal interpretation. The real matrix below is a simple negative control:
+
+```fsharp
+// Schematic: a square shape is not sufficient for a unitary gate.
+let shear = matrix [[1.0; 1.0]; [0.0; 1.0]]
+let gate = requireUnitary shear  // the required equations do not hold
+```
+
+Coherent uncomputation and measurement followed by reset can both complete an auxiliary-resource protocol, but they do not have the same observable effect on the data. Preserve the operation, outcome, state and probability contract. NFT contributes directed and resource-use structure only through an explicit quantum interpretation. It does not supply an arbitrary inverse, a cloning operation or an automatic proof of physical fidelity.
+
+**Decision and gates:** use E47–E49 for constrained learning and E50–E52 for quantum descriptions and resources. Start with small, finite reference interpretations and check the retained judgments and counterexamples. A simulator and a physical device have different representation, error and execution obligations. A generic pure-state simulator can require `2^n` complex amplitudes. No target or asymptotic improvement follows from the shared source description alone.
+
+**Evidence:** `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03`, `adaptive-domain-models.md:76–104,477–491`; `coexponential-exploration.md:578–660`; `negative-fractional-types-in-fidelity.md:535–624`; and `research/quantum/circuit-as-typed-value-substrate-neutrality.md:1–25,70–94`. The manuscript is the primary account where the older research note makes broader claims about automatic unitarity. Unitarity and each source-to-target quantum interpretation remain explicit obligations.
+
+**Horizon 1 exit:** a checked, bounded native elaboration contract, its executable reference, source-facing row/qualified examples, a finite service witness and one admitted service realization, and one JS numeric plus one native-boundary realization case. The handoff must show the additional Tier 1 statements and checked derivations beside the standard F# and inference-corpus results. AI and quantum cases identify the evidence to retain and the first bounded experiments. Publish exact unsupported cases and the graph-work measurements. A failed feature is narrowed or deferred. It does not leave the entire architecture undecided. Revise the foundation only when a counterexample or demonstrably better contract warrants it.
 
 ### The first deliverable increment
 
@@ -422,7 +675,7 @@ If the proposed JSIR route cannot yet emit the case, report the missing implemen
 
 Use stable identifiers so conclusions can be traced to exact examples. The source notation is schematic. Bind executable syntax and expected judgments in the implementation charter.
 
-**Every E01–E33 result requires the three comparison arms defined above.** Pin the F# compiler and any editor/FSharp.Compiler.Service versions used. Identify the inference-corpus implementation and any experimental extension. Retain the Clef scheme, native judgments, checking outcomes and dependencies. Mark a case outside an arm's domain explicitly rather than inventing an equivalent feature or score. Only the small F# examples in H1.1 have been executed in this document increment.
+**Every E01–E52 result requires the three comparison arms defined above.** Pin the F# compiler and any editor/FSharp.Compiler.Service versions used. Identify the inference-corpus implementation and any experimental extension. Retain the Clef scheme, native judgments, checking outcomes and dependencies. Mark a case outside an arm's domain explicitly rather than inventing an equivalent feature or score. The bounded F# documentation fixtures in H1.1 and H1.3 were executed separately. The full comparison matrix and Clef implementation cases remain unexecuted.
 
 | ID | Shape / positive case | Discriminating failure or alternative |
 |---|---|---|
@@ -459,6 +712,25 @@ Use stable identifiers so conclusions can be traced to exact examples. The sourc
 | E31 | Distinguish same-spelled foreign declarations under different headers/packing/macros | Attach one unit's measured layout to the other; retain stale ABI evidence after an edit; disagree with fresh compilation |
 | E32 | Establish deadlock freedom and request completion for an admitted workflow under its execution premises | Omit a cleanup/capacity wait, assume an unmodeled foreign call terminates, or turn unresolved supervision/race freedom into a progress proof |
 | E33 | Validate a colored concurrent group and its chosen target realization | Miss an alias/conflict edge, exceed a joint resource bound, change rounding semantics, or infer a speedup from coloring alone |
+| E34 | Derive and check a finite service interface with two message alternatives and one owned state | Omit a message branch, confuse client and server choices, or claim a principal protocol from one checked derivation |
+| E35 | Retain sound local ownership and wait facts when a callback contract is unresolved | Export a complete service guarantee without a sound residual-composition rule, or erase an independently checked fact |
+| E36 | Track fresh reply endpoints and two client invocations with equal payloads | Merge distinct endpoints or require a globally known runtime identity to recognize fresh local authority |
+| E37 | Capture a shared deferred input and actor state across suspension | Force an effect before its admitted demand, reuse a stale mutable observation, or duplicate a live resource through sharing |
+| E38 | Complete one invocation once under reply/timeout competition | Resume twice, accept a late reply from an earlier generation, or assume local timeout undoes remote effects |
+| E39 | Compare two service orders with state and request-labelled replies | Declare old-value counter increments equivalent because both orders end at state 2 while their labelled replies differ |
+| E40 | Build a complete may-wait abstraction including state, capacity and cleanup | Omit a callback or same-actor dependency and accept an unrepresented circular wait |
+| E41 | Complete an admitted finite request batch while the service remains available | Infer completion from fairness alone, from terminating local segments, or from termination of the persistent server |
+| E42 | Carry a request and reply across a measured foreign or wire boundary | Conflate payload type with endpoint identity, ignore conversion/access premises, or claim a proof of arbitrary foreign behavior |
+| E43 | Recompile a service while an earlier revision has a suspended frame | Rebind its return point, owned storage or completion to the new revision without an admitted migration |
+| E44 | Realize the same finite service contract on two named target pathways | Preserve final values while changing permitted observations, frame ownership, progress assumptions or the target-bound evidence |
+| E45 | Check a named recursive protocol and its validity witness | Treat finite testing, an unproved reconstruction algorithm or scheduler fairness as the infinitary theorem's validity and fairness premises |
+| E46 | Relate an admitted service to a continuation/interaction-net realization | Lose a request, state capability or labelled reply, or present one selected schedule as equivalence with all permitted source behavior |
+| E47 | Preserve a declared bivector support through a restricted training update | Admit an out-of-support update, or count nine candidate products as an already measured speedup |
+| E48 | Infer a dimensionally valid gradient and learning-rate update | Accept an update with incompatible dimensions, or treat units as a proof of numeric accuracy |
+| E49 | Assemble a distributed metric from related observations of the same execution | Independently resample one cross-term operand, merge invocation identities or mistake exactly-once receipt for a statistical guarantee |
+| E50 | Share a classical circuit description and execute it with distinct admitted resources | Treat sharing the description as cloning or duplicating authority over an unknown live quantum state |
+| E51 | Compose a gate carrying checked adjoint and inverse premises | Accept an arbitrary square matrix as unitary because its shape or NFT spelling type-checks |
+| E52 | Compare coherent uncomputation with measurement followed by reset | Equate their observable state or outcome laws, or omit physical preparation and measurement assumptions |
 
 The mutation column is as important as the successful example. Distinguish an intentional source-language difference from an unsoundness: accepting heterogeneous data is not the same as accepting an invalid arithmetic operation on it.
 
@@ -473,6 +745,9 @@ The mutation column is as important as the successful example. Distinguish an in
 | E14, E27–E28 | Compare type-resolution behavior across all three arms. Separately test whether Clef reuses only derivations whose dependencies remain valid. Report the cost of richer checking as well as avoided graph work. |
 | E18 | Exhibit a valid specialized answer and the evidence needed for a principal one. A checked typing instance must not be promoted into a theorem about every solution. |
 | E32–E33 | Identify structural/use judgments that contribute to workflow or parallel-group admission. Retain the separate progress theorem, conflict completeness, joint resource, arithmetic and target premises. Type acceptance alone establishes neither request completion nor a speedup. |
+| E34–E46 | Compare F# actor/interface encodings and the inference corpus's actual scope with Clef's service judgment. Show the finite witness, request/endpoint and continuation identities, demand and wait dependencies, residuals, and the observations preserved by each admitted realization. Separate protocol checking, reconstruction, completion and target correspondence. |
+| E47–E49 | Compare the expressed support, dimension, observation and reduction contracts with available F# and corpus cases. Check sample coupling and numeric premises separately from service completion and model quality. |
+| E50–E52 | Compare classical circuit descriptions and live-resource contracts. Require explicit gate, measurement and source-to-target interpretations; unsupported prototype cases are recorded as such. |
 
 ## Evaluation
 
@@ -486,11 +761,11 @@ Add a proof-expression result to each report: which native statement became expr
 
 ## Horizon 2 integrate the selected fragment
 
-**Integrate the selected contract through the existing source owners.** Carry the H1 NFT, dimensional, row/qualified and deferred numeric judgments into production in bounded increments. Promote each operation when its gate passes. The sequencing is conditional on evidence. The architectural direction is explicit.
+**Integrate the selected contract through the existing source owners.** Carry the H1 NFT, dimensional, row/qualified, service and deferred numeric judgments into production in bounded increments. Promote each operation when its gate passes. The sequencing is conditional on evidence. The architectural direction is explicit.
 
 1. **Settle the source contract.** State compatibility changes and exported schemes. Clarify nominal identity, equality, mutation, effects and demand. If profiles differ, make their boundary and interface correspondence explicit.
 2. **Bind evidence to existing PSG facts.** Preserve recipe ingredients, relation identity, instantiations, completeness dependencies and the intermediate rewrite record. Publication copies these facts. It does not create missing premises.
-3. **Establish incremental reuse.** Compare with full recomputation after the E14 and E19–E31 edits and measure H1.7. A stable printed type or a cache hit is not sufficient evidence. Reuse must remain valid for changed generalization, demand, transition, range, selected equality and resource/target premises, including selected platform and foreign declarations. Proof and code dependencies may differ.
+3. **Establish incremental reuse.** Compare with full recomputation after the E14, E19–E31 and E35/E40/E43 protocol or continuation edits, and measure H1.7. A stable printed type or a cache hit is not sufficient evidence. Reuse must remain valid for changed generalization, demand, transition, range, selected equality and resource/target premises, including selected platform and foreign declarations. Proof and code dependencies may differ.
 4. **Establish each claimed realization.** JS objects, comparator trees, BigInt operations, native layouts and FPGA resources have different obligations. Binding a source type does not prove a library or emitted operation implements it.
 5. **Measure the design-time result.** Quantify the gains and costs under the pinned workload rather than predicting them from pure versus mutable implementation style.
 
@@ -507,6 +782,8 @@ Develop reusable laws and their semantic bridges with the planned cvc5/Rocq ecos
 ## Horizon 3 extend proofs & the language remit
 
 **Pursue compiler correctness and self-hosting as explicit workstreams.** Mechanize the admitted source and intermediate semantics, prove nanopass preservation and composition, and bind executable implementations to those proofs. Apply the same artifact and dependency discipline to the compiler as it becomes self-hosted. Record the bootstrap compiler, transformations, checking environment and final executable. Independently checked evidence must break any circular claim that the compiler proves itself merely by compiling itself.
+
+Extend the finite coexponential service result through an explicit recursive-protocol and runtime interpretation where the evidence warrants it. Mechanize the source/continuation and target correspondence, including request-labelled observations, resources and any applicable validity and fairness premises. The result for one selected execution or finite trace is not automatically equivalence of all service orders or completion of every runtime request.
 
 This extends the planned proof ecosystem into an accountable path toward a proved compiler. Program guarantees, artifact correspondence, transformation correctness and bootstrap trust are related obligations that can advance together. The current Composer proof-composition owner explicitly names self-hosting as a long-term goal. Use its current support-completeness and generation-binding rules, not superseded proof-pipeline diagrams. The [positioning document](07-explaining-clefs-departure.md) gives the audience-facing account and source anchors.
 

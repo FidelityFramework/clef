@@ -1,6 +1,6 @@
-# Implications for DTS+DMM, PHG and NFT
+# Implications for DTS+DMM, PHG, NFT and the coexponential paper
 
-Revise the manuscripts' architectural account around the selected native elaboration direction: qualified schemes, dimensional and NFT judgments, unique-label measured rows, deferred numerics and evidence-preserving realization. NFT supplies a central contract for value identity and resource use. DTS+DMM and PHG explain its analysis and incremental integration. This chapter recommends the changes and separates design commitments from theorem and implementation claims that need additional evidence. The manuscript files themselves were not edited during this work.
+Revise the manuscripts' architectural account around the selected native elaboration direction: qualified schemes, dimensional and NFT judgments, unique-label measured rows, deferred numerics, service inference and evidence-preserving realization. NFT supplies a central contract for value identity and resource use. The coexponential paper connects service, client and continuation structure to communication and control. DTS+DMM and PHG explain their analysis and incremental integration. This chapter recommends the changes and separates design commitments from theorem and implementation claims that need additional evidence. The manuscript files themselves were not edited during this work.
 
 These are the first concrete impact sites, not a limit on the inquiry. A significant result may require corresponding changes throughout the published work, specifications, design documents and implementation accounts. Propagate only the supported claim and its premises. Do not preserve a conflicting downstream account merely because it was previously treated as settled.
 
@@ -13,6 +13,7 @@ The manuscripts are in `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03`:
 - `dts-dmm-paper.md` — DTS+DMM.
 - `program-hypergraph-paper.md` — PHG.
 - `negative-fractional-types-in-fidelity.md` — NFT, whose current source identifies itself as a working draft at lines 1–7.
+- `coexponential-exploration.md` — the coexponential service, continuation, communication and realization account.
 
 The inspected manuscript files had no working-tree diff. Existing unrelated changes in that repository were preserved. The requested AGENTS primer was read first. It directs primary claims to the manuscripts, rather than making itself the scientific authority.
 
@@ -32,6 +33,32 @@ DTS+DMM 131–143 already distinguishes dimensional, range, lifetime, representa
 | **PHG §2.1–2.3,84–120** | Relation participants and assumptions govern predicate-specific evidence and reuse. | One worked NFT/stateful/numeric example shows the needed identities and transitions, or exposes a missing relation. | E21–E26; creation/live-instance identity, equality, state/output dependency, snapshot and platform bindings. Reuse existing relations if sufficient. Add a new one only for an exhibited gap. |
 
 Experiment identifiers refer to [chapter 04](04-horizons-and-experiments.md). These are revision conditions, not a claim that any current theorem is false.
+
+## Coexponential services: what the manuscript contributes
+
+The paper is a foundation for inference, not merely a later concurrency application. Its finite actor fragment relates a service and client pool to a state protocol. Its continuation account associates each invocation with a return point, live environment, resource ownership and one completion right. Its communication summary and wait relation describe additional facts about that same source. **Evidence:** `coexponential-exploration.md:116–161,196–248,260–310`.
+
+The paper states finite service, ownership and reply-preservation results under named premises. Its service-order theorem requires both the same final state and the same reply for each labelled request. Its finite-batch completion result additionally requires complete wait coverage, whole-continuation progress and the stated scheduling, selection and external-outcome assumptions. These are source results with explicit scope. The proposed source-to-session reconstruction algorithm and target-runtime correspondence remain separate work. **Evidence:** `coexponential-exploration.md:226–238,280–310,312–346,665–682`.
+
+The inference research sharpens the implementation choice: begin with a finite interface and a checkable witness. Retain partial facts and residuals only under a sound composition rule, or withhold the whole-interface claim while preserving independent local evidence. A finite summary, checking a supplied derivation, reconstructing a protocol and transferring its property to a runtime are four different tasks. **Evidence:** `research/coexponential-inference/04-inference-ladder-design.md:7–57`, `05-decidability-map.md:7–38,54–72`.
+
+| Revision site | Recommended change and evidence |
+|---|---|
+| **§§3–4: service and continuation construction** | Give the native inference interface for message alternatives, state ownership, fresh invocation identity, captured values and completion rights. Show one checked finite derivation and a failed duplicate/escape control. E34, E36–E38. |
+| **§5: summaries and completion** | Distinguish an inferred finite may-wait abstraction, its complete dependency scope, a checked protocol witness and the stronger completion theorem. State the result when a callback or endpoint remains unresolved. E35, E40–E41. |
+| **§6: scheduling** | Make preservation of the request-labelled reply map as well as final state the criterion for reordering. Retain the old-value counter as the negative case. Stochastic sampling and external effects need their own observation relation. E39. |
+| **§§7–10: boundary, evidence and realization** | Bind message shape, endpoint provenance, storage, representation, proof dependencies and target correspondence to the same interaction. Preserve frames already suspended under an earlier revision or establish a migration. E42–E44. |
+| **Recursive protocols and logic interfaces** | Name the reconstructed fragment, proof-object language and checker before claiming completeness or principality. Relate runtime fairness and validity to the selected theorem. Do not infer a combined adjoint/coexponential metatheory merely from similar terminology. E45. |
+
+The paper's `§10.1` already places message/session structure, local checks, reusable protocol laws and relational claims at distinct tiers. The revision should show which new inference evidence supplies each application, without moving an unresolved local or relational obligation into Tier 1 by changing its name. Its `§10.7` provides the dependency-complete replacement account for the expanded differential experiments. **Evidence:** `coexponential-exploration.md:665–682,729–780,856–879`.
+
+### AI and quantum implications
+
+The coexponential paper's distributed metric example binds each direction, sampled execution, parameter point and contribution to one job. Its cross term shows a genuine inference and evidence need: separately correct marginal values can yield the wrong metric if a shared sample is silently replaced with an independent draw. Revise the service-inference interface around the identities and coupling premises that this example actually consumes. Keep exactly-once receipt, arithmetic error and statistical confidence as distinct claims. **Evidence:** `coexponential-exploration.md:578–660`; E47–E49.
+
+NFT's quantum section already distinguishes classical circuit descriptions, live quantum wires, checked unitary gates, coherent uncomputation and measurement/reset. Make the selected inference fragment preserve those distinctions and name the interpretation used for each. An older quantum research note makes broader claims that negative/fractional notation automatically yields unitarity. The current NFT manuscript instead requires a checked gate interface and its laws. Follow the manuscript's scoped contract and reconcile the older note through its owner. E50–E52 test the distinction. **Evidence:** `negative-fractional-types-in-fidelity.md:535–624`; `research/quantum/circuit-as-typed-value-substrate-neutrality.md:1–25,70–94`.
+
+For ADM, retain a bivector support across an admitted update and separately establish dimensional compatibility, numerical error, optimizer and realization conditions. A support proof is not a convergence theorem, nor does a shape prove a rotor invariant. **Evidence:** `adaptive-domain-models.md:88–104,477–491`; E47–E48.
 
 ## NFT: what the manuscript contributes
 
@@ -60,9 +87,9 @@ These are concrete review recommendations, not findings that the stated proposit
 
 ## Recommended manuscript changes and their order
 
-**H1:** expand NFT with the finite elaboration/equality/demand fragment and its explicit status table. State the selected unique-label row/qualified scheme interfaces and preserve the distinctions among dimensional equations, value equality and live-instance use. Update DTS+DMM's pending-member discussion for the admitted generalized requirements and PHG's worked examples for the retained dependencies. These design clarifications can be written as commitments before the new theorems exist. Mark theorem statements and implementation coverage accurately.
+**H1:** expand NFT with the finite elaboration/equality/demand fragment and its explicit status table. State the selected unique-label row/qualified scheme interfaces and preserve the distinctions among dimensional equations, value equality and live-instance use. Update DTS+DMM's pending-member discussion for the admitted generalized requirements and PHG's worked examples for the retained dependencies. Give the coexponential paper an explicit finite reconstruction/witness interface, demand and continuation example, and unsupported-boundary account. These design clarifications can be written as commitments before the new theorems exist. Mark theorem statements and implementation coverage accurately.
 
-**H2:** connect NFT's local propositions to Baker-owned inference and revision-bound PSG evidence as the feature gates pass. DTS+DMM should document the implemented generalization and numeric/deferred contract. PHG should identify retained identities, dependencies and measured reuse behavior. The same source scheme can persist while selected representations and boundary evidence change, so cached type syntax alone cannot justify reuse.
+**H2:** connect NFT's local propositions to Baker-owned inference and revision-bound PSG evidence as the feature gates pass. DTS+DMM should document the implemented generalization and numeric/deferred contract. PHG and the coexponential paper should identify retained invocation/frame identities, multi-party dependencies and measured reuse behavior. The same source scheme can persist while selected representations and boundary evidence change, so cached type syntax alone cannot justify reuse.
 
 Publish the actual combined results rather than inheriting a claim of global principality from a component algorithm.
 
@@ -72,7 +99,7 @@ The site articles make this reconciliation concrete. *The Gift of Deferred Infer
 
 ## FFI and differential-compilation implications
 
-Farscape's implemented separation between source numeric spelling and ABI descriptors supplies a useful worked case for all three papers. DTS+DMM can distinguish unchanged source schemes from changed representation/foreign premises. PHG can expose the proof and code dependencies that require different invalidation. NFT's representation proposition can state what preserves selected value equality and distinct live instances at the boundary. Elicited foreign types are premises for this connection, not a derivation of the foreign algorithm's behavior. [Current and historical owner evidence](02-js-numerics-and-interop.md)
+Farscape's implemented separation between source numeric spelling and ABI descriptors supplies a useful worked case for all four papers. DTS+DMM can distinguish unchanged source schemes from changed representation/foreign premises. PHG can expose the proof and code dependencies that require different invalidation. NFT's representation proposition can state what preserves selected value equality and distinct live instances at the boundary. The coexponential account must additionally bind the declaration, message, endpoint and waiting invocation through the admitted exchange. Elicited foreign types are premises for this connection, not a derivation of the foreign algorithm's behavior. [Current and historical owner evidence](02-js-numerics-and-interop.md)
 
 A meaningful revision would include a bound example that survives fresh-versus-reused compilation, invalidates a changed ABI or ownership premise, and preserves the admitted marshaling contract in its claimed native artifact. Equal foreign-call arguments must not merge effectful occurrences. Equal pointer bits must not merge successive resource lifetimes. This is where stable inference can reduce unnecessary graph work while still propagating changes that matter. Current Farscape status does not establish that reuse result already.
 
