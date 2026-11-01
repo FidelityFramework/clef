@@ -49,7 +49,7 @@ Clef gives these domains a common language, with target-specific requirements ma
 
 Clef uses familiar ML-family syntax for records, discriminated unions, pattern matching, computation expressions, and first-class functions. Its semantics are native to Clef, and evaluation is lazy by default.
 
-```clef
+```fsharp
 // Records are value types with struct layout
 type Point = { x: float; y: float }
 

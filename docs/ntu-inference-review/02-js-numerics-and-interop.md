@@ -12,7 +12,7 @@ NFT supplies the admitted indexed-use contract. Rows and qualified requirements 
 
 A reusable operation often needs only part of a record. Consider a function that divides a record's distance by its duration. A candidate inferred contract can quantify over both the dimensions of those fields and the unmentioned remainder of the record:
 
-```text
+```fsharp
 { distance: float<L>; duration: float<T> | remainder } -> float<L/T>
 ```
 

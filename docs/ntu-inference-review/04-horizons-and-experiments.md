@@ -145,7 +145,7 @@ These positive and negative cases were checked with .NET SDK 10.0.401 and F# Int
 
 **Clef's proposed change is to admit an explicit structural row contract as ordinary reusable polymorphism.** The following is mathematical scheme notation, not proposed final Clef syntax. Begin with pure operations on immutable, freely shareable fields:
 
-```text
+```fsharp
 project  : forall a rho. {Value: a | rho} -> a
 
 mapValue : forall a b rho.
@@ -248,7 +248,7 @@ These two positive fixtures and the rejected ordinary-callback fixture were chec
 
 The following blocks use mathematical schemes and schematic expressions. They explain the proposed checking rules and do not claim implemented Clef syntax:
 
-```text
+```fsharp
 identity : forall a. a -> a
 identity value = value
 
@@ -264,7 +264,7 @@ The initial fragment instantiates `a` only with monotypes, such as `int`, `bool`
 
 The same contract can appear inside a record field:
 
-```text
+```fsharp
 type Transform = { Apply: forall a. a -> a }
 
 transform : Transform
@@ -282,7 +282,7 @@ E05 must retain the declared quantifier, both instantiations and the callback's 
 
 First, a callback cannot let its private type escape into a single typed cell allocated outside it:
 
-```text
+```fsharp
 saved = cell None                 // one shared cell outside the callback
 
 escaping : forall a. a -> a
@@ -295,7 +295,7 @@ When checking `escaping`, treat `a` as a fresh, fixed type placeholder. It must 
 
 Second, one shared mutable cell must not be generalized as though it were separate storage at every type:
 
-```text
+```fsharp
 shared = cell []
 
 // Invalid generalization of the same allocated cell:
@@ -605,6 +605,32 @@ The coexponential paper's finite service construction and conditional state/repl
 **Narrow or defer:** reconstruction would require unchecked endpoint provenance, silently generalized live rights, incomplete wait coverage or an unsupported recursion rule. Preserve the sound finite core and its independent local facts. Do not turn unknown behavior into a proof, and do not require arbitrary actor-program inference before shipping a useful admitted fragment.
 
 **Evidence:** `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03`, `coexponential-exploration.md:116–161,196–248,260–355,665–682,729–780,856–879`; `research/coexponential-inference/04-inference-ladder-design.md:7–75`, `05-decidability-map.md:7–72`, `06-validation-plan.md:13–69`, `09-adjoint-logic-and-the-fork.md:23–88`, and `10-strategy-net-substrate-cgra-qkb.md:15–55`. Implementation binding: `clef@e3fbdc71a8d86ad5097f2db767f325d0fafc8b8a`, `src/Compiler/NativeTypedTree/UnionFind.fs:1–48`, `Unify.fs:1–47`, `src/Compiler/Baker/Ingredients/BindingDemand.fs:1–27`, `Recipes/BindingDemandRecipes.fs:1–42`, `Ingredients/Continuations.fs:1–8,55–75`, `Recipes/ContinuationObligationRecipes.fs:1–38`, `Ingredients/Boundaries.fs:1–35,45–85`, and `Ingredients/Obligations.fs:1–37`. Revision binding: `Fidelity.PSG@2a0025ad2176df86acc829121dbfa10fad071548`, `src/Fidelity.PSG/Revision.fs:1–65`. Farscape binding: `Farscape@053206a98240190b43231f901f3e7f3747c4ec16`, `src/Farscape.Core/TypeMapper.fs:21–75,181–194`. These are inspected source mechanisms, not execution or acceptance receipts.
+
+#### A compositional proof strategy for the compiler
+
+**Use a bounded two-dimensional proof model to connect native inference to a proven compiler.** The first construction should cover the finite service fragment above and one target realization. Its purpose is to make the interfaces between inference, proof and lowering precise enough to mechanize. The construction is a proposed research result, with the following definitions and laws as its first deliverable.
+
+| Part | First construction |
+|---|---|
+| Objects | Admitted semantic interfaces at a named representation and reasoning mode, including the types, observations, resource context and assumptions needed to interpret their judgments. |
+| 1-cells | Typed translations between interfaces, such as a selected Baker elaboration or a source-to-continuation realization, with explicit maps for values, effects, identities and premises. Identity and sequential composition must be defined. |
+| 2-cells | Checked comparison witnesses between two translations with the same source and target interfaces. A witness states a specific refinement or correspondence under named assumptions, including the observations and resource behavior it preserves. |
+
+The witnesses need not assert that all behavior is identical. A target that selects one permitted source schedule can satisfy a directional trace-refinement contract. A transformation claiming freedom to reorder requests needs the stronger observation contract appropriate to that claim. Define vertical composition of comparisons and horizontal composition across adjacent translations, then establish identity, associativity and interchange for the chosen witness equivalence. If composition is associative only up to a checked isomorphism, specify the associators and unitors and their coherence laws for a bicategory. These laws are proof obligations for the chosen model.
+
+A concrete candidate is the 2-category **Cat**. Define categories of well-formed source, PSG and target configurations, and show that the selected elaboration and realization are functors. With source interpretation `S : C_source -> Obs`, elaboration `E : C_source -> C_PSG` and PSG interpretation `P : C_PSG -> Obs`, a candidate comparison is a natural transformation `S => P ∘ E`. Its components and orientation must express the chosen correspondence. A subsequent pass can be composed with it by pasting the corresponding witnesses. Whether ordinary categories and natural transformations adequately express the required directional traces and resource conditions is a gate: use an ordered or enriched model, or a bicategory of relations and simulations, if the chosen contract needs it. Naturality alone does not establish trace preservation or progress.
+
+The CDL account's parameterized 2-category is a useful example of a two-dimensional construction. Its 2-cells are compatible reparameterizations. A compiler correctness witness needs its own definition and cannot be identified with a CDL reparameterization without an explicit interpretation. Likewise, an adjoint mode shift supplies a specific interface between reasoning contexts; it does not automatically make every translation invertible or establish the compiler's two-category laws.
+
+For one admitted source judgment, form the square whose horizontal steps carry the computation through elaboration and realization and whose vertical steps apply an admitted proof rule at the corresponding representations. The comparison witness must relate the claims about the same realized operation and transport the source identities and assumptions. Its boundary includes the actual PSG revision, source operation, target operation, proof context and relevant platform or foreign contract. If the rule or translation is unavailable, retain the unresolved obligation. A theorem application cannot supply a missing premise.
+
+**First case: a finite nonreentrant service that suspends for a reply.** Begin with the coexponential paper's total finite handler and its state/reply correspondence. Elaborate a measured request together with its invocation identity, exclusive state capability, captured frame and one-shot completion right. Follow the same instance through the Baker facts, published PSG, passive Alex witness and one named target's continuation realization. Check that the target trace preserves the request and reply association and consumes the correct completion right at most once. Record the dimensional derivation and any representation-coverage premise alongside that service witness. This combines an inferred Tier 1 statement with a concrete concurrency preservation result.
+
+Use two routes as a discriminating comparison: establish the applicable source claim and carry its evidence through the selected translations, or establish the corresponding claim against the realized operation using its translated premises. The proof objects can differ. The comparison must bind them to the same source and target operations and establish that their assumptions correspond under the translation. Mutate the reply identity, duplicate the completion right, change a dimension, and withdraw a layout or target premise. Each mutation must invalidate the corresponding witness or leave its obligation unresolved. Repeat after an edit to check that dependency-based reuse withdraws affected evidence while retaining independently valid facts.
+
+**H1:** write the interfaces, finite reference semantics and witnesses; demonstrate the source-to-continuation case, mutations and a checked composition on one selected path. Bind one admitted service realization to its artifact, as required by the H1 exit gate. State which steps are mechanized and which are executable checks. **H2:** extend the witnesses across emitted operations, target runtime contracts and revision-aware proof reuse, including applicable scheduler and FFI premises. **H3:** mechanize the selected compiler-pass preservation theorems and composition in Rocq/Coq, then connect the self-hosted implementation and bootstrap artifacts to those theorems. A source-level service theorem is a starting premise for the compiler argument. Target progress additionally needs the paper's scheduler, request-selection, delivery and external-outcome assumptions and the runtime correspondence that carries them.
+
+**Evidence:** `clef-lang-site@15d381634f7a08c2a44884a0598d0e634083b313`, `hugo/content/docs/design/categorical-foundations/categorical-deep-learning-adjoint-correspondence.md:16–35`, `hugo/content/blog/a-triangle-without-mystery.md:15–82,145–162`, and `hugo/content/docs/internals/verification/mode-shifts.md:15–65,126–149`; `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03`, `coexponential-exploration.md:116–161,196–248,280–346`. These sources motivate the construction and provide conditional component results. The combined compiler model and its laws remain to be established.
 
 ### H1.10: test the foundation against AI and quantum computation
 
