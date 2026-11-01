@@ -2,7 +2,7 @@
 
 Revise the manuscripts' architectural account around the selected native elaboration direction: qualified schemes, dimensional and NFT judgments, unique-label measured rows, deferred numerics, service inference and evidence-preserving realization. NFT supplies a central contract for value identity and resource use. The coexponential paper connects service, client and continuation structure to communication and control. DTS+DMM and PHG explain their analysis and incremental integration. This chapter recommends the changes and separates design commitments from theorem and implementation claims that need additional evidence. The manuscript files themselves were not edited during this work.
 
-These are the first concrete impact sites, not a limit on the inquiry. A significant result may require corresponding changes throughout the published work, specifications, design documents and implementation accounts. Propagate only the supported claim and its premises. Do not preserve a conflicting downstream account merely because it was previously treated as settled.
+These first concrete impact sites can lead to changes throughout the published work, specifications, design documents and implementation accounts. Propagate supported claims with their premises, and revise conflicting downstream accounts as evidence warrants.
 
 The central contribution to test is an enlarged set of native relationships that Tier 1 can express and check. The manuscripts should show a standard F# result, the relevant mechanism from `write-you-an-inference-in-fsharp`, and the additional Clef judgment with its derivation and failing control. DTS+DMM should explain the new schemes and admissible generalization. NFT should make the value/instance/use rules explicit. PHG should show how those derivations compose and when an edit invalidates them. The worked comparison and mandatory experiment format are in chapter 4. Existing F# dimensional inference is part of the baseline, not a newly discovered Clef advantage.
 
@@ -36,7 +36,7 @@ Experiment identifiers refer to [chapter 04](04-horizons-and-experiments.md). Th
 
 ## Coexponential services: what the manuscript contributes
 
-The paper is a foundation for inference, not merely a later concurrency application. Its finite actor fragment relates a service and client pool to a state protocol. Its continuation account associates each invocation with a return point, live environment, resource ownership and one completion right. Its communication summary and wait relation describe additional facts about that same source. **Evidence:** `coexponential-exploration.md:116–161,196–248,260–310`.
+The paper provides a foundation for inference. Its finite actor fragment relates a service and client pool to a state protocol. Its continuation account associates each invocation with a return point, live environment, resource ownership and one completion right. Its communication summary and wait relation describe additional facts about that same source. **Evidence:** `coexponential-exploration.md:116–161,196–248,260–310`.
 
 The paper states finite service, ownership and reply-preservation results under named premises. Its service-order theorem requires both the same final state and the same reply for each labelled request. Its finite-batch completion result additionally requires complete wait coverage, whole-continuation progress and the stated scheduling, selection and external-outcome assumptions. These are source results with explicit scope. The proposed source-to-session reconstruction algorithm and target-runtime correspondence remain separate work. **Evidence:** `coexponential-exploration.md:226–238,280–310,312–346,665–682`.
 
@@ -95,7 +95,7 @@ Publish the actual combined results rather than inheriting a claim of global pri
 
 **H3:** an admitted adapter correspondence could revise NFT's structural scope directly. It must define preserved observations, composition/coherence, variance and resource treatment before claiming a subtype order or replacement for algebraic subtyping. Current `1/v` does not already define a general `B/A` calculus. A complementary relationship is a valid result. Universal replacement is not required. The derivative transpose mentioned in NFT's applications is distinct from Atelier's proposed source-translation feature.
 
-The site articles make this reconciliation concrete. *The Gift of Deferred Inference* separates source schemes, ranges and physical choices. The FPGA article supplies per-output state/input dependencies across a broader target remit. *Carrying Proofs into JavaScript* adds arithmetic, identity, suspension and recovery obligations. These support H1 experiments, not a completed combined theorem. Exact article/platform bindings and implementation-status limits are in [chapter 2](02-js-numerics-and-interop.md).
+The site articles make this reconciliation concrete. *The Gift of Deferred Inference* separates source schemes, ranges and physical choices. The FPGA article supplies per-output state/input dependencies across a broader target remit. *Carrying Proofs into JavaScript* adds arithmetic, identity, suspension and recovery obligations. These inform H1 experiments and identify premises for proofs of the combined system. Exact article/platform bindings and implementation-status limits are in [chapter 2](02-js-numerics-and-interop.md).
 
 ## FFI and differential-compilation implications
 
@@ -138,7 +138,7 @@ These observations were recorded without changing the specifications or manuscri
 
 The compiler-verification direction also belongs in the wider manuscript account. Connect program-level judgments to actual artifact correspondence, then state the planned mechanized preservation and bootstrap obligations for a self-hosted compiler. Reusable Rocq/Coq libraries and cvc5 procedures have distinct roles. A tier label does not identify their trusted base. The current Composer proof-composition owner, not a historical pipeline sketch, governs that integration. [Ecosystem and positioning](07-explaining-clefs-position.md)
 
-Record the selected architecture as the design direction now. At each successful horizon gate, attach the exact judgment, theorem or measured result to the relevant paragraph and promote its status accordingly. Retain counterexamples and unsupported cases. Name new source rules before implementation spreads to readers or backends. Lack of a completed theorem is a reason to label the commitment, not to avoid making it.
+Record the selected architecture as the design direction now. At each successful horizon gate, attach the exact judgment, theorem or measured result to the relevant paragraph and promote its status accordingly. Retain counterexamples and unsupported cases. Name new source rules before implementation spreads to readers or backends. Label each commitment with its current evidentiary status.
 
 Use the existing compiler owners to establish the result. No new proof should be created opportunistically during publication, passive Alex witnessing or target lowering. Conversely, those ownership constraints do not require preserving every current F#-derived source restriction.
 

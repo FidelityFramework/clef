@@ -4,7 +4,7 @@
 
 Admit checked structural views where their semantics are established. Do not make unrestricted algebraic subtyping the organizing rule of the NTU, or treat a general NFT ratio as an already established replacement for it.
 
-This is a choice to develop beyond F# inference, not a claim that F# already supplies the required combination. “HM(X)-style” describes qualified schemes over cooperating constraint domains. No stock theorem proves this proposed combination. The [inference landscape](01-inference-landscape.md) develops the architecture. [JavaScript, numerics and interop](02-js-numerics-and-interop.md) supplies its boundary cases. The recommendation is concrete, while implementation and theorem acceptance remain subject to [the experiment gates](04-horizons-and-experiments.md).
+Clef's proposed inference combines qualified schemes over cooperating constraint domains with the native judgments developed in this review. “HM(X)-style” describes the scheme architecture. The combined system requires its own proofs. The [inference landscape](01-inference-landscape.md) develops the architecture. [JavaScript, numerics and interop](02-js-numerics-and-interop.md) supplies its boundary cases. Implementation and theorem acceptance remain subject to [the experiment gates](04-horizons-and-experiments.md).
 
 ## What structural subtyping would contribute
 
@@ -14,7 +14,7 @@ The strongest algebraic-subtyping case is directional information: inputs constr
 
 Dolan's calculus combines ML-style polymorphism and subtyping with principal types and decidable subsumption. Its polarity discipline permits joins in output positions and meets in input positions. Function arguments reverse polarity. These restrictions belong to the result's scope. They do not establish the same properties for every NTU extension. [Dolan, *Algebraic Subtyping*, summary, §5.1 and chapter 9](https://www.cs.tufts.edu/~nr/cs257/archive/stephen-dolan/thesis.pdf)
 
-The [video considered in this review](https://www.youtube.com/watch?v=OenHweMNVeY) illustrates record width and variant inclusion at 7:50–8:26 and function variance at 15:02–16:13. It gives an either-input result `β → γ → β ∨ γ` at 17:18–17:45 and separate mutable write/read bounds at 20:08–21:07. These concern structural compatibility and information flow, not necessarily class hierarchies.
+The [video considered in this review](https://www.youtube.com/watch?v=OenHweMNVeY) illustrates record width and variant inclusion at 7:50–8:26 and function variance at 15:02–16:13. It gives an either-input result `β → γ → β ∨ γ` at 17:18–17:45 and separate mutable write/read bounds at 20:08–21:07. These examples concern structural compatibility and information flow.
 
 Video evidence here is limited to the supplied transcript through 28:27. Diagrams were not inspected, and transcription ambiguities were checked against primary literature.
 
@@ -32,7 +32,7 @@ Implicit measured unions should not be the default response to conflicting branc
 
 The reason for this choice is that a clear dimensional disagreement should remain a clear obligation at the branch or consumer. An inferred union would need additional elimination and diagnostic rules. Comparable examples must test whether this explicitness costs too much annotation.
 
-Global subtyping would add bounds, joins, meets and variance to a combination already responsible for value indices, demand, resources and numeric refinements. Its published results do not discharge that combination's obligations. Measured rows and qualified constraints provide a narrower first contract with useful structural reuse. That is the present engineering and language-design judgment, not a theorem that algebraic subtyping cannot express the remit.
+Global subtyping would add bounds, joins, meets and variance to a combination already responsible for value indices, demand, resources and numeric refinements. Its published results do not discharge that combination's obligations. Measured rows and qualified constraints provide a narrower first contract with useful structural reuse. Further work can assess algebraic subtyping against the same remit.
 
 Retain the competing implementation in bounded comparisons, especially for foreign APIs, heterogeneous branch joins and future Transpose fragments. Reopen the core choice if it yields materially clearer programs and checked evidence without losing the required distinctions.
 
@@ -64,7 +64,7 @@ These are inference and elaboration questions even when no implicit subtype coer
 
 The immediate implementation guide is a finite, explicit elaboration fragment. Structural inference contributes a qualified scheme. Resource rules track permitted live-instance changes. Admitted numeric and transition procedures supply their premises. Generalization must preserve the relevant obligations rather than duplicate a captured right or discharge a use-site premise.
 
-The existing CCS/Baker owners remain responsible. “Fragment” describes a research judgment and executable reference, not a new production intermediate language or parallel semantic owner.
+The existing CCS/Baker owners remain responsible. The fragment defines a research judgment and an executable reference within that architecture.
 
 The manuscript's initial reciprocal core admits finite immutable data with pure decidable equality and no hidden consumable resources. A record can carry a separately tracked completion right, but placing such a record inside the indexed data domain requires an additional admission rule. Mutable objects and unrestricted foreign equality cannot be admitted just by assigning them an ordinary carrier type. A handle needs an explicit identity and lifetime protocol, including the observations permitted before and after release. [N:163–180]
 

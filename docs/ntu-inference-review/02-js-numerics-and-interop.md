@@ -6,7 +6,7 @@ A concrete programming contract gives the inference comparison its purpose. Bean
 
 The first shared implementation case should be a deferred measured computation with a one-shot completion right tracked separately beside its immutable record, outside the indexed data. Its record interface, arithmetic, state transitions and resource identity must agree.
 
-NFT supplies the admitted indexed-use contract. Rows and qualified requirements supply interface abstraction. Numeric and platform procedures supply realization premises. Resource-bearing aggregates follow under an explicit admission rule. This forces the native design to work across its actual semantic boundaries rather than succeeding only on isolated type examples.
+NFT supplies the admitted indexed-use contract. Rows and qualified requirements supply interface abstraction. Numeric and platform procedures supply realization premises. Resource-bearing aggregates follow under an explicit admission rule. Together, these cases test the native design across its semantic boundaries.
 
 ## The strongest case for measured rows
 
@@ -20,7 +20,7 @@ This is illustrative type notation, not accepted Clef syntax. The useful propert
 
 That supports telemetry adapters, coordinate-bearing records, calibrated sensor readings and application components on native targets as well as JavaScript. The experiment must demonstrate this reuse. Count duplicated adapters, required annotations and retained constraints across several unrelated call sites. Also measure diagnostic quality and incremental rechecking. An attractive inferred signature alone does not establish a worthwhile implementation.
 
-Select unique-label rows where projection, extension and update need explicit field presence and a remaining shape. An operation must retain the field's dimensional scheme, not merely establish that a label exists. Extension requires absence. Replacement/update is explicit and must preserve the applicable resource/effect contract. This is a better default for Clef's native and JS records than scoped duplicate-label shadowing.
+Select unique-label rows where projection, extension and update need explicit field presence and a remaining shape. An operation must retain the field's dimensional scheme. Extension requires absence. Replacement/update is explicit and must preserve the applicable resource/effect contract. This is a better default for Clef's native and JS records than scoped duplicate-label shadowing.
 
 Optional fields and recursive shapes need admitted rules. Record rows, effect rows and member-overload constraints remain distinct judgments even if implementation machinery is shared.
 
@@ -38,7 +38,7 @@ Its cost is repeated shape declarations and adapters where generic operations wo
 
 ## Value semantics must survive the inferred contract
 
-Beancounter requires content equality, persistent map/set updates, defined key comparison and ordered traversal. These claims concern observable behavior, not just shape compatibility. [J1]
+Beancounter requires content equality, persistent map/set updates, defined key comparison and ordered traversal. These are observable behaviors. [J1]
 
 The inspected Fickl source dispatches F# Map/Set operations to runtime libraries. Its maps and sets use comparer-directed trees. Updates construct collection values, and folds traverse left/key/right. The local Fable checkout contains the same persistent core. Fickl has additional changes, but this evidence does not attribute the invention of those collection semantics to Fickl. Nor does it show a global replacement of JavaScript's built-ins. [F1–F3]
 
@@ -52,7 +52,7 @@ Persistence likewise needs more than an immutable outer type. A retained scenari
 
 Beancounter distinguishes integer minor-unit amounts, currency and exact rational rates. Its documented model deliberately has a finite monetary resolution. Sub-minor-unit accrual needs a richer amount model. Currency compatibility, scale, rounding schedule, intermediate capacity and representation are separate concerns. Treating them all as a choice of numeric width would obscure the actual contract. [J1, J3]
 
-The numeric carrier alone is insufficient. Fickl routes fixed-width integer operations through BigInt machinery and then an unchecked width conversion. Its runtime separately provides checked conversion. Thus Beancounter's refusal of overflow belongs to the admitted money operation and its boundary checks, not to the mere presence of BigInt in generated code. [F5]
+The numeric carrier alone is insufficient. Fickl routes fixed-width integer operations through BigInt machinery and then an unchecked width conversion. Its runtime separately provides checked conversion. Beancounter's refusal of overflow depends on the admitted money operation and its boundary checks. [F5]
 
 A small discriminator makes the distinction clear: half-even rounding of two half-cent results separately gives zero cents after addition. Adding the exact halves before rounding gives one cent. Matching currencies, dimensions and final widths do not justify equating those programs. Similarly, allocating 10,000 cents three ways requires a conservation rule and a remainder policy, rather than three independent approximations. [J1, J3]
 
@@ -62,7 +62,7 @@ Native lowering faces the same issue. Checked range evidence, intended modular a
 
 The strategic JS path should compile settled native arithmetic through Composer's proposed JSIR backend. Keep Fickl/Fable behavior as a concrete application and regression reference for equality, persistence and checked monetary operations. Do not make Fable's host-oriented replacement choices the permanent definition of Clef's native numerics.
 
-The following is the recommended construction policy. CCS/Baker establishes eligibility and proof premises. Composer realizes the selected operations and helpers. The backend does not infer a missing range or silently weaken precision. Each row is an implementation target, not a claim that the current JSIR route already provides it.
+The following construction policy sets implementation targets for JSIR. CCS/Baker establishes eligibility and proof premises. Composer realizes the selected operations and helpers. The backend does not infer a missing range or silently weaken precision.
 
 | Source contract | Preferred JS realization | Required eligibility and preservation |
 |---|---|---|
@@ -115,13 +115,13 @@ The FFI work supplies an existing connection to native lowering. Farscape elicit
 
 The source/representation separation is visible in implementation. Farscape's `clefSpelling` maps signed and unsigned integer families to source `int`, while `AbiRepr` separately retains family, bit width, provenance stratum and C spelling. Profiles distinguish `int`, `long` and pointer widths. Its layout probe uses the declaring header, include paths and defines to obtain Clang layout information. The inspected probe is a C translation unit. This evidence does not establish a general C++ object ABI. [X2]
 
-This gives the inference comparison a concrete input: the source type and dimension, foreign declaration and declaring unit, selected ABI, measured layout and dynamic resource instance must remain distinguishable. A C `long` can expose the same source `int` under different ABI widths. A deferred value of `2^40` therefore needs different boundary coverage under LP64 and LLP64. Changing the profile must invalidate the affected proof and lowering facts without inventing a new source type. This is a proposed comparison, not current cross-target acceptance.
+This gives the inference comparison a concrete input: the source type and dimension, foreign declaration and declaring unit, selected ABI, measured layout and dynamic resource instance must remain distinguishable. A C `long` can expose the same source `int` under different ABI widths. A deferred value of `2^40` therefore needs different boundary coverage under LP64 and LLP64. Changing the profile must invalidate the affected proof and lowering facts while preserving the source type. This comparison is proposed work; cross-target acceptance remains to be established.
 
 A physical width supplied by a descriptor is a boundary constraint, not permission to truncate silently. [N3, X2–X3]
 
 The intended proof scope is the admitted marshaled values, storage/access and ownership contracts under explicit foreign hypotheses. It does not establish that an arbitrary C algorithm computes the intended answer. A return check cannot undo an unauthorized write already performed by foreign code. NFT can help express value matching and permitted uses, but applying its initial finite immutable interpretation to opaque `CHandle<T>` values requires an explicit equality, alias/lifetime and resource interpretation. Equal raw addresses, equal source types and equal live-instance identities are different claims. [X1; NFT assessment in chapter 5]
 
-This is also a precise differential-compilation case. The current working agreements distinguish proof dependencies from code dependencies and forbid merging effectful foreign calls merely because arguments are equal. A reusable graph judgment may remain stable while its boundary evidence must change with a descriptor, layout, ownership policy or foreign behavioral hypothesis. “Differential” here includes incremental evidence reuse. A C-versus-Clef execution comparison is a separate control with its own observations. H1.7 measures valid reuse, not just fewer changed rows. [X1, B1]
+This is also a precise differential-compilation case. The current working agreements distinguish proof dependencies from code dependencies and forbid merging effectful foreign calls merely because arguments are equal. A reusable graph judgment may remain stable while its boundary evidence must change with a descriptor, layout, ownership policy or foreign behavioral hypothesis. “Differential” here includes incremental evidence reuse. A C-versus-Clef execution comparison is a separate control with its own observations. H1.7 measures the validity of reuse as well as the number of changed rows. [X1, B1]
 
 Current evidence must remain scoped. The BoundaryConformance driver describes declaration generation and compiler/public-PSG checks. It explicitly does not execute C/native Clef, validate callback ABI execution or discharge releases. The separately versioned Definition of Done, with status dated October27, reports limited libc-shaped Linux x86-64 native evidence and marks reuse NR/unsettled. Neither is a new gate receipt from this review. Header extraction, native execution, boundary proofs and reuse acceptance are separate evidence categories. [X3–X4]
 

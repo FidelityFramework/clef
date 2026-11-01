@@ -2,7 +2,7 @@
 
 This chapter owns the recommended engineering direction. Build a native constraint-preserving elaborator, with dimensional and NFT obligations integral to its judgments, and retain ML-style inference where its generalization rules remain valid.
 
-Horizons describe increasing evidence and engineering commitment with no calendar implications. The gates below qualify the chosen direction. They are not a reason to postpone choosing it. The full comparison matrix and Clef implementation experiments remain unexecuted. H1.1 includes separately identified checks of its small F# examples.
+Horizons describe increasing evidence and engineering commitment without assigning calendar dates. The gates below qualify the chosen direction. The full comparison matrix and Clef implementation experiments remain unexecuted. H1.1 includes separately identified checks of its small F# examples.
 
 ## Recommendation and scope
 
@@ -324,9 +324,9 @@ These controls address different questions: whether a callback-local type escape
 - source revision, participants, contextual assumptions and invalidation dependencies;
 - the checking mechanism and unsupported, pending, contradiction and timeout outcomes.
 
-This is an admitted family of source judgments, not a demand for one universal algebra. Start with the existing Baker ingredients, recipes and retained relations. Identify a missing fact before proposing a new representation or owner.
+This family of source judgments builds on the existing Baker ingredients, recipes and retained relations. Identify a missing fact before proposing a new representation or owner.
 
-Use a scheme of the conceptual form `forall flexible variables. requirements => source type`. Quantified variables can include admitted type, row and measure variables. A live resource instance is not another freely quantified variable: retain its scope and use state separately, along with the creation-value relation. Context-specific ranges and platform/foreign facts keep their own dependency identities. This is the interface to implement, rather than flattening all obligations into host type equality.
+Use a scheme of the conceptual form `forall flexible variables. requirements => source type`. Quantified variables can include admitted type, row and measure variables. A live resource instance is not another freely quantified variable: retain its scope and use state separately, along with the creation-value relation. Context-specific ranges and platform/foreign facts keep their own dependency identities. This interface preserves the distinct obligations that host type equality alone cannot express.
 
 Use `HMSplitSolve` in `write-you-an-inference-in-fsharp` as the scheduling reference. Its let-bound constraints are solved before generalization against the updated environment. Clef must make the corresponding boundary explicit even when some native requirements remain in a qualified scheme. Compare the resulting interface with F#'s inferred signature and value-restriction diagnostics. Then show the additional evidence for every native requirement retained or excluded.
 
@@ -497,7 +497,7 @@ The distinction from a query-centered compiler needs precise wording. Fai's own 
 
 Compare the same edit across the systems where a faithful case exists. Record query evaluations or graph relations revisited, retained and rechecked evidence, unchanged versus changed semantic results, and time to a valid result. A query system can track dependencies and stop propagation when results are unchanged. The proposed Clef advantage must be demonstrated in the identity, composition and reuse of the relevant multi-participant semantic and proof facts, not claimed merely because one approach is incremental. [Fai at inspected revision](https://github.com/Krzysztof-Cieslak/fai/blob/3e03dd1ce3222dab895a71f4556af5fbff1109a1/README.md), [Rust query evaluation](https://rustc-dev-guide.rust-lang.org/queries/query-evaluation-model-in-detail.html), [Salsa red-green algorithm](https://github.com/salsa-rs/salsa/blob/master/book/src/reference/algorithm.md)
 
-MLKit's region inference and the Scheme Nanopass framework are useful precedents for distinct parts of the design. Clef's specific direction puts small source-owned recipes and native judgments on a revisioned hypergraph, then uses complete dependencies to revalidate affected evidence and realization. The comparison is about the contract chosen here, not a claim that another compiler could not adopt incremental or proof-carrying techniques. [MLKit](https://github.com/melsman/mlkit), [Nanopass framework](https://github.com/nanopass/nanopass-framework-scheme)
+MLKit's region inference and the Scheme Nanopass framework are useful precedents for distinct parts of the design. Clef's specific direction puts small source-owned recipes and native judgments on a revisioned hypergraph, then uses complete dependencies to revalidate affected evidence and realization. [MLKit](https://github.com/melsman/mlkit), [Nanopass framework](https://github.com/nanopass/nanopass-framework-scheme)
 
 **Measure the additional inference hypothesis.** More stable schemes, deferred commitments and precise dependencies could produce fewer changed facts and less invalidation for the same edit. That could improve an already selected differential approach. Richer inference can also cost more, reveal additional necessary dependencies or move work to checking. Neither outcome follows from theory elegance alone.
 
@@ -669,7 +669,7 @@ The handoff must contain the rules, retained Baker/PSG facts, a checker or check
 
 Present E01/E02/E07/E12/E18 side by side across all three comparison arms before making a superiority claim. Show what F# already establishes, what the selected corpus mechanism adds, and which extra Clef relationship now has a checked derivation. Then connect those source judgments to the numeric, NFT-instance and boundary controls. This is the first concrete demonstration of the proposed Tier 1 gain.
 
-If the proposed JSIR route cannot yet emit the case, report the missing implementation owner and finish that narrow path. A reference evaluator is useful earlier evidence but does not satisfy the realization gate. This increment establishes the selected architecture's first coherent slice instead of beginning with a broad compiler rewrite.
+If the proposed JSIR route cannot yet emit the case, report the missing implementation owner and finish that narrow path. A reference evaluator is useful earlier evidence but does not satisfy the realization gate. This increment establishes the selected architecture's first working slice.
 
 ## Common shape and mutation matrix
 
@@ -769,7 +769,7 @@ Add a proof-expression result to each report: which native statement became expr
 4. **Establish each claimed realization.** JS objects, comparator trees, BigInt operations, native layouts and FPGA resources have different obligations. Binding a source type does not prove a library or emitted operation implements it.
 5. **Measure the design-time result.** Quantify the gains and costs under the pinned workload rather than predicting them from pure versus mutable implementation style.
 
-The editor-facing result should retain the familiar usefulness of F# tooling while exposing the additional native judgments. For a selected expression, show its scheme, established structural relationships, pending nonstructural obligations and the source of a failure. The editor consumes CCS/Baker's evidence. It does not introduce another inference authority. FSharp.Compiler.Service remains the F# comparison surface rather than being assumed to recognize new Clef judgments.
+The editor-facing result should retain the familiar usefulness of F# tooling while exposing the additional native judgments. For a selected expression, show its scheme, established structural relationships, pending nonstructural obligations and the source of a failure. The editor consumes CCS/Baker's evidence. FSharp.Compiler.Service supplies the F# comparison surface, while CCS handles Clef judgments.
 
 **Advance:** source proofs, mutations, implementation checks and the affected consumer/target evidence agree. The implementer runs the shape matrix and discriminating mutations before handoff. Substantial acceptance uses unfiltered leased suites with a frozen dependency closure. Accepted baselines from other agents are reused. The reviewer audits binding and anomalies rather than rerunning a baseline solely to re-establish it.
 
