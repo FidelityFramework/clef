@@ -50,7 +50,7 @@ Unrestricted impredicative inference, a universal negative/fractional quotient t
 
 ## Why this direction follows from the evidence
 
-Dave's `write-you-an-inference-in-fsharp` provides a paved route to implementing the mechanisms. Pure/mutable HM, split solving, rows and rank-N are ***not*** seven competing type theories: some alter implementation or scheduling, others alter the language. The project began in 2018 and the inspected checkout includes later maintenance and rank-N work. Its value here is to make the departure concrete, without suggesting it is an exhaustive taxonomy or production certificate. [Inference decisions](01-inference-landscape.md)
+Dave's `write-you-an-inference-in-fsharp` provides a paved route to implementing the mechanisms. Pure/mutable HM, split solving, rows and rank-N are ***not*** seven competing type theories: some alter implementation or scheduling, others alter the language. The project began in 2018 and the inspected checkout includes later maintenance and rank-N work. Its value here is to make the available mechanisms concrete, without suggesting it is an exhaustive taxonomy or production certificate. [Inference decisions](01-inference-landscape.md)
 
 Deferred inference supplies the bridge from reusable source schemes to richer numerics. FPGA exposed per-field width and Mealy/Moore dependencies, but they apply across targets. Fidelity.Platform quotations and other supported declarations constrain realization while preserving provenance. NFT adds a further requirement: selected equality and distinct live instances must survive that realization. These fit a retained-constraint elaborator better than early carrier selection. [Numeric and stateful analysis](02-js-numerics-and-interop.md)
 
@@ -67,7 +67,7 @@ The selected contract creates work for DTS+DMM, PHG, NFT and the coexponential m
 ## Read and use this guide
 
 1. [Specific strategy, horizons and gates](04-horizons-and-experiments.md): the engineering direction and implementation sequence.
-2. [Explaining Clef's departure](07-explaining-clefs-position.md): the final positioning document and language for explaining the move beyond conventional ML/HM inference.
+2. [Explaining Clef's approach](07-explaining-clefs-position.md): the final positioning document and language for explaining the move beyond conventional ML/HM inference.
 3. [Inference decisions and rationale](01-inference-landscape.md): selected mechanisms, alternatives and reasons.
 4. [JavaScript, numerics and FFI](02-js-numerics-and-interop.md): concrete source-to-realization decisions.
 5. [NFT, subtyping and Transpose](03-subtyping-nft-and-transpose.md): what belongs in the core, what is selective, and what remains beyond the current remit.

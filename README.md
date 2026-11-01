@@ -11,12 +11,12 @@
 
 ## Overview
 
-CCS (Clef Compiler Services) is the compiler frontend for [Clef](https://clef-lang.com), a concurrent programming language in the ML tradition. It parses Clef source, resolves types against the Native Type Universe (NTU), and uses Baker's elaboration and saturation nanopasses to construct the Program Semantic Graph and its joint constraints. Composer's Alex witnesses that graph into the admitted MLIR forms for the selected backend.
+Clef is a concurrent programming language with ML-family syntax and its own Native Type Universe (NTU). Clef Compiler Services (CCS) parses and checks [Clef](https://clef-lang.com) source. Baker's elaboration and saturation nanopasses settle semantic facts and joint constraints, which CCS publishes as the Program Semantic Graph (PSG). The graph retains relationships needed for type checking, proof, and lowering. Alex witnesses the settled graph, and Composer's backend realizes it for the selected target.
 
 The bootstrap compiler is written in F# and runs on .NET. Its host dependencies
 are distinct from Clef language semantics and target runtime requirements.
 
-Clef targets CPU, MCU, GPU, NPU, FPGA, and CGRA from a single source language. CCS is stage one of that compilation.
+The framework's remit includes CPUs, microcontrollers, GPUs, NPUs, FPGAs, CGRAs, and JavaScript. Support varies by target and remains in active development. CCS is the frontend for those compilation pathways.
 
 ## The Fidelity Framework
 
@@ -35,19 +35,19 @@ CCS is part of the **Fidelity** compilation framework:
 
 Heterogeneous compute is fragmented. Writing software that runs across CPUs, microcontrollers, GPUs, NPUs, and FPGAs today means maintaining separate codebases in separate languages — C for bare-metal, CUDA for GPUs, HLS for FPGAs, Python for ML inference pipelines. Each target brings its own toolchain, its own memory model, and its own failure modes. Integrating them requires hand-written glue at every boundary.
 
-Clef is a single language that targets all of them.
+Clef gives these domains a common language, with target-specific requirements made visible to the compiler.
 
 **Concurrency is the programming model, not a library.** The actor model is built into the language. Every stateful interaction is a message. Actors are the unit of ownership, isolation, and scheduling — whether running on CPU threads, GPU streaming multiprocessors, or synthesized into FPGA logic.
 
-**The type system carries hardware information.** Dimensional type inference propagates numeric format, memory region, access kind, and tensor shape through the type system invisibly, the way Hindley-Milner propagates polymorphism. The compiler knows whether a value lives in global DRAM, shared SRAM, a peripheral register, or read-only flash — and enforces those distinctions at compile time.
+**Native types carry meaning across targets.** Dimensions and data structure are distinct from the numeric format chosen to represent a value. Range, precision, memory residence, access, and platform capabilities contribute their own constraints. Baker's recipes settle the relevant facts for lowering and retain proof obligations where evidence is required.
 
-**Memory is deterministic and ownership-tracked.** There is no garbage collector, no managed heap, no runtime. Lifetimes are inferred from program structure. Arena allocation per actor means thousands of allocations freed together at actor scope exit. Pointers carry lifetime information through the type system.
+**Memory has explicit lifetime and placement contracts.** Clef's native model is not defined by the .NET heap used by the bootstrap compiler. Lifetimes and placement follow program structure and the requirements of the selected target. Actors provide a scope for resource management, and pointers carry lifetime information through the type system.
 
 **SRTP-based polymorphism costs nothing at runtime.** Statically resolved type parameters monomorphize at compile time against the Alloy witness hierarchy. Zero-cost abstractions are not aspirational — they are structural.
 
 ## The Language
 
-Clef is ML-family syntax — records, discriminated unions, pattern matching, computation expressions, first-class functions — with native-first semantics throughout.
+Clef uses familiar ML-family syntax for records, discriminated unions, pattern matching, computation expressions, and first-class functions. Its semantics are native to Clef, and evaluation is lazy by default.
 
 ```clef
 // Records are value types with struct layout
@@ -109,10 +109,15 @@ platform/backend facts under the [lowering contract](../clef-lang-spec/spec/back
 Required unresolved obligations remain explicit; creating an obligation does not
 establish that it has been discharged.
 
+The PSG's hypergraph also provides a foundation for differential compilation.
+Changes can be traced through the relationships they affect, so the compiler can
+revisit affected facts and evidence while retaining unaffected work. Complete
+dependency tracking and measured performance remain implementation goals.
+
 ## What CCS Provides
 
 - **Parsing** — full Clef syntax via the inherited FCS lexer and parser, extended for Clef constructs
-- **Native type resolution** — literals, options, arrays and strings resolve to NTU types at check time; dimensional types carry numeric format, memory region and access kind
+- **Native type resolution** — literals, options, arrays and strings resolve to NTU types at check time. Dimensional relationships, numeric representation, residence and access contribute distinct constraints
 - **SRTP resolution** — statically resolved type parameters resolve against source-defined witnesses, not .NET method tables
 - **The Program Semantic Graph** — nodes and first-class hyperedges, saturated by Baker recipes: collections, closures, suspension, obligations
 - **Proof obligations as graph citizens** — born at saturation, emitted as an SMT-LIB2 ledger, dispatched to cvc5 at design time and re-derived from the artifact at build time
@@ -126,8 +131,8 @@ CCS is a focused front end, not a complete compiler:
 - **No IL generation** — Clef does not target .NET IL
 - **No MSBuild integration** — project files are `.fidproj`, loaded by CCS and driven by Composer
 - **No NuGet resolution** — package management is ClefPak (`cpk`)
-- **No inherited F# Interactive host** — Composer owns the planned [interactive workbench and native bridge](../Composer/docs/Interactive_Compiler_Workbench.md)
-- **No code generation** — that is Composer's, through Alex and MLIR
+- **No inherited F# Interactive host** — the planned [interactive workbench and native bridge](../Composer/docs/Interactive_Compiler_Workbench.md) is part of Composer
+- **No target code generation** — Composer's backend realizes the graph witnessed by Alex through the selected target pathway
 
 The planned interactive CLI is `clefx`, matching `.clefx` script files. Clef has
 no separate signature-file extension. Composer may use SageFS/FSI to keep the
@@ -194,4 +199,4 @@ CCS is developed by [SpeakEZ Technologies](https://speakez.tech) as part of the 
 
 ---
 
-*ML semantics. Hardware scale. No runtime.*
+*Concurrent by design. Native across targets.*

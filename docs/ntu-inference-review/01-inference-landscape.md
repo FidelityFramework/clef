@@ -29,7 +29,7 @@ These outside-index repositories permit scoped direct reads. Retained fresh/late
 
 The F# corpus illustrates these axes: its HM entries vary representation, schedule and rank, while rows add a structural theory. **Evidence:** `I: README.md:8–19`; `Hindley-Milner-Mutable.md:3–9`; `Hindley-Milner-Split-Solver.md:3–5`.
 
-Clef has already begun this departure. Its native type checker uses union-find and measure-aware unification, while Baker supplies distinct demand, continuation, boundary and obligation ingredients. Mutable union-find itself is familiar inference engineering, not proof of a new language theory. The relation to the corpus is therefore an implementation comparison as well as a language-design comparison. Extend the relevant current owner when it already supplies the mechanism, and identify the missing judgment before proposing another one. The scoped source bindings and the distinction between existing mechanisms and proposed capabilities are in [H1.9](04-horizons-and-experiments.md).
+Clef has already begun to build this foundation. Its native type checker uses union-find and measure-aware unification, while Baker supplies distinct demand, continuation, boundary and obligation ingredients. Mutable union-find itself is familiar inference engineering, not proof of a new language theory. The relation to the corpus is therefore an implementation comparison as well as a language-design comparison. Extend the relevant current owner when it already supplies the mechanism, and identify the missing judgment before proposing another one. The scoped source bindings and the distinction between existing mechanisms and proposed capabilities are in [H1.9](04-horizons-and-experiments.md).
 
 ## Decisions across the candidate families
 

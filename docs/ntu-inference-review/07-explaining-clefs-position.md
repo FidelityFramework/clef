@@ -78,7 +78,7 @@ These facts cooperate, but they answer different questions. Knowing that a quant
 
 That is why the strategy uses several procedures under one language contract. It is also why an interface can require an annotation or a tagged alternative when that makes its meaning clearer. The aim is to infer the useful everyday cases and make the remaining requirements understandable.
 
-Clef's treatment of **negative and fractional types** makes the departure especially tangible. A scratch value restored to zero and one still holding a temporary result can both have an ordinary integer type. *The type alone does not establish that the cleanup was completed.* Likewise, two separately created completion rights do not become one right merely because they refer to equal values. Clef must preserve those distinctions through branches, closures, lazy evaluation and generated code.
+Clef's treatment of **negative and fractional types** makes the need for richer contracts especially tangible. A scratch value restored to zero and one still holding a temporary result can both have an ordinary integer type. *The type alone does not establish that the cleanup was completed.* Likewise, two separately created completion rights do not become one right merely because they refer to equal values. Clef must preserve those distinctions through branches, closures, lazy evaluation and generated code.
 
 Recovery also has concrete limits. Rounding an amount can discard a fraction. Keeping only one field of a record can leave other information behind. To recover the original, the program must retain what is needed or use an operation with an established reversal rule. **Negative and fractional types give Clef a unique way to express and check those obligations.** They do not make every computation reversible or every interface conversion valid. The first implementation starts with precisely defined immutable values. More complex resources and foreign handles receive explicit rules as support expands.
 
@@ -90,7 +90,7 @@ For a record transformer, the contract can state which field changes and which r
 
 That does not turn every program property into a type check. A field relationship does not establish numeric accuracy. A valid consumption rule still needs its matching premise, and it does not by itself prove eventual completion. The useful advance is to connect these obligations explicitly, so later analyses and lowering can use established facts without silently discarding their conditions.
 
-The [worked F# comparison and experiment criteria](04-horizons-and-experiments.md) make this departure inspectable. They connect standard F# inference, the row and rank-N mechanisms in `write-you-an-inference-in-fsharp`, and the proposed native contract. The same roadmap uses Xantham's binding work, Partas.Solid's transformation boundaries and Ranvier's dependency model to identify practical tests of the design.
+The [worked F# comparison and experiment criteria](04-horizons-and-experiments.md) make the proposed approach concrete. They connect standard F# inference, the row and rank-N mechanisms in `write-you-an-inference-in-fsharp`, and the proposed native contract. The same roadmap uses Xantham's binding work, Partas.Solid's transformation boundaries and Ranvier's dependency model to identify practical tests of the design.
 
 ## JavaScript's richer numerics opportunity
 

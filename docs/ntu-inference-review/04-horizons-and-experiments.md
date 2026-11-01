@@ -25,7 +25,7 @@ The native universe determines the language problem. Targets can contribute capa
 
 Implement the evidence/scheme contract, NFT/deferred rules and bounded service-inference foundation together (H1.4–H1.6 and H1.9). Then extend measured structural interfaces (H1.1), the small annotated higher-rank interface (H1.3), and the shared JS/native-boundary examples (H1.8 and chapter 2). Establish the subtyping boundary in H1.2. Differential compilation is part of the architecture from the start. H1.7 measures whether these inference changes improve it. These identifiers name work items, not calendar phases.
 
-## What the departure must earn
+## What the proposed approach must deliver
 
 **The primary gain must be a richer native contract that ordinary compilation can infer, check and carry forward as evidence.** Accepting more source programs is useful. For Fidelity, the larger opportunity is to make relationships that currently live in API conventions, separate analyses or programmer reasoning part of the compiler's explicit contract.
 
@@ -757,7 +757,7 @@ For the same bound workload, measure annotation burden, inferred-interface reada
 
 Separate four outcomes: a new valid typing; a principal/complete inference result; a new structural theorem; and a measured engineering improvement. They justify different claims and manuscript changes.
 
-Add a proof-expression result to each report: which native statement became expressible, whether its derivation was checked, which assumptions remain, and which mutation invalidates it. A new source capability with a checked structural contract can justify the departure even without a speedup. Faster inference that drops those obligations cannot.
+Add a proof-expression result to each report: which native statement became expressible, whether its derivation was checked, which assumptions remain, and which mutation invalidates it. A new source capability with a checked structural contract can justify the added inference machinery even without a speedup. Faster inference that drops those obligations cannot.
 
 ## Horizon 2 integrate the selected fragment
 
