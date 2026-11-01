@@ -150,7 +150,7 @@ At the original research checkpoint, the source-checkout deliverable consisted o
 | 04-horizons-and-experiments.md | Inquiry: own advance/defer/stop recommendations and the shared discriminator matrix. |
 | 05-manuscript-implications.md | Inquiry: review DTS+DMM, PHG, NFT and coexponential implications and bind proposed changes to significance thresholds. |
 | 06-evidence-and-review.md | Inquiry: retain provenance, adjudication, growth and limitations. |
-| 07-explaining-clefs-departure.md | Inquiry: the explicitly requested final positioning document for F#, Haskell, Scala, Rust and native-language readers. |
+| 07-explaining-clefs-position.md | Inquiry: the explicitly requested final positioning document for F#, Haskell, Scala, Rust and native-language readers. |
 
 These files create no new compiler or language authority. Generated working evidence remained under the primary checkout's ignored `artifacts/` location. The original research did not create a branch/worktree, implementation owner, commit or push.
 

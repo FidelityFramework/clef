@@ -777,7 +777,7 @@ The editor-facing result should retain the familiar usefulness of F# tooling whi
 
 This review does not authorize a gate shortcut. No focused passing result establishes complete F/C acceptance.
 
-Develop reusable laws and their semantic bridges with the planned cvc5/Rocq ecosystem in parallel with production integration. Bind the admitted solver/checker dependencies and the actual artifact, not merely a source theorem or tool exit status. Framework and domain authors provide reusable checked constructions. Supported application cases should obtain those instances through ordinary compilation. [Proof-composition roles and exact source binding](07-explaining-clefs-departure.md)
+Develop reusable laws and their semantic bridges with the planned cvc5/Rocq ecosystem in parallel with production integration. Bind the admitted solver/checker dependencies and the actual artifact, not merely a source theorem or tool exit status. Framework and domain authors provide reusable checked constructions. Supported application cases should obtain those instances through ordinary compilation. [Proof-composition roles and exact source binding](07-explaining-clefs-position.md)
 
 ## Horizon 3 extend proofs & the language remit
 
@@ -785,7 +785,7 @@ Develop reusable laws and their semantic bridges with the planned cvc5/Rocq ecos
 
 Extend the finite coexponential service result through an explicit recursive-protocol and runtime interpretation where the evidence warrants it. Mechanize the source/continuation and target correspondence, including request-labelled observations, resources and any applicable validity and fairness premises. The result for one selected execution or finite trace is not automatically equivalence of all service orders or completion of every runtime request.
 
-This extends the planned proof ecosystem into an accountable path toward a proved compiler. Program guarantees, artifact correspondence, transformation correctness and bootstrap trust are related obligations that can advance together. The current Composer proof-composition owner explicitly names self-hosting as a long-term goal. Use its current support-completeness and generation-binding rules, not superseded proof-pipeline diagrams. The [positioning document](07-explaining-clefs-departure.md) gives the audience-facing account and source anchors.
+This extends the planned proof ecosystem into an accountable path toward a proved compiler. Program guarantees, artifact correspondence, transformation correctness and bootstrap trust are related obligations that can advance together. The current Composer proof-composition owner explicitly names self-hosting as a long-term goal. Use its current support-completeness and generation-binding rules, not superseded proof-pipeline diagrams. The [positioning document](07-explaining-clefs-position.md) gives the audience-facing account and source anchors.
 
 **Exploratory recommendation.** Investigate an NFT-informed admitted-adapter calculus and selected Transpose fragments once smaller judgments are understood. This horizon concerns broader correspondence, not whether to investigate NFT's own elaboration: that is already central in H1.6. A small correspondence counterexample can be studied in Horizon 1. A general calculus belongs here.
 

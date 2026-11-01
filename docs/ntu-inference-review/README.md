@@ -28,7 +28,7 @@ F# remains a valuable syntax, tooling and inference starting point. Compatibilit
 
 These choices select a coherent architecture, not one universal algorithm. Separate procedures can solve dimensions, rows, qualified requirements, resource use, ranges and target eligibility under one source contract. Their interfaces and composition rules are part of the implementation.
 
-Clef's lazy-by-default execution is integral to those rules. Its evaluation model differs from the eager defaults familiar in F# and many ML-family languages. Haskell's non-strict execution is a closer point of familiarity. Evaluation strategy and type inference are different choices, but demand and sharing change which effects, captures and resource facts remain valid when inference generalizes a binding. The language commitment is fearless concurrency and parallelism with no `unsafe` escape, including library code. Access, lifetime, arithmetic and protocol obligations must be established through the admitted source and boundary contracts. The [audience document](07-explaining-clefs-departure.md) connects these choices to Haskell and Rust as well as F#, Scala and C/C++.
+Clef's lazy-by-default execution is integral to those rules. Its evaluation model differs from the eager defaults familiar in F# and many ML-family languages. Haskell's non-strict execution is a closer point of familiarity. Evaluation strategy and type inference are different choices, but demand and sharing change which effects, captures and resource facts remain valid when inference generalizes a binding. The language commitment is fearless concurrency and parallelism with no `unsafe` escape, including library code. Access, lifetime, arithmetic and protocol obligations must be established through the admitted source and boundary contracts. The [audience document](07-explaining-clefs-position.md) connects these choices to Haskell and Rust as well as F#, Scala and C/C++.
 
 ## JavaScript should receive the native contract
 
@@ -67,7 +67,7 @@ The selected contract creates work for DTS+DMM, PHG, NFT and the coexponential m
 ## Read and use this guide
 
 1. [Specific strategy, horizons and gates](04-horizons-and-experiments.md): the engineering direction and implementation sequence.
-2. [Explaining Clef's departure](07-explaining-clefs-departure.md): the final positioning document and language for explaining the move beyond conventional ML/HM inference.
+2. [Explaining Clef's departure](07-explaining-clefs-position.md): the final positioning document and language for explaining the move beyond conventional ML/HM inference.
 3. [Inference decisions and rationale](01-inference-landscape.md): selected mechanisms, alternatives and reasons.
 4. [JavaScript, numerics and FFI](02-js-numerics-and-interop.md): concrete source-to-realization decisions.
 5. [NFT, subtyping and Transpose](03-subtyping-nft-and-transpose.md): what belongs in the core, what is selective, and what remains beyond the current remit.

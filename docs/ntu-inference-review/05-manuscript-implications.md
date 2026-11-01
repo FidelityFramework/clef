@@ -136,7 +136,7 @@ These observations were recorded without changing the specifications or manuscri
 
 ## Recommended revision discipline
 
-The compiler-verification direction also belongs in the wider manuscript account. Connect program-level judgments to actual artifact correspondence, then state the planned mechanized preservation and bootstrap obligations for a self-hosted compiler. Reusable Rocq/Coq libraries and cvc5 procedures have distinct roles. A tier label does not identify their trusted base. The current Composer proof-composition owner, not a historical pipeline sketch, governs that integration. [Ecosystem and positioning](07-explaining-clefs-departure.md)
+The compiler-verification direction also belongs in the wider manuscript account. Connect program-level judgments to actual artifact correspondence, then state the planned mechanized preservation and bootstrap obligations for a self-hosted compiler. Reusable Rocq/Coq libraries and cvc5 procedures have distinct roles. A tier label does not identify their trusted base. The current Composer proof-composition owner, not a historical pipeline sketch, governs that integration. [Ecosystem and positioning](07-explaining-clefs-position.md)
 
 Record the selected architecture as the design direction now. At each successful horizon gate, attach the exact judgment, theorem or measured result to the relevant paragraph and promote its status accordingly. Retain counterexamples and unsupported cases. Name new source rules before implementation spreads to readers or backends. Lack of a completed theorem is a reason to label the commitment, not to avoid making it.
 
