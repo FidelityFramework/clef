@@ -8,12 +8,14 @@ The central contribution to test is an enlarged set of native relationships that
 
 ## Source binding
 
-The manuscripts are in `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03`:
+The published papers and the working manuscript files inspected at `arxiv-papers@d2bab3376032929dc7a4eca7e0bc807247a88c03` are:
 
-- `dts-dmm-paper.md` — DTS+DMM.
-- `program-hypergraph-paper.md` — PHG.
-- `negative-fractional-types-in-fidelity.md` — NFT, whose current source identifies itself as a working draft at lines 1–7.
-- `coexponential-exploration.md` — the coexponential service, continuation, communication and realization account.
+- [Dimensional Type Systems and Deterministic Memory Management](https://arxiv.org/abs/2603.16437) — `dts-dmm-paper.md`.
+- [The Program Hypergraph](https://arxiv.org/abs/2603.17627) — `program-hypergraph-paper.md`.
+- [Negative and Fractional Types in the Fidelity Framework](https://arxiv.org/abs/2606.04352) — `negative-fractional-types-in-fidelity.md`.
+- [Coexponential Exploration in the Clef Programming Language](https://arxiv.org/abs/2610.12911) — `coexponential-exploration.md`.
+- [Decidable By Construction](https://arxiv.org/abs/2603.25414) — `decidable-by-construction.md`.
+- [Fixed-Point Scaffolding in the Clef Programming Language](https://arxiv.org/abs/2606.02854) — `fixed-point-scaffolding.md`.
 
 The inspected manuscript files had no working-tree diff. Existing unrelated changes in that repository were preserved. The requested AGENTS primer was read first. It directs primary claims to the manuscripts, rather than making itself the scientific authority.
 
