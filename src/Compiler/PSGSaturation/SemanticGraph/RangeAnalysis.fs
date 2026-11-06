@@ -416,17 +416,19 @@ let private escapingOf (nodes: Map<NodeId, SemanticNode>) (ordered: SemanticNode
         |> List.choose (fun node ->
             match node.Kind with
             | SemanticKind.Lambda _ ->
-                let ownedByBinding =
+                // A mutable binding stores a function value, including its
+                // initializer. Only immutable bindings denote a direct function.
+                let ownedByDirectBinding =
                     match Map.tryFind node.Id parents |> Option.bind (fun p -> Map.tryFind p nodes) with
-                    | Some { Kind = SemanticKind.Binding _ } -> true
+                    | Some { Kind = SemanticKind.Binding (_, false, _, _) } -> true
                     | Some { Kind = SemanticKind.TypeAnnotation _ } ->
                         // `let f : t = fun ...`: the annotation's parent is the binding
                         Map.tryFind node.Id parents
                         |> Option.bind (fun a -> Map.tryFind a parents)
                         |> Option.bind (fun p -> Map.tryFind p nodes)
-                        |> Option.exists (fun p -> match p.Kind with SemanticKind.Binding _ -> true | _ -> false)
+                        |> Option.exists (fun p -> match p.Kind with SemanticKind.Binding (_, false, _, _) -> true | _ -> false)
                     | _ -> false
-                if ownedByBinding || Set.contains node.Id calleePositions then None
+                if ownedByDirectBinding || Set.contains node.Id calleePositions then None
                 else
                     lambdaShape nodes node.Id |> Option.map (fun (parameters, body) ->
                         { LambdaId = node.Id; Parameters = parameters; Body = body; Offset = 0; Escape = escapeOf nodes parents node.Id })
@@ -3766,6 +3768,21 @@ let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
 /// (a signature, a capture's type); None for the bare kind, whose width is the node's selection.
 let declaredWidthOfKind (graph: SemanticGraph) (kind: NTUKind) : int option =
     RangeSources.declarationOfKind graph.Platform kind |> Option.map (fun d -> d.Bits)
+
+/// The physical convention an integer occurrence selects on the graph's platform: the
+/// declared representation (`selectedRepresentation`, always one of the platform's declared
+/// records, so record equality is identity of the declared convention) paired with the width
+/// the value is selected at (`selectedWidth`). None when either is unavailable or when the
+/// occurrence's range is Empty, the proved-inactive case `heldWidth` also refuses. The mutable
+/// callable storage owner compares this across a family's alternatives and treats None as no
+/// agreement; each occurrence's own range and coverage obligation are not part of it.
+let selectedConvention (graph: SemanticGraph) (nodeId: NodeId) : (NumericRepresentation * int) option =
+    match SemanticGraph.tryGetNode nodeId graph with
+    | Some { ValueRange = Some ValueRange.Empty } -> None
+    | _ ->
+    match selectedRepresentation graph nodeId, selectedWidth graph nodeId with
+    | Some representation, Some bits -> Some(representation, bits)
+    | _ -> None
 
 /// The width a node's value is held at: `selectedWidth`, or `heldWidthOf` its settled range.
 /// Baker's held-carrier rule for each integer node; None is a source stop (a node with

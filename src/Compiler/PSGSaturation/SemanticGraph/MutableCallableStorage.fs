@@ -184,6 +184,7 @@ let sourceFamilies (graph: SemanticGraph) =
 /// source work; its known neighbours cannot erase it from the cell's use set.
 let settle (sourceType: SemanticNode -> NativeType)
            (valueShape: SemanticGraph -> SemanticNode -> CallableValueShape)
+           (convention: SemanticGraph -> NodeId -> (Clef.Compiler.NativeTypedTree.NativeTypes.NumericRepresentation * int) option)
            (carriers: Map<NodeId, CallableCarrier>) (layouts: Map<NodeId, EnvironmentLayout>)
            (graph: SemanticGraph) : Settlement =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
@@ -200,17 +201,26 @@ let settle (sourceType: SemanticNode -> NativeType)
                                             layout.Implementation = carrier.Implementation && layout.Bytes > 0)
             |> Option.map (fun layout -> Some layout.Bytes)
     // Source component participants must agree before a common boundary is
-    // proposed. Alex still checks the projected physical types at commitment.
+    // proposed. On a platform, integer components agree when they select the
+    // same declared representation and width (the convention Baker publishes);
+    // each occurrence keeps its own range and coverage obligation, which are
+    // not compared. An unavailable selection on either side is no agreement.
+    // Without a platform no physical selection exists and the source ranges
+    // remain the agreement. Alex still checks the projected physical types at commitment.
     let rec sameShape seen left right =
         match left, right with
         | CallableValueShape.Data left, CallableValueShape.Data right ->
             match nodes.TryFind left, nodes.TryFind right with
-            | Some left, Some right ->
-                let sameRange =
-                    match Types.tryGetNTUKind (applySubst left.Type) with
-                    | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) -> left.ValueRange = right.ValueRange
+            | Some leftNode, Some rightNode ->
+                let agreed =
+                    match Types.tryGetNTUKind (applySubst leftNode.Type) with
+                    | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) ->
+                        if graph.Platform.IsNone then leftNode.ValueRange = rightNode.ValueRange else
+                        match convention graph left, convention graph right with
+                        | Some leftConvention, Some rightConvention -> leftConvention = rightConvention
+                        | _ -> false
                     | _ -> true
-                applySubst left.Type = applySubst right.Type && sameRange
+                applySubst leftNode.Type = applySubst rightNode.Type && agreed
             | _ -> false
         | CallableValueShape.Callable left, CallableValueShape.Callable right ->
             if Set.contains (left, right) seen then false else
@@ -289,12 +299,12 @@ let settle (sourceType: SemanticNode -> NativeType)
 
 /// Revalidate the complete participant set when observing retained codata.
 /// Added writes/borrows and changed signatures retract an earlier conclusion.
-let validate sourceType valueShape (currentCarriers: SemanticGraph -> Map<NodeId, CallableCarrier>)
+let validate sourceType valueShape convention (currentCarriers: SemanticGraph -> Map<NodeId, CallableCarrier>)
              (graph: SemanticGraph) (expected: MutableCallableStorage) =
-    let actual = settle sourceType valueShape (currentCarriers graph) graph.Codata.Value.EnvironmentLayouts graph
+    let actual = settle sourceType valueShape convention (currentCarriers graph) graph.Codata.Value.EnvironmentLayouts graph
     actual.Storage.TryFind expected.Binding = Some expected
 
-let validateJoin sourceType valueShape currentCarriers (graph: SemanticGraph) (expected: CallableJoin) =
-    let actual = settle sourceType valueShape (currentCarriers graph) graph.Codata.Value.EnvironmentLayouts graph
+let validateJoin sourceType valueShape convention currentCarriers (graph: SemanticGraph) (expected: CallableJoin) =
+    let actual = settle sourceType valueShape convention (currentCarriers graph) graph.Codata.Value.EnvironmentLayouts graph
     actual.Joins.TryFind expected.Occurrence = Some expected &&
-    (graph.Codata.Value.MutableCallableStorage.TryFind expected.Storage |> Option.exists (validate sourceType valueShape currentCarriers graph))
+    (graph.Codata.Value.MutableCallableStorage.TryFind expected.Storage |> Option.exists (validate sourceType valueShape convention currentCarriers graph))

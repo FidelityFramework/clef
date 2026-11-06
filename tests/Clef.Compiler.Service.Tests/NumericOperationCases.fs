@@ -361,10 +361,28 @@ type StringExtentCases() =
         let memory = Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> function Ok facts -> facts | Error errors -> failwithf "%A" errors
         let extents = memory.Operations.Values |> Seq.choose (function MemoryWitnessOperation.BufferExtent extent -> Some extent | _ -> None) |> Seq.toList
         Assert.NotEmpty extents
-        Assert.Contains(extents,fun extent -> extent.Extent.StaticOrigins.IsEmpty)
+        let expectedOrigins =
+            if form = "curried" then Map.empty
+            else
+                let yes, no = NumericOperationFixture.selectedBranches result.Graph "a\000b" "longer"
+                Map.ofList [yes, 3I; no, 6I]
+        Assert.Contains(extents, fun extent -> extent.Extent.StaticOrigins = expectedOrigins)
         for extent in extents do
             Assert.Equal(extent.Source,extent.Extent.Source)
             Assert.True(extent.Participants.Contains extent.Source)
+            let descriptor = extent.Extent.ExtentSource
+            if form = "curried" then
+                // This is the current descriptor fallback; complete callable
+                // lineage may eventually provide origins for this form too.
+                Assert.Equal(extent.Source, descriptor)
+                match result.Graph.Nodes[descriptor].Kind with
+                | SemanticKind.VarRef _ -> ()
+                | other -> failwithf "Expected a curried descriptor reference, got %A" other
+            else
+                Assert.DoesNotContain(descriptor, expectedOrigins.Keys)
+                match result.Graph.Nodes[descriptor].Kind, result.Graph.Nodes[extent.Source].Kind with
+                | SemanticKind.PatternBinding _, SemanticKind.VarRef(_, Some target) -> Assert.Equal(descriptor, target)
+                | other -> failwithf "Expected a formal descriptor and its reference, got %A" other
         if form = "first-class" then
             let generated = extents |> List.filter (fun extent ->
                 result.Graph.Nodes[extent.Site].Metadata.TryFind ElaborationMetadata.For = Some(MetadataValue.String "String.length"))

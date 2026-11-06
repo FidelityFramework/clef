@@ -374,16 +374,31 @@ let private tile (p: Placer) (fields: (string * SettledSlot) list) : SettledLayo
 /// A case with several fields carries them as one tuple payload.
 let private unionTagLayout = SettledSlot.Integer(8, None), 1
 
+let private unionTagFits cases =
+    match fst unionTagLayout with
+    | SettledSlot.Integer(bits, _) when bits > 0 -> bigint (List.length cases) <= (1I <<< bits)
+    | _ -> false
+
 let private union (p: Placer) (cases: (string * SettledSlot option) list) : SettledLayout =
     let payloads = cases |> List.choose snd
     let extents = payloads |> List.map (extentOf p)
-    if extents |> List.exists Option.isNone then SettledLayout.Union (cases, None, None, None)
+    let fabric = p.Context |> Option.exists (fun ctx -> PlatformContext.substrateKind ctx = SubstrateKind.FPGA)
+    if (not fabric && not (unionTagFits cases)) || (extents |> List.exists Option.isNone) then
+        SettledLayout.Union (cases, None, None, None)
     else
         let extents = extents |> List.choose id
         let widest = extents |> List.map fst |> List.fold max 0
         let alignment = extents |> List.map snd |> List.fold max 1
         let offset = alignUp (snd unionTagLayout) alignment
         SettledLayout.Union (cases, Some offset, Some (alignUp (offset + widest) alignment), Some alignment)
+
+/// The discriminant width selected by this placement owner for a complete union.
+/// Do not derive it from the payload offset, which may include alignment padding.
+let tryUnionTagBits (graph: SemanticGraph) ty =
+    match graph.Layouts.Value.TryFind(keyOf ty), fst unionTagLayout with
+    | Some(SettledLayout.Union(cases, Some _, Some _, Some _)), SettledSlot.Integer(bits, _)
+        when not cases.IsEmpty && unionTagFits cases -> Some bits
+    | _ -> None
 
 /// Source Option identity/case order and the exact discriminant layout policy.
 /// Consumers cannot recover these facts from a foreign null representation.

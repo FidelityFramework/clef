@@ -73,6 +73,24 @@ type UnionPlacementCases() =
         | other -> failwithf "Empty cases acquired payload storage: %A" other
 
     [<Theory>]
+    [<InlineData(256, true)>]
+    [<InlineData(257, false)>]
+    member _.``CPU union placement requires every case to fit its tag`` count fits =
+        let ty = UnionPlacementFixture.union (List.replicate count [])
+        match UnionPlacementFixture.place (Some(UnionPlacementFixture.context 64)) ty, fits with
+        | SettledLayout.Union(cases, Some 1, Some 1, Some 1), true -> Assert.Equal(count, cases.Length)
+        | SettledLayout.Union(cases, None, None, None), false -> Assert.Equal(count, cases.Length)
+        | other -> failwithf "Unexpected tag-capacity placement: %A" other
+
+    [<Fact>]
+    member _.``Fabric enum placement does not apply the CPU tag capacity`` () =
+        let platform = { UnionPlacementFixture.context 64 with SubstrateKind = Some SubstrateKind.FPGA }
+        let ty = UnionPlacementFixture.union (List.replicate 257 [])
+        match UnionPlacementFixture.place (Some platform) ty with
+        | SettledLayout.Union(cases, Some 1, Some 1, Some 1) -> Assert.Equal(257, cases.Length)
+        | other -> failwithf "Fabric enum acquired the CPU capacity refusal: %A" other
+
+    [<Theory>]
     [<InlineData("no-platform")>]
     [<InlineData("fabric")>]
     [<InlineData("opaque")>]

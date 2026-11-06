@@ -71,6 +71,132 @@ module private CallableFlowFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableFlow")>]
 type CallableFlowCases() =
     [<Fact>]
+    member _.``A receiving flow retains two snapshot frontiers and a direct callable`` () =
+        let result = SourcePlatformFixture.checkResult 64 "mixed-snapshot-flow.clef" """
+module MixedSnapshotFlow
+let invoke (work: bool -> bool) value = work value
+[<EntryPoint>]
+let main _ =
+    let mutable selected = fun (value: bool) -> value
+    let first = selected
+    selected <- fun (value: bool) -> not value
+    let second = selected
+    let a = invoke first false
+    let b = invoke second false
+    let c = invoke (fun (value: bool) -> value) false
+    if a || b || c then 0 else 1
+"""
+        let graph = result.Graph
+        let binding name =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with
+                                    | SemanticKind.Binding(actual, _, _, _) -> actual = name || actual.EndsWith("." + name)
+                                    | _ -> false) |> Assert.Single
+        let actual name =
+            let source = binding name
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with
+                                    | SemanticKind.VarRef(actual, Some target) -> actual = name && target = source.Id
+                                    | _ -> false) |> Assert.Single
+        let first, second = actual "first", actual "second"
+        let formal =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with SemanticKind.PatternBinding "work" -> true | _ -> false)
+            |> Assert.Single
+        let facts = graph.Codata.Value
+        let firstJoin, secondJoin = facts.CallableJoins[first.Id], facts.CallableJoins[second.Id]
+        Assert.NotEqual(firstJoin.Read, secondJoin.Read)
+        let flow = facts.CallableFlows[formal.Id]
+        Assert.Contains(first.Id, flow.Alternatives)
+        Assert.Contains(second.Id, flow.Alternatives)
+        Assert.False(facts.CallableCarriers.ContainsKey first.Id)
+        Assert.False(facts.CallableCarriers.ContainsKey second.Id)
+        let direct = flow.Alternatives |> List.filter facts.CallableCarriers.ContainsKey |> Assert.Single
+        match graph.Nodes[facts.CallableCarriers[direct].Implementation].Kind with
+        | SemanticKind.Lambda _ -> ()
+        | _ -> failwith "The direct callable alternative must retain its source lambda."
+        Assert.True(Flows.validate graph flow)
+        let inputs: Flows.Inputs =
+            { Carriers = facts.CallableCarriers
+              Joins = facts.CallableJoins.Add(first.Id, { firstJoin with Read = secondJoin.Read })
+              Layouts = facts.EnvironmentLayouts; SequenceFlows = facts.SequenceFlows; SequenceFamilies = facts.SequenceFamilies }
+        let staleFlows, _ = Flows.settle inputs graph
+        Assert.False(staleFlows.ContainsKey formal.Id, "One stale join must refuse the complete mixed flow.")
+        match Clef.Compiler.PSGSaturation.SemanticGraph.CallableEmission.project graph with
+        | Result.Error errors -> failwithf "Expected mixed callable publication: %A" errors
+        | Result.Ok publication ->
+            Assert.Equal(flow, publication.Flows[formal.Id])
+            Assert.Contains(first.Id, publication.Transports[formal.Id])
+            Assert.Contains(second.Id, publication.Transports[formal.Id])
+            Assert.Contains(direct, publication.Transports[formal.Id])
+
+    [<Fact>]
+    member _.``A mutable snapshot flowing into a formal retains its read frontier`` () =
+        let result = SourcePlatformFixture.checkResult 64 "mutable-flow-frontier.clef" """
+module MutableFlowFrontier
+let invoke (work: bool -> bool) value = work value
+[<EntryPoint>]
+let main _ =
+    let mutable selected = fun (value: bool) -> value
+    let saved = selected
+    selected <- fun (value: bool) -> not value
+    if invoke saved false then 0 else 1
+"""
+        let graph = result.Graph
+        let binding name =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with
+                                    | SemanticKind.Binding(actual, _, _, _) -> actual = name || actual.EndsWith("." + name)
+                                    | _ -> false) |> Assert.Single
+        let cell, saved = binding "selected", binding "saved"
+        let read = Assert.Single saved.Children
+        let actual =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with
+                                    | SemanticKind.VarRef("saved", Some source) -> source = saved.Id
+                                    | _ -> false) |> Assert.Single
+        let formal =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with SemanticKind.PatternBinding "work" -> true | _ -> false)
+            |> Assert.Single
+        let facts = graph.Codata.Value
+        Assert.True(facts.MutableCallableStorage.ContainsKey cell.Id, "The source storage must be admitted before checking its flow.")
+        Assert.True(facts.CallableJoins.ContainsKey actual.Id, "The argument must carry the admitted snapshot join.")
+        let join = facts.CallableJoins[actual.Id]
+        Assert.Equal(cell.Id, join.Storage)
+        Assert.Equal(read, join.Read)
+        Assert.True(facts.CallableFlows.ContainsKey formal.Id, "The receiving formal must retain the snapshot as a flow alternative.")
+        let flow = facts.CallableFlows[formal.Id]
+        Assert.Contains(actual.Id, flow.Alternatives)
+        Assert.Contains(actual.Id, flow.Dependencies[formal.Id])
+        Assert.True(Flows.validate graph flow)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.CallableEmission.project graph with
+        | Result.Error errors -> failwithf "Expected callable publication for the source snapshot: %A" errors
+        | Result.Ok publication ->
+            Assert.Equal(join, publication.Joins[actual.Id])
+            Assert.Equal(flow, publication.Flows[formal.Id])
+            Assert.Contains(actual.Id, publication.Transports[formal.Id])
+        let inputs: Flows.Inputs =
+            { Carriers = facts.CallableCarriers; Joins = facts.CallableJoins; Layouts = facts.EnvironmentLayouts
+              SequenceFlows = facts.SequenceFlows; SequenceFamilies = facts.SequenceFamilies }
+        let refuses joins carriers changed =
+            let flows, _ = Flows.settle { inputs with Joins = joins; Carriers = carriers } changed
+            Assert.False(flows.ContainsKey formal.Id)
+        for changed in [
+            { join with Read = actual.Id }
+            { join with Storage = saved.Id }
+            { join with Alternatives = [] }
+            { join with Alternatives = [NodeId.fresh()] }
+        ] do
+            refuses (inputs.Joins.Add(actual.Id, changed)) inputs.Carriers graph
+        refuses Map.empty inputs.Carriers graph
+        let alternative = List.head join.Alternatives
+        refuses inputs.Joins (inputs.Carriers.Remove alternative) graph
+        let originalRead = graph.Nodes[read]
+        let redirected = { graph with Nodes = graph.Nodes.Add(read, { originalRead with Kind = SemanticKind.VarRef("selected", None) }) }
+        Assert.False(Flows.validate redirected flow, "A changed source read must retract its retained snapshot flow.")
+
+    [<Fact>]
     member _.``Eager callable actual retains its demand marker in complete ingress and value flow`` () =
         let original, _, formal, _, alternatives, calls, _ = CallableFlowFixture.create ()
         let actual, callId = List.head alternatives, List.head calls

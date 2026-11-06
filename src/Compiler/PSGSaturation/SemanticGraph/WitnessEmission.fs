@@ -155,6 +155,40 @@ let private materialized value =
     held.Force() |> ignore
     held
 
+/// Live CPU union operations require the placement owner's complete byte
+/// representation. Resource-option reads retain their own value convention.
+let internal unionLayoutFailures (graph: SemanticGraph) (scope: WitnessLiveScopePlan) =
+    match graph.Platform with
+    | Some platform when PlatformContext.substrateKind platform <> SubstrateKind.FPGA ->
+        let resourceOptions =
+            (PlatformResolution.readDescriptors graph).Resources
+            |> List.map _.ResultType |> Set.ofList
+        scope.Occurrences
+        |> Map.toList
+        |> List.choose (fun (id, occurrence) ->
+            let node = occurrence.Body
+            let unionType, isTag =
+                match node.Kind with
+                | SemanticKind.DUConstruct _ -> Some node.Type, false
+                | SemanticKind.DUInitialize (destination, _, _, _) ->
+                    graph.Nodes.TryFind destination |> Option.map _.Type, false
+                | SemanticKind.DUGetTag (_, ty) -> Some ty, true
+                | _ -> None, false
+            unionType |> Option.bind (fun ty ->
+                let reason =
+                    if Placement.tryUnionTagBits graph ty |> Option.isNone then
+                        Some "A live union operation requires a complete, representable source placement."
+                    elif isTag && not (resourceOptions.Contains(TypeIdentity.ofType ty)) &&
+                         (node.ValueRange |> Option.exists ValueRange.isNonNegative |> not) then
+                        Some "A live union tag read requires its nonnegative source range."
+                    else None
+                reason |> Option.map (fun message ->
+                    { Kind = WitnessProjectionFailureKind.Settlement
+                      Occurrence = Some id
+                      Participants = Set.singleton id
+                      Reason = message })))
+    | _ -> []
+
 /// Complete source publication once. The graph returned here owns all current
 /// projected facts and eager indices; it is the graph handed to witnessing.
 let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFailure list> =
@@ -171,7 +205,7 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
             let segmentation = WitnessSegmentation.project graph projection liveScope
             let liveRows = LiveRows.project graph projection liveScope preparedRows segmentation
             let publication =
-                match DeviceAccess.checkSelected graph liveRows.Codata.Mmio with
+                match unionLayoutFailures graph liveScope @ DeviceAccess.checkSelected graph liveRows.Codata.Mmio with
                 | [] -> PublishedRows.project graph liveScope liveRows dispatch
                 | failures -> Error failures
             match publication with
@@ -306,7 +340,7 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
             Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Baker-selected live fact rows differ from the current source snapshot." }]
         else
-            match DeviceAccess.checkSelected graph facts.WitnessLiveRows.Value.Codata.Mmio with
+            match unionLayoutFailures graph facts.WitnessLiveScope.Value @ DeviceAccess.checkSelected graph facts.WitnessLiveRows.Value.Codata.Mmio with
             | _ :: _ as failures -> Error failures
             | [] when not (isMaterialized graph) ->
                 Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty

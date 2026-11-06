@@ -25,7 +25,8 @@
 ///   IfThenElse / CaseElimination / Match     each arm's value -> the join's width (the node's)
 ///   Lambda (the return, `returns`)           the body's last value -> the body node's width
 ///   VarRef / FieldGet / TupleGet /           the slot's width -> the read's width (ruling 3),
-///     IndexGet / Array.get / DUEliminate       keyed with the consumer as its own operand
+///     IndexGet / Array.get / DUEliminate /    keyed with the consumer as its own operand
+///     DUGetTag
 ///   IndexSet / ArrayExpr                     each value -> the element's settled width
 ///   DUConstruct / Option.Some                the payload -> the payload slot's width
 module Clef.Compiler.PSGSaturation.SemanticGraph.Meets
@@ -242,6 +243,11 @@ let private readMeet (graph: SemanticGraph) (node: SemanticNode) (slot: int opti
     | Some from, Some target -> Option.toList (meet graph node.Id node.Id from target)
     | _ -> []
 
+let private unionTagRead (graph: SemanticGraph) (node: SemanticNode) unionTy =
+    match Placement.tryUnionTagBits graph unionTy, node.ValueRange with
+    | Some bits, Some range when ValueRange.isNonNegative range -> readMeet graph node (Some bits)
+    | _ -> []
+
 /// Floating fields at a foreign representation boundary retain their declared
 /// storage precision; source float values convert at construction and readback.
 let private realWidth (graph: SemanticGraph) (node: SemanticNode) =
@@ -332,6 +338,7 @@ let private nodeMeets (ctx: Ctx) (node: SemanticNode) : Meet list =
         | Some tuple -> readMeet graph node (fieldSlotWidth graph tuple.Type (sprintf "Item%d" (index + 1)))
         | None -> []
     | SemanticKind.IndexGet (arrId, _) -> readMeet graph node (elementSlotWidth graph arrId)
+    | SemanticKind.DUGetTag (_, unionTy) -> unionTagRead graph node unionTy
     | SemanticKind.DUEliminate (duId, caseIndex, _, _) ->
         match SemanticGraph.tryGetNode duId graph with
         | Some du -> readMeet graph node (payloadSlotWidth graph du.Type caseIndex)
@@ -394,6 +401,25 @@ let derive (context: PlatformContext option) (graph: SemanticGraph) (curry: Curr
                 | [] -> None
                 | meets -> Some (node.Id, meets))
         |> Map.ofList
+
+/// Callable aggregate settlement can complete a union layout after the initial
+/// meet pass. Renew only tag self-reads from that current placement and range.
+let renewUnionTagReads (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph =
+    if onFabric context then graph
+    else
+        let facts = graph.Codata.Value
+        let meets =
+            graph.Nodes |> Map.fold (fun (current: Map<NodeId, Meet list>) id node ->
+                match node.Kind with
+                | SemanticKind.DUGetTag (_, unionTy) ->
+                    let retained = current.TryFind id |> Option.defaultValue [] |> List.filter (fun value -> value.Operand <> id)
+                    let renewed = if node.IsReachable then unionTagRead graph node unionTy else []
+                    match retained @ renewed with
+                    | [] -> Map.remove id current
+                    | values -> Map.add id values current
+                | _ -> current) facts.Meets
+        if meets = facts.Meets then graph
+        else { graph with Codata = lazy { facts with Meets = meets } } |> SemanticGraph.invalidateWitness
 
 let private environmentSlotWidths (graph: SemanticGraph) (slot: ContinuationSlot) =
     match slot.Holds with

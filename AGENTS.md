@@ -20,5 +20,7 @@ These are owner requirements for all work in this repository.
 - Preserve Clef's native dimensional type universe and lazy-default semantics.
   .NET is the compiler/tooling host, not the language's semantic model.
 - Use .NET tooling; do not introduce or run Python automation.
+- Keep temporary test fixtures and gate scratch under `artifacts/scratch/` in
+  this primary checkout.
 - Record exact evidence and failures. Focused passing checks do not establish
   complete F/C acceptance.

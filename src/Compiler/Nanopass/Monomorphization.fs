@@ -695,6 +695,36 @@ let private runWithEvidenceCore (retainedDeclarations: Set<NodeId>) (nodes: Map<
             |> List.sortByDescending (fun (_, _, _, _, value) ->
                 max (bareLibraryOperation current value |> Option.map snd |> Option.defaultValue 0)
                     (nullaryNoneDepth retainedDeclarations current value |> Option.defaultValue 0))
+        // Clone callers before the generic declarations they reference. The
+        // caller's checked instantiation then reaches those references before
+        // the callee groups its requests; an open caller remains open.
+        let genericIds = generics |> List.map (fun (id, _, _, _, _) -> id) |> Set.ofList
+        let dependencies =
+            generics |> List.map (fun (id, _, _, _, body) ->
+                let referenced =
+                    collectSubtree current body
+                    |> List.choose (fun occurrence ->
+                        match current[occurrence] with
+                        | { IsReachable = true; Kind = SemanticKind.VarRef (_, Some target) }
+                            when target <> id && genericIds.Contains target -> Some target
+                        | _ -> None)
+                    |> Set.ofList
+                id, referenced) |> Map.ofList
+        let rec callersFirst remaining ordered =
+            match remaining with
+            | [] -> List.rev ordered
+            | _ ->
+                let ready =
+                    remaining |> List.tryFind (fun (id, _, _, _, _) ->
+                        remaining |> List.forall (fun (other, _, _, _, _) ->
+                            other = id || not (dependencies[other].Contains id)))
+                match ready with
+                | Some ((id, _, _, _, _) as next) ->
+                    callersFirst (remaining |> List.filter (fun (other, _, _, _, _) -> other <> id)) (next :: ordered)
+                // Recursive groups have their own settlement above. Preserve
+                // existing order for any remaining cycle rather than guessing.
+                | None -> List.rev ordered @ remaining
+        let generics = callersFirst generics []
         for (bindingId, bindingNode, rawTypars, rawSchemeBody, lambdaId) in generics do
             // Re-root the scheme: unions since generalization may have moved a parameter's root.
             let typars = rawTypars |> List.map (fun tp -> fst (find tp)) |> List.distinctBy (fun tp -> tp.Id)

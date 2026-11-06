@@ -35,7 +35,7 @@ module private ContinuationIngressFixture =
         let formal = builder.Create(SemanticKind.PatternBinding "environment", environmentType, dummyRange)
         let environment = builder.Create(SemanticKind.VarRef("environment", Some formal.Id), environmentType, dummyRange)
         let persistent = builder.Create(SemanticKind.FrameRead(environment.Id, source.Id), callable, dummyRange)
-        let storageType = Types.mkArrayType Types.uint8Type
+        let storageType = Types.internalStorageType
         let storage = builder.Create(SemanticKind.ContinuationStorage owner.Id, storageType, dummyRange)
         let stored = builder.Create(SemanticKind.Binding("storage", false, false, None), storageType, dummyRange, children = [storage.Id])
         let scratchEnvironment = builder.Create(SemanticKind.VarRef("storage", Some stored.Id), storageType, dummyRange)
@@ -93,6 +93,28 @@ type ContinuationIngressCases() =
         Assert.Contains(fixture.Original, scratch.Participants)
         Assert.Contains(fixture.Writer, scratch.Participants)
         Assert.Contains(fixture.Persistent, scratch.Participants)
+
+    [<Fact>]
+    member _.``Scratch storage refuses a coherent user-array representation`` () =
+        let fixture = ContinuationIngressFixture.create ()
+        let graph = fixture.Graph
+        let frame =
+            match graph.Nodes[fixture.Scratch].Kind with
+            | SemanticKind.FrameRead(frame, _) -> frame
+            | other -> failwithf "Expected scratch frame read, got %A" other
+        let binding =
+            match graph.Nodes[frame].Kind with
+            | SemanticKind.VarRef(_, Some binding) -> binding
+            | other -> failwithf "Expected scratch storage reference, got %A" other
+        let userArray = Types.mkArrayType Types.uint8Type
+        let changedNodes =
+            [fixture.Storage; binding; frame]
+            |> List.fold (fun (nodes: Map<NodeId, SemanticNode>) id ->
+                nodes.Add(id, { nodes[id] with Type = userArray })) graph.Nodes
+        let reading = ContinuationIngress.analyze { graph with Nodes = changedNodes }
+        Assert.True(ContinuationIngress.allowsOccurrence (ContinuationIngress.analyze graph) fixture.Scratch)
+        Assert.True(ContinuationIngress.allowsOccurrence reading fixture.Persistent)
+        Assert.False(ContinuationIngress.allowsOccurrence reading fixture.Scratch)
 
     [<Theory>]
     [<InlineData("missing-access")>]

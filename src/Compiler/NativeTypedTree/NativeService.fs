@@ -1335,7 +1335,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let mutableCallables =
         Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.settle
           Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.sourceType
-          Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.valueShape callableCarriers environments.Layouts finalGraph
+          Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.valueShape
+          Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedConvention callableCarriers environments.Layouts finalGraph
     let callableFlows, callableFlowResiduals =
         Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows.settle
             { Carriers = callableCarriers; Joins = mutableCallables.Joins; Layouts = environments.Layouts
@@ -1434,6 +1435,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph, aggregateResiduals =
         if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.normalize finalGraph
+    // The aggregate owner may complete a union after initial meet derivation.
+    let finalGraph = Meets.renewUnionTagReads platformContext finalGraph
     // Inventory consumes the aggregate owner's final physical extents.
     let programInventory = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle finalGraph
     tracePhase "program-storage"

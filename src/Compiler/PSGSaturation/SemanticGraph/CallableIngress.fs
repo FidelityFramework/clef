@@ -796,6 +796,33 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
             | Some { Kind = SemanticKind.Lambda _ | SemanticKind.ClosureValue _ } -> Some(empty, Set.singleton id)
             | Some { Kind = SemanticKind.VarRef(_, Some _) } when promotedReferences.Contains id ->
                 sourceDeclaration id |> Option.bind (fun declaration -> all [declaration])
+            | Some ({ Kind = SemanticKind.VarRef(_, Some binding) } as read)
+                when (nodes.TryFind binding |> Option.exists (fun source ->
+                    match source.Kind with SemanticKind.Binding(_, true, _, None) -> true | _ -> false))
+                     && not (graph.DeclarationRoots |> List.exists (fun (root, _) -> root = binding)) ->
+                // A mutable read is its own snapshot. The existing complete
+                // source family bounds its possible values without replacing
+                // that occurrence with the cell's current value.
+                mutableCells.Value.TryFind binding
+                |> Option.filter (fun cell -> cell.Reads.Contains id && (activation binding |> Option.isSome))
+                |> Option.filter (fun _ -> applySubst read.Type = applySubst nodes[binding].Type)
+                |> Option.bind (fun cell ->
+                    let scopedWrite (site, _, value) =
+                        match activation site, nodes.TryFind value with
+                        | Some owner, Some { Kind = SemanticKind.Lambda _ } ->
+                            structuralParents.TryFind value |> Option.exists (fun parents ->
+                                not parents.IsEmpty && (parents |> List.forall (fun edge -> activation edge.Target = Some owner)))
+                        | Some owner, Some _ -> activation value = Some owner
+                        | _ -> false
+                    let values = cell.Initial :: (cell.Writes |> List.map (fun (_, _, value) -> value))
+                    let candidates = values |> List.map (occurrence retained seen)
+                    if not (cell.Writes |> List.forall scopedWrite) ||
+                       (candidates |> List.exists (function None -> true | Some (_, leaves) -> leaves.IsEmpty)) then None
+                    else
+                        let proof, leaves =
+                            candidates |> List.choose (fun candidate -> candidate) |> List.fold (fun (proof, leaves) (next, values) ->
+                                merge proof next, Set.union leaves values) (empty, Set.empty)
+                        Some({ proof with Participants = Set.union proof.Participants cell.Participants }, leaves))
             | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
             | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) } -> all [value]
             | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> all [value]

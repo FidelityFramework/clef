@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 /// Complete finite callable value flow at ordinary argument, result and alias
-/// boundaries. This is not a mutable-cell snapshot and does not select an
-/// implementation or environment. Every leaf is an independently settled
-/// callable occurrence; opaque alternatives remain explicit refusals.
+/// boundaries. An admitted mutable join remains an exact value occurrence
+/// with its own read frontier; this pass does not select its implementation or
+/// environment. Opaque alternatives remain explicit refusals.
 module Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -25,7 +25,15 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
     let tracked = nodes |> Map.filter (fun _ node -> match applySubst node.Type with NativeType.TFun _ -> true | _ -> false)
     let ingress = CallableIngress.analyzeWith graph resolution
     let admitted id = CallableIngress.allowsOccurrence ingress id
-    let exact id = inputs.Carriers.ContainsKey id && admitted id
+    // Reuse the storage owner's current census before forwarding a join.
+    let currentJoins = lazy (
+        MutableCallableStorage.settle CallableCarriers.sourceType CallableCarriers.valueShape RangeAnalysis.selectedConvention
+            inputs.Carriers inputs.Layouts graph |> _.Joins)
+    let joined id =
+        inputs.Joins.TryFind id |> Option.filter (fun row ->
+            admitted id && row.Occurrence = id && not row.Alternatives.IsEmpty &&
+            currentJoins.Value.TryFind id = Some row)
+    let exact id = inputs.Carriers.ContainsKey id && not (inputs.Joins.ContainsKey id) && admitted id
     let callSite call (target: CallableOrigins.CallTarget) =
         { Call = call; Implementation = target.Lambda
           Parameters = target.Parameters |> List.map (fun (_, _, id) -> id)
@@ -85,7 +93,7 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
     let empty = { Leaves = Set.empty; Unknown = Set.empty }
     let union left right = { Leaves = Set.union left.Leaves right.Leaves; Unknown = Set.union left.Unknown right.Unknown }
     let mutable facts = tracked |> Map.map (fun id _ ->
-        if exact id then { empty with Leaves = Set.singleton id }
+        if exact id || (joined id).IsSome then { empty with Leaves = Set.singleton id }
         elif steps[id].Opaque then { empty with Unknown = Set.singleton id }
         else empty)
     let propagate () =
@@ -124,6 +132,14 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
     let alternatives id =
         facts.TryFind id |> Option.bind (fun value ->
             if value.Unknown.IsEmpty && not value.Leaves.IsEmpty then Some(Set.toList value.Leaves) else None)
+    let leafCarriers id =
+        if exact id then Some [inputs.Carriers[id]] else
+        joined id |> Option.bind (fun join ->
+            let carriers = join.Alternatives |> List.map inputs.Carriers.TryFind
+            if carriers |> List.exists Option.isNone then None else Some(List.choose (fun value -> value) carriers))
+    let allCarriers leaves =
+        let carriers = leaves |> List.map leafCarriers
+        if carriers |> List.exists Option.isNone then None else Some(carriers |> List.choose id |> List.concat)
     let lazyOwner = lazy (LazyValues.tryOwner graph)
     let rec sameShape seen left right =
         match left, right with
@@ -152,10 +168,14 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
             | _ -> false
         | CallableValueShape.Callable left, CallableValueShape.Callable right ->
             if Set.contains (left, right) seen then false else
+            let seen = Set.add (left, right) seen
             match alternatives left, alternatives right with
             | Some lefts, Some rights ->
-                lefts |> List.forall (fun left -> rights |> List.forall (fun right ->
-                    sameBoundary (Set.add (left, right) seen) inputs.Carriers[left] inputs.Carriers[right]))
+                match allCarriers lefts, allCarriers rights with
+                | Some lefts, Some rights when not lefts.IsEmpty && not rights.IsEmpty ->
+                    lefts |> List.forall (fun left -> rights |> List.forall (fun right ->
+                        sameBoundary seen left right))
+                | _ -> false
             | _ -> false
         | _ -> false
     and sameBoundary seen (left: CallableCarrier) (right: CallableCarrier) =
@@ -179,9 +199,15 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
     let flows = facts |> Map.toList |> List.choose (fun (id, value) ->
         if exact id || inputs.Joins.ContainsKey id || not value.Unknown.IsEmpty || value.Leaves.IsEmpty then None else
         let alternatives = Set.toList value.Leaves
-        let first = inputs.Carriers[alternatives.Head]
+        let physical = allCarriers alternatives
+        if physical |> Option.forall List.isEmpty then
+            residuals <- { Occurrence = id; Reason = "Every callable flow leaf must retain a current physical carrier." } :: residuals
+            None
+        else
+        let physical = Option.get physical
+        let first = physical.Head
         if applySubst (CallableCarriers.sourceType tracked[id]) <> applySubst first.SourceType ||
-           not (alternatives |> List.forall (fun alternative -> sameBoundary Set.empty first inputs.Carriers[alternative])) then
+           not (physical |> List.forall (sameBoundary Set.empty first)) then
             residuals <- { Occurrence = id; Reason = "Every callable alternative must share its actual source type, parameter, result and environment convention." } :: residuals
             None
         else
@@ -209,7 +235,7 @@ let validate (graph: SemanticGraph) (expected: CallableFlow) =
         let carriers, _ = CallableCarriers.settle
                             { Layouts = codata.EnvironmentLayouts; Origins = ClosureEnvironments.origins graph
                               Known = ClosureEnvironments.knownCallables graph; Contracts = codata.CallableContracts } graph
-        let joins = MutableCallableStorage.settle CallableCarriers.sourceType CallableCarriers.valueShape carriers codata.EnvironmentLayouts graph
+        let joins = MutableCallableStorage.settle CallableCarriers.sourceType CallableCarriers.valueShape RangeAnalysis.selectedConvention carriers codata.EnvironmentLayouts graph
         settle { Carriers = carriers; Joins = joins.Joins; Layouts = codata.EnvironmentLayouts
                  SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph |> fst)
     flows.TryFind expected.Occurrence = Some expected

@@ -264,14 +264,25 @@ let private transportInputs (graph: SemanticGraph) (reading: Origins.AggregateRe
 
 /// One completed closed unit call produces a new aggregate instance. The
 /// constructor identifies its static formation, never the application's token.
-let private resultInputs (graph: SemanticGraph) (calls:Map<NodeId,Origins.ResolvedCall>) (reading:Origins.AggregateResolution) site construction (payload:NodeId option) =
+let private resultInputs (graph: SemanticGraph) (calls:Map<NodeId,Origins.ResolvedCall>) (reading:Origins.AggregateResolution) (slot: CallableAggregateSlot) site construction (payload:NodeId option) =
     let refused = Error "The aggregate result requires one exact closed unit application and its original returned constructor."
     let unitType = function NativeType.TApp(constructor,[]) -> constructor.NTUKind=Some NTUKind.NTUunit | _ -> false
+    let ordinaryResult ty =
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty, slot.Path with
+        | NativeType.TApp(constructor, [success; _]), [CallableAggregatePathStep.UnionPayload(0, 0)] ->
+            Identity.constructor constructor = Identity.constructor Clef.Compiler.NativeTypedTree.Expressions.Types.resultTycon &&
+            (match Clef.Compiler.NativeTypedTree.UnionFind.applySubst success with
+             | NativeType.TFun _ -> true
+             | _ -> false) &&
+            slot.SourceType = Identity.ofType success
+        | _ -> false
+    let optionalEntry ty =
+        Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.optionalEntrySignature ty |> Option.isSome
     match graph.Nodes.TryFind site,calls.TryFind site with
     | Some {Kind=SemanticKind.Application(callee,[argument]);Children=children;Type=ty},
       Some {Complete=true;Unknown=false;Targets=[called]}
         when children=[callee;argument] &&
-             (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.optionalEntrySignature ty |> Option.isSome) ->
+             (optionalEntry ty || ordinaryResult ty) ->
         match called.Parameters,graph.Nodes.TryFind called.Lambda,graph.Nodes.TryFind callee with
         | [(_,parameterType,formal)],
           Some {Kind=SemanticKind.Lambda([(_,_,heldFormal)],body,[],_,_);Children=lambdaChildren},
@@ -297,8 +308,12 @@ let private resultInputs (graph: SemanticGraph) (calls:Map<NodeId,Origins.Resolv
                 graph.Nodes.TryFind construction |> Option.exists(fun node->
                     Identity.ofType node.Type=reading.AggregateType &&
                     match node.Kind with
-                    | SemanticKind.UnionCase("None",0,None) | SemanticKind.DUConstruct("None",0,None,_) -> payload.IsNone
-                    | SemanticKind.UnionCase("Some",1,Some value) | SemanticKind.DUConstruct("Some",1,Some value,_) -> payload=Some value
+                    | SemanticKind.UnionCase("None",0,None) | SemanticKind.DUConstruct("None",0,None,_) ->
+                        optionalEntry node.Type && payload.IsNone
+                    | SemanticKind.UnionCase("Some",1,Some value) | SemanticKind.DUConstruct("Some",1,Some value,_) ->
+                        optionalEntry node.Type && payload=Some value
+                    | SemanticKind.UnionCase("Ok",0,Some value) | SemanticKind.DUConstruct("Ok",0,Some value,_) ->
+                        ordinaryResult node.Type && payload=Some value
                     | _ -> false)
             if not returned || not nominal then refused else
             let ordered=[callee;argument;called.Lambda;formal;body;construction] @ Option.toList payload
@@ -608,7 +623,7 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
                 match values.TryFind formation.Construction |> Option.defaultValue []
                       |> List.filter(fun row->row.Slot=slot.Identity && row.Operation=CallableAggregateOperation.Construct) with
                 | [source] ->
-                    match resultInputs graph work.Calls reading site formation.Construction source.Value with
+                    match resultInputs graph work.Calls reading slot site formation.Construction source.Value with
                     | Ok(ordered,roles) ->
                         let carrier=source.Value |> Option.bind inputs.Carriers.TryFind
                         let row=valueRow slot.Identity site site CallableAggregateOperation.Result ordered source.Value

@@ -45,21 +45,24 @@ let description = { Id = "intrinsic-write-test"
 """
         template.Replace("%s", representations)
 
-    let check pointerBits path body =
+    let checkResult pointerBits path body =
         let context = { platform with Dimensions = platform.Dimensions.Add("Pointer", pointerBits) }
         let source = authority.Replace("Name = \"Pointer\"; Bits = 64", sprintf "Name = \"Pointer\"; Bits = %d" pointerBits)
         let parse text file =
             match parseStringWithDefaults text file with
             | ParseSuccess input -> input
             | ParseError errors -> failwithf "Parse failed: %A" errors
-        let result = checkParsedInputsWithPlatform [parse source "write-authority.clef"; parse body path] (Some context)
+        checkParsedInputsWithPlatform [parse source "write-authority.clef"; parse body path] (Some context)
+
+    let check pointerBits path body =
+        let result = checkResult pointerBits path body
         DimensionalCases.noErrors result
         result.Graph
 
     /// Exercise the selected project owner, including its captured parsed policy.
     /// The fixture units are real project inputs; no test authors policy authority.
     let checkProjectWithMemoryPolicy model (metadata:(string*string) list) authoritySource source =
-        let root = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013/optional-retirement-20261016/project-fixtures", System.Guid.NewGuid().ToString("N")))
+        let root = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/scratch/optional-retirement-projects", System.Guid.NewGuid().ToString("N")))
         System.IO.Directory.CreateDirectory root |> ignore
         let write name (text:string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root,name),text)
         write "Platform.clef" authoritySource

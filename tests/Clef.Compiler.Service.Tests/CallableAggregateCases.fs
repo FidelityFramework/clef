@@ -36,6 +36,22 @@ module private CallableAggregateFixture =
         else
             "module StoredCallable\nlet first (value: bool) = value\nlet fallback (value: bool) = false\nlet input () : Result<bool -> bool, bool> = Ok first\n[<EntryPoint>]\nlet main _ = if Result.defaultValue fallback (input ()) true then 0 else 1\n"
 
+    let genericTwoDemands = """
+module GenericResultDemands
+let first (value: 'a) = value
+let fallbackBool (value: bool) = false
+let fallbackUnit (value: unit) = value
+let input () : Result<'a -> 'a, bool> = Ok first
+[<EntryPoint>]
+let main _ =
+    let selectedBool = Result.defaultValue fallbackBool (input ())
+    let selectedUnit = Result.defaultValue fallbackUnit (input ())
+    if selectedBool true then
+        let () = selectedUnit ()
+        0
+    else 1
+"""
+
     let receivingSource deeper =
         let declarations = """
 module ReceivingAggregate
@@ -60,6 +76,204 @@ let main _ =
 """
 
 type CallableAggregateCases() =
+    [<Theory>]
+    [<InlineData(256, true)>]
+    [<InlineData(257, false)>]
+    member _.``Live union construction requires a representable source layout`` count fits =
+        let cases = [0 .. count - 1] |> List.map (fun index -> sprintf "    | Case%d" index) |> String.concat "\n"
+        let source =
+            sprintf "module UnionCapacity\ntype Choice =\n%s\nlet create () = Case%d\n[<EntryPoint>]\nlet main _ = let ignored = create () in 0\n" cases (count - 1)
+        let result = CallableAggregateFixture.checkResult source
+        if fits then
+            DimensionalCases.noErrors result
+            Assert.True(result.Graph.Codata.Value.WitnessEmission.IsSome)
+        else
+            Assert.Contains(result.Diagnostics, fun diagnostic ->
+                diagnostic.Code = "CCS8403" &&
+                diagnostic.Message.Contains "A live union operation requires a complete, representable source placement" &&
+                (diagnostic.RelatedNodes |> List.exists (fun id ->
+                    match result.Graph.Nodes[id].Kind with SemanticKind.DUConstruct _ -> true | _ -> false)))
+            Assert.True(result.Graph.Codata.Value.WitnessEmission.IsNone)
+
+    [<Fact>]
+    member _.``Returned ordinary Result retains its exact Ok construction and rejects a changed tag`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.source false)
+        let revision =
+            AggregatePublication.publish graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.callableAggregates revision)
+
+        let callable = revision.Emission.Callable
+        let result =
+            callable.AggregateValues.Values
+            |> Seq.collect id
+            |> Seq.filter (fun row -> row.Operation = Fidelity.PSG.CallableAggregateOperation.Result)
+            |> Seq.exactlyOne
+        let slot = callable.AggregateSlots[result.Slot]
+        Assert.Equal<Fidelity.PSG.CallableAggregatePathStep list>(
+            [Fidelity.PSG.CallableAggregatePathStep.UnionPayload(0, 0)], slot.Path)
+        let tag = result.Tag |> Option.get
+        Assert.Equal(0, tag.CaseOrdinal)
+        Assert.Equal(result.Value, tag.Payload)
+        Assert.Equal(Some 0, tag.PayloadOrdinal)
+        Assert.Equal(tag.Constructor, result.FormationInputs[5])
+        let sourceResult =
+            graph.Codata.Value.CallableAggregateValues.Values
+            |> Seq.collect id
+            |> Seq.filter (fun row -> row.Operation = CallableAggregateOperation.Result)
+            |> Seq.exactlyOne
+        Assert.True(AggregateAccounts.current graph sourceResult.Occurrence |> Result.isOk)
+        Assert.Equal(
+            Some (Error "Returned optional backing has no captured project memory policy."),
+            result.ResultRetirement)
+
+        let constructor = revision.Nodes[tag.Constructor]
+        let changedKind =
+            match constructor.Kind with
+            | Fidelity.PSG.SemanticKind.DUConstruct(name, _, payload, annotation) ->
+                Fidelity.PSG.SemanticKind.DUConstruct(name, 1, payload, annotation)
+            | Fidelity.PSG.SemanticKind.UnionCase(name, _, payload) ->
+                Fidelity.PSG.SemanticKind.UnionCase(name, 1, payload)
+            | kind -> failwithf "Expected the returned Ok constructor: %A" kind
+        let changed =
+            { revision with Nodes = revision.Nodes.Add(tag.Constructor, { constructor with Kind = changedKind }) }
+        Assert.Contains(
+            Fidelity.PSG.Integrity.callableAggregates changed,
+            fun failure ->
+                failure.Node = Some result.Occurrence &&
+                failure.Reason = "The aggregate result differs from its exact closed application, return or original constructor.")
+
+    [<Fact>]
+    member _.``Returned ordinary Result does not gain native retirement under a heap policy`` () =
+        let authority = SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+        let checkedProject =
+            SourcePlatformFixture.checkProjectWithMemoryPolicy
+                "standard" [] authority (CallableAggregateFixture.source false)
+        DimensionalCases.noErrors checkedProject
+        let graph = checkedProject.Graph
+        Assert.True(
+            graph.Platform
+            |> Option.bind _.ProjectMemoryPolicy
+            |> Option.exists (fun (_, _, _, heapAllowed) -> heapAllowed))
+        let result =
+            graph.Codata.Value.CallableAggregateValues.Values
+            |> Seq.collect id
+            |> Seq.filter (fun row -> row.Operation = CallableAggregateOperation.Result)
+            |> Seq.exactlyOne
+        Assert.Equal(
+            Some (Error "Returned optional backing requires one exact receiving use and its original construction."),
+            result.ResultRetirement)
+        Assert.True(AggregateAccounts.current graph result.Occurrence |> Result.isOk)
+
+    [<Fact>]
+    member _.``A generic returned Result callable is checked and published coherently`` () =
+        let source = """
+module GenericResultCallable
+let first (value: 'a) = value
+let fallback (value: bool) = false
+let input () : Result<'a -> 'a, bool> = Ok first
+[<EntryPoint>]
+let main _ = if Result.defaultValue fallback (input ()) true then 0 else 1
+"""
+        let graph = CallableAggregateFixture.check source
+        let revision =
+            AggregatePublication.publish graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.callableAggregates revision)
+        let row =
+            revision.Emission.Callable.AggregateValues.Values
+            |> Seq.collect id
+            |> Seq.filter (fun value -> value.Operation = Fidelity.PSG.CallableAggregateOperation.Result)
+            |> Seq.exactlyOne
+        match revision.Emission.Callable.AggregateSlots[row.Slot].SourceType with
+        | Fidelity.PSG.TypeIdentity.Function _ -> ()
+        | other -> failwithf "Expected an instantiated callable slot, got %A" other
+
+    [<Fact>]
+    member _.``A generic returned Result retains distinct concrete callable carriers`` () =
+        let graph = CallableAggregateFixture.check CallableAggregateFixture.genericTwoDemands
+        let revision =
+            AggregatePublication.publish graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.callableAggregates revision)
+        let facts = graph.Codata.Value
+        let rows =
+            facts.CallableAggregateValues.Values
+            |> Seq.collect id
+            |> Seq.filter (fun row -> row.Operation = CallableAggregateOperation.Result)
+            |> Seq.toList
+        Assert.Equal(2, rows.Length)
+        let representations =
+            rows |> List.map (fun row ->
+                let slot = facts.CallableAggregateSlots[row.Slot]
+                let alternative = row.Alternatives |> List.exactlyOne
+                let carrier = facts.CallableCarriers[alternative.Carrier]
+                Assert.Equal(slot.SourceType, Clef.Compiler.NativeTypedTree.TypeIdentities.ofType carrier.SourceType)
+                let source = Clef.Compiler.NativeTypedTree.UnionFind.applySubst carrier.SourceType
+                let implementation = Clef.Compiler.NativeTypedTree.UnionFind.applySubst graph.Nodes[carrier.Implementation].Type
+                Assert.Equal(source, implementation)
+                let kind =
+                    match source with
+                    | NativeType.TFun(argument, result) when argument = result ->
+                        match Types.tryGetNTUKind argument with
+                        | Some NTUKind.NTUbool -> "bool"
+                        | Some NTUKind.NTUunit -> "unit"
+                        | other -> failwithf "Unexpected callable argument kind: %A" other
+                    | other -> failwithf "Expected a concrete identity callable, got %A" other
+                kind, carrier.Implementation)
+        Assert.Equal<Set<string>>(set ["bool"; "unit"], representations |> List.map fst |> Set.ofList)
+        Assert.Equal(2, representations |> List.map snd |> Set.ofList |> Set.count)
+
+    [<Fact>]
+    member _.``A generic returned Result refuses a fallback with the wrong argument type`` () =
+        let source =
+            CallableAggregateFixture.genericTwoDemands.Replace(
+                "let fallbackUnit (value: unit) = value",
+                "let fallbackUnit (value: bool) = value")
+        let result = CallableAggregateFixture.checkResult source
+        let diagnostic = Assert.Single result.Diagnostics
+        Assert.Equal("CCS8003", diagnostic.Code)
+        Assert.Equal("callable-aggregate.clef", diagnostic.Range.File)
+        Assert.Equal((12, 17), (diagnostic.Range.Start.Line, diagnostic.Range.Start.Column))
+        Assert.Equal((12, 32), (diagnostic.Range.End.Line, diagnostic.Range.End.Column))
+        Assert.Equal("Type mismatch at callable-aggregate.clef(12,17): expected 'bool', got 'unit'", diagnostic.Message)
+
+    [<Fact>]
+    member _.``Returned Result tag read retains its equally wide union discriminant`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.source false)
+        let tag =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                node.IsReachable &&
+                match node.Kind with SemanticKind.DUGetTag _ -> true | _ -> false)
+            |> Seq.exactlyOne
+        let unionType =
+            match tag.Kind with
+            | SemanticKind.DUGetTag(_, ty) -> ty
+            | other -> failwithf "Expected a DU tag read, got %A" other
+        let tagBits =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Placement.tryUnionTagBits graph unionType
+            |> Option.defaultWith (fun () -> failwith "The union discriminant was not settled")
+        let targetBits =
+            Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph tag.Id
+            |> Option.defaultWith (fun () -> failwith "The tag result width was not settled")
+        Assert.Equal(tagBits, targetBits)
+        let meets = graph.Codata.Value.Meets.TryFind tag.Id |> Option.defaultValue []
+        Assert.DoesNotContain(meets, fun value -> value.Operand = tag.Id)
+        let unsettled = { graph with Layouts = lazy Map.empty }
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.Placement.tryUnionTagBits unsettled unionType |> Option.isNone)
+        let scope = graph.Codata.Value.WitnessLiveScope.Value
+        let failures = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.unionLayoutFailures
+        Assert.Empty(failures graph scope)
+        Assert.Contains(failures unsettled scope, fun failure ->
+            failure.Occurrence = Some tag.Id && failure.Reason.Contains "complete, representable source placement")
+        let noRangeTag = { tag with ValueRange = None }
+        let noRange = { graph with Nodes = graph.Nodes.Add(tag.Id, noRangeTag) }
+        let tagOccurrence = scope.Occurrences[tag.Id]
+        let noRangeScope = { scope with Occurrences = scope.Occurrences.Add(tag.Id, { tagOccurrence with Body = noRangeTag }) }
+        Assert.Contains(failures noRange noRangeScope, fun failure ->
+            failure.Occurrence = Some tag.Id && failure.Reason.Contains "nonnegative source range")
+
     [<Fact>]
     member _.``Immutable aggregate Transport retains its source account without becoming a native projection`` () =
         let graph = CallableAggregateFixture.check (CallableAggregateFixture.source true)

@@ -16,9 +16,9 @@ module private MutableCallableFixture =
               Known = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables graph
               Contracts = codata.CallableContracts } graph |> fst
 
-    let settle = MutableStorage.settle MutableCarriers.sourceType MutableCarriers.valueShape
-    let validate = MutableStorage.validate MutableCarriers.sourceType MutableCarriers.valueShape currentCarriers
-    let validateJoin = MutableStorage.validateJoin MutableCarriers.sourceType MutableCarriers.valueShape currentCarriers
+    let settle = MutableStorage.settle MutableCarriers.sourceType MutableCarriers.valueShape Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedConvention
+    let validate = MutableStorage.validate MutableCarriers.sourceType MutableCarriers.valueShape Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedConvention currentCarriers
+    let validateJoin = MutableStorage.validateJoin MutableCarriers.sourceType MutableCarriers.valueShape Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedConvention currentCarriers
 
     type Fixture = {
         Graph: SemanticGraph
