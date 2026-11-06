@@ -138,7 +138,7 @@ let main _ =
                 Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedConvention
                 graph.Codata.Value.CallableCarriers graph.Codata.Value.EnvironmentLayouts graph
         Assert.Contains(storage.Residuals, fun residual ->
-            residual.Binding = cell.Id && residual.Reason.Contains("common parameter, result, and environment convention"))
+            residual.Binding = cell.Id && residual.Reason = "Mutable callable alternatives require an admitted common parameter, result, and environment convention.")
         Assert.False(storage.Storage.ContainsKey cell.Id)
         Assert.False(storage.Joins.ContainsKey read.Id)
         Assert.False(graph.Codata.Value.CallableCarriers.ContainsKey read.Id)
@@ -159,7 +159,7 @@ let main _ =
         Assert.False(flows.ContainsKey saved.Id)
         Assert.DoesNotContain(flowResiduals, fun residual ->
             (residual.Occurrence = read.Id || residual.Occurrence = saved.Id) &&
-            residual.Reason.Contains("Every callable alternative"))
+            residual.Reason = "Every callable alternative must share its actual source type, parameter, result and environment convention.")
 
     [<Fact>]
     member _.``Admitted integer family with distinct result ranges publishes its snapshot flow``() =
@@ -343,7 +343,7 @@ let main _ =
         let refused = settleOn inactive
         Assert.False(refused.Storage.ContainsKey cell.Id, "A proved-inactive result is no agreement.")
         Assert.Contains(refused.Residuals, fun residual ->
-            residual.Binding = cell.Id && residual.Reason.Contains("common parameter, result, and environment convention"))
+            residual.Binding = cell.Id && residual.Reason = "Mutable callable alternatives require an admitted common parameter, result, and environment convention.")
 
     [<Fact>]
     member _.``Without a platform mutable callable storage keeps the source range agreement``() =
@@ -382,7 +382,7 @@ let main _ =
         Assert.NotEqual(distinctInitial, distinctWritten)
         Assert.False(distinct.Storage.ContainsKey distinctCell, "Distinct result ranges are no agreement without a platform.")
         Assert.Contains(distinct.Residuals, fun residual ->
-            residual.Binding = distinctCell && residual.Reason.Contains("common parameter, result, and environment convention"))
+            residual.Binding = distinctCell && residual.Reason = "Mutable callable alternatives require an admitted common parameter, result, and environment convention.")
         let equalCell, equalInitial, equalWritten, equal = check "unplatformed-equal-ranges.clef" 1
         Assert.Equal(equalInitial, equalWritten)
         Assert.True(equal.Storage.ContainsKey equalCell, "Equal result ranges remain the agreement without a platform.")
@@ -491,7 +491,7 @@ let main _ =
                         "Only the family's own rows are queried.")
             Assert.False(settled.Storage.ContainsKey cell.Id, "Proved-inactive rows are no agreement.")
             Assert.Contains(settled.Residuals, fun residual ->
-                residual.Binding = cell.Id && residual.Reason.Contains("common parameter, result, and environment convention"))
+                residual.Binding = cell.Id && residual.Reason = "Mutable callable alternatives require an admitted common parameter, result, and environment convention.")
             Assert.False(graph.Codata.Value.MutableCallableStorage.ContainsKey cell.Id, "The pipeline installed no storage row for the refused family.")
             Assert.False(graph.Codata.Value.CallableJoins.ContainsKey read.Id, "No join is published for a read of the refused family.")
 
@@ -536,7 +536,7 @@ let main _ =
         let refused = settleOn bare
         Assert.False(refused.Storage.ContainsKey cell.Id, "No declared representation is no agreement.")
         Assert.Contains(refused.Residuals, fun residual ->
-            residual.Binding = cell.Id && residual.Reason.Contains("common parameter, result, and environment convention"))
+            residual.Binding = cell.Id && residual.Reason = "Mutable callable alternatives require an admitted common parameter, result, and environment convention.")
 
     [<Fact>]
     member _.``Unavailable numeric selection refuses mutable callable storage``() =
@@ -571,7 +571,7 @@ let main _ =
         let refused = settleWith masked
         Assert.False(refused.Storage.ContainsKey cell.Id)
         Assert.Contains(refused.Residuals, fun residual ->
-            residual.Binding = cell.Id && residual.Reason.Contains("common parameter, result, and environment convention"))
+            residual.Binding = cell.Id && residual.Reason = "Mutable callable alternatives require an admitted common parameter, result, and environment convention.")
 
     [<Fact>]
     member _.``Emission refuses a held storage row its current selection does not rederive``() =
