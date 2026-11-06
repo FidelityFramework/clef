@@ -3357,8 +3357,16 @@ type MmioAccessEvidence = {
     Binding: MmioBindingEvidence option
 }
 
+/// `CallableCell` is the program-long residence of one module-level mutable callable
+/// binding: its discriminator cell, then the retained environment of its published
+/// mutable callable storage when that contract carries one.
 [<RequireQualifiedAccess>]
-type ProgramStorageShape = Bytes | Scalar of SettledSlot | ValueView of NativeType | NativeEntry of formation: NodeId
+type ProgramStorageShape =
+    | Bytes
+    | Scalar of SettledSlot
+    | ValueView of NativeType
+    | NativeEntry of formation: NodeId
+    | CallableCell of environmentBytes: int option
 
 /// One source-owned writable object. No linker section, address or pooled
 /// offset is implied: those belong to the selected backend's commitment.

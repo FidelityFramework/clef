@@ -104,3 +104,26 @@ let analyze (graph: SemanticGraph) : Map<NodeId, EscapeKind> =
     sites graph
     |> List.map (fun (siteId, kind) -> siteId, escapeOf graph siteId kind)
     |> Map.ofList
+
+/// Whether no lambda encloses a node: it belongs to the program, not to an activation.
+let rec private outsideEveryLambda (graph: SemanticGraph) (nodeId: NodeId) : bool =
+    match SemanticGraph.tryGetNode nodeId graph with
+    | None -> false
+    | Some node ->
+        match node.Kind with
+        | SemanticKind.Lambda _ -> false
+        | _ -> node.Parent |> Option.forall (outsideEveryLambda graph)
+
+/// The residence of each published mutable callable cell whose binding no lambda encloses:
+/// a module-level cell lives as long as the program (Farscape #109). A cell inside an
+/// activation receives no residence here; its stack lifetime needs its own activation
+/// proof (Farscape #107), so it stays unpublished rather than assumed.
+let mutableCellResidences (graph: SemanticGraph) (storage: Map<NodeId, MutableCallableStorage>) : Map<NodeId, EscapeKind> =
+    storage
+    |> Map.toSeq
+    |> Seq.choose (fun (_, row) ->
+        match SemanticGraph.tryGetNode row.Binding graph with
+        | Some { Kind = SemanticKind.Binding(_, true, _, _) } when outsideEveryLambda graph row.Binding ->
+            Some(row.Binding, EscapeKind.StaticLifetime)
+        | _ -> None)
+    |> Map.ofSeq

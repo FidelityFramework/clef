@@ -967,6 +967,23 @@ let placeProgramSlot (graph: SemanticGraph) id =
     | Some node, None when node.IsReachable -> Error ContinuationPlacementError.MissingPlatform
     | _ -> Error (ContinuationPlacementError.MissingSource id)
 
+/// A module-level mutable callable cell: one Pointer-extent discriminator followed by the
+/// retained environment bytes of its published storage contract, at Pointer alignment
+/// (Farscape #109). The contract is the protocol; this places only its residence.
+let placeCallableCell (graph: SemanticGraph) (storage: MutableCallableStorage) =
+    match graph.Nodes.TryFind storage.Binding, graph.Platform with
+    | Some node, Some context when node.IsReachable ->
+        match PlatformContext.pointerSize context, PlatformContext.resolveAlign context NTUKind.NTUptr with
+        | Ok pointer, Ok alignment when pointer > 0 && alignment = pointer && (alignment &&& (alignment - 1)) = 0 ->
+            match storage.EnvironmentBytes with
+            | Some bytes when bytes <= 0 || bytes > System.Int32.MaxValue - pointer ->
+                Error(ContinuationPlacementError.UnsupportedField(storage.Binding, "A callable cell environment requires a positive bounded extent"))
+            | environment ->
+                Ok(ProgramStorageShape.CallableCell environment, pointer + defaultArg environment 0, alignment)
+        | _ -> Error(ContinuationPlacementError.InvalidPlatform "A callable cell requires the declared Pointer extent with equal power-of-two alignment")
+    | Some node, None when node.IsReachable -> Error ContinuationPlacementError.MissingPlatform
+    | _ -> Error(ContinuationPlacementError.MissingSource storage.Binding)
+
 /// Closure environments share exact slot selection/tiling with continuation
 /// frames but have no state/current prefix and no code-address field.
 let placeEnvironment (graph: SemanticGraph) (captures: CaptureInfo list) =

@@ -357,3 +357,128 @@ let main _ = if alias true && second false && later true then 0 else 1
         let delayed = { root with Kind = SemanticKind.Lambda([], top, [], None, LambdaContext.RegularClosure); Children = [top] }
         let deferred = proposals { changed with Nodes = changed.Nodes.Add(root.Id, delayed) }
         Assert.DoesNotContain(deferred.Values |> Seq.collect id, fun (binding, _) -> binding = first)
+
+/// Farscape #109: a module-level mutable callable binding resides in one program-long
+/// cell. Its storage protocol is published by MutableCallableStorage; the inventory
+/// adds only residence, extent and alignment.
+module private CallableCellFixture =
+    let source = """
+module CallableCells
+let mutable selected: int -> int -> int = fun left right -> left + right
+let invoke (work: int -> int -> int) (left: int) (right: int) : int =
+    let saved = work
+    saved left right
+[<EntryPoint>]
+let main _ =
+    let saved = selected
+    selected <- fun left right -> left - right
+    if invoke saved 7 3 = 10 && selected 7 3 = 4 then 0 else 91
+"""
+    /// The source platform with the writable program space a module-level binding needs.
+    let writableAuthority () =
+        SourcePlatformFixture.authority
+            .Replace("let rodata =", "let data = { Name = \"data\"; Kind = \"data\"; Capacity = 4096; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"rw\"; Base = None }\nlet rodata =")
+            .Replace("Spaces = [| rodata |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = None }",
+                     "Spaces = [| rodata; data |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = Some \"data\" }")
+
+    let checkWith authority source =
+        Assert.NotEqual<string>(SourcePlatformFixture.authority, authority)
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
+        let result =
+            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                [parse authority "write-authority.clef"; parse source "callable-cells.clef"] (Some SourcePlatformFixture.platform)
+        DimensionalCases.noErrors result
+        result
+
+    let graph = lazy ((checkWith (writableAuthority ()) source).Graph)
+
+    let selected (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with
+                                | SemanticKind.Binding(actual, true, _, _) -> actual = "selected" || actual.EndsWith ".selected"
+                                | _ -> false) |> Assert.Single
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProgramStorageInventory")>]
+type CallableCellInventoryCases() =
+    [<Fact>]
+    member _.``A module-level mutable callable resides in one program-long callable cell`` () =
+        let graph = CallableCellFixture.graph.Value
+        let binding = CallableCellFixture.selected graph
+        let facts = graph.Codata.Value
+        let slot = ProgramStorageIdentity.BindingSlot binding.Id
+        Assert.True(facts.MutableCallableStorage.ContainsKey binding.Id, "The cell's storage protocol must be published first.")
+        let inventory = facts.ProgramStorage
+        Assert.False(inventory.Unresolved.ContainsKey slot, sprintf "Cell left unresolved: %A" (inventory.Unresolved.TryFind slot))
+        Assert.False(inventory.Unresolved.ContainsKey(ProgramStorageIdentity.Allocation binding.Id), "The cell must not also be a static allocation.")
+        Assert.Equal(Some EscapeKind.StaticLifetime, facts.Escapes.TryFind binding.Id)
+        let entry = inventory.Entries[slot]
+        Assert.Equal(ProgramStorageShape.CallableCell facts.MutableCallableStorage[binding.Id].EnvironmentBytes, entry.Shape)
+        Assert.Equal(8 + defaultArg facts.MutableCallableStorage[binding.Id].EnvironmentBytes 0, entry.Bytes)
+        Assert.Equal(8, entry.Alignment)
+        Assert.False(inventory.Entries.ContainsKey(ProgramStorageIdentity.Allocation binding.Id))
+        Assert.Equal(Some inventory, WritableInventory.read graph)
+
+    [<Fact>]
+    member _.``A published callable cell satisfies the contract's integrity`` () =
+        let graph = CallableCellFixture.graph.Value
+        match Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph with
+        | Error failures -> failwithf "Expected source publication: %A" failures
+        | Ok revision ->
+            let binding = CallableCellFixture.selected graph
+            let slot = Fidelity.PSG.ProgramStorageIdentity.BindingSlot(Fidelity.PSG.NodeId(NodeId.value binding.Id))
+            match revision.Codata.ProgramStorage.Entries.TryFind slot with
+            | Some entry ->
+                match entry.Shape with
+                | Fidelity.PSG.ProgramStorageShape.CallableCell _ -> ()
+                | other -> failwithf "Expected a published callable cell: %A" other
+            | None -> failwith "The published inventory lost the callable cell."
+            Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``A callable cell without its program-long residence stays unresolved with its exact reason`` () =
+        let graph = CallableCellFixture.graph.Value
+        let binding = CallableCellFixture.selected graph
+        let facts = graph.Codata.Value
+        let changed = { graph with Codata = lazy { facts with Escapes = facts.Escapes.Remove binding.Id } }
+        let inventory = WritableInventory.settle changed
+        let slot = ProgramStorageIdentity.BindingSlot binding.Id
+        Assert.False(inventory.Entries.ContainsKey slot)
+        Assert.Equal(Some "The mutable callable cell lacks its published program-long residence", inventory.Unresolved.TryFind slot)
+        Assert.True((WritableInventory.read changed).IsNone, "A copied inventory must not validate a cell whose residence was withdrawn.")
+
+    [<Fact>]
+    member _.``A callable cell without startup authority stays unresolved and never becomes an allocation`` () =
+        let graph = CallableCellFixture.graph.Value
+        let binding = CallableCellFixture.selected graph
+        let changed = ProgramInventoryFixture.withoutAuthority graph
+        let inventory = WritableInventory.settle changed
+        Assert.Equal(Some "The mutable callable cell lacks exact startup and mutable-space authority",
+                     inventory.Unresolved.TryFind(ProgramStorageIdentity.BindingSlot binding.Id))
+        Assert.False(inventory.Unresolved.ContainsKey(ProgramStorageIdentity.Allocation binding.Id))
+        Assert.False(inventory.Entries.ContainsKey(ProgramStorageIdentity.Allocation binding.Id))
+
+    [<Fact>]
+    member _.``A mutable callable inside an activation receives no program residence`` () =
+        let result =
+            let authority = CallableCellFixture.writableAuthority ()
+            CallableCellFixture.checkWith authority """
+module LocalCell
+[<EntryPoint>]
+let main _ =
+    let mutable selected = fun () -> false
+    let saved = selected
+    selected <- fun () -> true
+    if saved () = false && selected () = true then 0 else 91
+"""
+        let graph = result.Graph
+        let facts = graph.Codata.Value
+        let local =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with SemanticKind.Binding("selected", true, _, _) -> true | _ -> false)
+            |> Assert.Single
+        Assert.True(facts.MutableCallableStorage.ContainsKey local.Id, "The local cell's protocol is published.")
+        Assert.Equal(None, facts.Escapes.TryFind local.Id)
+        Assert.False(facts.ProgramStorage.Entries.ContainsKey(ProgramStorageIdentity.BindingSlot local.Id))

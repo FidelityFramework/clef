@@ -2655,6 +2655,7 @@ and mapProgramStorageShape (value: S.ProgramStorageShape) : Fidelity.PSG.Program
     | S.ProgramStorageShape.Scalar(a0) -> Fidelity.PSG.ProgramStorageShape.Scalar(mapSettledSlot a0)
     | S.ProgramStorageShape.ValueView(a0) -> Fidelity.PSG.ProgramStorageShape.ValueView(freeze a0)
     | S.ProgramStorageShape.NativeEntry(a0) -> Fidelity.PSG.ProgramStorageShape.NativeEntry(nodeId a0)
+    | S.ProgramStorageShape.CallableCell(a0) -> Fidelity.PSG.ProgramStorageShape.CallableCell(a0)
 
 and mapRecurrencePowerStep (value: S.RecurrencePowerStep) : Fidelity.PSG.RecurrencePowerStep =
     ({

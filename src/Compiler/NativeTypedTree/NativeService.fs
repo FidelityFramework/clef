@@ -1354,6 +1354,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         |> fun facts -> environments.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
         |> fun facts -> sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
         |> fun facts -> lazies.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
+        |> fun facts ->
+            Escape.mutableCellResidences finalGraph mutableCallables.Storage
+            |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
     // Materialize absence/demand consequences while CCS owns the graph. The
     // emission traversal must not invoke a use census or inference through a
     // lazily evaluated codata member.

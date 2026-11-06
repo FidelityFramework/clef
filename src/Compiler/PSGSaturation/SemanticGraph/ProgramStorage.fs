@@ -41,7 +41,8 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
     let staticSites =
         codata.Escapes |> Map.toList |> List.choose (fun (site, residence) ->
             match residence, graph.Nodes.TryFind site with
-            | EscapeKind.StaticLifetime, Some node when node.IsReachable -> Some(site, node)
+            // A module-level mutable callable cell is a binding slot, never a static allocation.
+            | EscapeKind.StaticLifetime, Some node when node.IsReachable && not (codata.MutableCallableStorage.ContainsKey site) -> Some(site, node)
             | _ -> None)
     match Program.read graph, graph.Platform with
     | _, None -> ProgramStorageInventory.empty
@@ -70,6 +71,20 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
         for binding in plan.ValueBindings do
             let identity = ProgramStorageIdentity.BindingSlot binding
             match graph.Nodes.TryFind binding, Program.tryValueAuthority graph binding with
+            | Some node, Some authority when node.IsReachable && codata.MutableCallableStorage.ContainsKey binding ->
+                // The callable cell's protocol is its published storage contract; the slot
+                // is its program-long residence and requires that residence fact.
+                let storage = codata.MutableCallableStorage[binding]
+                if codata.Escapes.TryFind binding <> Some EscapeKind.StaticLifetime then
+                    pending identity "The mutable callable cell lacks its published program-long residence"
+                else
+                    match Placement.placeCallableCell graph storage with
+                    | Ok(shape, bytes, alignment) ->
+                        add identity shape bytes alignment authority
+                            (Set.ofList (binding :: authority.Initializer.Initializer :: authority.Evidence.Sources))
+                    | Error reason -> pending identity (sprintf "%A" reason)
+            | Some node, None when node.IsReachable && codata.MutableCallableStorage.ContainsKey binding ->
+                pending identity "The mutable callable cell lacks exact startup and mutable-space authority"
             | Some node, Some authority when node.IsReachable ->
                 if not (viewCarrier node.Type) then
                     match Placement.placeProgramSlot graph binding with
