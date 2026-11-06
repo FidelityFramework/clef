@@ -3694,6 +3694,17 @@ let private integerCarrierSource (graph: SemanticGraph) nodeId =
                     | Some value when isIntegerNode value && applySubst value.Type = applySubst node.Type ->
                         follow (Set.add id seen) last
                     | _ -> None)
+            // An ascription forwards its operand unchanged, exactly as `lastValueOf` and
+            // `lambdaOfResult` read it; like a block it is neither a store nor a conversion.
+            // Without this a return annotation over a value-call result was re-selected from its
+            // own range while the value it forwards stays at the Register width, publishing two
+            // carriers for one value with no meet between them (Farscape #108). An annotation
+            // whose operand is not the same integer type keeps its own selection.
+            | SemanticKind.TypeAnnotation (inner, _) when isIntegerNode node && declared.IsNone ->
+                match graph.Nodes.TryFind inner with
+                | Some value when isIntegerNode value && applySubst value.Type = applySubst node.Type ->
+                    follow (Set.add id seen) inner
+                | _ -> Some(node, declared)
             | _ -> Some(node, declared)
     follow Set.empty nodeId
 
@@ -3702,7 +3713,7 @@ let private integerCarrierSource (graph: SemanticGraph) nodeId =
 /// value-call boundary (ruling 1) the Register representation of the range's sign; a width-named
 /// carrier's own; for the bare kind, `selectedRepresentationOf` its range. None for an
 /// unobservable range, a context declaring no integer representation, or a node that is not an
-/// integer. Transparent integer blocks retain their final value's representation.
+/// integer. Transparent integer blocks and ascriptions retain their final value's representation.
 /// This source selector is consumed by Baker's carrier settlement;
 /// witness consumers use NumericWitnessProjection instead.
 let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepresentation option =
@@ -3744,7 +3755,7 @@ let heldWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
 /// as a value or is a declaration root, and a call through a value) the declared Register width,
 /// regardless of the range; a width-named carrier at its own representation's bits (interim,
 /// CS-12), or at the bits its spelling states where the context offers no such representation;
-/// otherwise `selectedWidthOf` its range. Transparent integer blocks retain their
+/// otherwise `selectedWidthOf` its range. Transparent integer blocks and ascriptions retain their
 /// final value's physical width. None for a node with no range, an invalid block
 /// value path, or an unobservable range on a core (see `heldWidth`).
 let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =

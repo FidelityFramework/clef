@@ -770,6 +770,18 @@ module private TransparentScalarFixture =
             graph.Nodes[List.last values]
         | _ -> failwith "Expected a source Sequential body."
 
+    /// Farscape #108: the FunctionSnapshots `invoke` shape, a non-escaping function whose
+    /// annotated result is a call through a function value.
+    let annotatedValueCall = lazy (check "module AnnotatedValueCall\nlet add (left: int) (right: int) = left + right\nlet invoke (work: int -> int -> int) (left: int) (right: int) : int =\n    let saved = work\n    saved left right\n[<EntryPoint>]\nlet main _ =\n    if invoke add 7 3 = 10 then 0 else 1\n")
+
+    let annotatedNarrow = lazy (check "module AnnotatedNarrow\nlet narrow () : int =\n    let value = 7\n    value\n[<EntryPoint>]\nlet main _ =\n    let value = narrow ()\n    value\n")
+
+    /// The annotation that is a function's body, and the block it ascribes.
+    let annotated (graph: SemanticGraph) (body: SemanticNode) =
+        match body.Kind with
+        | SemanticKind.TypeAnnotation(inner, _) -> body, graph.Nodes[inner]
+        | _ -> failwith "Expected an annotated source result."
+
 type TransparentScalarCarrierCases() =
     [<Fact>]
     member _.``Sequential publication preserves its terminal callable ABI carrier`` () =
@@ -816,6 +828,45 @@ type TransparentScalarCarrierCases() =
             let entryCarrier = SettledSlot.Integer(64, Some "unsigned64")
             Assert.Equal(entryCarrier, numeric.Values[entryBody.Id].Slot)
             Assert.Equal(entryCarrier, numeric.Values[entryResult.Id].Slot)
+
+    [<Fact>]
+    member _.``An annotated value-call result keeps the call's Register carrier`` () =
+        let graph = TransparentScalarFixture.annotatedValueCall.Value
+        let _, body = TransparentScalarFixture.body graph "invoke"
+        let annotation, block = TransparentScalarFixture.annotated graph body
+        let call = TransparentScalarFixture.terminal graph block
+        match call.Kind with SemanticKind.Application _ -> () | _ -> failwith "Expected the call through the function value."
+        let numeric = NumericPublication.project graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        match numeric.Values[call.Id].Slot with
+        | SettledSlot.Integer(64, _) -> ()
+        | other -> failwithf "The value-call result must sit at the Register width, found %A." other
+        Assert.Equal(numeric.Values[call.Id].Slot, numeric.Values[block.Id].Slot)
+        Assert.Equal(numeric.Values[call.Id].Slot, numeric.Values[annotation.Id].Slot)
+        Assert.Equal(numeric.Values[call.Id].Representation, numeric.Values[annotation.Id].Representation)
+        Assert.Contains(block.Id, numeric.Values[annotation.Id].Participants)
+        Assert.Contains(annotation.Id, numeric.ResultSites)
+        Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidth graph call.Id, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidth graph annotation.Id)
+
+    [<Fact>]
+    member _.``An annotated narrow result keeps its narrow source carrier`` () =
+        let graph = TransparentScalarFixture.annotatedNarrow.Value
+        let _, body = TransparentScalarFixture.body graph "narrow"
+        let annotation, block = TransparentScalarFixture.annotated graph body
+        let numeric = NumericPublication.project graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let expected = SettledSlot.Integer(8, Some "octet")
+        Assert.Equal(expected, numeric.Values[block.Id].Slot)
+        Assert.Equal(expected, numeric.Values[annotation.Id].Slot)
+
+    [<Fact>]
+    member _.``An annotation over a different type keeps its own selection`` () =
+        let graph = TransparentScalarFixture.annotatedValueCall.Value
+        let _, body = TransparentScalarFixture.body graph "invoke"
+        let annotation, block = TransparentScalarFixture.annotated graph body
+        let changed = { graph with Nodes = graph.Nodes.Add(block.Id, { block with Type = Types.boolType }) }
+        let own = annotation.ValueRange |> Option.bind (Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidthOf changed)
+        Assert.True own.IsSome
+        Assert.Equal(own, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidth changed annotation.Id)
+        Assert.NotEqual(Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidth graph annotation.Id, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidth changed annotation.Id)
 
     [<Theory>]
     [<InlineData("missing-final")>]

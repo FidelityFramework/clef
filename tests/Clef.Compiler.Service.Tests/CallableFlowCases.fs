@@ -196,6 +196,49 @@ let main _ =
         let redirected = { graph with Nodes = graph.Nodes.Add(read, { originalRead with Kind = SemanticKind.VarRef("selected", None) }) }
         Assert.False(Flows.validate redirected flow, "A changed source read must retract its retained snapshot flow.")
 
+    /// Farscape #108 review: the flow's shape agreement compares data leaves by held width.
+    /// An annotated alternative result holds its operand's carrier, so alternatives whose
+    /// annotations would select different widths from their own ranges still agree.
+    [<Fact>]
+    member _.``Annotated alternative results agree on their forwarded carrier in a snapshot flow`` () =
+        let result = SourcePlatformFixture.checkResult 64 "annotated-flow-frontier.clef" """
+module AnnotatedFlowFrontier
+let invoke (work: int -> int) value = work value
+let increment (value: int) : int = value + 1
+let scale (value: int) : int = value * 1000
+[<EntryPoint>]
+let main _ =
+    let mutable selected = increment
+    let saved = selected
+    selected <- scale
+    if invoke saved 3 = 4 then 0 else 1
+"""
+        let graph = result.Graph
+        let reachable predicate = graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && predicate node)
+        let saved =
+            reachable (fun node -> match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = "saved" | _ -> false)
+            |> Assert.Single
+        let actual =
+            reachable (fun node -> match node.Kind with SemanticKind.VarRef("saved", Some source) -> source = saved.Id | _ -> false)
+            |> Assert.Single
+        let formal =
+            reachable (fun node -> match node.Kind with SemanticKind.PatternBinding "work" -> true | _ -> false) |> Assert.Single
+        let annotations =
+            reachable (fun node -> match node.Kind with SemanticKind.TypeAnnotation _ -> true | _ -> false) |> List.ofSeq
+        Assert.Equal(2, annotations.Length)
+        for annotation in annotations do
+            match annotation.Kind with
+            | SemanticKind.TypeAnnotation(inner, _) ->
+                let held = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph annotation.Id
+                Assert.True(held.IsSome, "An annotated alternative result must hold a carrier.")
+                Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph inner, held)
+            | _ -> ()
+        let facts = graph.Codata.Value
+        Assert.True(facts.CallableFlows.ContainsKey formal.Id, "Annotated alternatives must settle one shared flow.")
+        let flow = facts.CallableFlows[formal.Id]
+        Assert.Contains(actual.Id, flow.Alternatives)
+        Assert.True(Flows.validate graph flow)
+
     [<Fact>]
     member _.``Eager callable actual retains its demand marker in complete ingress and value flow`` () =
         let original, _, formal, _, alternatives, calls, _ = CallableFlowFixture.create ()
