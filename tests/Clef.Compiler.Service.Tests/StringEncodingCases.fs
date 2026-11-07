@@ -924,12 +924,31 @@ type CheckedStringEncodingCases() =
                 let residence=match row.Residence with Fidelity.PSG.MemoryResidence.Stack(_,space) -> Fidelity.PSG.MemoryResidence.Stack(row.Site,space) | _ -> failwith "stack"
                 revision.Emission.Memory.Operations.Add(row.Site,Fidelity.PSG.MemoryWitnessOperation.ConstructedValue {row with Residence=residence})
         let changed={revision with Emission={revision.Emission with Memory={revision.Emission.Memory with Operations=operations}}}
-        let reason=match change with
-                   | "missing" -> "exact source-authorized checked native-case storage"
-                   | "layout" -> "The constructed instance lost its exact current layout proof supported by this site."
-                   | "capacity" -> "The constructed instance lost its exact declared-space capacity proof supported by this site."
-                   | _ -> "The constructed instance's stack lifetime has no exact activation scope."
-        Assert.Contains(reason,sprintf "%A" (Fidelity.PSG.Integrity.check changed))
+        let (Fidelity.PSG.NodeId siteId)=row.Site
+        let reason=
+            match change with
+            | "missing" ->
+                sprintf "Node %d is named by Emission.Memory.Operations.ConstructedValue and has no row in exact source-authorized checked native-case storage." siteId
+            | "layout" -> "The constructed instance lost its exact current layout proof supported by this site."
+            | "capacity" -> "The constructed instance lost its exact declared-space capacity proof supported by this site."
+            | _ -> "The constructed instance lacks its exact source activation or checked return instance."
+        let expected:Fidelity.PSG.IntegrityViolation=
+            { Part="Emission.Memory.Operations.ConstructedValue"; Node=Some row.Site; Reason=reason }
+        let siteIssues target=
+            Fidelity.PSG.Integrity.check target
+            |> List.filter(fun item -> item.Part="Emission.Memory.Operations.ConstructedValue" && item.Node=Some row.Site)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        if change="scope" then
+            Assert.Contains(expected,siteIssues changed)
+            let scope=match row.Residence with Fidelity.PSG.MemoryResidence.Stack(scope,_) -> scope | _ -> failwith "stack"
+            let isolatedScope=
+                { revision with
+                    Nodes=revision.Nodes.Add(scope,{revision.Nodes[scope] with Kind=Fidelity.PSG.SemanticKind.DUConstruct("ValueNone",0,None,None)}) }
+            let issue=Assert.Single(siteIssues isolatedScope)
+            Assert.Equal(expected,issue)
+        else
+            let issue=Assert.Single(siteIssues changed)
+            Assert.Equal(expected,issue)
 
     [<Fact>]
     member _.``Checked native storage refuses disagreement with snapshot space capacity``() =

@@ -873,11 +873,151 @@ let main _ = ignore dormant; 0
         let inactive = DemandProjection.tryInactivity graph |> function Ok proof -> proof | Result.Error errors -> failwithf "%A" errors
         if invoked then
             Assert.DoesNotContain(write.Id, inactive.Excluded)
+            Assert.Equal<ValueRange option>(Some(ValueRange.Bounded(1I, 9I)), observed.ValueRange)
             Assert.True(observed.ValueRange |> Option.exists (fun range -> ValueRange.contains range (ValueRange.point 9I)),
                         sprintf "The executed write vanished from %A" observed.ValueRange)
         else
             Assert.Contains(write.Id, inactive.Excluded)
             Assert.Equal<ValueRange option>(Some(ValueRange.point 1I), observed.ValueRange)
+            let literal = match write.Kind with SemanticKind.Set(_, value) | SemanticKind.EnvironmentWrite(_, _, value) -> graph.Nodes[value] | _ -> failwith "Expected write value"
+            Assert.Equal<ValueRange option>(Some(ValueRange.point 9I), literal.ValueRange)
+            let stripped = { graph with Nodes = graph.Nodes.Add(literal.Id, { literal with ValueRange = Some ValueRange.Empty }) }
+            let _, diagnostics = Clef.Compiler.Nanopass.ObligationElaboration.elaborateSettled stripped
+            let diagnostic = Assert.Single(diagnostics |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8011"))
+            Assert.Equal("CCS8011", diagnostic.Code)
+            Assert.Equal("Integer literal 9 has no finite analysed range for proof dispatch.", diagnostic.Message)
+            Assert.Equal<NodeId list>([literal.Id], diagnostic.RelatedNodes)
+            let withoutAuthority =
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.OrdinaryInactiveImplementation) }
+            let withoutAuthorityGraph, withoutAuthorityDiagnostics = DemandRanges.run withoutAuthority.Platform withoutAuthority
+            Assert.Empty withoutAuthorityDiagnostics
+            Assert.Equal<ValueRange option>(Some ValueRange.Empty, withoutAuthorityGraph.Nodes[literal.Id].ValueRange)
+            let _, withoutAuthorityElaborated = Clef.Compiler.Nanopass.ObligationElaboration.elaborateSettled withoutAuthorityGraph
+            let authorityDiagnostic = Assert.Single(withoutAuthorityElaborated |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8011"))
+            Assert.Equal("Integer literal 9 has no finite analysed range for proof dispatch.", authorityDiagnostic.Message)
+            Assert.Equal<NodeId list>([literal.Id], authorityDiagnostic.RelatedNodes)
+            let baseSharedGraph =
+                OrdinaryDemandFixture.check (
+                    String.concat "\n"
+                        [ "[<EntryPoint>]"
+                          "let main _ ="
+                          "    let delta = 4"
+                          "    let mutable activeCell = 1"
+                          "    let mutable dormantCell = 1"
+                          "    let dormant () = dormantCell <- 4"
+                          "    activeCell <- delta"
+                          "    ignore dormant"
+                          "    let observedActive = eager activeCell"
+                          "    let observedDormant = eager dormantCell"
+                          "    observedActive + observedDormant" ])
+            let delta =
+                baseSharedGraph.Nodes.Values
+                |> Seq.filter (fun node ->
+                    node.IsReachable &&
+                    match node.Kind with SemanticKind.Binding("delta", false, _, _) -> true | _ -> false)
+                |> Assert.Single
+            let activeCell =
+                baseSharedGraph.Nodes.Values
+                |> Seq.filter (fun node ->
+                    node.IsReachable &&
+                    match node.Kind with SemanticKind.Binding("activeCell", true, _, _) -> true | _ -> false)
+                |> Assert.Single
+            let dormantCell =
+                baseSharedGraph.Nodes.Values
+                |> Seq.filter (fun node ->
+                    node.IsReachable &&
+                    match node.Kind with SemanticKind.Binding("dormantCell", true, _, _) -> true | _ -> false)
+                |> Assert.Single
+            let observedActive =
+                baseSharedGraph.Nodes.Values
+                |> Seq.filter (fun node ->
+                    node.IsReachable &&
+                    match node.Kind with SemanticKind.Binding("observedActive", _, _, _) -> true | _ -> false)
+                |> Assert.Single
+            let observedDormant =
+                baseSharedGraph.Nodes.Values
+                |> Seq.filter (fun node ->
+                    node.IsReachable &&
+                    match node.Kind with SemanticKind.Binding("observedDormant", _, _, _) -> true | _ -> false)
+                |> Assert.Single
+            let _, sharedValueId =
+                baseSharedGraph.Nodes.Values
+                |> Seq.choose (fun node ->
+                    if not node.IsReachable then None else
+                    match node.Kind with
+                    | SemanticKind.Set(target, value) ->
+                        match baseSharedGraph.Nodes[target].Kind with
+                        | SemanticKind.VarRef("activeCell", Some defId) when defId = activeCell.Id -> Some(node, value)
+                        | _ -> None
+                    | _ -> None)
+                |> Assert.Single
+            let dormantWrite, oldDormantValueId, rewiredDormantKind, rewiredDormantChildren =
+                baseSharedGraph.Nodes.Values
+                |> Seq.choose (fun node ->
+                    if not node.IsReachable then None else
+                    match node.Kind with
+                    | SemanticKind.EnvironmentWrite(environment, slot, value) when slot = dormantCell.Id ->
+                        Some(node, value, SemanticKind.EnvironmentWrite(environment, slot, sharedValueId), [environment; sharedValueId])
+                    | SemanticKind.Set(target, value) ->
+                        match baseSharedGraph.Nodes[target].Kind with
+                        | SemanticKind.VarRef("dormantCell", Some defId) when defId = dormantCell.Id ->
+                            Some(node, value, SemanticKind.Set(target, sharedValueId), [target; sharedValueId])
+                        | _ -> None
+                    | _ -> None)
+                |> Assert.Single
+            let rewiredDormantWrite =
+                { dormantWrite with
+                    Kind = rewiredDormantKind
+                    Children = rewiredDormantChildren }
+            let sharedCandidateGraph =
+                { baseSharedGraph with
+                    Nodes =
+                        baseSharedGraph.Nodes
+                        |> Map.remove oldDormantValueId
+                        |> Map.add rewiredDormantWrite.Id rewiredDormantWrite
+                    Edges =
+                        Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence rewiredDormantWrite
+                        @ (baseSharedGraph.Edges
+                           |> List.filter (fun edge ->
+                               edge.Target <> oldDormantValueId &&
+                               not (List.contains oldDormantValueId edge.Sources) &&
+                               not (edge.Target = rewiredDormantWrite.Id &&
+                                    (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference || edge.Role = EdgeRole.FrameSlot)))) }
+                |> DemandRecipe.normalize
+            let sharedInactive =
+                DemandProjection.tryInactivity sharedCandidateGraph
+                |> function Ok proof -> proof | Result.Error errors -> failwithf "%A" errors
+            Assert.Contains(rewiredDormantWrite.Id, sharedInactive.Excluded)
+            Assert.DoesNotContain(sharedValueId, sharedInactive.Excluded)
+            let finiteBounds = Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize sharedCandidateGraph
+            let activeBoundIndex = finiteBounds |> List.findIndex (fun bound -> bound.Cell = activeCell.Id)
+            let dormantBoundIndex = finiteBounds |> List.findIndex (fun bound -> bound.Cell = dormantCell.Id)
+            Assert.True(activeBoundIndex < dormantBoundIndex, "Expected dormantBound after activeBound so Map.ofList collides on write.Value")
+            let activeBound = finiteBounds[activeBoundIndex]
+            let dormantBound = finiteBounds[dormantBoundIndex]
+            let activeBoundWrite = Assert.Single activeBound.Writes
+            let dormantBoundWrite = Assert.Single dormantBound.Writes
+            Assert.Equal(sharedValueId, activeBoundWrite.Value)
+            Assert.Equal(sharedValueId, dormantBoundWrite.Value)
+            Assert.Equal(1I, activeBoundWrite.MaximumActivations)
+            Assert.Equal(0I, dormantBoundWrite.MaximumActivations)
+            Assert.Equal<ValueRange>(ValueRange.Bounded(-5I, 5I), Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.range activeBound)
+            Assert.Equal<ValueRange>(ValueRange.Bounded(-1I, 1I), Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.range dormantBound)
+            let sharedGraph, sharedRangeDiagnostics = DemandRanges.run sharedCandidateGraph.Platform sharedCandidateGraph
+            Assert.Empty sharedRangeDiagnostics
+            Assert.Equal<ValueRange option>(Some(ValueRange.point 4I), sharedGraph.Nodes[delta.Id].ValueRange)
+            Assert.Equal<ValueRange option>(Some(ValueRange.point 4I), sharedGraph.Nodes[sharedValueId].ValueRange)
+            Assert.Equal<ValueRange option>(Some(ValueRange.Bounded(1I, 4I)), sharedGraph.Nodes[observedActive.Id].ValueRange)
+            Assert.Equal<ValueRange option>(Some(ValueRange.point 1I), sharedGraph.Nodes[observedDormant.Id].ValueRange)
+            let _, sharedDiagnostics = Clef.Compiler.Nanopass.ObligationElaboration.elaborateSettled sharedGraph
+            Assert.Empty sharedDiagnostics
+            let sharedWithoutAuthority =
+                { sharedCandidateGraph with
+                    Edges = sharedCandidateGraph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.OrdinaryInactiveImplementation) }
+            let sharedWithoutAuthorityGraph, sharedWithoutAuthorityDiagnostics =
+                DemandRanges.run sharedWithoutAuthority.Platform sharedWithoutAuthority
+            Assert.Empty sharedWithoutAuthorityDiagnostics
+            Assert.Equal<ValueRange option>(Some ValueRange.Empty, sharedWithoutAuthorityGraph.Nodes[sharedValueId].ValueRange)
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "OrdinaryDemand")>]
 type OrdinaryDemandSupplierCases() =

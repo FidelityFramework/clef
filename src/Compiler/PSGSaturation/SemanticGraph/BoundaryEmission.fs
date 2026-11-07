@@ -86,6 +86,19 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 | _ -> true)
         let anchorValid = graph.Nodes.TryFind domainRow.Target |> Option.exists (fun node ->
             Ingredients.ownedNode node && match node.Kind with SemanticKind.Literal NativeLiteral.Unit -> true | _ -> false)
+        let borrowStale =
+            [ if not snapshotProofsCurrent then
+                  stale "The runtime snapshot borrow proof lost its exact count, snapshot, copy, allocation or finite range incidence."
+              if (not domain.StringComparisonReads.IsEmpty || not domain.StringBorrowSnapshots.IsEmpty || not domain.StringBorrowCopies.IsEmpty || not domain.StringBorrowAllocations.IsEmpty) &&
+                 (match MemoryPublication.project graph with
+                  | Error _ -> true
+                  | Ok memory ->
+                      (domain.StringComparisonReads |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAccess fact))) ||
+                      (domain.StringBorrowSnapshots |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.StringView fact))) ||
+                      (domain.StringBorrowCopies |> List.exists (fun fact -> memory.ArrayCopies.TryFind fact.Site <> Some fact)) ||
+                      (domain.StringBorrowAllocations |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAllocation fact)))) then
+                  stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence." ]
+            |> List.collect (function Error failures -> failures | Ok _ -> [])
         if not optionalClaimErrors.IsEmpty then Error optionalClaimErrors
         elif not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.platformPremise graph.Platform || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
             stale "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph."
@@ -93,8 +106,6 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             Error (domain.Failures |> List.map (fun (site, participants, reason) -> failure (Some site) participants reason))
         elif not borrowMembership then
             stale "The source-published snapshot, copy or allocation dependency account is incomplete."
-        elif not snapshotProofsCurrent then
-            stale "The runtime snapshot borrow proof lost its exact count, snapshot, copy, allocation or finite range incidence."
         elif (match domain.StringOriginRelations with
               | Some expected ->
                   StringOrigins.relations graph <> Ok expected || domain.StringOriginRoots <> Some graph.DeclarationRoots
@@ -102,15 +113,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                   (domain.ByteViews |> List.exists (fun view -> StringOrigins.used view.Participants)) ||
                   (domain.StringExtents |> List.exists (fun extent -> StringOrigins.used extent.Participants))) then
             stale "The string-origin relation premises changed; Baker must settle the new source graph."
-        elif (not domain.StringComparisonReads.IsEmpty || not domain.StringBorrowSnapshots.IsEmpty || not domain.StringBorrowCopies.IsEmpty || not domain.StringBorrowAllocations.IsEmpty) &&
-             (match MemoryPublication.project graph with
-              | Error _ -> true
-              | Ok memory ->
-                  (domain.StringComparisonReads |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAccess fact))) ||
-                  (domain.StringBorrowSnapshots |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.StringView fact))) ||
-                  (domain.StringBorrowCopies |> List.exists (fun fact -> memory.ArrayCopies.TryFind fact.Site <> Some fact)) ||
-                  (domain.StringBorrowAllocations |> List.exists (fun fact -> memory.Operations.TryFind fact.Site <> Some(MemoryWitnessOperation.ArrayAllocation fact)))) then
-            stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
+        elif not borrowStale.IsEmpty then
+            Error borrowStale
         else
             let writableDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryWritableBufferDeclaration row -> Some row | _ -> None)
             let writableUses = graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.BoundaryWritableBufferUse row -> Some row | _ -> None)

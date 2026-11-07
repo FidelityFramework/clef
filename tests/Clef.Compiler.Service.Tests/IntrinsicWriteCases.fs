@@ -2042,7 +2042,21 @@ type RuntimeSnapshotWriteCases() =
 
     [<Fact>]
     member _.``Runtime write retracts changed allocation evidence with unchanged source nodes``() =
-        let graph, domain, _ = RuntimeSnapshotWriteFixture.admitted ""
+        let graph, domain, call = RuntimeSnapshotWriteFixture.admitted ""
+        let domainRow =
+            graph.Edges
+            |> List.filter (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDomain _ -> true
+                | _ -> false)
+            |> Assert.Single
+        let expectedParticipants = Map.keys domain.Premises |> Set.ofSeq
+        let expectedProofReason =
+            "BoundaryEmission: The runtime snapshot borrow proof lost its exact count, snapshot, copy, allocation or finite range incidence."
+        let expectedMemoryReason =
+            "BoundaryEmission: A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence."
+        let expectedOriginReason =
+            "BoundaryEmission: The string-origin relation premises changed; Baker must settle the new source graph."
         let allocation = Assert.Single domain.StringBorrowAllocations
 
         let changedAllocation =
@@ -2069,8 +2083,104 @@ type RuntimeSnapshotWriteCases() =
         Assert.Same(graph.Nodes, changed.Nodes)
 
         match IntrinsicBoundary.project changed with
-        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains "snapshot copy or lifetime correspondence")
+        | Error failures ->
+            Assert.Equal(2, failures.Length)
+            Assert.All(
+                failures,
+                fun failure ->
+                    Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+                    Assert.Equal(Some domainRow.Target, failure.Occurrence)
+                    Assert.Equal<Set<NodeId>>(expectedParticipants, failure.Participants)
+            )
+            Assert.Equal<string list>(
+                [ expectedProofReason; expectedMemoryReason ],
+                failures |> List.map _.Reason
+            )
         | Ok _ -> failwith "Changed runtime allocation evidence retained the old write authority."
+
+        let proofOnlyDomain =
+            { domain with
+                IntrinsicProofs =
+                    domain.IntrinsicProofs
+                    |> List.map (fun proof ->
+                        if proof.Ordinal = 1 then
+                            { proof with Body = ObligationBody.InputBufferBound(2L, 3L) }
+                        else
+                            proof)
+            }
+        let proofOnly = RuntimeSnapshotWriteFixture.withDomain graph proofOnlyDomain
+        match IntrinsicBoundary.project proofOnly with
+        | Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some domainRow.Target, failure.Occurrence)
+            Assert.Equal<Set<NodeId>>(expectedParticipants, failure.Participants)
+            Assert.Equal(expectedProofReason, failure.Reason)
+        | Ok _ -> failwith "Corrupted runtime snapshot proof retained write authority."
+
+        let memoryOnly =
+            { graph with
+                Edges =
+                    graph.Edges
+                    |> List.filter (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.MemoryOperation(MemoryWitnessOperation.ArrayAllocation fact) -> fact.Site <> allocation.Site
+                        | _ -> true)
+            }
+        match IntrinsicBoundary.project memoryOnly with
+        | Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some domainRow.Target, failure.Occurrence)
+            Assert.Equal<Set<NodeId>>(expectedParticipants, failure.Participants)
+            Assert.Equal(expectedMemoryReason, failure.Reason)
+        | Ok _ -> failwith "Withdrawn memory allocation operation retained write authority."
+
+        Assert.NotEmpty graph.DeclarationRoots
+        let originOnlyDomain =
+            { domain with
+                StringOriginRelations = Some []
+                StringOriginRoots = Some []
+            }
+        let originOnly = RuntimeSnapshotWriteFixture.withDomain graph originOnlyDomain
+        match IntrinsicBoundary.project originOnly with
+        | Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some domainRow.Target, failure.Occurrence)
+            Assert.Equal<Set<NodeId>>(expectedParticipants, failure.Participants)
+            Assert.Equal(expectedOriginReason, failure.Reason)
+        | Ok _ -> failwith "Changed string-origin premises retained write authority."
+
+        let originAndBorrowDomain =
+            { originOnlyDomain with
+                StringBorrowAllocations = [ changedAllocation ]
+            }
+        let originAndBorrow = RuntimeSnapshotWriteFixture.withDomain graph originAndBorrowDomain
+        match IntrinsicBoundary.project originAndBorrow with
+        | Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some domainRow.Target, failure.Occurrence)
+            Assert.Equal<Set<NodeId>>(expectedParticipants, failure.Participants)
+            Assert.Equal(expectedOriginReason, failure.Reason)
+        | Ok _ -> failwith "Simultaneous string-origin and borrow drift retained write authority."
+
+        for drifted in [ changed; proofOnly; originOnly; originAndBorrow ] do
+            let resettled = Clef.Compiler.Nanopass.BoundarySettlement.normalize drifted
+            let projection =
+                IntrinsicBoundary.project resettled
+                |> Result.defaultWith (sprintf "%A" >> failwith)
+            Assert.True(projection.IntrinsicWrites.ContainsKey call.Site)
+
+        let resettledMemory =
+            memoryOnly
+            |> Clef.Compiler.Nanopass.MemorySettlement.normalize
+            |> Clef.Compiler.Nanopass.BoundarySettlement.normalize
+        let resettledMemoryProjection =
+            IntrinsicBoundary.project resettledMemory
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.True(resettledMemoryProjection.IntrinsicWrites.ContainsKey call.Site)
 
     [<Theory>]
     [<InlineData("snapshot")>]

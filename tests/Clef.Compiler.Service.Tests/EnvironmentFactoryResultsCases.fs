@@ -1111,11 +1111,11 @@ let main _ =
             match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project source with
             | Result.Ok projection -> projection
             | Result.Error failures -> failwithf "Missing numeric projection: %A" failures
-        let domain (source: SemanticGraph) =
+        let domainEntry (source: SemanticGraph) =
             source.Edges |> List.choose (fun edge ->
-                match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None) |> Assert.Single
+                match edge.Role with EdgeRole.NumericDomain domain -> Some(edge.Target, domain) | _ -> None) |> Assert.Single
         let previous = project graph
-        let originalDomain = domain graph
+        let originalAnchor, originalDomain = domainEntry graph
         let changed, annotation = FiniteCellRepresentationFixture.annotateInitializer graph
         let initializer = graph.Nodes[Assert.Single (graph.Nodes[finite.Cell].Children)]
         let transported = { changed.Nodes[annotation] with ValueRange = initializer.ValueRange }
@@ -1130,23 +1130,229 @@ let main _ =
             edge.Role = EdgeRole.Constrains && edge.Target = finiteProof && List.contains annotation edge.Sources)
         // The added numeric participant needs its own claim even when its range
         // is unchanged. Completeness must refuse before the owner renews proofs.
+        Assert.Equal(None, Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId "numeric-carrier-coverage" preserved.Nodes[annotation])
+        let claim = $"numeric_carrier_{NodeId.value annotation}"
         match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project preserved with
         | Result.Error failures ->
-            Assert.Equal(None, Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId "numeric-carrier-coverage" preserved.Nodes[annotation])
-            let claim = $"numeric_carrier_{NodeId.value annotation}"
+            Assert.Equal(2, failures.Length)
             Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
+                failure.Occurrence = Some originalAnchor &&
+                failure.Reason = "NumericPublication: finite-cell relation premises changed; source numeric settlement is required.")
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
                 failure.Occurrence = Some annotation &&
                 failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
         | Result.Ok _ -> failwith "The old numeric proof survived a change of finite support."
+        let staleDemand =
+            { preserved with
+                Edges =
+                    { Class = EdgeClass.Demand
+                      Role = EdgeRole.OrdinaryUnusedFormal
+                      Ordinal = 0
+                      Sources = [annotation]
+                      Target = annotation } :: preserved.Edges }
+        Assert.True(Result.isError (Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead staleDemand))
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project staleDemand with
+        | Result.Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some originalAnchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: finite-cell relation premises changed; source numeric settlement is required.", failure.Reason)
+        | Result.Ok _ -> failwith "Stale ordinary demand and finite support crossed numeric publication."
         let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize preserved
+        let renewedAnchor, renewedDomain = domainEntry renewed
         let current = project renewed
+        let staleDomainOnly =
+            { renewed with
+                Edges =
+                    renewed.Edges
+                    |> List.map (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericDomain _ -> { edge with Role = EdgeRole.NumericDomain originalDomain }
+                        | _ -> edge) }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project staleDomainOnly with
+        | Result.Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some renewedAnchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: finite-cell relation premises changed; source numeric settlement is required.", failure.Reason)
+        | Result.Ok _ -> failwith "Stale finite-cell relation premises on a settled claim graph crossed numeric publication."
+        let claimNodeId = Assert.Single current.Values[annotation].Obligations
+        let missingClaimOnly = { renewed with Nodes = renewed.Nodes.Remove claimNodeId }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project missingClaimOnly with
+        | Result.Error failures ->
+            Assert.Equal(2, failures.Length)
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
+                failure.Occurrence = Some renewedAnchor &&
+                failure.Reason = "NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent.")
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
+                failure.Occurrence = Some annotation &&
+                failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
+        | Result.Ok _ -> failwith "Withdrawn carrier claim citizen crossed numeric publication."
+        let claimNode = renewed.Nodes[claimNodeId]
+        let missingClaimIdentity =
+            match claimNode.Kind with
+            | SemanticKind.Obligation info ->
+                { renewed with Nodes = renewed.Nodes.Add(claimNodeId, { claimNode with Kind = SemanticKind.Obligation { info with Id = "stale_" + claim } }) }
+            | _ -> failwith "Expected carrier coverage obligation node."
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project missingClaimIdentity with
+        | Result.Error failures ->
+            Assert.Equal(2, failures.Length)
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
+                failure.Occurrence = Some annotation &&
+                failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
+                failure.Occurrence = Some claimNodeId &&
+                failure.Reason = "Numeric obligation completeness: unexpected claim stale_" + claim)
+        | Result.Ok _ -> failwith "Corrupted carrier claim identity crossed numeric publication."
         Assert.Equal(previous.Values[finite.Cell].Slot, current.Values[finite.Cell].Slot)
         Assert.Equal(graph.Nodes[finite.Cell].ValueRange, renewed.Nodes[finite.Cell].ValueRange)
-        Assert.NotEqual(originalDomain.FiniteCellRelations, (domain renewed).FiniteCellRelations)
-        Assert.Contains((domain renewed).FiniteCellRelations |> Option.get, fun relation -> List.contains annotation relation.Sources)
+        Assert.NotEqual(originalDomain.FiniteCellRelations, renewedDomain.FiniteCellRelations)
+        Assert.Contains(renewedDomain.FiniteCellRelations |> Option.get, fun relation -> List.contains annotation relation.Sources)
         Assert.NotEmpty(previous.Values[finite.Cell].Obligations)
         for obligation in previous.Values[finite.Cell].Obligations do
             Assert.False(renewed.Nodes.ContainsKey obligation, "Changed support requires new downstream numeric proof citizens.")
+        let parseForeign source path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults source path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
+        let foreignAuthority = SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+        let foreignSource = """module Foreign
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Pointer of int | Void
+type PassBy = Value | Reference
+type CallConv = | CDecl
+type Transfer = | Borrowed
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+[<FidelityExtern("c", "native_read")>]
+let read (count: int) : int = NativeDefault.zeroed ()
+let readDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName="native_read"; Parameters=[| {Name="count";Type=Integer(Unsigned,32);PassBy=Value} |]
+    ReturnType=Integer(Signed,64); CallingConvention=CDecl; OwnershipTransfer=Borrowed } @>
+[<EntryPoint>]
+let main _ = if read 4 = 0 then 0 else 1
+"""
+        let settledForeign =
+            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                [parseForeign foreignAuthority "write-authority.clef"; parseForeign foreignSource "foreign.clef"]
+                (Some SourcePlatformFixture.platform)
+            |> fun result ->
+                DimensionalCases.noErrors result
+                result.Graph
+        project settledForeign |> ignore
+        let foreignAnchor, foreignDomain = domainEntry settledForeign
+        let foreignUse = Assert.Single foreignDomain.ForeignResultUses
+        let foreignRole, abiClaimNodeId = Assert.Single foreignUse.Claims
+        Assert.Equal(ForeignResultProofRole.AbiNarrowing, foreignRole)
+        Assert.Empty(Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness settledForeign)
+        let abiClaimId =
+            match settledForeign.Nodes[abiClaimNodeId].Kind with
+            | SemanticKind.Obligation info -> info.Id
+            | _ -> failwith "Expected foreign result coverage obligation node."
+        let foreignWithStaleValues =
+            { settledForeign with
+                Edges =
+                    settledForeign.Edges
+                    |> List.map (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericDomain _ -> { edge with Role = EdgeRole.NumericDomain { foreignDomain with Values = [] } }
+                        | _ -> edge) }
+        let abiSuffix = "31333A6162692D6E6172726F77696E67"
+        let logicalSuffix = "31363A6C6F676963616C2D636F766572616765"
+        Assert.EndsWith(abiSuffix, abiClaimId)
+        let logicalClaimId = abiClaimId.Substring(0, abiClaimId.Length - abiSuffix.Length) + logicalSuffix
+        let staleValueCompleteness = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness foreignWithStaleValues
+        let staleValueSite, staleValueReason = Assert.Single staleValueCompleteness
+        Assert.Equal(foreignUse.Application.Call, staleValueSite)
+        Assert.Equal("Numeric obligation completeness: missing or duplicate claim " + logicalClaimId, staleValueReason)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project foreignWithStaleValues with
+        | Result.Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some foreignAnchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: A required source scalar carrier is absent or duplicated.", failure.Reason)
+        | Result.Ok _ -> failwith "Stale foreign carrier domain crossed numeric publication."
+        let callCarrier =
+            foreignDomain.Values
+            |> List.filter (fun value -> value.Site = foreignUse.Application.Call)
+            |> Assert.Single
+        Assert.Equal(SettledSlot.Integer(64, Some "signed64"), callCarrier.Slot)
+        let narrowCarrier =
+            foreignDomain.Values
+            |> List.find (fun value ->
+                match value.Slot, value.Representation, value.Declaration with
+                | SettledSlot.Integer(bits, Some _), Some rep, Some _ -> bits > 0 && bits < 64 && rep.Bits = bits
+                | _ -> false)
+        let stalePositiveSlot = narrowCarrier.Slot
+        let stalePositiveCarrier =
+            { callCarrier with
+                Slot = stalePositiveSlot
+                Representation = narrowCarrier.Representation
+                Declaration = narrowCarrier.Declaration
+                Participants =
+                    match narrowCarrier.Declaration with
+                    | Some decl -> callCarrier.Participants |> Set.add decl
+                    | None -> callCarrier.Participants }
+        let foreignWithStalePositiveCarrier =
+            { settledForeign with
+                Edges =
+                    settledForeign.Edges
+                    |> List.map (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericDomain _ ->
+                            { edge with
+                                Role =
+                                    EdgeRole.NumericDomain
+                                        { foreignDomain with
+                                            Values =
+                                                foreignDomain.Values
+                                                |> List.map (fun value ->
+                                                    if value.Site = foreignUse.Application.Call then stalePositiveCarrier else value)
+                                            OccurrenceRepresentations =
+                                                foreignDomain.OccurrenceRepresentations.Add(
+                                                    foreignUse.Application.Call,
+                                                    Ok(ValueRepresentation.Scalar stalePositiveSlot)) } }
+                        | _ -> edge) }
+        let stalePositiveCompleteness = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness foreignWithStalePositiveCarrier
+        let stalePositiveSite, stalePositiveReason = Assert.Single stalePositiveCompleteness
+        Assert.Equal(foreignUse.Application.Call, stalePositiveSite)
+        Assert.Equal("Numeric obligation completeness: missing or duplicate claim " + logicalClaimId, stalePositiveReason)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project foreignWithStalePositiveCarrier with
+        | Result.Error failures ->
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some foreignAnchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent.", failure.Reason)
+        | Result.Ok _ -> failwith "Stale positive-width foreign carrier crossed numeric publication."
+        let foreignWithStaleFiniteCellsAndMissingAbiNarrowing =
+            { settledForeign with
+                Nodes = settledForeign.Nodes.Remove abiClaimNodeId
+                Edges =
+                    settledForeign.Edges
+                    |> List.filter (fun edge -> edge.Target <> abiClaimNodeId && not (List.contains abiClaimNodeId edge.Sources))
+                    |> List.map (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericDomain _ ->
+                            { edge with Role = EdgeRole.NumericDomain { foreignDomain with FiniteCellRelations = Some [] } }
+                        | _ -> edge) }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project foreignWithStaleFiniteCellsAndMissingAbiNarrowing with
+        | Result.Error failures ->
+            Assert.Equal(2, failures.Length)
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
+                failure.Occurrence = Some foreignAnchor &&
+                failure.Reason = "NumericPublication: finite-cell relation premises changed; source numeric settlement is required.")
+            Assert.Contains(failures, fun failure ->
+                failure.Kind = WitnessProjectionFailureKind.Settlement &&
+                failure.Occurrence = Some foreignUse.Application.Call &&
+                failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + abiClaimId)
+        | Result.Ok _ -> failwith "Stale finite-cell relations and missing foreign ABI-narrowing claim crossed numeric publication."
 
     [<Theory>]
     [<InlineData(false, "startup")>]

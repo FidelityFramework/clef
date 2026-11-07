@@ -1951,7 +1951,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         (bound.Cell, bound) :: (bound.Contributions |> List.map (fun contribution -> contribution.Value, bound))) |> Map.ofList
     let finiteCells = FiniteCellRanges.recognize graph
     let finiteTargets = finiteCells |> List.collect (fun bound ->
-        (bound.Cell, bound) :: (bound.Writes |> List.map (fun write -> write.Value, bound))) |> Map.ofList
+        (bound.Cell, bound) :: (bound.Writes |> List.choose (fun write -> if write.MaximumActivations > 0I || not (inactiveOccurrences.Contains write.Store) then Some(write.Value, bound) else None))) |> Map.ofList
     let program =
         { program with Effects = effectsOf program; LazyEffects = lazyTargets; FiniteCells = finiteTargets }
     let inputs: LoopRecipes.Inputs = {

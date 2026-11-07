@@ -197,6 +197,62 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
                      OccurrenceRepresentations = domain.OccurrenceRepresentations; TypeRepresentations = domain.TypeRepresentations }
     | _ -> reject None Set.empty "Exactly one source NumericSettlement domain is required before witnessing."
 
+let private foreignResultCompletenessCurrent (graph: SemanticGraph) : bool =
+    match RangeAnalysis.foreignResultApplications graph graph.RangeContextFacts with
+    | Ok [] -> true
+    | Ok applications ->
+        match
+            graph.Edges
+            |> List.choose (fun edge ->
+                match edge.Role with
+                | EdgeRole.NumericDomain domain -> Some domain
+                | _ -> None)
+            |> List.tryExactlyOne
+        with
+        | Some domain when
+            domain.RangeContextFacts = graph.RangeContextFacts
+            && (graph.RangeContextFacts |> Option.exists (Numeric.rangeContextCurrent graph)) ->
+            let premises = Numeric.premises graph
+            let sourceReading = PlatformResolution.read graph
+            let sourceCore = sourceReading.Platform |> Option.bind _.Core
+            applications
+            |> List.forall (fun evidence ->
+                let callId = evidence.Application.Call
+                match
+                    domain.Values |> List.filter (fun value -> value.Site = callId) |> List.tryExactlyOne,
+                    graph.Nodes.TryFind callId,
+                    premises.TryFind callId,
+                    RangeAnalysis.heldWidth graph callId
+                with
+                | Some carrier, Some callNode, Some premise, Some bits when bits > 0 ->
+                    let authorityMatches =
+                        match RangeAnalysis.selectedRepresentation graph callId, sourceCore with
+                        | Some representation, Some core when sourceReading.Findings.IsEmpty ->
+                            match core.Representations |> List.filter (fun declaration -> declaration.Representation = representation) with
+                            | [declaration] ->
+                                Clef.Compiler.NativeTypedTree.NativeTypes.NumericRepresentation.isOffered representation
+                                && representation.Bits = bits
+                                && carrier.Slot = SettledSlot.Integer(bits, Some representation.Name)
+                                && carrier.Representation = Some representation
+                                && carrier.Declaration = Some declaration.Node
+                            | _ -> false
+                        | None, _ when
+                            graph.Platform
+                            |> Option.exists (fun context ->
+                                Clef.Compiler.NativeTypedTree.NativeTypes.PlatformContext.substrateKind context =
+                                    Clef.Compiler.NativeTypedTree.NativeTypes.SubstrateKind.FPGA) ->
+                            carrier.Slot = SettledSlot.Integer(bits, None)
+                            && carrier.Representation = None
+                            && carrier.Declaration = None
+                        | _ -> false
+                    authorityMatches
+                    && callNode.ValueRange = Some carrier.Range
+                    && premise.Shape.SourceType = carrier.SourceType
+                    && premise.Range = Some carrier.Range
+                | _ -> false)
+        | _ -> false
+    | Error _ -> false
+
 /// Retain each Pending identity beside the currentness refusal that explains it.
 /// Currentness is checked before reading the source completeness census.
 /// Every admitted domain still requires completeness; neither a partial ledger
@@ -231,7 +287,13 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
             | _ -> None)
 
     match projectDomain graph with
-    | Error failures -> Error(failures @ pending)
+    | Error failures ->
+        let complete =
+            if Result.isOk (OrdinaryDemand.tryRead graph) && foreignResultCompletenessCurrent graph then
+                completeness graph
+            else
+                []
+        Error(failures @ complete @ pending)
     | Ok projection ->
         match completeness graph, pending with
         | failures, _ when not failures.IsEmpty -> Error(failures @ pending)

@@ -311,9 +311,69 @@ let main _ =
             for clone in clones do
                 Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.SchemeSpecialization && edge.Target = clone.Id && edge.Sources.Head = retired.Id)
             let cloneIds = clones |> List.map (fun node -> node.Id) |> Set.ofList
+            let cloneNames =
+                clones |> List.choose (fun node ->
+                    match node.Kind with
+                    | SemanticKind.Binding (name, _, _, _) -> Some (node.Id, name)
+                    | _ -> None) |> Map.ofList
+            Assert.DoesNotContain(graph.Nodes.Values, fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.VarRef (name, _) -> name = original
+                | _ -> false)
             let uses = graph.Nodes.Values |> Seq.choose (fun node ->
                 match node.Kind with
-                | SemanticKind.VarRef (name, Some _) when name = original -> Some (CallableTestContracts.sourceDefinition graph node.Id)
+                | SemanticKind.VarRef (name, Some codeBindingId) when name.StartsWith(original + "__mono") ->
+                    let defId = CallableTestContracts.sourceDefinition graph node.Id
+                    Assert.Equal(Some defId, CallableTestContracts.sourceDeclaration graph node.Id)
+                    Assert.NotEqual(codeBindingId, defId)
+                    let originEdge =
+                        graph.Edges
+                        |> List.filter (fun edge -> edge.Role = EdgeRole.CallableReferenceOrigin && edge.Target = node.Id)
+                        |> Assert.Single
+                    Assert.Equal(EdgeClass.Provenance, originEdge.Class)
+                    Assert.Equal(0, originEdge.Ordinal)
+                    Assert.Equal<NodeId list>([defId; codeBindingId], originEdge.Sources)
+                    Assert.Equal(Some name, cloneNames.TryFind defId)
+                    let wrongClone = clones |> List.find (fun clone -> clone.Id <> defId)
+                    let wrongOriginEdge =
+                        graph.Edges
+                        |> List.find (fun edge -> edge.Role = EdgeRole.CallableReferenceOrigin && edge.Sources.Head = wrongClone.Id)
+                    let wrongCodeBindingId = wrongOriginEdge.Sources[1]
+                    let forgedOriginGraph =
+                        { graph with
+                            Edges =
+                                graph.Edges
+                                |> List.map (fun edge ->
+                                    if edge.Role = EdgeRole.CallableReferenceOrigin && edge.Target = node.Id then
+                                        { edge with Sources = [wrongClone.Id; codeBindingId] }
+                                    else edge) }
+                    Assert.Equal(None, CallableTestContracts.sourceDeclaration forgedOriginGraph node.Id)
+                    Assert.Equal(None, cloneNames.TryFind (CallableTestContracts.sourceDefinition forgedOriginGraph node.Id))
+                    let wrongTargetGraph =
+                        { graph with
+                            Nodes = graph.Nodes.Add(node.Id, { node with Kind = SemanticKind.VarRef (name, Some wrongCodeBindingId) })
+                            Edges =
+                                graph.Edges
+                                |> List.map (fun edge ->
+                                    if edge.Role = EdgeRole.CallableReferenceOrigin && edge.Target = node.Id then
+                                        { edge with Sources = wrongOriginEdge.Sources }
+                                    else edge) }
+                    let wrongDefId = CallableTestContracts.sourceDefinition wrongTargetGraph node.Id
+                    Assert.Equal(wrongClone.Id, wrongDefId)
+                    Assert.NotEqual<string option>(Some name, cloneNames.TryFind wrongDefId)
+                    let missingLinkGraph =
+                        { graph with
+                            Edges =
+                                graph.Edges
+                                |> List.filter (fun edge ->
+                                    not (edge.Role = EdgeRole.CallableReferenceOrigin && edge.Target = node.Id)) }
+                    Assert.Equal(None, CallableTestContracts.sourceDeclaration missingLinkGraph node.Id)
+                    let missingLinkDefId = CallableTestContracts.sourceDefinition missingLinkGraph node.Id
+                    Assert.Equal(codeBindingId, missingLinkDefId)
+                    Assert.False(cloneIds.Contains missingLinkDefId)
+                    Assert.Equal(None, cloneNames.TryFind missingLinkDefId)
+                    Some defId
                 | _ -> None) |> Seq.toList
             Assert.Equal<Set<NodeId>>(cloneIds, Set.ofList uses)
             for clone in clones do
