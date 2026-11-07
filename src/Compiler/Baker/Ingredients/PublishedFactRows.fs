@@ -2367,7 +2367,7 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.ForeignResultCoverage(a0) -> Fidelity.PSG.ObligationBody.ForeignResultCoverage(mapForeignResultCoverageModel a0)
     | S.ObligationBody.ResourceConversion(a0) -> Fidelity.PSG.ObligationBody.ResourceConversion(mapResourceConversionModel a0)
     | S.ObligationBody.ResourceCleanup(a0) -> Fidelity.PSG.ObligationBody.ResourceCleanup(mapResourceCleanupModel a0)
-    | S.ObligationBody.SnapshotBorrowBound(a0, a1, a2, a3, a4, a5) -> Fidelity.PSG.ObligationBody.SnapshotBorrowBound(nodeId a0, nodeId a1, nodeId a2, nodeId a3, a4, a5)
+    | S.ObligationBody.SnapshotBorrowBound(a0, a1, a2, a3, a4, a5, a6, a7) -> Fidelity.PSG.ObligationBody.SnapshotBorrowBound(nodeId a0, nodeId a1, nodeId a2, nodeId a3, a4, a5, a6, a7)
 
 and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
     mapObligationInfoUsing mapObligationBody value

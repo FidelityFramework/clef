@@ -618,7 +618,7 @@ type ObligationBody =
     | OptionalEntryAbsenceArgumentConversion of OptionalEntryAbsenceArgumentConversionModel
     /// One dynamic snapshot count is shared by the write, complete copy and
     /// allocation. Exact source incidence is replayed separately from bounds.
-    | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint
+    | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint * elementBytes: bigint * allocationCapacity: bigint
 
 /// The obligation record carried by an Obligation node.
 type ObligationInfo = {

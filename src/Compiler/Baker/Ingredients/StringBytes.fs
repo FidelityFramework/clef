@@ -81,10 +81,11 @@ let proofOutcome body =
         | ObligationBody.StringBorrowBound origins ->
             not origins.IsEmpty && origins |> List.forall (fun (count, extent, storage) -> 0I <= count && count = extent && extent < storage)
         | ObligationBody.InputBufferBound(count, allocation) -> 0L<=count && count<=allocation
-        | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
+        | ObligationBody.SnapshotBorrowBound(count,snapshot,copy,allocation,minimum,maximum,elementBytes,allocationCapacity) ->
             // Source readiness only. Actual solver and satisfiable-premise
             // receipts remain required before backend execution authority.
-            Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum |> Result.isOk
+            let nodeId (NodeId value) = Fidelity.PSG.NodeId value
+            Fidelity.PSG.SnapshotBorrowProof.ofBounds (nodeId count) (nodeId snapshot) (nodeId copy) (nodeId allocation) minimum maximum elementBytes allocationCapacity |> Result.isOk
         | _ -> false
     if holds then BoundaryProofOutcome.Proven else BoundaryProofOutcome.Refuted
 

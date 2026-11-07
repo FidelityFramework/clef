@@ -80,17 +80,14 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
         | Error reason -> invalidArg "body" reason
-    | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
-        match Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum with
+    | ObligationBody.SnapshotBorrowBound(count,snapshot,copy,allocation,minimum,maximum,elementBytes,allocationCapacity) ->
+        match Fidelity.PSG.SnapshotBorrowProof.ofBounds (Published.nodeId count) (Published.nodeId snapshot) (Published.nodeId copy) (Published.nodeId allocation) minimum maximum elementBytes allocationCapacity with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
         | Error reason -> invalidArg "body" reason
     | ObligationBody.ForeignResultCoverage model ->
         match foreignProjection model with
         | Error reason -> invalidArg "body" reason
-        | Ok projection ->
-            Fidelity.PSG.ForeignResultCoverage.declarations projection
-            @ [ sprintf "(assert (= %s %s))" id (Fidelity.PSG.ForeignResultCoverage.smtLib projection.Conclusion)
-                sprintf "(assert (not %s))" id ]
+        | Ok projection -> Fidelity.PSG.ForeignResultCoverage.refutation id projection
     | ObligationBody.ProgramInitializationOrder(initializerOrdinal, initializerCount, useOrdinals) ->
         let ordinal, count = integer (bigint initializerOrdinal), integer (bigint initializerCount)
         let clauses =
@@ -492,37 +489,276 @@ type UnavailableObligation = {
     MissingPremises: string list
 }
 
-let unavailable (obligations: ObligationInfo list) : UnavailableObligation list =
+type ProofStageReceipt = {
+    Stage: string
+    ObligationId: string
+    ClauseIndex: int option
+    Clause: string option
+    ParticipantVariables: string list
+    Verdict: string
+    Query: string
+}
+
+type DischargeReceipt = {
+    Premises: ProofStageReceipt list
+    NonVacuity: ProofStageReceipt list
+    Evidence: ProofStageReceipt list
+}
+
+let private solverCache =
+    System.Collections.Concurrent.ConcurrentDictionary<string, Result<string list, string>>()
+
+let private runSolver (query: string) : Result<string list, string> =
+    solverCache.GetOrAdd(query, fun text ->
+        let tempPath = Path.Combine(Path.GetTempPath(), sprintf "clef-proof-%s.smt2" (System.Guid.NewGuid().ToString("N")))
+        try
+            File.WriteAllText(tempPath, text + "\n")
+            let psi = System.Diagnostics.ProcessStartInfo("cvc5", sprintf "--lang smt2 \"%s\"" tempPath)
+            psi.RedirectStandardOutput <- true
+            psi.RedirectStandardError <- true
+            psi.UseShellExecute <- false
+            use proc = new System.Diagnostics.Process(StartInfo = psi)
+            if not (proc.Start()) then
+                Error "Failed to start cvc5 process"
+            else
+                let stdout = proc.StandardOutput.ReadToEnd()
+                let stderr = proc.StandardError.ReadToEnd()
+                proc.WaitForExit()
+                if proc.ExitCode <> 0 then
+                    Error (sprintf "cvc5 exited with code %d: %s" proc.ExitCode (stderr.Trim()))
+                elif not (System.String.IsNullOrWhiteSpace stderr) then
+                    Error (sprintf "cvc5 reported stderr: %s" (stderr.Trim()))
+                else
+                    stdout.Split([| '\r'; '\n' |], System.StringSplitOptions.RemoveEmptyEntries)
+                    |> Array.map (fun line -> line.Trim())
+                    |> Array.filter (fun line -> line <> "")
+                    |> Array.toList
+                    |> Ok
+        finally
+            if File.Exists tempPath then File.Delete tempPath)
+
+let private resourceProjectionWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (ob: ObligationInfo) : Result<Fidelity.PSG.ResourceProof.Projection, string> option =
+    match overrideProjection ob with
+    | Some projection -> Some (Ok projection)
+    | None ->
+        match ob.Body with
+        | ObligationBody.ResourceConversion model ->
+            Some (Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion)
+        | ObligationBody.OptionalEntryAbsenceArgumentConversion model ->
+            Some (Published.mapOptionalEntryAbsenceArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.projectAbsence)
+        | ObligationBody.OptionalEntryArgumentConversion model ->
+            Some (Published.mapOptionalEntryArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.project)
+        | ObligationBody.ResourceCleanup model ->
+            Some (Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup)
+        | ObligationBody.SnapshotBorrowBound(count,snapshot,copy,allocation,minimum,maximum,elementBytes,allocationCapacity) ->
+            Some (Fidelity.PSG.SnapshotBorrowProof.ofBounds (Published.nodeId count) (Published.nodeId snapshot) (Published.nodeId copy) (Published.nodeId allocation) minimum maximum elementBytes allocationCapacity)
+        | _ -> None
+
+let checkNonVacuityClause (obligation: ObligationInfo) (clauseIndex: int) (clauseText: string) (participantVars: string list) (query: string) : Result<ProofStageReceipt, string> =
+    match runSolver query with
+    | Error reason -> Error reason
+    | Ok [ "sat" ] ->
+        Ok {
+            Stage = "psg-nonvacuity"
+            ObligationId = obligation.Id
+            ClauseIndex = Some clauseIndex
+            Clause = Some clauseText
+            ParticipantVariables = participantVars
+            Verdict = "sat"
+            Query = query
+        }
+    | Ok [ "unsat" ] ->
+        Error (sprintf "obligation %s (%s) clause %d is valid without premises: %s" obligation.Id obligation.Kind clauseIndex clauseText)
+    | Ok verdicts ->
+        Error (sprintf "Conditional conclusion non-vacuity check for '%s' (%s) clause %d returned '%s'" obligation.Id obligation.Source clauseIndex (String.concat ", " verdicts))
+
+let private checkClausesAndRelevance (obligation: ObligationInfo) (participantVars: string list) (missingVars: string list) (clauses: (int * string * string) list) : Result<ProofStageReceipt list, string> =
+    let rec loop acc = function
+        | [] ->
+            if not missingVars.IsEmpty then
+                Error (sprintf "obligation %s (%s) conclusion ignores participant variables: %s" obligation.Id obligation.Kind (String.concat ", " missingVars))
+            else
+                Ok (List.rev acc)
+        | (clauseIndex, clauseText, query) :: rest ->
+            match checkNonVacuityClause obligation clauseIndex clauseText participantVars query with
+            | Ok receipt -> loop (receipt :: acc) rest
+            | Error reason -> Error reason
+    loop [] clauses
+
+let private checkResourceNonVacuity (obligation: ObligationInfo) (projection: Fidelity.PSG.ResourceProof.Projection) : Result<ProofStageReceipt list, string> =
+    let participantVars = Fidelity.PSG.ResourceProof.participantVariables projection
+    let missingVars = Fidelity.PSG.ResourceProof.missingParticipantVariables projection
+    let clauses = Fidelity.PSG.ResourceProof.anchoredNonVacuityQueries obligation.Id projection
+    checkClausesAndRelevance obligation participantVars missingVars clauses
+
+let checkForeignNonVacuity (obligation: ObligationInfo) (projection: Fidelity.PSG.ForeignResultCoverage.Projection) : Result<ProofStageReceipt list, string> =
+    let participantVars = Fidelity.PSG.ForeignResultCoverage.participantVariables projection
+    let missingVars = Fidelity.PSG.ForeignResultCoverage.missingParticipantVariables projection
+    let clauses = Fidelity.PSG.ForeignResultCoverage.anchoredNonVacuityQueries obligation.Id projection
+    checkClausesAndRelevance obligation participantVars missingVars clauses
+
+let conditionalPremisesWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<(ObligationInfo * string) list, string> =
+    let rec loop acc = function
+        | [] -> Ok (List.rev acc)
+        | (ob: ObligationInfo) :: rest ->
+            match ob.Body with
+            | ObligationBody.ForeignResultCoverage model when (overrideProjection ob).IsNone ->
+                match foreignProjection model with
+                | Ok projection -> loop ((ob, Fidelity.PSG.ForeignResultCoverage.anchoredPremisesQuery ob.Id projection) :: acc) rest
+                | Error reason -> Error (sprintf "Foreign premise query for '%s' (%s) cannot be constructed: %s" ob.Id ob.Source reason)
+            | _ ->
+                match resourceProjectionWithOverride overrideProjection ob with
+                | Some (Ok projection) ->
+                    let queries = Fidelity.PSG.ResourceProof.anchoredPremisesQueries ob.Id projection |> List.map (fun q -> ob, q)
+                    loop (List.rev queries @ acc) rest
+                | Some (Error reason) ->
+                    Error (sprintf "Conditional premise query for '%s' (%s) cannot be constructed: %s" ob.Id ob.Source reason)
+                | None -> loop acc rest
+    loop [] obligations
+
+let conditionalPremises (obligations: ObligationInfo list) : Result<(ObligationInfo * string) list, string> =
+    conditionalPremisesWithOverride (fun _ -> None) obligations
+
+let conditionalNonVacuityWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<(ObligationInfo * int * string * string list * string list * string) list, string> =
+    let rec loop acc = function
+        | [] -> Ok (List.rev acc)
+        | (ob: ObligationInfo) :: rest ->
+            match ob.Body with
+            | ObligationBody.ForeignResultCoverage model when (overrideProjection ob).IsNone ->
+                match foreignProjection model with
+                | Ok projection ->
+                    let participants = Fidelity.PSG.ForeignResultCoverage.participantVariables projection
+                    let missing = Fidelity.PSG.ForeignResultCoverage.missingParticipantVariables projection
+                    let clauses =
+                        Fidelity.PSG.ForeignResultCoverage.anchoredNonVacuityQueries ob.Id projection
+                        |> List.map (fun (idx, text, query) -> ob, idx, text, participants, missing, query)
+                    loop (List.rev clauses @ acc) rest
+                | Error reason -> Error (sprintf "Foreign non-vacuity query for '%s' (%s) cannot be constructed: %s" ob.Id ob.Source reason)
+            | _ ->
+                match resourceProjectionWithOverride overrideProjection ob with
+                | Some (Ok projection) ->
+                    let participants = Fidelity.PSG.ResourceProof.participantVariables projection
+                    let missing = Fidelity.PSG.ResourceProof.missingParticipantVariables projection
+                    let clauses =
+                        Fidelity.PSG.ResourceProof.anchoredNonVacuityQueries ob.Id projection
+                        |> List.map (fun (idx, text, query) -> ob, idx, text, participants, missing, query)
+                    loop (List.rev clauses @ acc) rest
+                | Some (Error reason) ->
+                    Error (sprintf "Conditional non-vacuity query for '%s' (%s) cannot be constructed: %s" ob.Id ob.Source reason)
+                | None -> loop acc rest
+    loop [] obligations
+
+let conditionalNonVacuity (obligations: ObligationInfo list) : Result<(ObligationInfo * string) list, string> =
+    conditionalNonVacuityWithOverride (fun _ -> None) obligations
+    |> Result.map (List.map (fun (ob, _, _, _, _, query) -> ob, query))
+
+let unavailableWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : UnavailableObligation list =
     obligations |> List.choose (fun obligation ->
         match obligation.Body with
         | ObligationBody.Pending reasons ->
             Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = reasons }
-        | ObligationBody.ForeignResultCoverage model ->
+        | ObligationBody.ForeignResultCoverage model when (overrideProjection obligation).IsNone ->
             match foreignProjection model with
-            | Ok _ -> None
+            | Ok projection ->
+                match checkForeignNonVacuity obligation projection with
+                | Ok _ -> None
+                | Error reason -> Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = [reason] }
             | Error reason ->
                 Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = [reason] }
-        | ObligationBody.ResourceConversion model ->
-            match Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion with
-            | Ok _ -> None
-            | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
-        | ObligationBody.OptionalEntryAbsenceArgumentConversion model ->
-            match Published.mapOptionalEntryAbsenceArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.projectAbsence with
-            | Ok _ -> None
-            | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
-        | ObligationBody.OptionalEntryArgumentConversion model ->
-            match Published.mapOptionalEntryArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.project with
-            | Ok _ -> None
-            | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
-        | ObligationBody.ResourceCleanup model ->
-            match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
-            | Ok _ -> None
-            | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
-        | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
-            match Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum with
-            | Ok _ -> None
-            | Error reason -> Some {Anchor=obligation.Id;Source=obligation.Source;MissingPremises=[reason]}
-        | _ -> None)
+        | _ ->
+            match resourceProjectionWithOverride overrideProjection obligation with
+            | Some (Ok projection) ->
+                match checkResourceNonVacuity obligation projection with
+                | Ok _ -> None
+                | Error reason -> Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = [reason] }
+            | Some (Error reason) ->
+                Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = [reason] }
+            | None -> None)
+
+let unavailable (obligations: ObligationInfo list) : UnavailableObligation list =
+    unavailableWithOverride (fun _ -> None) obligations
+
+let private readySmtLibWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : string =
+    obligations
+    |> List.map (fun ob ->
+        let bodyLines =
+            match overrideProjection ob with
+            | Some projection -> Fidelity.PSG.ResourceProof.refutation ob.Id projection
+            | None -> bodyToSmtLib ob.Id ob.Body
+        String.concat
+            "\n"
+            ([ sprintf "; %s: %s" ob.Id ob.Statement
+               sprintf "; origin: %s" ob.Source
+               sprintf "(set-logic %s)" ob.Logic
+               sprintf "(declare-const %s Bool)" ob.Id ]
+             @ bodyLines
+             @ [ "(check-sat)"; "(reset)" ]))
+    |> String.concat "\n\n"
+
+let dischargeWithProjectionOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
+    match unavailableWithOverride overrideProjection obligations with
+    | pending when not pending.IsEmpty ->
+        match pending |> List.collect _.MissingPremises |> List.tryFind (fun reason -> reason.StartsWith("obligation ")) with
+        | Some reason -> Error reason
+        | None ->
+            pending
+            |> List.map (fun item -> sprintf "'%s' (%s): %s" item.Anchor item.Source (String.concat "; " item.MissingPremises))
+            |> String.concat "; "
+            |> sprintf "Required obligations have unavailable premises: %s"
+            |> Error
+    | _ ->
+        match conditionalPremisesWithOverride overrideProjection obligations, conditionalNonVacuityWithOverride overrideProjection obligations with
+        | Error reason, _ | _, Error reason -> Error reason
+        | Ok premiseQueries, Ok nonVacuityClauses ->
+            let rec checkPremises acc = function
+                | [] -> Ok (List.rev acc)
+                | (ob: ObligationInfo, query: string) :: rest ->
+                    match runSolver query with
+                    | Error reason -> Error reason
+                    | Ok [ "sat" ] ->
+                        checkPremises ({ Stage = "psg-premises"; ObligationId = ob.Id; ClauseIndex = None; Clause = None; ParticipantVariables = []; Verdict = "sat"; Query = query } :: acc) rest
+                    | Ok [ "unsat" ] ->
+                        Error (sprintf "Premises for '%s' (%s) are unsatisfiable; refutation would be vacuous" ob.Id ob.Source)
+                    | Ok verdicts ->
+                        Error (sprintf "Premise check for '%s' (%s) returned '%s'" ob.Id ob.Source (String.concat ", " verdicts))
+            let rec checkNonVacuityList acc = function
+                | [] -> Ok (List.rev acc)
+                | (ob: ObligationInfo, clauseIndex: int, clauseText: string, participantVars: string list, missingVars: string list, query: string) :: rest ->
+                    match checkNonVacuityClause ob clauseIndex clauseText participantVars query with
+                    | Error reason -> Error reason
+                    | Ok receipt ->
+                        let nextNeedsRelevance =
+                            match rest with
+                            | (nextOb, _, _, _, _, _) :: _ when nextOb.Id = ob.Id -> false
+                            | _ -> true
+                        if nextNeedsRelevance && not missingVars.IsEmpty then
+                            Error (sprintf "obligation %s (%s) conclusion ignores participant variables: %s" ob.Id ob.Kind (String.concat ", " missingVars))
+                        else
+                            checkNonVacuityList (receipt :: acc) rest
+            match checkPremises [] premiseQueries with
+            | Error reason -> Error reason
+            | Ok premises ->
+                match checkNonVacuityList [] nonVacuityClauses with
+                | Error reason -> Error reason
+                | Ok nonVacuity ->
+                    let query = readySmtLibWithOverride overrideProjection obligations
+                    match runSolver query with
+                    | Error reason -> Error reason
+                    | Ok verdicts when verdicts.Length <> obligations.Length ->
+                        Error (sprintf "Expected %d verdicts from cvc5, got %d" obligations.Length verdicts.Length)
+                    | Ok verdicts ->
+                        let pairs = List.zip obligations verdicts
+                        match pairs |> List.tryFind (fun (_, verdict) -> verdict <> "unsat") with
+                        | Some (ob, verdict) ->
+                            Error (sprintf "Obligation '%s' (%s) was not discharged: solver returned '%s'" ob.Id ob.Source verdict)
+                        | None ->
+                            let evidence =
+                                pairs |> List.map (fun (ob, verdict) ->
+                                    { Stage = "psg"; ObligationId = ob.Id; ClauseIndex = None; Clause = None; ParticipantVariables = []; Verdict = verdict; Query = readySmtLibWithOverride overrideProjection [ob] })
+                            Ok { Premises = premises; NonVacuity = nonVacuity; Evidence = evidence }
+
+let discharge (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
+    dischargeWithProjectionOverride (fun _ -> None) obligations
 
 let trySmtLib (obligations: ObligationInfo list) : Result<string, UnavailableObligation list> =
     match unavailable obligations with
@@ -650,8 +886,8 @@ let ledgerJson (obligations: ObligationInfo list) : string =
                             match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
                             | Ok _ -> "ready", []
                             | Error reason -> "pending",[reason]
-                        | ObligationBody.SnapshotBorrowBound(_,_,_,_,minimum,maximum) ->
-                            match Fidelity.PSG.SnapshotBorrowProof.ofBounds minimum maximum with
+                        | ObligationBody.SnapshotBorrowBound(count,snapshot,copy,allocation,minimum,maximum,elementBytes,allocationCapacity) ->
+                            match Fidelity.PSG.SnapshotBorrowProof.ofBounds (Published.nodeId count) (Published.nodeId snapshot) (Published.nodeId copy) (Published.nodeId allocation) minimum maximum elementBytes allocationCapacity with
                             | Ok _ -> "ready",[]
                             | Error reason -> "pending",[reason]
                         | _ -> "ready", []

@@ -71,14 +71,17 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                                 copy.Count=copy.CountOperand.Actual && copy.CountCarrier.Site=copy.CountOperand.Actual &&
                                 snapshot.Extent.Range=ValueRange.bounded minimum maximum &&
                                 allocation.CountCarrier.Range=ValueRange.bounded minimum maximum &&
-                                allocation.MinimumCount=minimum && allocation.MaximumCount=maximum &&
+                                0I<=allocation.MinimumCount && allocation.MinimumCount<=allocation.MaximumCount &&
                                 (match proof.Body with
                                  | ObligationBody.InputBufferBound(count,capacity) when minimum=maximum ->
-                                     bigint count=minimum && bigint capacity=minimum
-                                 | ObligationBody.SnapshotBorrowBound(count,viewSite,copySite,allocationSite,lo,hi) ->
+                                     bigint count=minimum && bigint capacity=minimum &&
+                                     allocation.MinimumCount=minimum && allocation.MaximumCount=maximum
+                                 | ObligationBody.SnapshotBorrowBound(count,viewSite,copySite,allocationSite,lo,hi,elementBytes,allocationCapacity) ->
                                      minimum<maximum && 0I<=minimum && count=call.Count &&
                                      viewSite=snapshot.Site && copySite=copy.Site && allocationSite=allocation.Site &&
-                                     lo=minimum && hi=maximum
+                                     lo=minimum && hi=maximum &&
+                                     elementBytes=bigint allocation.ElementBytes &&
+                                     allocationCapacity=allocation.MaximumCount * bigint allocation.ElementBytes
                                  | _ -> false)
                             | None -> false
                         | _ -> false

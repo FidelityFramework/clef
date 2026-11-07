@@ -1687,7 +1687,7 @@ type RuntimeSnapshotWriteCases() =
         let allocation=Assert.Single domain.StringBorrowAllocations
         let proof=revision.Emission.Boundary.IntrinsicWriteProofs[map call.Site] |> List.filter (fun value -> value.Ordinal=1) |> Assert.Single
         Assert.Equal(Fidelity.PSG.ObligationBody.InputBufferBound(2L,2L),proof.Body)
-        let body=Fidelity.PSG.ObligationBody.SnapshotBorrowBound(map call.Count,map snapshot.Site,map copy.Site,map allocation.Site,2I,2I)
+        let body=Fidelity.PSG.ObligationBody.SnapshotBorrowBound(map call.Count,map snapshot.Site,map copy.Site,map allocation.Site,2I,2I,bigint allocation.ElementBytes,allocation.MaximumCount * bigint allocation.ElementBytes)
         let old=revision.CurrentClaims[proof.Obligation]
         let changed={old with Body=body}
         let boundary=revision.Emission.Boundary
@@ -1856,7 +1856,7 @@ type RuntimeSnapshotWriteCases() =
         Assert.Equal(copy.CountOperand.Actual,copy.Count)
         Assert.Equal(copy.CountOperand.Reference,allocation.Count)
         let proof = domain.IntrinsicProofs |> List.filter (fun proof -> proof.Site=call.Site && proof.Ordinal=1) |> Assert.Single
-        Assert.Equal(ObligationBody.SnapshotBorrowBound(call.Count,snapshot.Site,copy.Site,allocation.Site,2I,3I),proof.Body)
+        Assert.Equal(ObligationBody.SnapshotBorrowBound(call.Count,snapshot.Site,copy.Site,allocation.Site,2I,3I,bigint allocation.ElementBytes,allocation.MaximumCount * bigint allocation.ElementBytes),proof.Body)
         Assert.Contains(graph.Edges,fun edge -> edge.Target=snapshot.Owner && edge.Role=EdgeRole.StringAscii)
         let revision = RuntimeSnapshotWriteFixture.publish graph
         Assert.Empty(Fidelity.PSG.Integrity.check revision)
@@ -1886,8 +1886,8 @@ type RuntimeSnapshotWriteCases() =
         Assert.Equal(graph.Nodes[call.Count].ValueRange,graph.Nodes[copy.Count].ValueRange)
         let proofs = domain.IntrinsicProofs |> List.map (fun proof ->
             match proof.Body with
-            | ObligationBody.SnapshotBorrowBound(_,snapshot,copySite,allocation,minimum,maximum) ->
-                {proof with Body=ObligationBody.SnapshotBorrowBound(copy.Count,snapshot,copySite,allocation,minimum,maximum)}
+            | ObligationBody.SnapshotBorrowBound(_,snapshot,copySite,allocation,minimum,maximum,elementBytes,allocationCapacity) ->
+                {proof with Body=ObligationBody.SnapshotBorrowBound(copy.Count,snapshot,copySite,allocation,minimum,maximum,elementBytes,allocationCapacity)}
             | _ -> proof)
         let changed = RuntimeSnapshotWriteFixture.withDomain graph {domain with IntrinsicProofs=proofs}
         match IntrinsicBoundary.project changed with
@@ -1919,14 +1919,14 @@ type RuntimeSnapshotWriteCases() =
             |> Seq.filter (fun proof ->
                 match proof.Body with Fidelity.PSG.ObligationBody.SnapshotBorrowBound _ -> true | _ -> false)
             |> Assert.Single
-        let count,snapshot,copySite,allocation,minimum,maximum =
+        let count,snapshot,copySite,allocation,minimum,maximum,elementBytes,allocationCapacity =
             match proof.Body with
-            | Fidelity.PSG.ObligationBody.SnapshotBorrowBound(a,b,c,d,e,f) -> a,b,c,d,e,f
+            | Fidelity.PSG.ObligationBody.SnapshotBorrowBound(a,b,c,d,e,f,g,h) -> a,b,c,d,e,f,g,h
             | _ -> failwith "Missing published dynamic borrow claim."
         let copy = revision.Emission.Memory.ArrayCopies[copySite]
         Assert.NotEqual(count,copy.Count)
         Assert.Equal(revision.Emission.Numeric.Values[count].Range,copy.CountCarrier.Range)
-        let body = Fidelity.PSG.ObligationBody.SnapshotBorrowBound(copy.Count,snapshot,copySite,allocation,minimum,maximum)
+        let body = Fidelity.PSG.ObligationBody.SnapshotBorrowBound(copy.Count,snapshot,copySite,allocation,minimum,maximum,elementBytes,allocationCapacity)
         let old = revision.CurrentClaims[proof.Obligation]
         let changed = {old with Body=body}
         let boundary = revision.Emission.Boundary
@@ -2366,3 +2366,516 @@ type RuntimeSnapshotWriteCases() =
         Assert.Empty projection.IntrinsicWrites
         Assert.NotEmpty projection.ByteViews
         Assert.Empty(Fidelity.PSG.Integrity.check (RuntimeSnapshotWriteFixture.publish graph))
+
+    [<Fact>]
+    member _.``Dynamic snapshot borrow obligation discharges for valid snapshot and fails when copy extent exceeds independent allocation capacity``() =
+        let graph,domain,call = RuntimeSnapshotWriteFixture.dynamicAdmitted ()
+        let snapshot = Assert.Single domain.StringBorrowSnapshots
+        let copy = Assert.Single domain.StringBorrowCopies
+        let allocation = Assert.Single domain.StringBorrowAllocations
+        let borrow = domain.IntrinsicProofs |> List.filter (fun proof -> proof.Site=call.Site && proof.Ordinal=1) |> Assert.Single
+        let info =
+            match graph.Nodes[borrow.Obligation].Kind with
+            | SemanticKind.Obligation info -> info
+            | _ -> failwith "Missing actual snapshot borrow obligation."
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [info] with
+        | Error reason -> failwithf "Valid snapshot borrow failed design-time discharge: %s" reason
+        | Ok receipt ->
+            Assert.Equal("sat", (Assert.Single receipt.Premises).Verdict)
+            Assert.Equal(2, receipt.NonVacuity.Length)
+            Assert.Equal<int option list>([Some 0; Some 1], receipt.NonVacuity |> List.map _.ClauseIndex)
+            Assert.Equal<string option list>([Some "(<= 0 snapshot_count)"; Some "(<= snapshot_copy_extent snapshot_allocation_capacity)"], receipt.NonVacuity |> List.map _.Clause)
+            for nv in receipt.NonVacuity do
+                Assert.Equal("sat", nv.Verdict)
+                Assert.Equal<string list>(["snapshot_allocation_capacity"; "snapshot_copy_extent"; "snapshot_count"], nv.ParticipantVariables)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+
+        // End-to-end oversized copy where the count/snapshot/copy range is [2..3] while the allocation witness's own settled capacity is independently bound to 2 bytes:
+        let undersizedAllocation =
+            { allocation with
+                MinimumCount = 2I
+                MaximumCount = 2I }
+        let memoryDomain =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.MemoryDomain value -> Some value | _ -> None)
+            |> Assert.Single
+        let revisedMemoryDomain =
+            { memoryDomain with
+                Operations =
+                    memoryDomain.Operations
+                    |> List.map (fun (site, op) ->
+                        if site = allocation.Site then site, MemoryWitnessOperation.ArrayAllocation undersizedAllocation
+                        else site, op) }
+        let edgesWithUndersizedAllocation =
+            graph.Edges
+            |> List.map (fun edge ->
+                match edge.Role with
+                | EdgeRole.MemoryDomain _ ->
+                    { edge with Role = EdgeRole.MemoryDomain revisedMemoryDomain }
+                | EdgeRole.MemoryOperation(MemoryWitnessOperation.ArrayAllocation fact) when fact.Site = allocation.Site ->
+                    { edge with Role = EdgeRole.MemoryOperation(MemoryWitnessOperation.ArrayAllocation undersizedAllocation) }
+                | _ -> edge)
+        let oversizedGraph =
+            { graph with Edges = edgesWithUndersizedAllocation }
+            |> Clef.Compiler.Nanopass.BoundarySettlement.normalize
+            |> Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        let oversizedRevision = RuntimeSnapshotWriteFixture.publish oversizedGraph
+        Assert.Empty(Fidelity.PSG.Integrity.check oversizedRevision)
+        let oversizedDomain =
+            oversizedGraph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDomain value -> Some value | _ -> None)
+            |> Assert.Single
+        let oversizedBorrow =
+            oversizedDomain.IntrinsicProofs
+            |> List.filter (fun proof -> proof.Site = call.Site && proof.Ordinal = 1)
+            |> Assert.Single
+        let oversizedInfo =
+            match oversizedGraph.Nodes[oversizedBorrow.Obligation].Kind with
+            | SemanticKind.Obligation ob -> ob
+            | _ -> failwith "Missing oversized snapshot borrow obligation."
+        Assert.Equal(
+            ObligationBody.SnapshotBorrowBound(call.Count, snapshot.Site, copy.Site, allocation.Site, 2I, 3I, bigint allocation.ElementBytes, 2I),
+            oversizedInfo.Body)
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [oversizedInfo] with
+        | Ok _ -> failwith "Snapshot borrow whose copy extent exceeds independent allocation capacity was discharged."
+        | Error reason ->
+            Assert.Equal(sprintf "Obligation '%s' (%s) was not discharged: solver returned 'sat'" oversizedInfo.Id oversizedInfo.Source, reason)
+
+    [<Fact>]
+    member _.``Design-time per-clause guard and relevance check refuse tautological clause and ignored participant variables with exact reasons``() =
+        let graph,domain,call = RuntimeSnapshotWriteFixture.dynamicAdmitted ()
+        let snapshot = Assert.Single domain.StringBorrowSnapshots
+        let copy = Assert.Single domain.StringBorrowCopies
+        let allocation = Assert.Single domain.StringBorrowAllocations
+        let borrow = domain.IntrinsicProofs |> List.filter (fun proof -> proof.Site=call.Site && proof.Ordinal=1) |> Assert.Single
+        let info =
+            match graph.Nodes[borrow.Obligation].Kind with
+            | SemanticKind.Obligation info -> info
+            | _ -> failwith "Missing actual snapshot borrow obligation."
+        let nodeId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId
+        let baseProjection =
+            match Fidelity.PSG.SnapshotBorrowProof.ofBounds (nodeId call.Count) (nodeId snapshot.Site) (nodeId copy.Site) (nodeId allocation.Site) 2I 3I (bigint allocation.ElementBytes) (allocation.MaximumCount * bigint allocation.ElementBytes) with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        let countVar = Fidelity.PSG.ResourceProof.Expr.Variable "snapshot_count"
+        let copyExtentVar = Fidelity.PSG.ResourceProof.Expr.Variable "snapshot_copy_extent"
+        let capacityVar = Fidelity.PSG.ResourceProof.Expr.Variable "snapshot_allocation_capacity"
+        let zero = Fidelity.PSG.ResourceProof.Expr.Integer 0I
+
+        // 1. Injected negative fixture: a tautological clause next to a real one
+        let tautologicalClauseProjection =
+            { baseProjection with
+                Conclusion =
+                    Fidelity.PSG.ResourceProof.Expr.And
+                        [ Fidelity.PSG.ResourceProof.Expr.LessOrEqual(zero, countVar)
+                          Fidelity.PSG.ResourceProof.Expr.LessOrEqual(countVar, countVar)
+                          Fidelity.PSG.ResourceProof.Expr.LessOrEqual(copyExtentVar, capacityVar) ] }
+        let expectedGuardReason =
+            sprintf "obligation %s (%s) clause 1 is valid without premises: (<= snapshot_count snapshot_count)" info.Id info.Kind
+        let unavailableGuard =
+            Clef.Compiler.Nanopass.ObligationDischarge.unavailableWithOverride (fun ob -> if ob.Id = info.Id then Some tautologicalClauseProjection else None) [info]
+            |> Assert.Single
+        Assert.Equal<string list>([expectedGuardReason], unavailableGuard.MissingPremises)
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some tautologicalClauseProjection else None) [info] with
+        | Ok _ -> failwith "Injected tautological clause next to a real one was discharged."
+        | Error reason -> Assert.Equal(expectedGuardReason, reason)
+
+        // 2. Injected negative fixture: a conclusion (or projection) that ignores its published participant variables
+        let ignoredParticipantsProjection =
+            { baseProjection with
+                Conclusion = Fidelity.PSG.ResourceProof.Expr.LessOrEqual(zero, countVar) }
+        let expectedRelevanceReason =
+            sprintf "obligation %s (%s) conclusion ignores participant variables: snapshot_allocation_capacity, snapshot_copy_extent" info.Id info.Kind
+        let unavailableRelevance =
+            Clef.Compiler.Nanopass.ObligationDischarge.unavailableWithOverride (fun ob -> if ob.Id = info.Id then Some ignoredParticipantsProjection else None) [info]
+            |> Assert.Single
+        Assert.Equal<string list>([expectedRelevanceReason], unavailableRelevance.MissingPremises)
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some ignoredParticipantsProjection else None) [info] with
+        | Ok _ -> failwith "Injected conclusion ignoring participant variables was discharged."
+        | Error reason -> Assert.Equal(expectedRelevanceReason, reason)
+
+        // 3. Positive fixture: an honest obligation that uses a helper variable in a premise passes
+        let publishedBody =
+            Fidelity.PSG.ObligationBody.SnapshotBorrowBound(
+                nodeId call.Count,
+                nodeId snapshot.Site,
+                nodeId copy.Site,
+                nodeId allocation.Site,
+                2I,
+                3I,
+                bigint allocation.ElementBytes,
+                allocation.MaximumCount * bigint allocation.ElementBytes)
+        Assert.Equal<(string * string) list>(
+            [ "count", "snapshot_count"
+              "snapshot", "snapshot_copy_extent"
+              "copy", "snapshot_copy_extent"
+              "allocation", "snapshot_allocation_capacity"
+              "minimum", "snapshot_count"
+              "maximum", "snapshot_count" ],
+            Fidelity.PSG.ObligationBody.participantRoles publishedBody)
+        Assert.Equal<(string * string) list>(
+            Fidelity.PSG.ObligationBody.participantRoles publishedBody,
+            baseProjection.ParticipantRoles)
+        let helperVar = Fidelity.PSG.ResourceProof.Expr.Variable "snapshot_helper"
+        let helperProjection =
+            { baseProjection with
+                Declarations = baseProjection.Declarations @ [ "snapshot_helper", Fidelity.PSG.ResourceProof.Sort.Integer ]
+                Premises =
+                    Fidelity.PSG.ResourceProof.Expr.And
+                        [ baseProjection.Premises
+                          Fidelity.PSG.ResourceProof.Expr.Equal(helperVar, countVar)
+                          Fidelity.PSG.ResourceProof.Expr.LessOrEqual(zero, helperVar) ] }
+        Assert.Contains("snapshot_helper", Fidelity.PSG.ResourceProof.freeVariables helperProjection.Premises)
+        Assert.DoesNotContain("snapshot_helper", Fidelity.PSG.ResourceProof.freeVariables helperProjection.Conclusion)
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some helperProjection else None) [info] with
+        | Error reason -> failwithf "Honest obligation using a helper variable in a premise failed discharge: %s" reason
+        | Ok receipt ->
+            Assert.Equal(2, receipt.NonVacuity.Length)
+            for nv in receipt.NonVacuity do
+                Assert.Equal<string list>(
+                    [ "snapshot_allocation_capacity"; "snapshot_copy_extent"; "snapshot_count" ],
+                    nv.ParticipantVariables)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+        Assert.Equal<string list>(
+            [ "snapshot_allocation_capacity"; "snapshot_copy_extent"; "snapshot_count" ],
+            Fidelity.PSG.ResourceProof.participantVariables helperProjection)
+        Assert.Empty(Fidelity.PSG.ResourceProof.missingParticipantVariables helperProjection)
+        Assert.Empty(
+            Clef.Compiler.Nanopass.ObligationDischarge.unavailableWithOverride
+                (fun ob -> if ob.Id = info.Id then Some helperProjection else None)
+                [info])
+        let droppedFromPremisesAndConclusionProjection =
+            { baseProjection with
+                Premises = Fidelity.PSG.ResourceProof.Expr.LessOrEqual(zero, countVar)
+                Conclusion = Fidelity.PSG.ResourceProof.Expr.LessOrEqual(zero, countVar) }
+        Assert.Equal<string list>(
+            [ "snapshot_allocation_capacity"; "snapshot_copy_extent" ],
+            Fidelity.PSG.ResourceProof.missingParticipantVariables droppedFromPremisesAndConclusionProjection)
+
+        // 4. Conversion correspondence and structural unit-alignment settlement
+        let validConversionModel : Fidelity.PSG.ResourceConversionModel =
+            { Declaration = Fidelity.PSG.NodeId 10
+              Acquisition = Fidelity.PSG.NodeId 11
+              Import = Fidelity.PSG.NodeId 12
+              OptionType = Fidelity.PSG.TypeIdentity.Error "test_option"
+              HandleType = Fidelity.PSG.TypeIdentity.Error "test_handle"
+              Core = Fidelity.PSG.NodeId 13
+              PointerBits = 64
+              SelectedPointerBits = 64
+              HandleBytes = 8
+              HandleAlignment = 8
+              OptionBytes = 16
+              OptionAlignment = 8
+              PayloadOffset = 8
+              TagBits = 32
+              TagBytes = 4
+              CaseCount = 2
+              NoneCase = 0
+              SomeCase = 1
+              Arms =
+                  [ { NativeNonNull = false; CaseOrdinal = 0; PayloadOrigin = None }
+                    { NativeNonNull = true; CaseOrdinal = 1; PayloadOrigin = Some(Fidelity.PSG.NodeId 11) } ] }
+        let unitAlignedConversionModel =
+            { validConversionModel with
+                HandleAlignment = 1
+                OptionAlignment = 1
+                PayloadOffset = 4
+                OptionBytes = 12 }
+        let unitAlignedConversionProjection =
+            match Fidelity.PSG.ResourceProof.ofConversion unitAlignedConversionModel with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        Assert.Empty(Fidelity.PSG.ResourceProof.missingParticipantVariables unitAlignedConversionProjection)
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some unitAlignedConversionProjection else None) [info] with
+        | Error reason -> failwithf "Honest unit-aligned conversion model failed design-time discharge: %s" reason
+        | Ok receipt ->
+            Assert.Equal(7, receipt.NonVacuity.Length)
+            Assert.DoesNotContain(receipt.NonVacuity, fun nv -> nv.Clause |> Option.exists (fun c -> c.Contains "(mod resource_payload_offset"))
+            for nv in receipt.NonVacuity do
+                Assert.Equal("sat", nv.Verdict)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+        let vacuousUnitAlignmentProjection =
+            { unitAlignedConversionProjection with
+                Conclusion =
+                    Fidelity.PSG.ResourceProof.Expr.And(
+                        Fidelity.PSG.ResourceProof.conjuncts unitAlignedConversionProjection.Conclusion
+                        @ [ Fidelity.PSG.ResourceProof.Expr.Equal(
+                                Fidelity.PSG.ResourceProof.Expr.Modulo(
+                                    Fidelity.PSG.ResourceProof.Expr.Variable "resource_payload_offset",
+                                    Fidelity.PSG.ResourceProof.Expr.Integer 1I),
+                                Fidelity.PSG.ResourceProof.Expr.Integer 0I) ]) }
+        let expectedUnitAlignmentVacuityReason =
+            sprintf "obligation %s (%s) clause 7 is valid without premises: (= (mod resource_payload_offset 1) 0)" info.Id info.Kind
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some vacuousUnitAlignmentProjection else None) [info] with
+        | Ok _ -> failwith "Unit-alignment tautological clause (= (mod resource_payload_offset 1) 0) was discharged at design time."
+        | Error reason -> Assert.Equal(expectedUnitAlignmentVacuityReason, reason)
+
+        let misalignedConversionModel =
+            { validConversionModel with
+                PayloadOffset = 4 }
+        let misalignedConversionProjection =
+            match Fidelity.PSG.ResourceProof.ofConversion misalignedConversionModel with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        Assert.Empty(Fidelity.PSG.ResourceProof.missingParticipantVariables misalignedConversionProjection)
+        Assert.Empty(
+            Clef.Compiler.Nanopass.ObligationDischarge.unavailableWithOverride
+                (fun ob -> if ob.Id = info.Id then Some misalignedConversionProjection else None)
+                [info])
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some misalignedConversionProjection else None) [info] with
+        | Ok _ -> failwith "Conversion model with misaligned PayloadOffset (4 mod 8 <> 0) was discharged at design time."
+        | Error reason ->
+            Assert.Equal(sprintf "Obligation '%s' (%s) was not discharged: solver returned 'sat'" info.Id info.Source, reason)
+
+        let validConversionProjection =
+            match Fidelity.PSG.ResourceProof.ofConversion validConversionModel with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        Assert.Equal<string list>(
+            [ "resource_acquisition_origin"
+              "resource_case"
+              "resource_none_case"
+              "resource_nonnull"
+              "resource_payload_offset"
+              "resource_payload_origin"
+              "resource_some_case" ],
+            Fidelity.PSG.ResourceProof.participantVariables validConversionProjection)
+        Assert.Empty(Fidelity.PSG.ResourceProof.missingParticipantVariables validConversionProjection)
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some validConversionProjection else None) [info] with
+        | Error reason -> failwithf "Honest alignment-8 conversion model failed design-time discharge: %s" reason
+        | Ok receipt ->
+            Assert.Equal(8, receipt.NonVacuity.Length)
+            Assert.Equal(Some "(= (mod resource_payload_offset 8) 0)", receipt.NonVacuity[7].Clause)
+            for nv in receipt.NonVacuity do
+                Assert.Equal("sat", nv.Verdict)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+
+        let mismatchedArmModel =
+            { validConversionModel with
+                Arms =
+                    [ { NativeNonNull = false; CaseOrdinal = 0; PayloadOrigin = None }
+                      { NativeNonNull = true; CaseOrdinal = 0; PayloadOrigin = Some(Fidelity.PSG.NodeId 11) } ] }
+        let mismatchedConversionProjection =
+            match Fidelity.PSG.ResourceProof.ofConversion mismatchedArmModel with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        Assert.Empty(
+            Clef.Compiler.Nanopass.ObligationDischarge.unavailableWithOverride
+                (fun ob -> if ob.Id = info.Id then Some mismatchedConversionProjection else None)
+                [info])
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some mismatchedConversionProjection else None) [info] with
+        | Ok _ -> failwith "Conversion model whose arm table disagrees with SomeCase was discharged."
+        | Error reason ->
+            Assert.Equal(sprintf "Obligation '%s' (%s) was not discharged: solver returned 'sat'" info.Id info.Source, reason)
+
+        // 4b. Resource cleanup with a Release point: excludes Release sites from origin variables and discharges non-vacuously;
+        // restoring the release origin variable is caught by the relevance check's own message.
+        let makeCleanupModel (convModel: Fidelity.PSG.ResourceConversionModel) : Fidelity.PSG.ResourceCleanupModel =
+            { Acquisition = Fidelity.PSG.NodeId 11
+              Declaration = Fidelity.PSG.NodeId 10
+              Release = Fidelity.PSG.NodeId 14
+              Conversion = Fidelity.PSG.NodeId 15
+              ConversionModel = convModel
+              Entry = 0
+              Points =
+                  [ { Label = 0; Site = Fidelity.PSG.NodeId 19; Context = []; Port = Fidelity.PSG.EvaluationPort.Entry; Event = None }
+                    { Label = 1; Site = Fidelity.PSG.NodeId 19; Context = []; Port = Fidelity.PSG.EvaluationPort.OperandEntry 0; Event = None }
+                    { Label = 2; Site = Fidelity.PSG.NodeId 11; Context = [0]; Port = Fidelity.PSG.EvaluationPort.Entry; Event = None }
+                    { Label = 3; Site = Fidelity.PSG.NodeId 11; Context = [0]; Port = Fidelity.PSG.EvaluationPort.Exit; Event = Some Fidelity.PSG.ResourceFlowEvent.Acquisition }
+                    { Label = 4; Site = Fidelity.PSG.NodeId 19; Context = []; Port = Fidelity.PSG.EvaluationPort.OperandExit 0; Event = None }
+                    { Label = 5; Site = Fidelity.PSG.NodeId 19; Context = []; Port = Fidelity.PSG.EvaluationPort.OperandEntry 1; Event = None }
+                    { Label = 6; Site = Fidelity.PSG.NodeId 20; Context = [1]; Port = Fidelity.PSG.EvaluationPort.Entry; Event = None }
+                    { Label = 7; Site = Fidelity.PSG.NodeId 20; Context = [1]; Port = Fidelity.PSG.EvaluationPort.Exit; Event = Some(Fidelity.PSG.ResourceFlowEvent.Release(Fidelity.PSG.NodeId 11, Fidelity.PSG.NodeId 14)) }
+                    { Label = 8; Site = Fidelity.PSG.NodeId 19; Context = []; Port = Fidelity.PSG.EvaluationPort.OperandExit 1; Event = None }
+                    { Label = 9; Site = Fidelity.PSG.NodeId 19; Context = []; Port = Fidelity.PSG.EvaluationPort.Exit; Event = None } ]
+              Relations =
+                  [ { Role = Fidelity.PSG.ResourceEvaluationRole.Root; Ordinal = 0; Sources = [Fidelity.PSG.NodeId 19]; Target = Fidelity.PSG.NodeId 19 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Operand Fidelity.PSG.EvaluationAccess.Value; Ordinal = 0; Sources = [Fidelity.PSG.NodeId 19; Fidelity.PSG.NodeId 11]; Target = Fidelity.PSG.NodeId 19 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Flow(Fidelity.PSG.EvaluationPort.Entry, Fidelity.PSG.EvaluationPort.OperandEntry 0, Fidelity.PSG.EvaluationTransfer.Continue); Ordinal = 0; Sources = [Fidelity.PSG.NodeId 19]; Target = Fidelity.PSG.NodeId 19 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Flow(Fidelity.PSG.EvaluationPort.Entry, Fidelity.PSG.EvaluationPort.Exit, Fidelity.PSG.EvaluationTransfer.Continue); Ordinal = 0; Sources = [Fidelity.PSG.NodeId 11]; Target = Fidelity.PSG.NodeId 11 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Flow(Fidelity.PSG.EvaluationPort.OperandExit 0, Fidelity.PSG.EvaluationPort.Exit, Fidelity.PSG.EvaluationTransfer.WhenCase 0); Ordinal = 1; Sources = [Fidelity.PSG.NodeId 19]; Target = Fidelity.PSG.NodeId 19 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Flow(Fidelity.PSG.EvaluationPort.OperandExit 0, Fidelity.PSG.EvaluationPort.OperandEntry 1, Fidelity.PSG.EvaluationTransfer.WhenCase 1); Ordinal = 2; Sources = [Fidelity.PSG.NodeId 19]; Target = Fidelity.PSG.NodeId 19 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Operand Fidelity.PSG.EvaluationAccess.Value; Ordinal = 1; Sources = [Fidelity.PSG.NodeId 19; Fidelity.PSG.NodeId 20]; Target = Fidelity.PSG.NodeId 19 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Flow(Fidelity.PSG.EvaluationPort.Entry, Fidelity.PSG.EvaluationPort.Exit, Fidelity.PSG.EvaluationTransfer.Continue); Ordinal = 0; Sources = [Fidelity.PSG.NodeId 20]; Target = Fidelity.PSG.NodeId 20 }
+                    { Role = Fidelity.PSG.ResourceEvaluationRole.Flow(Fidelity.PSG.EvaluationPort.OperandExit 1, Fidelity.PSG.EvaluationPort.Exit, Fidelity.PSG.EvaluationTransfer.Continue); Ordinal = 3; Sources = [Fidelity.PSG.NodeId 19]; Target = Fidelity.PSG.NodeId 19 } ]
+              Edges =
+                  [ { From = 0; To = 1; Relation = 2; Connection = Fidelity.PSG.ResourceFlowConnection.Local; Transfer = Fidelity.PSG.EvaluationTransfer.Continue }
+                    { From = 1; To = 2; Relation = 1; Connection = Fidelity.PSG.ResourceFlowConnection.OperandEntry; Transfer = Fidelity.PSG.EvaluationTransfer.Continue }
+                    { From = 2; To = 3; Relation = 3; Connection = Fidelity.PSG.ResourceFlowConnection.Local; Transfer = Fidelity.PSG.EvaluationTransfer.Continue }
+                    { From = 3; To = 4; Relation = 1; Connection = Fidelity.PSG.ResourceFlowConnection.OperandExit; Transfer = Fidelity.PSG.EvaluationTransfer.Continue }
+                    { From = 4; To = 9; Relation = 4; Connection = Fidelity.PSG.ResourceFlowConnection.Local; Transfer = Fidelity.PSG.EvaluationTransfer.WhenCase 0 }
+                    { From = 4; To = 5; Relation = 5; Connection = Fidelity.PSG.ResourceFlowConnection.Local; Transfer = Fidelity.PSG.EvaluationTransfer.WhenCase 1 }
+                    { From = 5; To = 6; Relation = 6; Connection = Fidelity.PSG.ResourceFlowConnection.OperandEntry; Transfer = Fidelity.PSG.EvaluationTransfer.Continue }
+                    { From = 6; To = 7; Relation = 7; Connection = Fidelity.PSG.ResourceFlowConnection.Local; Transfer = Fidelity.PSG.EvaluationTransfer.Continue }
+                    { From = 7; To = 8; Relation = 6; Connection = Fidelity.PSG.ResourceFlowConnection.OperandExit; Transfer = Fidelity.PSG.EvaluationTransfer.Continue }
+                    { From = 8; To = 9; Relation = 8; Connection = Fidelity.PSG.ResourceFlowConnection.Local; Transfer = Fidelity.PSG.EvaluationTransfer.Continue } ]
+              Cases =
+                  [ { Site = Fidelity.PSG.NodeId 19
+                      Subject = Fidelity.PSG.NodeId 11
+                      Domain = [0; 1]
+                      Arms =
+                          [ { Ordinal = Some 0; Body = Fidelity.PSG.NodeId 21; BooleanResult = None }
+                            { Ordinal = Some 1; Body = Fidelity.PSG.NodeId 20; BooleanResult = None } ] } ]
+              LiteralGuards = []
+              Exits = [9] }
+        let cleanupUnitProjection =
+            match Fidelity.PSG.ResourceProof.ofCleanup (makeCleanupModel unitAlignedConversionModel) with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some cleanupUnitProjection else None) [info] with
+        | Error reason -> failwithf "Honest cleanup model with a Release point failed design-time discharge: %s" reason
+        | Ok receipt ->
+            Assert.Equal(2, receipt.Premises.Length)
+            for p in receipt.Premises do
+                Assert.Equal("sat", p.Verdict)
+            Assert.Equal(28, receipt.NonVacuity.Length)
+            for nv in receipt.NonVacuity do
+                Assert.Equal("sat", nv.Verdict)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+        Assert.Empty(Fidelity.PSG.ResourceProof.missingParticipantVariables cleanupUnitProjection)
+        Assert.DoesNotContain("resource_origin_20", Fidelity.PSG.ResourceProof.participantVariables cleanupUnitProjection)
+
+        let restoredReleaseOriginProjection =
+            { cleanupUnitProjection with
+                Declarations = cleanupUnitProjection.Declarations @ [ "resource_origin_20", Fidelity.PSG.ResourceProof.Sort.Integer ]
+                ParticipantRoles = cleanupUnitProjection.ParticipantRoles @ [ "origin_20", "resource_origin_20" ]
+                Conclusion =
+                    Fidelity.PSG.ResourceProof.Expr.And(
+                        Fidelity.PSG.ResourceProof.conjuncts cleanupUnitProjection.Conclusion
+                        @ [ Fidelity.PSG.ResourceProof.Expr.Implies(
+                                Fidelity.PSG.ResourceProof.Expr.Variable "resource_nonnull",
+                                Fidelity.PSG.ResourceProof.Expr.Equal(
+                                    Fidelity.PSG.ResourceProof.Expr.Variable "resource_origin_20",
+                                    Fidelity.PSG.ResourceProof.Expr.Integer 11I)) ]) }
+        let expectedReleaseOriginReason =
+            sprintf "obligation %s (%s) conclusion ignores participant variables: resource_origin_20" info.Id info.Kind
+        let unavailableReleaseOrigin =
+            Clef.Compiler.Nanopass.ObligationDischarge.unavailableWithOverride
+                (fun ob -> if ob.Id = info.Id then Some restoredReleaseOriginProjection else None)
+                [info]
+            |> Assert.Single
+        Assert.Equal<string list>([expectedReleaseOriginReason], unavailableReleaseOrigin.MissingPremises)
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some restoredReleaseOriginProjection else None) [info] with
+        | Ok _ -> failwith "Cleanup projection with restored unconstrained release origin variable was discharged at design time."
+        | Error reason -> Assert.Equal(expectedReleaseOriginReason, reason)
+
+        // 5. Foreign-result totality and coverage over symbolic hypotheses: per-clause guard over all Conclusion clauses
+        let makeForeignObligation id lower upper (args: (int * ValueRange) list) resultRange destination abiRange : ObligationInfo =
+            let hypothesis : ForeignResultHypothesis =
+                { Quote = NodeId 300
+                  Declaration = NodeId 301
+                  Identity = "foreign:test:hypothesis"
+                  Version = "1"
+                  Source = "foreign.clef:1:1"
+                  Lower = lower
+                  Upper = upper }
+            let application : ForeignResultApplication =
+                { Declaration = NodeId 301
+                  Call = NodeId 302
+                  Context = []
+                  Hypothesis = Some hypothesis
+                  Arguments =
+                      args
+                      |> List.map (fun (idx, enc) ->
+                          { Index = idx
+                            Node = NodeId (310 + idx)
+                            Enclosure = enc } : ForeignResultArgument) }
+            let model : ForeignResultCoverageModel =
+                { Application = application
+                  Role = ForeignResultProofRole.LogicalCoverage
+                  ResultRange = resultRange
+                  Destination = destination
+                  DestinationDeclaration = Some (NodeId 303)
+                  Abi = Some (NodeId 304)
+                  AbiRange = abiRange
+                  AbiIdentity = Some "abi:test"
+                  DestinationIdentity = Some "dest:test" }
+            { Id = id
+              Kind = "foreign-result-coverage"
+              Logic = "QF_LIA"
+              Statement = "foreign result coverage obligation"
+              Source = "foreign.clef:1:1"
+              Refs = []
+              Body = ObligationBody.ForeignResultCoverage model }
+
+        // Codex's constant-bounds [0,1] vs ABI [0,10] case: modelled over symbolic hypotheses so totality and coverage are non-vacuous
+        let codexConstObligation =
+            makeForeignObligation
+                "foreign_const_bounds"
+                (ForeignResultBound.Constant 0I)
+                (ForeignResultBound.Constant 1I)
+                []
+                (ValueRange.Bounded(0I, 10I))
+                (ValueRange.Bounded(0I, 10I))
+                (ValueRange.Bounded(0I, 10I))
+        let codexProjection =
+            match
+                Fidelity.PSG.ForeignResultCoverage.project
+                    (Fidelity.PSG.ForeignResultBound.Constant 0I)
+                    (Fidelity.PSG.ForeignResultBound.Constant 1I)
+                    []
+                    (Fidelity.PSG.ValueRange.Bounded(0I, 10I))
+                    (Fidelity.PSG.ValueRange.Bounded(0I, 10I))
+                    (Fidelity.PSG.ValueRange.Bounded(0I, 10I))
+            with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        Assert.Empty(Fidelity.PSG.ForeignResultCoverage.missingParticipantVariables codexProjection)
+        Assert.Equal(7, (Fidelity.PSG.ForeignResultCoverage.anchoredNonVacuityQueries "foreign_const_bounds" codexProjection).Length)
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [codexConstObligation] with
+        | Error reason -> failwithf "Honest constant-bounds foreign coverage [0,1] within ABI [0,10] failed discharge: %s" reason
+        | Ok receipt ->
+            Assert.Single receipt.Premises |> ignore
+            Assert.Equal("sat", (Assert.Single receipt.Premises).Verdict)
+            Assert.Equal(7, receipt.NonVacuity.Length)
+            for nv in receipt.NonVacuity do
+                Assert.Equal("psg-nonvacuity", nv.Stage)
+                Assert.Equal("sat", nv.Verdict)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+
+        // Negative control 5a: literal tautology in Totality is caught by the per-clause Conclusion guard
+        let vacuousTotalityProjection =
+            let tautology =
+                Fidelity.PSG.ForeignResultCoverage.Predicate.LessOrEqual(
+                    Fidelity.PSG.ForeignResultCoverage.Term.Constant 0I,
+                    Fidelity.PSG.ForeignResultCoverage.Term.Constant 1I)
+            { codexProjection with
+                Totality = Fidelity.PSG.ForeignResultCoverage.Predicate.And [ tautology; codexProjection.Totality ]
+                Conclusion =
+                    Fidelity.PSG.ForeignResultCoverage.Predicate.And
+                        [ tautology; codexProjection.Totality; codexProjection.Claim ] }
+        match Clef.Compiler.Nanopass.ObligationDischarge.checkForeignNonVacuity codexConstObligation vacuousTotalityProjection with
+        | Ok _ -> failwith "Vacuous totality clause (<= 0 1) in ForeignResultCoverage was accepted."
+        | Error reason ->
+            Assert.Equal("obligation foreign_const_bounds (foreign-result-coverage) clause 0 is valid without premises: (<= 0 1)", reason)
+
+        // Negative control 5b: published coverage facts disagree (constant bounds [0,10] exceed narrower destination [0,5])
+        let narrowDestObligation =
+            makeForeignObligation
+                "foreign_narrow_dest"
+                (ForeignResultBound.Constant 0I)
+                (ForeignResultBound.Constant 10I)
+                []
+                (ValueRange.Bounded(0I, 10I))
+                (ValueRange.Bounded(0I, 5I))
+                (ValueRange.Bounded(0I, 10I))
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [narrowDestObligation] with
+        | Ok _ -> failwith "Foreign result coverage exceeding destination bounds was discharged."
+        | Error reason ->
+            Assert.Equal("Obligation 'foreign_narrow_dest' (foreign.clef:1:1) was not discharged: solver returned 'sat'", reason)
+
+        // Negative control 5c: universal argument-tuple totality fails on one tuple in D (lower=1, upper=arg_0 with arg_0 in [0,2])
+        let partialTupleObligation =
+            makeForeignObligation
+                "foreign_partial_tuple"
+                (ForeignResultBound.Constant 1I)
+                (ForeignResultBound.Argument 0)
+                [ 0, ValueRange.Bounded(0I, 2I) ]
+                (ValueRange.Bounded(1I, 2I))
+                (ValueRange.Bounded(1I, 2I))
+                (ValueRange.Bounded(0I, 10I))
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [partialTupleObligation] with
+        | Ok _ -> failwith "Foreign result coverage with partial-tuple totality failure was discharged."
+        | Error reason ->
+            Assert.Equal("Obligation 'foreign_partial_tuple' (foreign.clef:1:1) was not discharged: solver returned 'sat'", reason)

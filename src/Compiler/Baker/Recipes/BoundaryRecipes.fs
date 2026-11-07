@@ -1067,14 +1067,14 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
                     | ValueRange.Bounded(lo,hi) when 0I<=lo && lo<=hi && hi<=bigint System.Int64.MaxValue -> Ok(lo,hi)
                     | _ -> Error "A runtime string write requires its actual finite nonnegative descriptor count range."
                 do! require (snapshot.Extent.Range=countRange && allocation.CountCarrier.Range=countRange &&
-                             allocation.MinimumCount=minimum && allocation.MaximumCount=maximum)
+                             0I<=allocation.MinimumCount && allocation.MinimumCount<=allocation.MaximumCount)
                         "The runtime write count must equal its exact copied descriptor and allocation extent."
                 do! require (copy.Count=copy.CountOperand.Actual && copy.CountCarrier.Site=copy.CountOperand.Actual &&
                              allocation.Count=copy.CountOperand.Reference)
                         "The runtime borrow lost its original copy count operand and allocation reference."
                 let borrowProof =
                     if minimum=maximum then ObligationBody.InputBufferBound(int64 minimum,int64 minimum)
-                    else ObligationBody.SnapshotBorrowBound(count,snapshot.Site,copy.Site,allocation.Site,minimum,maximum)
+                    else ObligationBody.SnapshotBorrowBound(count,snapshot.Site,copy.Site,allocation.Site,minimum,maximum,bigint allocation.ElementBytes,allocation.MaximumCount * bigint allocation.ElementBytes)
                 return borrowProof,
                        Set.union lineage allocation.Participants, snapshots, copies, [allocation] }
         let! platform = Declarations.resolve graph |> needed "Sys.write lost its selected source platform description."
