@@ -48,9 +48,20 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
     | _, None -> ProgramStorageInventory.empty
     | _, Some context when PlatformContext.substrateKind context = SubstrateKind.FPGA -> ProgramStorageInventory.empty
     | None, Some _ ->
+        // Without a current startup plan nothing program-long is placed, and each such
+        // site says so: static allocations, and module-level callable cells (binding
+        // slots, which are not among the static allocation sites).
+        let cells =
+            codata.Escapes |> Map.toList |> List.choose (fun (site, residence) ->
+                match residence, graph.Nodes.TryFind site with
+                | EscapeKind.StaticLifetime, Some node when node.IsReachable && codata.MutableCallableStorage.ContainsKey site ->
+                    Some(ProgramStorageIdentity.BindingSlot site, "The mutable callable cell lacks a current program startup plan")
+                | _ -> None)
         { ProgramStorageInventory.empty with
-            Unresolved = staticSites |> List.map (fun (site, _) ->
-                ProgramStorageIdentity.Allocation site, "The retained static allocation lacks a current program startup plan") |> Map.ofList }
+            Unresolved =
+                (staticSites |> List.map (fun (site, _) ->
+                    ProgramStorageIdentity.Allocation site, "The retained static allocation lacks a current program startup plan"))
+                @ cells |> Map.ofList }
     | Some plan, Some _ ->
         let mutable entries: Map<ProgramStorageIdentity, ProgramStorageEntry> = Map.empty
         let mutable unresolved: Map<ProgramStorageIdentity, string> = Map.empty

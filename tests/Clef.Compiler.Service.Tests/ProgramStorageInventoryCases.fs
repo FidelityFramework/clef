@@ -460,6 +460,29 @@ type CallableCellInventoryCases() =
         Assert.False(inventory.Unresolved.ContainsKey(ProgramStorageIdentity.Allocation binding.Id))
         Assert.False(inventory.Entries.ContainsKey(ProgramStorageIdentity.Allocation binding.Id))
 
+    /// Farscape #109 acceptance: a module-level cell whose initializer is not covered by
+    /// the startup plan. Only this cell's initializer row is withdrawn while its
+    /// initializer still runs in the startup sequence: the plan validator refuses the
+    /// whole plan (it never drops an executed initializer silently), and the cell is
+    /// refused with its own exact reason instead of being silently omitted.
+    [<Fact>]
+    member _.``A callable cell whose initializer is outside the startup plan stays unresolved with its exact reason`` () =
+        let graph = CallableCellFixture.graph.Value
+        let binding = CallableCellFixture.selected graph
+        let ownRow (edge: Hyperedge) =
+            edge.Role = EdgeRole.ProgramInitializer
+            && (match edge.Sources with [_; rowBinding; _; _] -> rowBinding = binding.Id | _ -> false)
+        Assert.Single(graph.Edges |> List.filter ownRow) |> ignore
+        let changed = { graph with Edges = graph.Edges |> List.filter (ownRow >> not) }
+        let read = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read
+        Assert.True((read graph).IsSome, "The intact startup plan must read.")
+        Assert.True((read changed).IsNone, "An executed initializer outside the plan must invalidate the startup plan.")
+        let inventory = WritableInventory.settle changed
+        let slot = ProgramStorageIdentity.BindingSlot binding.Id
+        Assert.False(inventory.Entries.ContainsKey slot)
+        Assert.False(inventory.Entries.ContainsKey(ProgramStorageIdentity.Allocation binding.Id))
+        Assert.Equal(Some "The mutable callable cell lacks a current program startup plan", inventory.Unresolved.TryFind slot)
+
     [<Fact>]
     member _.``A mutable callable inside an activation receives no program residence`` () =
         let result =
