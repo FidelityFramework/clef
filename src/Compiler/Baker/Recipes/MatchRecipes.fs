@@ -151,24 +151,117 @@ let private requireThen (evidence: ResizeArray<Hyperedge>) diagnostic condition 
     return frontier
   }
 
+/// A pattern with its source variables erased tests the same input facts and
+/// binds nothing. A disjunction with bindings selects with it first.
+let rec private erased (pattern: Pattern) : Pattern =
+    match pattern with
+    | Pattern.Var _ -> Pattern.Wildcard
+    | Pattern.As(inner, _) -> erased inner
+    | Pattern.Union(name, tag, payload, unionType) -> Pattern.Union(name, tag, Option.map erased payload, unionType)
+    | Pattern.Tuple elements -> Pattern.Tuple(List.map erased elements)
+    | Pattern.Record(fields, recordType) -> Pattern.Record(fields |> List.map (fun (name, field) -> name, erased field), recordType)
+    | Pattern.Array elements -> Pattern.Array(List.map erased elements)
+    | Pattern.And(left, right) -> Pattern.And(erased left, erased right)
+    | Pattern.Or(left, right) -> Pattern.Or(erased left, erased right)
+    | Pattern.Exception(exnType, _) -> Pattern.Exception(exnType, None)
+    | Pattern.Wildcard | Pattern.Null | Pattern.Const _ | Pattern.IsType _ -> pattern
+
+/// Source variable names in CCS binding order (Expressions/Patterns.fs): an
+/// alias follows its inner pattern; a disjunction is named by its left side.
+let rec private patternNames (pattern: Pattern) : string list =
+    match pattern with
+    | Pattern.Var(name, _) -> [name]
+    | Pattern.Union(_, _, Some payload, _) -> patternNames payload
+    | Pattern.Tuple elements | Pattern.Array elements -> List.collect patternNames elements
+    | Pattern.Record(fields, _) -> fields |> List.collect (snd >> patternNames)
+    | Pattern.And(left, right) -> patternNames left @ patternNames right
+    | Pattern.Or(left, _) -> patternNames left
+    | Pattern.As(inner, name) -> patternNames inner @ [name]
+    | Pattern.Exception(_, Some name) -> [name]
+    | Pattern.Union(_, _, None, _) | Pattern.Exception(_, None)
+    | Pattern.Wildcard | Pattern.Null | Pattern.Const _ | Pattern.IsType _ -> []
+
 /// Compile a constructor chain with the original later cases as its failure
 /// continuation. Every payload read and source guard remains inside the branch
 /// whose pattern facts admit it. Source variable definitions retain their IDs.
+/// The scrutinee is read once into the match input; every test and projection
+/// below reads that input, never the scrutinee expression again.
 let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGraph) (scrutinee: NodeId) (cases: MatchCase list) (resultType: NativeType) =
     let scrutineeType = graph.Nodes[scrutinee].Type
     let range = graph.Nodes[scrutinee].Range
     let diagnostic = sprintf "Pattern match failed at %s:%d:%d" range.File range.Start.Line range.Start.Column
-    let rec compile (input: NodeId) (inputType: NativeType) (pattern: Pattern) (bindings: NodeId list) (success: NodeId) (fallback: NodeId option) : SaturationParser<NodeId> =
-        if bindings.Length <> countPatternBindings pattern then fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the source bindings for match pattern %A at scrutinee %d: the pattern requires %d exact source bindings, got %d" pattern (NodeId.value scrutinee) (countPatternBindings pattern) bindings.Length)) else
+    let refuse message = fail (XParsec.ErrorType.Message message)
+    // Source binding identities carry their checked name and type. A disjunction
+    // with bindings adds its alternatives' own definitions here.
+    let variables = System.Collections.Generic.Dictionary<NodeId, string * string * NativeType>()
+    for case in cases do
+        for binding in case.PatternBindings do
+            match graph.Nodes.TryFind binding with
+            | Some { Kind = SemanticKind.PatternBinding name; Type = ty } -> variables[binding] <- (name, name, ty)
+            | _ -> ()
+    // A boolean test selects the matched input facts; the later cases are its
+    // failure continuation, or the source requirement when no case follows.
+    let select condition selected fallback resultType =
+        match fallback with
+        | Some later -> ifThenElse condition selected later resultType
+        | None -> requireThen evidence diagnostic condition selected resultType
+    let rec compile (input: NodeId) (inputType: NativeType) (pattern: Pattern) (bindings: NodeId list) (success: NodeId) (fallback: NodeId option) (resultType: NativeType) : SaturationParser<NodeId> =
+        if bindings.Length <> countPatternBindings pattern then refuse (sprintf "CCS source checking did not settle the source bindings for match pattern %A at scrutinee %d: the pattern requires %d exact source bindings, got %d" pattern (NodeId.value scrutinee) (countPatternBindings pattern) bindings.Length) else
         match pattern with
         | Pattern.Wildcard -> saturation { return success }
         | Pattern.Var(name, ty) ->
             match bindings with
             | [source] -> saturation {
-                let! binding = letBindAt source name input ty
+                // A disjunction side defines its own generated name; a source
+                // definition keeps its checked name.
+                let defined = match variables.TryGetValue source with | true, (_, defined, _) -> defined | _ -> name
+                let! binding = letBindAt source defined input ty
                 return! evaluateBefore [binding] success resultType
               }
-            | _ -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the source binding for match variable '%s' at scrutinee %d: expected exactly one, got %d" name (NodeId.value scrutinee) bindings.Length))
+            | _ -> refuse (sprintf "CCS source checking did not settle the source binding for match variable '%s' at scrutinee %d: expected exactly one, got %d" name (NodeId.value scrutinee) bindings.Length)
+        | Pattern.As(inner, name) ->
+            // CCS orders the alias after its inner pattern's variables. The alias
+            // names the whole input; the inner pattern still selects.
+            let own, alias = List.splitAt (bindings.Length - 1) bindings
+            saturation {
+                let! selected = compile input inputType inner own success fallback resultType
+                let! binding = letBindAt alias.Head name input inputType
+                return! evaluateBefore [binding] selected resultType
+            }
+        | Pattern.And(left, right) ->
+            let own, rest = List.splitAt (countPatternBindings left) bindings
+            saturation {
+                let! selected = compile input inputType right rest success fallback resultType
+                return! compile input inputType left own selected fallback resultType
+            }
+        | Pattern.Or(left, right) when bindings.IsEmpty -> saturation {
+            // The right side is the left side's failure continuation; both
+            // select the same body, which binds nothing from either side.
+            let! later = compile input inputType right [] success fallback resultType
+            return! compile input inputType left [] success (Some later) resultType
+          }
+        | Pattern.Or(left, right) -> disjunction input inputType left right bindings success fallback resultType
+        | Pattern.Union(_, tag, payload, _) when (match applySubst inputType with NativeType.TList _ -> true | _ -> false) ->
+            match applySubst inputType, tag, payload |> Option.map singlePayload with
+            | NativeType.TList element, 0, None -> saturation {
+                let! empty = isEmpty input element
+                return! select empty success fallback resultType
+              }
+            | NativeType.TList element, 1, Some (Pattern.Tuple [headPattern; tailPattern]) -> saturation {
+                // Head and tail are read only inside the branch whose
+                // non-empty test admits them.
+                let components =
+                    [ headPattern, element, (fun () -> head input element)
+                      tailPattern, NativeType.TList element, (fun () -> tail input element) ]
+                let! selected = compileComponents components bindings success fallback resultType
+                let! empty = isEmpty input element
+                match fallback with
+                | Some later -> return! ifThenElse empty later selected resultType
+                | None ->
+                    let! nonEmpty = not' empty
+                    return! requireThen evidence diagnostic nonEmpty selected resultType
+              }
+            | _ -> refuse (sprintf "CCS source checking did not settle a list case for list pattern at scrutinee %d: %A over %A is neither the nil case nor the cons case with a head and a tail" (NodeId.value scrutinee) pattern inputType)
         | Pattern.Union(name, tag, payload, unionType) -> saturation {
             let! selected =
                 match payload |> Option.map singlePayload with
@@ -176,10 +269,10 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
                 | Some payloadPattern ->
                     match payloadType graph unionType tag with
                     | Error reason ->
-                        fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the instantiated payload type for union pattern '%s' at scrutinee %d: %s" name (NodeId.value scrutinee) reason))
+                        refuse (sprintf "CCS source checking did not settle the instantiated payload type for union pattern '%s' at scrutinee %d: %s" name (NodeId.value scrutinee) reason)
                     | Ok payloadType -> saturation {
                         let! value = duEliminate input name tag payloadType
-                        return! compile value payloadType payloadPattern bindings success fallback
+                        return! compile value payloadType payloadPattern bindings success fallback resultType
                       }
             let shallow = Pattern.Union(name, tag, payload |> Option.map (fun _ -> Pattern.Wildcard), unionType)
             return! caseDecision evidence diagnostic input inputType shallow selected fallback resultType
@@ -190,17 +283,34 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
             // algorithm; the ordinary typed operation owns those semantics.
             let! literal = createWithChildren (SemanticKind.Literal constant) inputType []
             let! equal = compareEq input literal inputType
-            match fallback with
-            | Some later -> return! ifThenElse equal success later resultType
-            | None -> return! requireThen evidence diagnostic equal success resultType
+            return! select equal success fallback resultType
           }
         | Pattern.Tuple elements ->
             match applySubst inputType with
             | NativeType.TTuple(types, _) when types.Length = elements.Length ->
                 let components = List.zip elements types |> List.mapi (fun index (pattern, ty) ->
                     pattern, ty, fun () -> createWithChildren (SemanticKind.TupleGet(input, index)) ty [input])
-                compileComponents components bindings success fallback
-            | _ -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a tuple input type for tuple pattern at scrutinee %d: the pattern has %d elements, the input type is %A" (NodeId.value scrutinee) elements.Length inputType))
+                compileComponents components bindings success fallback resultType
+            | _ -> refuse (sprintf "CCS source checking did not settle a tuple input type for tuple pattern at scrutinee %d: the pattern has %d elements, the input type is %A" (NodeId.value scrutinee) elements.Length inputType)
+        | Pattern.Array elements ->
+            match applySubst inputType with
+            | NativeType.TApp(constructor, [element]) when constructor.NTUKind = Some NTUKind.NTUarray -> saturation {
+                // A fixed-length array pattern admits its element reads only
+                // after the input's actual length equals the pattern's.
+                let components = elements |> List.mapi (fun index pattern ->
+                    pattern, element, fun () -> saturation {
+                        let! position = numLit (int64 index) Types.intType
+                        return! createWithChildren (SemanticKind.IndexGet(input, position)) element [input; position]
+                    })
+                let! selected = compileComponents components bindings success fallback resultType
+                let lengthOperation = { Module = IntrinsicModule.Array; Operation = "length"; Category = IntrinsicCategory.Pure; FullName = "Array.length" }
+                let! lengthFunction = createWithChildren (SemanticKind.Intrinsic lengthOperation) (NativeType.TFun(inputType, Types.intType)) []
+                let! length = app lengthFunction [input] Types.intType
+                let! expected = numLit (int64 elements.Length) Types.intType
+                let! equal = compareEq length expected Types.intType
+                return! select equal selected fallback resultType
+              }
+            | _ -> refuse (sprintf "CCS source checking did not settle an array input type for array pattern at scrutinee %d: the pattern has %d elements, the input type is %A" (NodeId.value scrutinee) elements.Length inputType)
         | Pattern.Record(fields, recordType) ->
             let declared =
                 match applySubst recordType with
@@ -208,33 +318,101 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
                 | _ -> Clef.Compiler.PSGSaturation.SemanticGraph.RecordInstances.tryFields recordType graph
             match declared with
             | None ->
-                fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the instantiated fields for record pattern at scrutinee %d: %A" (NodeId.value scrutinee) recordType))
+                refuse (sprintf "CCS source checking did not settle the instantiated fields for record pattern at scrutinee %d: %A" (NodeId.value scrutinee) recordType)
             | Some declared ->
                 match fields |> List.tryFind (fun (name, _) -> declared |> List.exists (fst >> (=) name) |> not) with
                 | Some (name, _) ->
-                    fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle record pattern field '%s' at scrutinee %d: %A declares no such field" name (NodeId.value scrutinee) recordType))
+                    refuse (sprintf "CCS source checking did not settle record pattern field '%s' at scrutinee %d: %A declares no such field" name (NodeId.value scrutinee) recordType)
                 | None ->
                     let components = fields |> List.map (fun (name, pattern) ->
                         let ty = declared |> List.find (fst >> (=) name) |> snd
                         pattern, ty, fun () -> createWithChildren (SemanticKind.FieldGet(input, name)) ty [input])
-                    compileComponents components bindings success fallback
+                    compileComponents components bindings success fallback resultType
         | unsupported ->
-            fail (XParsec.ErrorType.Message (sprintf "Baker Match recipe did not settle a decision for pattern at scrutinee %d: %A requires further source pattern elaboration" (NodeId.value scrutinee) unsupported))
-    and compileComponents components bindings success fallback : SaturationParser<NodeId> =
+            refuse (sprintf "Baker Match recipe did not settle a decision for pattern at scrutinee %d: %A requires further source pattern elaboration" (NodeId.value scrutinee) unsupported)
+    and compileComponents components bindings success fallback resultType : SaturationParser<NodeId> =
         match components with
         | [] -> preturn success
         | (pattern, ty, project) :: rest -> saturation {
             let own, remaining = List.splitAt (countPatternBindings pattern) bindings
-            let! selected = compileComponents rest remaining success fallback
+            let! selected = compileComponents rest remaining success fallback resultType
             match pattern with
             | Pattern.Wildcard -> return selected
             | _ ->
                 let! value = project ()
-                return! compile value ty pattern own selected fallback
+                return! compile value ty pattern own selected fallback resultType
           }
+    /// A disjunction whose sides bind variables. Its erased form selects it
+    /// once; inside the selected branch one value decision reads the bound
+    /// values from whichever side matched, and each source definition is bound
+    /// once from it before the shared body.
+    and disjunction input inputType left right bindings success fallback resultType : SaturationParser<NodeId> =
+        let sourceNames = bindings |> List.map (fun binding -> variables.TryGetValue binding)
+        if sourceNames |> List.exists (fst >> not) then
+            refuse (sprintf "CCS source checking did not settle the source definitions of the disjunctive pattern at scrutinee %d: a binding is not a checked pattern variable" (NodeId.value scrutinee))
+        else
+        let sourceNames = sourceNames |> List.map snd
+        let names = sourceNames |> List.map (fun (name, _, _) -> name)
+        let types = sourceNames |> List.map (fun (_, _, ty) -> ty)
+        let leftNames = patternNames left
+        let rightNames = patternNames right
+        let distinct (values: string list) = (List.distinct values).Length = values.Length
+        if leftNames <> names || not (distinct names) || not (distinct rightNames) || Set.ofList rightNames <> Set.ofList names then
+            refuse (sprintf "CCS source checking did not settle the variables of the disjunctive pattern at scrutinee %d: the case binds [%s], the left side [%s], the right side [%s]" (NodeId.value scrutinee) (String.concat ", " names) (String.concat ", " leftNames) (String.concat ", " rightNames))
+        else
+        let packType = match types with [single] -> single | types -> NativeType.TTuple(types, false)
+        // Each side defines its own variables and packs them in the case's
+        // source order. Definitions are identities, not values: the side's
+        // pattern binds them only where its tests admit the reads.
+        let side (pattern: Pattern) =
+            let definitions =
+                patternNames pattern |> List.map (fun name ->
+                    let definition = NodeId.fresh()
+                    variables[definition] <- (name, sprintf "__match_%s_%d" name (NodeId.value definition), types[List.findIndex ((=) name) names])
+                    name, definition)
+            let packed = saturation {
+                let! references =
+                    names |> List.map (fun name ->
+                        let definition = definitions |> List.find (fst >> (=) name) |> snd
+                        let _, defined, ty = variables[definition]
+                        varRef defined (Some definition) ty)
+                    |> sequence
+                match references with
+                | [single] -> return single
+                | references -> return! createWithChildren (SemanticKind.TupleExpr references) packType references
+              }
+            List.map snd definitions, packed
+        let leftDefinitions, leftPack = side left
+        let rightDefinitions, rightPack = side right
+        saturation {
+            let! leftPacked = leftPack
+            let! rightPacked = rightPack
+            // Selected only after the erased disjunction matched, so the right
+            // side's requirement holds whenever the left side failed.
+            let! rightValues = compile input inputType right rightDefinitions rightPacked None packType
+            let! values = compile input inputType left leftDefinitions leftPacked (Some rightValues) packType
+            let carrier = NodeId.fresh()
+            let carrierName = sprintf "__match_alternative_%d" (NodeId.value carrier)
+            let! carried = letBindAt carrier carrierName values packType
+            let! sources =
+                List.zip bindings sourceNames |> List.mapi (fun index (source, (_, defined, ty)) -> saturation {
+                    let! reference = varRef carrierName (Some carried) packType
+                    let! value =
+                        match types with
+                        | [_] -> preturn reference
+                        | _ -> createWithChildren (SemanticKind.TupleGet(reference, index)) ty [reference]
+                    return! letBindAt source defined value ty
+                  })
+                |> sequence
+            let! selected = evaluateBefore (carried :: sources) success resultType
+            let! yes = boolLit true
+            let! no = boolLit false
+            let! matched = compile input inputType (Pattern.Or(erased left, erased right)) [] yes (Some no) Types.boolType
+            return! select matched selected fallback resultType
+        }
     let rec remaining (input: NodeId) (cases: MatchCase list) : SaturationParser<NodeId> =
         match cases with
-        | [] -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a terminal case for match at scrutinee %d: the match has no cases" (NodeId.value scrutinee)))
+        | [] -> refuse (sprintf "CCS source checking did not settle a terminal case for match at scrutinee %d: the match has no cases" (NodeId.value scrutinee))
         | case :: rest -> saturation {
             let! fallback =
                 match rest with
@@ -248,7 +426,7 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
                 | None, _ -> preturn case.Body
                 | Some guard, Some later -> ifThenElse guard case.Body later resultType
                 | Some guard, None -> requireThen evidence diagnostic guard case.Body resultType
-            return! compile input scrutineeType case.Pattern case.PatternBindings success fallback
+            return! compile input scrutineeType case.Pattern case.PatternBindings success fallback resultType
           }
     saturation {
         let! expansion = getExpansionId

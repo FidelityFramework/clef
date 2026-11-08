@@ -9,8 +9,6 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
 module Participants = Clef.Compiler.Baker.Ingredients.Participants
 
-let private stringOrigin = StringComparisonRecipes.stringOrigin
-
 let private scopeOf (graph: SemanticGraph) source =
     let rec follow seen id =
         if Set.contains id seen then None else
@@ -22,6 +20,8 @@ let private scopeOf (graph: SemanticGraph) source =
 
 let private plan enrichId (graph: SemanticGraph) =
     let flow = CallableOrigins.resolve graph
+    let stringOrigin = lazy (StringComparisonRecipes.stringOrigins graph flow)
+    let arrayShape = lazy (Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph)
     let representation = Bytes.byteRepresentation graph
     // Occurrences at ordinal 0 in the group of the row's site: the row's own fields, a
     // callee path and the nodes of a local construction.
@@ -30,7 +30,7 @@ let private plan enrichId (graph: SemanticGraph) =
     // Logical descriptor lineage supplies early numeric support only. Runtime
     // storage, snapshot immutability and lifetime remain late memory premises.
     let descriptorOrigin site source =
-        Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph source
+        arrayShape.Value source
         |> Option.filter (fun extent -> not extent.StringSources.IsEmpty)
         |> Option.bind (fun extent ->
             let identity =
@@ -40,7 +40,7 @@ let private plan enrichId (graph: SemanticGraph) =
             identity |> Option.map (fun identity ->
                 identity, Map.empty, constructed site extent.Participants))
     let origin site source =
-        stringOrigin graph flow site source |> Result.map (fun derived ->
+        stringOrigin.Value site source |> Result.map (fun derived ->
             derived |> Option.orElseWith (fun () -> descriptorOrigin site source))
     let localOrigin site view = StringComparisonRecipes.localView graph view |> Option.map (fun (source,_,participants) ->
         origin site source |> Result.map (function

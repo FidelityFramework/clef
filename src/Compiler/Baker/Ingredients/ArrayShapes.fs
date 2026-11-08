@@ -95,6 +95,7 @@ let private inlineStringExtent (graph:SemanticGraph) site input =
 let reader (graph:SemanticGraph) =
     let flow=Origins.resolve graph
     let inputs=FormalDemand.reader graph flow
+    let stringOrigins = lazy (Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigins graph flow)
     let combine values =
         if List.isEmpty values || values |> List.exists Option.isNone then None else
         let values=List.choose id values
@@ -116,7 +117,7 @@ let reader (graph:SemanticGraph) =
         | Some {Kind=SemanticKind.EnvironmentRead _;Type=ty} when Types.isStringType ty ->
             // Logical bytes follow the same scoped capture and complete input
             // authority as string origins. This grants no storage or borrow.
-            match Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph flow id id with
+            match stringOrigins.Value id id with
             | Ok(Some(identity,origins,participants)) when not origins.IsEmpty ->
                 Some {Sources=origins.Values |> Seq.map Length.Constant |> Seq.toList
                       StringSources=origins.Keys |> Set.ofSeq
@@ -173,7 +174,7 @@ let reader (graph:SemanticGraph) =
                 // Reuse the owning source origin contract, including its lazy
                 // protocol and complete formal-input validation. No new cache
                 // semantics or physical byte-view authority is supplied here.
-                match Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph flow id source with
+                match stringOrigins.Value id source with
                 | Ok(Some(identity,origins,participants)) when not origins.IsEmpty ->
                     Some {Sources=origins.Values |> Seq.map Length.Constant |> Seq.toList
                           StringSources=origins.Keys |> Set.ofSeq

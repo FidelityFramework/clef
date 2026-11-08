@@ -100,16 +100,20 @@ let analyze (graph: SemanticGraph) : Reading =
         |> List.distinctBy key
         |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
         |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
-    let valid id =
-        match nodes.TryFind id with
-        | None -> false
-        | Some node ->
+    // Resides is a resource constraint, not a competing spelling of
+    // syntactic containment/reference. It remains in the complete use
+    // census above, including any formal it names as a premise. The recorded
+    // rows are read per target; the order within a target is the edge order.
+    let recordedAt =
+        recorded
+        |> List.filter (fun edge -> not (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Resides))
+        |> List.groupBy _.Target |> Map.ofList
+    // Each node's agreement with its recorded incidence is one fact of this
+    // graph, derived once for every reachable node (clef #131).
+    let validity =
+        nodes |> Map.map (fun id node ->
             let expected = Incidence.structuralIncidence node
-            // Resides is a resource constraint, not a competing spelling of
-            // syntactic containment/reference. It remains in the complete use
-            // census above, including any formal it names as a premise.
-            let actual = recorded |> List.filter (fun edge ->
-                edge.Target = id && not (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Resides))
+            let actual = recordedAt.TryFind id |> Option.defaultValue []
             let children = kindEdges id node.Kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
             let childrenAgree =
                 match node.Kind with
@@ -124,16 +128,19 @@ let analyze (graph: SemanticGraph) : Reading =
                     node.Children |> List.forall (fun child -> initializers |> List.exists (fun (_, value) -> value = child))
                 | _ -> node.Children = children
             childrenAgree && actual.Length = (actual |> List.distinctBy key |> List.length) &&
-            (actual |> List.forall (fun edge -> expected |> List.exists (fun candidate -> key candidate = key edge)))
+            (actual |> List.forall (fun edge -> expected |> List.exists (fun candidate -> key candidate = key edge))))
+    let valid id = validity.TryFind id = Some true
     let resolution = CallableOrigins.resolve graph
     let ingress = CallableIngress.analyzeWith graph resolution
-    let rawCapture formal = nodes.Values |> Seq.exists (fun node ->
-        let captures =
+    // Every source node a lambda, sequence or lazy expression captures raw.
+    let rawCaptured =
+        nodes.Values |> Seq.collect (fun node ->
             match node.Kind with
             | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.SeqExpr(_, captures)
             | SemanticKind.LazyExpr(_, captures) -> captures
-            | _ -> []
-        captures |> List.exists (fun capture -> capture.SourceNodeId = Some formal))
+            | _ -> [])
+        |> Seq.choose _.SourceNodeId |> Set.ofSeq
+    let rawCapture formal = rawCaptured.Contains formal
     let hidden =
         graph.Edges |> List.collect (fun edge ->
             match edge.Role, edge.Sources with
@@ -164,6 +171,9 @@ let analyze (graph: SemanticGraph) : Reading =
             | Some { Kind = SemanticKind.Binding _ | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _ }, EdgeClass.Structural, _
             | Some { Kind = SemanticKind.Application _ }, EdgeClass.Structural, EdgeRole.Callee -> true
             | _ -> false))
+    let entryParticipants =
+        graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ProgramInitialization || edge.Role = EdgeRole.ProgramEntryCall)
+        |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList
     let formals =
         nodes.Values |> Seq.collect (fun code ->
             match code.Kind, CallableIngress.tryClosedImplementation ingress code.Id with
@@ -172,9 +182,6 @@ let analyze (graph: SemanticGraph) : Reading =
                 let bodyNodes = bodyParticipants body
                 let incoming = proof.Calls |> List.collect (fun call ->
                     call.Site :: call.Implementation :: (call.Parameters @ call.Arguments)) |> Set.ofList
-                let entryParticipants =
-                    graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ProgramInitialization || edge.Role = EdgeRole.ProgramEntryCall)
-                    |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList
                 let fullType = List.foldBack (fun (_, ty, _) result -> NativeType.TFun(ty, result)) parameters nodes[body].Type
                 if applySubst code.Type <> applySubst fullType || bodyNodes |> Set.exists (valid >> not) then [] else
                 parameters |> List.mapi (fun ordinal (_, ty, formal) ->
@@ -231,10 +238,14 @@ let analyze (graph: SemanticGraph) : Reading =
             | _ -> None) |> Map.ofList
     // All source calls to an omitted implementation must use the same admitted
     // projection. A partial, opaque, mismatched or unadapted call retracts it.
+    let sitesByImplementation =
+        resolution.Calls |> Map.toList
+        |> List.collect (fun (site, call) -> call.Targets |> List.map (fun target -> target.Lambda, site) |> List.distinct)
+        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
     let admitted =
         formals.Values |> Seq.map _.Implementation |> Set.ofSeq |> Set.filter (fun implementation ->
-            let sites = resolution.Calls |> Map.toList |> List.filter (fun (_, call) -> call.Targets |> List.exists (fun target -> target.Lambda = implementation))
-            not sites.IsEmpty && sites |> List.forall (fun (site, _) -> calls.ContainsKey site))
+            let sites = sitesByImplementation.TryFind implementation |> Option.defaultValue []
+            not sites.IsEmpty && sites |> List.forall calls.ContainsKey)
     let structuralParents =
         incidence |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge.Target))
         |> List.groupBy fst |> List.map (fun (child, rows) -> child, rows |> List.map snd |> List.distinct) |> Map.ofList

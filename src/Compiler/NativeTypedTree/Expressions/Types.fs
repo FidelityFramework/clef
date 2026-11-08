@@ -66,6 +66,9 @@ module DiagnosticCodes =
     // compile-time data the compiler reads (D9); a module-level quotation is reported at each
     // reachable reference, a local or expression-position one at the quotation itself.
     let CCS8066_QuotationHasNoRuntimeValue = "CCS8066"
+    // CCS8067: the two sides of a disjunctive pattern bind different sets of variables, or one
+    // name twice (spec/patterns.md, Disjunctive Patterns). Reported at the pattern.
+    let CCS8067_DisjunctivePatternBindings = "CCS8067"
     let CCS8080_BclReferenceNotAllowed = "CCS8080"
     let CCS8081_SystemNamespaceNotAllowed = "CCS8081"
     let CCS8082_MicrosoftNamespaceNotAllowed = "CCS8082"

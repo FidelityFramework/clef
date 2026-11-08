@@ -71,6 +71,7 @@
     <Compile Include="SequenceProgramCases.fs" />
     <Compile Include="NestedMatchCases.fs" />
     <Compile Include="MatchDecisionCases.fs" />
+    <Compile Include="CallableOriginScheduleCases.fs" />
     <Compile Include="RequirementCases.fs" />
     <Compile Include="SequencePullEffectCases.fs" />
     <Compile Include="LoopRangeCases.fs" />

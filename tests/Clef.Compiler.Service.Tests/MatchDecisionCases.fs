@@ -20,7 +20,7 @@ module private SelectedMatch =
         graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = name | _ -> false) |> Assert.Single
 
-    type Value = Number of int64 | Real of float | Text of string | Bytes of byte array | Character of char | Boolean of bool | Unit | Union of int * Value option | Tuple of Value list | Record of Map<string, Value>
+    type Value = Number of int64 | Real of float | Text of string | Bytes of byte array | Character of char | Boolean of bool | Unit | Union of int * Value option | Tuple of Value list | Record of Map<string, Value> | Items of Value list
 
     // Interpret the admitted primitive decision algebra, recording observable
     // source assignments. A payload read from a different active case fails;
@@ -67,8 +67,10 @@ module private SelectedMatch =
             | SemanticKind.IndexGet(buffer, index) ->
                 match value buffer, value index with
                 | Bytes bytes, Number index when 0L <= index && index < bytes.LongLength -> Number(int64 bytes[int index])
+                | Items items, Number index when 0L <= index && index < int64 items.Length -> items[int index]
                 | other -> failwithf "Invalid byte read in decision oracle: %A" other
             | SemanticKind.TupleExpr elements -> Tuple(List.map value elements)
+            | SemanticKind.ArrayExpr elements | SemanticKind.ListExpr elements -> Items(List.map value elements)
             | SemanticKind.TupleGet(source, ordinal) ->
                 match value source with Tuple fields -> fields[ordinal] | other -> failwithf "Invalid tuple projection: %A" other
             | SemanticKind.RecordExpr(fields, _) -> Record(fields |> List.map (fun (name, source) -> name, value source) |> Map.ofList)
@@ -109,6 +111,14 @@ module private SelectedMatch =
                     Number(int64 (System.Text.Encoding.UTF8.GetByteCount text))
                 | SemanticKind.Intrinsic info, Bytes bytes when info.Module = IntrinsicModule.Array && info.Operation = "length" ->
                     Number bytes.LongLength
+                | SemanticKind.Intrinsic info, Items items when info.Module = IntrinsicModule.Array && info.Operation = "length" ->
+                    Number(int64 items.Length)
+                | SemanticKind.Intrinsic info, Items items when info.Module = IntrinsicModule.List ->
+                    match info.Operation, items with
+                    | "isEmpty", _ -> Boolean items.IsEmpty
+                    | "head", first :: _ -> first
+                    | "tail", _ :: rest -> Items rest
+                    | other -> failwithf "List read preceded its non-empty test: %A" other
                 | other -> failwithf "Unexpected unary operation in decision oracle: %A" other
             | SemanticKind.Application(callee, [left; right]) ->
                 match graph.Nodes[callee].Kind with
@@ -374,3 +384,194 @@ let observed = match input with Pair (_, Some selected) -> selected | _ -> 30
             match node.Kind, node.Type with
             | SemanticKind.DUEliminate(_, _, _, _), NativeType.TTuple([first; _], _) -> first = Types.boolType
             | _ -> false)
+
+/// clef #124: disjunctive, alias, conjunctive, list and array patterns are
+/// settled by CCS and elaborated by Baker into the same shallow decisions.
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "MatchDecision")>]
+type PatternFormCases() =
+    let events (text: string) = if text = "" then [] else text.Split(',') |> Array.map int64 |> Array.toList
+
+    /// The scrutinee assigns trace 9 once; every alternative reads the shared
+    /// match input, so a re-evaluated scrutinee would record 9 twice.
+    let once (input: string) = sprintf "(trace <- 9; %s)" input
+
+    [<Theory>]
+    [<InlineData("A", 1L)>]
+    [<InlineData("B 3", 1L)>]
+    [<InlineData("C", 2L)>]
+    member _.``A disjunction without bindings selects either side's constructor`` (input: string, expected: int64) =
+        SelectedMatch.assertSelected expected [9L] (sprintf """
+type Shape = A | B of int | C
+let mutable trace = 0
+let input = %s
+let observed =
+    match %s with
+    | A | B _ -> 1
+    | C -> 2
+        """ input (once "input")) |> ignore
+
+    [<Theory>]
+    [<InlineData("(Error 4, Ok 1)", 4L)>]
+    [<InlineData("(Ok 1, Error 5)", 5L)>]
+    [<InlineData("(Error 6, Error 7)", 6L)>]
+    [<InlineData("(Ok 1, Ok 2)", 3L)>]
+    member _.``A disjunction binds each source variable once from the side that matched`` (input: string, expected: int64) =
+        // BAREWire Schema/Analysis.fs:140 and :160 (clef #124 comment 5433).
+        let graph = SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input: Result<int, int> * Result<int, int> = %s
+let observed =
+    match %s with
+    | Error errors, _ | _, Error errors -> errors
+    | Ok left, Ok right -> left + right
+        """ input (once "input"))
+        SelectedMatch.binding "errors" graph |> ignore
+
+    [<Theory>]
+    [<InlineData("(1, 2, 0)", 5L)>]
+    [<InlineData("(1, 2, 1)", 4L)>]
+    [<InlineData("(1, 2, 2)", 30L)>]
+    member _.``A disjunction maps the right side's variables to the case's by name`` (input: string, expected: int64) =
+        SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input = %s
+let observed =
+    match %s with
+    | (a, b, 0) | (b, a, 1) -> a + b + b
+    | _ -> 30
+        """ input (once "input")) |> ignore
+
+    [<Theory>]
+    [<InlineData("Some 7", "true", 7L, "9,1")>]
+    [<InlineData("Some 7", "false", 30L, "9,1")>]
+    [<InlineData("None", "true", 30L, "9")>]
+    member _.``A disjunction with bindings selects before its guard and falls through after it`` (input: string, guard: string, expected: int64, trace: string) =
+        SelectedMatch.assertSelected expected (events trace) (sprintf """
+let mutable trace = 0
+let input: int option * int option = (%s, None)
+let observed =
+    match %s with
+    | (Some value, _) | (_, Some value) when (trace <- 1; %s) -> value
+    | _ -> 30
+        """ input (once "input") guard) |> ignore
+
+    [<Theory>]
+    [<InlineData("(3, 4)", 7L)>]
+    member _.``An alias binds the whole input beside its inner pattern's variables`` (input: string, expected: int64) =
+        let graph = SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input = %s
+let observed =
+    match %s with
+    | (first, _) as pair ->
+        match pair with
+        | (_, second) -> first + second
+        """ input (once "input"))
+        SelectedMatch.binding "pair" graph |> ignore
+
+    [<Theory>]
+    [<InlineData("Some 5", 10L)>]
+    [<InlineData("None", 30L)>]
+    member _.``An alias over a refutable pattern selects only when the inner pattern matches`` (input: string, expected: int64) =
+        SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input: int option = %s
+let observed =
+    match %s with
+    | Some value as whole -> (match whole with Some again -> again + value | None -> 40)
+    | _ -> 30
+        """ input (once "input")) |> ignore
+
+    [<Theory>]
+    [<InlineData("(3, Some 4)", 7L)>]
+    [<InlineData("(3, None)", 30L)>]
+    member _.``A conjunction selects only when both sides match and binds both sides`` (input: string, expected: int64) =
+        SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input: int * int option = %s
+let observed =
+    match %s with
+    | (first, _) & (_, Some second) -> first + second
+    | _ -> 30
+        """ input (once "input")) |> ignore
+
+    [<Fact>]
+    member _.``A disjunction whose sides bind different variables is a CCS diagnostic`` () =
+        let result =
+            match parseAndCheck "module OrBindings\nlet choose (input: int option) = match input with Some value | None -> value\n" "or-bindings.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "Disjunction parse failed: %A" errors
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8067")
+
+    [<Fact>]
+    member _.``A disjunction whose sides bind one name at different types is a CCS diagnostic`` () =
+        let result =
+            match parseAndCheck "module OrTypes\nlet choose (input: int option * bool option) = match input with (Some value, _) | (_, Some value) -> 1 | _ -> 0\n" "or-types.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "Disjunction parse failed: %A" errors
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error)
+
+    [<Fact>]
+    member _.``A failed final disjunction terminates at the pattern requirement`` () =
+        let graph = SelectedMatch.check """
+type Shape = A | B of int | C
+let mutable trace = 0
+let input = C
+let observed =
+    match input with
+    | A | B _ -> 1
+        """
+        try
+            SelectedMatch.evaluate graph (SelectedMatch.binding "observed" graph).Id |> ignore
+            failwith "A failed disjunction returned a match result"
+        with SelectedMatch.RequirementFailed(diagnostic, _) ->
+            Assert.StartsWith("Pattern match failed at selected-match.clef:", diagnostic)
+
+    [<Theory>]
+    [<InlineData("[]", 0L)>]
+    [<InlineData("[false]", 2L)>]
+    [<InlineData("[true; false]", 14L)>]
+    [<InlineData("[false; true; true]", 23L)>]
+    member _.``List nil, literal and cons patterns read head and tail only after the non-empty test`` (input: string, expected: int64) =
+        // Boolean elements: this control is about selection and projection,
+        // not the range of a list element.
+        SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input: bool list = %s
+let observed =
+    match %s with
+    | [] -> 0
+    | [only] -> (if only then 1 else 2)
+    | first :: second :: _ -> (if first then 10 else 20) + (if second then 3 else 4)
+        """ input (once "input")) |> ignore
+
+    [<Theory>]
+    [<InlineData("[| 4 |]", 4L)>]
+    [<InlineData("[| 4; 5 |]", 9L)>]
+    [<InlineData("[| 4; 5; 6 |]", 30L)>]
+    member _.``Array patterns read elements only after the length test`` (input: string, expected: int64) =
+        SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input: int array = %s
+let observed =
+    match %s with
+    | [| only |] -> only
+    | [| first; second |] -> first + second
+    | _ -> 30
+        """ input (once "input")) |> ignore
+
+    [<Theory>]
+    [<InlineData("(Ok 1, Ok 2, Error 8)", 8L)>]
+    [<InlineData("(Ok 1, Error 7, Error 8)", 7L)>]
+    [<InlineData("(Error 6, Error 7, Ok 8)", 6L)>]
+    [<InlineData("(Ok 1, Ok 2, Ok 3)", 30L)>]
+    member _.``A nested disjunction with bindings binds the source variable once`` (input: string, expected: int64) =
+        let graph = SelectedMatch.assertSelected expected [9L] (sprintf """
+let mutable trace = 0
+let input: Result<int, int> * Result<int, int> * Result<int, int> = %s
+let observed =
+    match %s with
+    | Error errors, _, _ | _, Error errors, _ | _, _, Error errors -> errors
+    | _ -> 30
+        """ input (once "input"))
+        SelectedMatch.binding "errors" graph |> ignore

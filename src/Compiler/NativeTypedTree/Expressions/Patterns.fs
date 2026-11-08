@@ -20,6 +20,13 @@ open Clef.Compiler.NativeTypedTree.Expressions.Literals
 // Pattern Checking
 //-------------------------------------------------------------------------
 
+/// The nil union case of a list type (spec/patterns.md, List Patterns).
+let listNilPattern (listTy: NativeType) = Pattern.Union("[]", 0, None, listTy)
+
+/// The cons union case of a list type; its payload is the head and the tail.
+let listConsPattern (head: Pattern) (tail: Pattern) (listTy: NativeType) =
+    Pattern.Union("::", 1, Some(Pattern.Tuple [head; tail]), listTy)
+
 /// Check a pattern and return (Pattern, bindings)
 let rec checkPattern
     (env: TypeEnv)
@@ -154,23 +161,47 @@ let rec checkPattern
             // with its wildcard and the diagnostic, not a saturation failure, is what surfaces.
             (Pattern.Wildcard, [])
 
-    | SynPat.Or(lhsPat, rhsPat, _, _) ->
-        // Alternation pattern
+    | SynPat.Or(lhsPat, rhsPat, orRange, _) ->
+        // Disjunctive pattern (spec/patterns.md): both sides bind the same set of variables
+        // with the same types. The left side's bindings name the case's variables, in its
+        // order; Baker maps the right side's values to them by name.
         let (lhsPattern, lhsBindings) = checkPattern env lhsPat expectedTy range
-        let (rhsPattern, _rhsBindings) = checkPattern env rhsPat expectedTy range
-        // Both alternatives are retained; the right one is never dropped. Both branches bind
-        // the same names, so the left branch's bindings name the case's variables.
-        (Pattern.Or(lhsPattern, rhsPattern), lhsBindings)
+        let (rhsPattern, rhsBindings) = checkPattern env rhsPat expectedTy range
+        let names bindings = bindings |> List.map fst
+        let distinct bindings = (names bindings |> List.distinct).Length = bindings.Length
+        if distinct lhsBindings && distinct rhsBindings
+           && Set.ofList (names lhsBindings) = Set.ofList (names rhsBindings) then
+            for name, leftTy in lhsBindings do
+                let rightTy = rhsBindings |> List.find (fst >> (=) name) |> snd
+                addConstraint (Constraint.Equals(leftTy, rightTy, range)) env
+            (Pattern.Or(lhsPattern, rhsPattern), lhsBindings)
+        else
+            let show bindings = names bindings |> String.concat ", "
+            addNativeError DiagnosticCodes.CCS8067_DisjunctivePatternBindings orRange
+                $"The two sides of this disjunctive pattern must bind the same set of variables, each once: the left side binds [{show lhsBindings}], the right side binds [{show rhsBindings}]." env
+            // Recovery keeps only the left side, whose pattern and bindings agree, so the
+            // diagnostic, not a saturation failure, is what surfaces.
+            (lhsPattern, lhsBindings)
 
-    | SynPat.ArrayOrList(isArray, pats, _) ->
+    | SynPat.ArrayOrList(true, pats, _) ->
         let elemTy = freshTypeVar range
-        let listTy = if isArray then NativeType.TApp(Types.arrayTyCon, [elemTy]) else NativeType.TList elemTy
-        addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
+        addConstraint (Constraint.Equals(expectedTy, NativeType.TApp(Types.arrayTyCon, [elemTy]), range)) env
         let (patterns, bindings) =
             pats
             |> List.map (fun p -> checkPattern env p elemTy range)
             |> List.unzip
         (Pattern.Array patterns, List.concat bindings)
+
+    | SynPat.ArrayOrList(false, pats, _) ->
+        // `[p1; ...; pn]` is shorthand for `p1 :: ... :: pn :: []` (spec/patterns.md, List
+        // Patterns): the cons and nil union cases of the list type, never an indexed shape.
+        let elemTy = freshTypeVar range
+        let listTy = NativeType.TList elemTy
+        addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
+        let checkedElements = pats |> List.map (fun p -> checkPattern env p elemTy range)
+        let pattern =
+            List.foldBack (fun (element, _) tail -> listConsPattern element tail listTy) checkedElements (listNilPattern listTy)
+        (pattern, checkedElements |> List.collect snd)
 
     | SynPat.Record(fields, _) ->
         // Record pattern: { field1 = pat1; ... }
@@ -231,18 +262,13 @@ let rec checkPattern
 
     | SynPat.ListCons(lhsPat, rhsPat, _, _) ->
         // List cons pattern: x :: xs
+        // `head :: tail` is the cons union case of the list type (spec/patterns.md).
         let elemTy = freshTypeVar range
         let listTy = NativeType.TList elemTy
         addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
-        checkPattern env lhsPat elemTy range |> ignore
-        checkPattern env rhsPat listTy range |> ignore
-        // The pattern graph has no cons form; a tuple of head and tail would test a list as a
-        // tuple. Refused at the site.
-        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pat.Range
-            "CCS source checking did not settle a pattern form for this list cons pattern 'head :: tail': the pattern graph has no cons form." env
-        // Recovery binds nothing, so the refused pattern's count of source bindings agrees
-        // with its wildcard and the diagnostic, not a saturation failure, is what surfaces.
-        (Pattern.Wildcard, [])
+        let (headPattern, headBindings) = checkPattern env lhsPat elemTy range
+        let (tailPattern, tailBindings) = checkPattern env rhsPat listTy range
+        (listConsPattern headPattern tailPattern listTy, headBindings @ tailBindings)
 
     | SynPat.Ands(pats, _) ->
         // Conjunction pattern: pat1 & pat2 & ...

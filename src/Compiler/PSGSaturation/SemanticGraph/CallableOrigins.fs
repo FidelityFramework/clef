@@ -133,7 +133,18 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
         |> List.filter sourceEdge
         |> List.groupBy _.Target
         |> Map.ofList
-    let agrees (node: SemanticNode) =
+    // A node's agreement with its recorded incidence depends only on the node,
+    // the graph's edges and the reachable node map, all fixed for one
+    // analysis; each node's structural incidence is derived once (clef #131).
+    let agreement = Dictionary<NodeId, bool>()
+    let rec agrees (node: SemanticNode) =
+        match agreement.TryGetValue node.Id with
+        | true, known -> known
+        | _ ->
+            let known = derivedAgreement node
+            agreement[node.Id] <- known
+            known
+    and derivedAgreement (node: SemanticNode) =
         let expected = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node |> List.filter sourceEdge
         let children = kindEdges node.Id node.Kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
         let childrenAgree =
@@ -353,10 +364,37 @@ let private nativeOperation (nodes: Map<NodeId, SemanticNode>) callee =
         | _ -> None
     follow Set.empty callee
 
+/// How the origin fixed point is reached. Both schedules evaluate the same
+/// per-node transfer and seed opaque leaves at the same quiescent state; they
+/// differ only in which nodes are re-evaluated.
+type internal OriginSchedule =
+    /// Re-evaluate only the nodes that read a fact that changed. This is the
+    /// compiler's schedule (clef #131).
+    | DependencyWorklist
+    /// Re-evaluate every reachable node until a whole pass changes nothing.
+    /// Retained as the reference schedule for the exact-result regression
+    /// control in Clef.Compiler.Service.Tests (CallableOriginScheduleCases).
+    | WholeGraphPasses
+
+/// The complete fixed point, including the field family the transfer joins.
+type internal OriginFixedPoint = {
+    Facts: Map<NodeId, Set<NodeId * int>>
+    Fields: Map<NodeId * string, Set<NodeId * int>>
+    Inputs: Map<NodeId, (NodeId * NodeId) list>
+    Branches: Map<NodeId, CallableBranchObservation>
+    TransportInputs: Map<NodeId, NodeId list>
+    /// Node transfers evaluated to reach the fixed point.
+    Evaluations: int
+}
+
 /// A finite origin analysis over declaration, parameter, result and aggregate
 /// edges. Unknown callable leaves remain explicit origins, preventing a known
 /// candidate from silently standing in for an opaque alternative.
-let private analyze branchSelections (graph: SemanticGraph) =
+///
+/// Every transfer only joins into the facts it writes, and reads facts only
+/// through `read` and `readField`. Each read records the evaluating node as a
+/// reader of that fact, so a change re-evaluates exactly its readers.
+let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let sourceGuards, sourceDecision, caseAlternative, agrees = branchReaders graph nodes
     let guards, decideGuard =
@@ -364,14 +402,37 @@ let private analyze branchSelections (graph: SemanticGraph) =
         else Map.empty, (fun _ _ -> BothArms)
     let facts = Dictionary<NodeId, Set<Origin>>()
     let fields = Dictionary<NodeId * string, Set<Origin>>()
-    let read id = match facts.TryGetValue id with true, values -> values | _ -> Set.empty
+    let readers = Dictionary<NodeId, HashSet<NodeId>>()
+    let fieldReaders = Dictionary<NodeId * string, HashSet<NodeId>>()
+    let pending = Queue<NodeId>()
+    let queued = HashSet<NodeId>()
+    let enqueue id = if queued.Add id then pending.Enqueue id
+    // The node whose transfer is being evaluated; None while seeding.
+    let mutable evaluating: NodeId option = None
+    let register (table: Dictionary<'key, HashSet<NodeId>>) key =
+        match evaluating with
+        | Some reader ->
+            match table.TryGetValue key with
+            | true, rows -> rows.Add reader |> ignore
+            | _ -> table[key] <- HashSet [reader]
+        | None -> ()
+    let notify (table: Dictionary<'key, HashSet<NodeId>>) key =
+        match table.TryGetValue key with
+        | true, rows -> for reader in rows do enqueue reader
+        | _ -> ()
+    let read id =
+        register readers id
+        match facts.TryGetValue id with true, values -> values | _ -> Set.empty
+    let readField key =
+        register fieldReaders key
+        match fields.TryGetValue key with true, values -> values | _ -> Set.empty
     let mutable changed = false
     let add id values =
-        let old = read id
-        let combined = Set.union old values
-        if old <> combined then
-            facts[id] <- combined
+        let old = match facts.TryGetValue id with true, values -> values | _ -> Set.empty
+        if not (Set.isSubset values old) then
+            facts[id] <- Set.union old values
             changed <- true
+            notify readers id
     let union ids = ids |> Seq.map read |> Seq.fold Set.union Set.empty
     let shapes =
         nodes |> Map.toSeq |> Seq.choose (fun (id, _) -> shape nodes id |> Option.map (fun value -> id, value)) |> Map.ofSeq
@@ -410,6 +471,16 @@ let private analyze branchSelections (graph: SemanticGraph) =
             | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> environmentOwner seen value
             | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (environmentOwner seen)
             | _ -> None
+    // The declared environment formal of each closure pair, keyed by the exact
+    // [owner; implementation] sources of its row. The first row in edge order
+    // names the formal, as a scan of the edge list at each evaluation would.
+    let environmentFormals =
+        graph.Edges |> List.fold (fun found edge ->
+            match edge.Class, edge.Role, edge.Sources with
+            | EdgeClass.Provenance, EdgeRole.EnvironmentFormal, [owner; implementation]
+                when not (Map.containsKey (owner, implementation) found) ->
+                Map.add (owner, implementation) edge.Target found
+            | _ -> found) Map.empty
     let inputs = Dictionary<NodeId, Set<NodeId * NodeId>>()
     let transportInputs = Dictionary<NodeId, NodeId list>()
     let supply call parameter argument =
@@ -448,23 +519,23 @@ let private analyze branchSelections (graph: SemanticGraph) =
                     Set.union results produced
                 | _ -> Set.add (id, -1) results) Set.empty
 
-    changed <- true
-    let mutable seedUnknown = true
-    while changed || seedUnknown do
-        if not changed then
-            // A callable or aggregate with no resident producing edge is
-            // opaque. Its projections must remain in later joins beside any
-            // known candidate. Proved-empty alternatives carry their marker
-            // through this pass instead of becoming opaque producing edges.
-            seedUnknown <- false
-            for KeyValue(id, node) in nodes do
-                match applySubst node.Type with
-                | NativeType.TFun _ | NativeType.TApp _ | NativeType.TTuple _
-                | NativeType.TAnon _ | NativeType.TUnion _ when Set.isEmpty (read id) ->
-                    add id (Set.singleton (id, -1))
-                | _ -> ()
-        changed <- false
+    // A callable or aggregate with no resident producing edge is opaque. Its
+    // projections must remain in later joins beside any known candidate.
+    // Proved-empty alternatives carry their marker through this step instead
+    // of becoming opaque producing edges. Seeding happens once, at the first
+    // quiescent state, and is not itself a reader of any fact.
+    let seedUnknown () =
+        evaluating <- None
         for KeyValue(id, node) in nodes do
+            match applySubst node.Type with
+            | NativeType.TFun _ | NativeType.TApp _ | NativeType.TTuple _
+            | NativeType.TAnon _ | NativeType.TUnion _ when Set.isEmpty (read id) ->
+                add id (Set.singleton (id, -1))
+            | _ -> ()
+    let mutable evaluations = 0
+    let evaluate (id: NodeId) (node: SemanticNode) =
+            evaluating <- Some id
+            evaluations <- evaluations + 1
             let values =
                 match node.Kind with
                 | SemanticKind.Binding _ -> union node.Children
@@ -500,9 +571,7 @@ let private analyze branchSelections (graph: SemanticGraph) =
                 | SemanticKind.ClosureValue(implementation, _) ->
                     // The pair closes over its explicitly declared environment
                     // formal. Rewritten direct calls still supply that formal.
-                    let formal = graph.Edges |> List.tryPick (fun edge ->
-                        if edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.EnvironmentFormal
-                           && edge.Sources = [id; implementation] then Some edge.Target else None)
+                    let formal = environmentFormals.TryFind((id, implementation))
                     match shapes.TryFind implementation, formal with
                     | Some ((_, _, first) :: _, _), Some actual when first = actual ->
                         transportInputs[id] <- node.Children @ [actual]
@@ -554,18 +623,44 @@ let private analyze branchSelections (graph: SemanticGraph) =
                             | true, _ -> Set.singleton alternative
                             | false, Some { Kind = SemanticKind.RecordExpr (members, _) } -> members |> List.tryPick (fun (field, value) -> if field = name then Some (read value) else None) |> Option.defaultValue (Set.singleton (origin, -1))
                             | _ -> Set.singleton (origin, -1)
-                        let assigned = match fields.TryGetValue ((origin, name)) with true, values -> values | _ -> Set.empty
+                        let assigned = readField (origin, name)
                         Set.union values (Set.union initial assigned)) Set.empty
                 | SemanticKind.FieldSet (value, name, assigned) ->
+                    let values = read assigned
                     for origin, _ in presentOrigins (read value) do
-                        let old = match fields.TryGetValue ((origin, name)) with true, values -> values | _ -> Set.empty
-                        let combined = Set.union old (read assigned)
-                        if old <> combined then
-                            fields[(origin, name)] <- combined
+                        let key = origin, name
+                        let old = match fields.TryGetValue key with true, values -> values | _ -> Set.empty
+                        if not (Set.isSubset values old) then
+                            fields[key] <- Set.union old values
                             changed <- true
+                            notify fieldReaders key
                     Set.empty
                 | _ -> Set.empty
             add id values
+
+    match schedule with
+    | DependencyWorklist ->
+        // Every node is evaluated once in node order; afterwards a node is
+        // evaluated again only when a fact or field it read has grown.
+        for KeyValue(id, _) in nodes do enqueue id
+        let drain () =
+            while pending.Count > 0 do
+                let id = pending.Dequeue()
+                queued.Remove id |> ignore
+                evaluate id nodes[id]
+        drain ()
+        seedUnknown ()
+        drain ()
+    | WholeGraphPasses ->
+        changed <- true
+        let mutable seeded = false
+        while changed || not seeded do
+            if not changed then
+                seeded <- true
+                seedUnknown ()
+            changed <- false
+            for KeyValue(id, node) in nodes do evaluate id node
+    evaluating <- None
 
     // Only the final fixed point can author a branch observation. Transient
     // one-arm discoveries are not retained when later/opaque origins arrive.
@@ -577,7 +672,19 @@ let private analyze branchSelections (graph: SemanticGraph) =
         |> Map.ofList
     nodes, shapes, (facts |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq),
         (inputs |> Seq.map (fun pair -> pair.Key, Set.toList pair.Value) |> Map.ofSeq), branches, agrees,
-        (transportInputs |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq)
+        (transportInputs |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq),
+        (fields |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq), evaluations
+
+let private analyze branchSelections graph =
+    let nodes, shapes, facts, inputs, branches, agrees, transportInputs, _, _ = analyzeWith DependencyWorklist branchSelections graph
+    nodes, shapes, facts, inputs, branches, agrees, transportInputs
+
+/// The complete origin fixed point under a chosen schedule, for the exact-result
+/// regression control. The compiler reads origins only through `resolve`.
+let internal originFixedPoint schedule branchSelections graph : OriginFixedPoint =
+    let _, _, facts, inputs, branches, _, transportInputs, fields, evaluations = analyzeWith schedule branchSelections graph
+    { Facts = facts; Fields = fields; Inputs = inputs; Branches = branches
+      TransportInputs = transportInputs; Evaluations = evaluations }
 
 type private AggregateConstruction =
     | RecordConstruction of (string * NativeType * NodeId option) list * NodeId option
@@ -881,13 +988,23 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
     { Calls = calls; NativeCalls = nativeCalls; ParameterInputs = inputs; Lambdas = lambdas; FirstBoundaries = boundaries; Branches = branches
       Aggregates = aggregateResolutions graph nodes facts inputs calls agrees transportInputs }
 
+// A resolution is a function of one immutable graph value. Each graph is read
+// once per mode; every reader of the same graph shares that one reading
+// (clef #131). The tables hold no graph alive.
+let private conservativeReadings = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>()
+let private branchReadings = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>()
+let private conservativeReading =
+    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>.CreateValueCallback(fun graph -> resolveWith false graph)
+let private branchReading =
+    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>.CreateValueCallback(fun graph -> resolveWith true graph)
+
 /// Early source analyses retain conservative joins. They do not yet own the
 /// transfer of branch premises through their subsequent rewrites.
-let resolve graph = resolveWith false graph
+let resolve (graph: SemanticGraph) = conservativeReadings.GetValue(graph, conservativeReading)
 
 /// Opt-in final callable reading. The owning Baker settlement must retain and
 /// validate its whole-revision branch authority before publication.
-let resolveCallableBranches graph = resolveWith true graph
+let resolveCallableBranches (graph: SemanticGraph) = branchReadings.GetValue(graph, branchReading)
 
 let resolveCalls graph = (resolve graph).Calls
 let knownLambdas graph = (resolve graph).Lambdas

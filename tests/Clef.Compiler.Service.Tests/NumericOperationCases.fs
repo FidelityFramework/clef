@@ -340,6 +340,42 @@ type NumericOperationCases() =
         | Error _ -> ()
         | Ok _ -> failwith "Missing zero-extent comparison proof was accepted."
 
+    // clef #124: byte traversals are folded in runs under one demand settlement,
+    // and a length comparison between them is settled on its own. Each comparison
+    // keeps the construction its own evidence selects, in source order.
+    [<Fact>]
+    member _.``Interleaved byte traversals and length comparisons each keep their own construction`` () =
+        let program =
+            "module InterleavedEquality\n" +
+            "let compareAll (left: string) (right: string) =\n" +
+            "    let first = left = right\n" +
+            "    let emptyLeft = left = \"\"\n" +
+            "    let second = right <> left\n" +
+            "    let emptyRight = \"\" <> right\n" +
+            "    let third = left = \"ab\"\n" +
+            "    if first then (if emptyLeft then 1 else 2) + (if second then 4 else 8) + (if emptyRight then 16 else 32) + (if third then 64 else 128) else 0\n" +
+            "[<EntryPoint>]\n" +
+            "let main _ = if compareAll \"ab\" \"ab\" = 0 then 1 else 0\n"
+        let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.authority program
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let isLiteral text id = graph.Nodes.TryFind id |> Option.exists (fun node -> node.Kind = SemanticKind.Literal(NativeLiteral.String text))
+        let lengths = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.lengthConstructions graph
+        Assert.Equal(2, lengths.Length)
+        for construction in lengths do
+            Assert.Equal(Ok true, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validLengthStructure graph construction)
+            Assert.True(isLiteral "" construction.Left || isLiteral "" construction.Right)
+        Assert.Equal<bool list>([false; true], lengths |> List.map _.Negated |> List.sort)
+        let traversals = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.constructions graph
+        Assert.Equal(3, traversals.Length)
+        for construction in traversals do
+            Assert.True(Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validStructure graph construction)
+            Assert.False(isLiteral "" construction.Left || isLiteral "" construction.Right)
+        Assert.Empty(Clef.Compiler.Baker.Recipes.StringComparisonRecipes.candidates graph)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph with
+        | Ok _ -> ()
+        | Error errors -> failwithf "%A" errors
+
 type StringExtentCases() =
     [<Theory>]
     [<InlineData("property")>]

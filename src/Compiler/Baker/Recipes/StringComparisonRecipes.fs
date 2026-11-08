@@ -29,7 +29,11 @@ module CapturedStrings = Clef.Compiler.Baker.Ingredients.CapturedStrings
 /// whose targets the participant form cannot state is the `Error` of the whole
 /// derivation, whatever the other inputs derive; `Ok None` is a source with no
 /// complete static origin.
-let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (group: NodeId) source =
+///
+/// The readers this derivation consults (formal demand, captured strings, lazy
+/// facts) are facts of `graph` and `flow`; one origin reader shares them across
+/// every source it derives on that graph (clef #124).
+let stringOrigins (graph: SemanticGraph) (flow: CallableOrigins.Resolution) =
     let inputs = lazy (FormalDemand.reader graph flow)
     let capturedString = lazy (CapturedStrings.reader graph)
     let lazyFacts = lazy (LazyValues.settle graph)
@@ -183,10 +187,15 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
                 |> path
             | None -> Ok None
         | _ -> Ok None
-    origins Set.empty group source |> Result.map (fun derived ->
-        match canonical Set.empty source, derived with
-        | Some(identity, _), Some(values, participants) -> Some(identity, values, participants)
-        | _ -> None)
+    fun (group: NodeId) source ->
+        origins Set.empty group source |> Result.map (fun derived ->
+            match canonical Set.empty source, derived with
+            | Some(identity, _), Some(values, participants) -> Some(identity, values, participants)
+            | _ -> None)
+
+/// The origins of one source in `group` (`stringOrigins`).
+let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (group: NodeId) source =
+    stringOrigins graph flow group source
 
 /// The located error of a string at `site` whose origins are reached through a call
 /// whose targets the participant form cannot state: the site, the nodes the failure
@@ -208,22 +217,39 @@ let originError (graph: SemanticGraph) site (failure: Participants.TargetFailure
 
 let private owned (node: SemanticNode) = node.Metadata.TryFind "Baker.StringComparisonOwned" = Some(MetadataValue.Bool true)
 
+type private ZeroEvidenceReader = { Read: NodeId -> NodeId -> Result<Set<NodeId> option, Participants.TargetFailure> }
+
 /// The participants of both operands when every origin of each has length zero, `Ok None`
-/// otherwise, and the first failure of either operand's derivation.
-let private zeroEvidence graph left right =
-    let flow = CallableOrigins.resolve graph
-    [left;right] |> List.map (fun source ->
-        stringOrigin graph flow source source |> Result.map (Option.bind (fun (_,origins,participants) ->
+/// otherwise, and the first failure of either operand's derivation. One reader serves
+/// every comparison of one graph with one origin reader (clef #124).
+let private zeroEvidenceReader (graph: SemanticGraph) =
+    let origin = stringOrigins graph (CallableOrigins.resolve graph)
+    let operand source =
+        origin source source |> Result.map (Option.bind (fun (_,origins,participants) ->
             if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then
                 // Both extent rows retain any lazy/captured origin marker. It activates the
                 // complete joint node/relation/root premise at source settlement.
                 participants |> Participants.nodes |> Set.ofList |> Some
-            else None)))
-    |> List.fold (fun state fact ->
-        match state, fact with
-        | Error failure, _ | _, Error failure -> Error failure
-        | Ok facts, Ok fact -> Ok (Option.toList fact @ facts)) (Ok [])
-    |> Result.map (function [] -> None | facts -> Some(Set.unionMany facts))
+            else None))
+    { Read = fun left right ->
+        [left;right] |> List.map operand
+        |> List.fold (fun state fact ->
+            match state, fact with
+            | Error failure, _ | _, Error failure -> Error failure
+            | Ok facts, Ok fact -> Ok (Option.toList fact @ facts)) (Ok [])
+        |> Result.map (function [] -> None | facts -> Some(Set.unionMany facts)) }
+
+let private zeroEvidenceReaders = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, ZeroEvidenceReader>()
+let private zeroEvidenceRead =
+    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, ZeroEvidenceReader>.CreateValueCallback(fun graph -> zeroEvidenceReader graph)
+
+let private zeroEvidence (graph: SemanticGraph) left right =
+    (zeroEvidenceReaders.GetValue(graph, zeroEvidenceRead)).Read left right
+
+/// The zero-extent evidence a comparison of `graph` is materialized under: a failure
+/// of either operand's origins gives no evidence (see `materializeWith`).
+let lengthEvidence (graph: SemanticGraph) (_: SemanticNode, _: NumericOperationKind, _: NodeId, left, right) =
+    match zeroEvidence graph left right with Ok evidence -> evidence | Error _ -> None
 
 let lengthRow site negated sources =
     { Class=EdgeClass.Provenance; Role=EdgeRole.StringLengthComparison negated; Ordinal=0; Sources=sources; Target=site }
@@ -276,7 +302,13 @@ let candidates (graph: SemanticGraph) =
             Some(node, kind, callee, left, right)
         | _ -> None) |> Seq.toList
 
-let materialize (graph: SemanticGraph) (source: SemanticNode, kind, callee, left, right) =
+/// Materialize one comparison of `graph` under the zero-extent evidence `empty`
+/// (`lengthEvidence graph` of the same comparison). A failure of either operand's
+/// origins gives no evidence of zero extents, so the comparison takes the byte
+/// traversal, which claims nothing of the origins. Its two views derive the same
+/// origins, and the borrow owner reports the failure at each view
+/// (BoundaryRecipes.intrinsicWrites).
+let materializeWith (empty: Set<NodeId> option) (graph: SemanticGraph) (source: SemanticNode, kind, callee, left, right) =
     let state = SaturationState.create source.Range "String.equality" (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) source.Id graph.Platform
     let arrayType = Types.mkArrayType Types.intType
     let length input = saturation {
@@ -320,11 +352,6 @@ let materialize (graph: SemanticGraph) (source: SemanticNode, kind, callee, left
         do! Closures.enrich source (SemanticKind.Sequential [lb;rb;decision]) Types.boolType [lb;rb;decision] source.EmissionStrategy false
         return [callee;left;right;lb;rb;ls;rs;lv;rv;ll;rl;lengthTest;index;equal;guard;current;lr;rr;byteTest;advance;stop;body;loop;result;decision]
       }
-    // A failure of either operand's origins gives no evidence of zero extents, so the
-    // comparison takes the byte traversal, which claims nothing of the origins. Its two
-    // views derive the same origins, and the borrow owner reports the failure at each
-    // view (BoundaryRecipes.intrinsicWrites).
-    let empty = match zeroEvidence graph left right with Ok evidence -> evidence | Error _ -> None
     let parser =
         match empty with
         | None -> fullParser
@@ -356,6 +383,9 @@ let materialize (graph: SemanticGraph) (source: SemanticNode, kind, callee, left
                     @ (nodes |> List.collect Closures.structuralIncidence)
                     @ [construction]
         mkResultNoShadow nodes source.Id [], edges
+
+let materialize (graph: SemanticGraph) candidate =
+    materializeWith (lengthEvidence graph candidate) graph candidate
 
 let private calleeMatches graph negated callee =
     match BoundaryDeclarations.target graph callee with
