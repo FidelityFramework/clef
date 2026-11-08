@@ -270,7 +270,9 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
                     | None -> allRefs
                 allRefs |> List.fold (walk root) visited
 
-    entries |> List.fold (fun visited (nodeId, root) -> walk root visited nodeId) Map.empty
+    entries
+    |> List.filter (fun (nodeId, _) -> not (isQuotationBinding graph nodeId))
+    |> List.fold (fun visited (nodeId, root) -> walk root visited nodeId) Map.empty
 
 /// The same dependency walk carries each declaration's purpose. A binding can
 /// contribute both library retention and concrete commitment; neither row may

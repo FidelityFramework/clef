@@ -527,11 +527,14 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
     let seedUnknown () =
         evaluating <- None
         for KeyValue(id, node) in nodes do
-            match applySubst node.Type with
-            | NativeType.TFun _ | NativeType.TApp _ | NativeType.TTuple _
-            | NativeType.TAnon _ | NativeType.TUnion _ when Set.isEmpty (read id) ->
-                add id (Set.singleton (id, -1))
-            | _ -> ()
+            match node.Kind with
+            | SemanticKind.TypeDef _ | SemanticKind.ModuleDef _ -> ()
+            | _ ->
+                match applySubst node.Type with
+                | NativeType.TFun _ | NativeType.TApp _ | NativeType.TTuple _
+                | NativeType.TAnon _ | NativeType.TUnion _ when Set.isEmpty (read id) ->
+                    add id (Set.singleton (id, -1))
+                | _ -> ()
     let mutable evaluations = 0
     let evaluate (id: NodeId) (node: SemanticNode) =
             evaluating <- Some id
@@ -879,6 +882,7 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
     nodes |> Map.toList |> List.choose (fun (id, node) ->
         let slots =
             match node.Kind with
+            | SemanticKind.TypeDef _ | SemanticKind.ModuleDef _ -> []
             // A foreign formal declares the receiving contract. Each original
             // actual owns its aggregate construction and per-call conversion;
             // joining callers does not create one runtime tag for this formal.

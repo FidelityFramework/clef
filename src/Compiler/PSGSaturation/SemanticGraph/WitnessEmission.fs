@@ -26,6 +26,48 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
             match graph.Nodes.TryFind body with
             | Some { Kind = SemanticKind.Lambda (more, inner, _, _, _) } -> lambdas (parameters @ more) inner
             | _ -> parameters, body
+        let typeRefMatches (typeNodeId: NodeId) (ty: NativeType) =
+            let ty = applySubst ty
+            let isPointerSlot =
+                Types.tryGetNTUKind ty = Some NTUKind.NTUptr ||
+                Types.tryGetNTUKind ty = Some NTUKind.NTUfnptr ||
+                (match ty with
+                 | NativeType.TApp (tc, [inner]) when tc.Name = "option" ->
+                     let inner = applySubst inner
+                     Types.tryGetNTUKind inner = Some NTUKind.NTUptr || Types.tryGetNTUKind inner = Some NTUKind.NTUfnptr
+                 | _ -> false)
+            match PlatformResolution.caseOf graph typeNodeId with
+            | Some (_, "Void", None) -> Types.tryGetNTUKind ty = Some NTUKind.NTUunit
+            | Some (_, "Bool", None) -> Types.tryGetNTUKind ty = Some NTUKind.NTUbool
+            | Some (_, "Pointer", Some bitsId) ->
+                let pointerBits = graph.Platform |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption) |> Option.map (fun bytes -> int64 bytes * 8L)
+                Option.isSome pointerBits && PlatformResolution.int64Of graph bitsId = pointerBits && isPointerSlot
+            | Some (_, "Integer", Some pairId) ->
+                Types.isIntegerType ty &&
+                (match PlatformResolution.valueOf graph pairId with
+                 | Some { Kind = SemanticKind.TupleExpr [signId; bitsId] } ->
+                     match PlatformResolution.caseOf graph signId, PlatformResolution.int64Of graph bitsId with
+                     | Some (_, ("Signed" | "Unsigned"), None), Some bits -> bits > 0L
+                     | _ -> false
+                 | _ -> false)
+            | Some (_, "Float", Some bitsId) ->
+                Types.isFloatType ty && (PlatformResolution.int64Of graph bitsId |> Option.exists (fun bits -> bits = 32L || bits = 64L))
+            | Some (_, "Named", Some nameId) ->
+                match PlatformResolution.stringOf graph nameId, ty with
+                | Some name, NativeType.TApp (tc, _) -> tc.Name = name || tc.Name.EndsWith("." + name)
+                | _ -> false
+            | _ -> false
+        let parameterMatches (paramNodeId: NodeId) (ty: NativeType) =
+            match PlatformResolution.recordOf graph paramNodeId with
+            | Some (paramRecord, paramFields) when PlatformResolution.typeName paramRecord = Some "ParameterInfo" ->
+                let passByOk =
+                    match PlatformResolution.field "PassBy" paramFields |> Option.bind (PlatformResolution.caseOf graph) with
+                    | Some (_, "Value", None) | None -> true
+                    | _ -> false
+                let typeOk =
+                    PlatformResolution.field "Type" paramFields |> Option.exists (fun typeId -> typeRefMatches typeId ty)
+                passByOk && typeOk
+            | _ -> false
         let descriptorMatches typeName fieldName fieldTy =
             let rec signature parameters ty =
                 match applySubst ty with
@@ -59,10 +101,8 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
                                 (match convention with Some (_, "CDecl", None) -> true | _ -> false) &&
                                 (fnSignature |> Option.exists (fun (fnParams, fnRet) ->
                                     let parameters = PlatformResolution.field "Parameters" signatureFields |> Option.bind (PlatformResolution.elementsOf graph)
-                                    let returnType = PlatformResolution.field "ReturnType" signatureFields |> Option.bind (PlatformResolution.caseOf graph)
-                                    (parameters |> Option.exists (fun values -> List.length values = List.length fnParams)) &&
-                                    (returnType |> Option.exists (fun (_, caseName, payload) ->
-                                        (caseName = "Void" && Option.isNone payload) = (Types.tryGetNTUKind (applySubst fnRet) = Some NTUKind.NTUunit)))))
+                                    (parameters |> Option.exists (fun values -> List.length values = List.length fnParams && List.forall2 parameterMatches values fnParams)) &&
+                                    (PlatformResolution.field "ReturnType" signatureFields |> Option.exists (fun retId -> typeRefMatches retId fnRet))))
                             | _ -> false
                         | _ -> false
                     | _ -> false

@@ -119,14 +119,82 @@ let exported (first: int) (second: int) (entry: Entry) (arg: CHandle<unit>) : in
               declarations + callback.Replace("Field = \"Invoke\"", "Field = \"Wrong\"") + wrapper
               declarations + callback.Replace("CallingConvention = CDecl", "CallingConvention = StdCall") + wrapper
               declarations + callback.Replace("Parameters = [| { Name = \"arg\"; Type = Pointer 64; PassBy = Value } |]", "Parameters = [||]") + wrapper
+              declarations + callback.Replace("Type = Pointer 64; PassBy = Value", "Type = Integer (Signed, 32); PassBy = Value") + wrapper
+              declarations + callback.Replace("Type = Pointer 64; PassBy = Value", "Type = Pointer 64; PassBy = Reference") + wrapper
+              declarations + callback.Replace("ReturnType = Pointer 64", "ReturnType = Integer (Signed, 32)") + wrapper
               declarations + callback + wrapper.Replace("[<FidelityExtern(\"c\", \"pthread_create\")>]\n", "")
               declarations + callback + wrapper.Replace("native first second entry.Invoke arg", "0") ]
-        for source in invalidSources do
+        for index, source in List.indexed invalidSources do
             let result = BoundaryValuesFixture.library source false
-            let failure = BoundaryEmission.exportedInterfaceFailures result.Graph |> Assert.Single
+            let failures = BoundaryEmission.exportedInterfaceFailures result.Graph
+            Assert.True(not failures.IsEmpty, $"Invalid source {index} was admitted")
+            let failure = Assert.Single failures
             Assert.Equal(WitnessProjectionFailureKind.LibraryNativeInterfaceLoading, failure.Kind)
             Assert.Contains("result.result.parameter.Invoke", failure.Reason)
             Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
+
+        let concreteLibrary = """module LibraryNative
+type Signedness = Signed | Unsigned
+type TypeRef = Void | Integer of Signedness * int | Pointer of int | Entry of string
+type Passing = Value | Reference
+type CallingConvention = CDecl | StdCall
+type Ownership = Undeclared | Owned
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: Passing }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallingConvention; OwnershipTransfer: Ownership }
+type CallbackDescriptor = { Record: string; Field: string; Signature: FunctionDescriptor }
+type EntrySignature = { Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallingConvention }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ScopedCallbackDescriptor = { Binding: string; Parameter: string }
+type CallbackInvocationContract = { Binding: string; Parameter: int; Scope: string; Signature: EntrySignature; Hypothesis: ExternalExecutionHypothesis }
+type CallbackEntry = { Invoke: FnPtr<unit -> unit> }
+let CallbackEntryDescriptor : Expr<CallbackDescriptor> =
+    <@ { Record = "CallbackEntry"; Field = "Invoke"; Signature = { CName = "callback"; Parameters = [||]; ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } } @>
+[<FidelityExtern("c", "pthread_create")>]
+let private native (entry: FnPtr<unit -> unit>) : unit = ()
+let nativeDescriptor : Expr<FunctionDescriptor> =
+    <@ { CName = "pthread_create"; Parameters = [| { Name = "entry"; Type = TypeRef.Entry "LibraryNative.nativeInvocation"; PassBy = Value } |]; ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let nativeScope : Expr<ScopedCallbackDescriptor> =
+    <@ { Binding = "LibraryNative.native"; Parameter = "entry" } @>
+let nativeInvocation : Expr<CallbackInvocationContract> =
+    <@ { Binding = "LibraryNative.native"; Parameter = 0; Scope = "LibraryNative.nativeScope"; Signature = { Parameters = [||]; ReturnType = Void; CallingConvention = CDecl }; Hypothesis = { Identity = "test"; Version = "1"; Source = "test" } } @>
+let exported (entry: CallbackEntry) : unit = native entry.Invoke
+"""
+        let concreteConsumer = """module Program
+let callback () = ()
+[<EntryPoint>]
+let main _ =
+    LibraryNative.exported { Invoke = FnPtr.ofFunction callback }
+    0
+"""
+        let libraryPath = System.IO.Path.GetFullPath "library-native.clef"
+        let authorityPath = System.IO.Path.GetFullPath "write-authority.clef"
+        let parse text file =
+            match parseStringWithDefaults text file with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Library native source did not parse: %A" errors
+        let libcAuthority = SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+        let libcPlatform =
+            { SourcePlatformFixture.platform with
+                RuntimeModel = Some RuntimeModel.Libc
+                PlatformDescription = Some "WriteAuthority.description"
+                PlatformSourcePaths = Set.singleton authorityPath }
+        let concreteResult =
+            checkParsedInputsWithDeclarations
+                [ parse libcAuthority authorityPath
+                  parse concreteLibrary libraryPath
+                  parse concreteConsumer "native-program.clef" ]
+                (Some libcPlatform)
+                Set.empty
+                (Some(Set.singleton libraryPath))
+                None
+        DimensionalCases.noErrors concreteResult
+        Assert.Contains(concreteResult.Graph.DeclarationRoots, fun (_, purpose) -> purpose = DeclRoot.LibraryExport)
+        Assert.Contains(concreteResult.Graph.DeclarationRoots, fun (_, purpose) -> purpose = DeclRoot.EntryPoint)
+        let revision = BoundaryValuesFixture.publish concreteResult.Graph
+        let nodes = revision.Nodes.Values |> Seq.map (sprintf "%A") |> String.concat "\n"
+        Assert.Contains("exported", nodes)
+        Assert.Contains("native", nodes)
+        Assert.Contains("callback", nodes)
 
     [<Fact>]
     member _.``A public boolean function does not export its private native implementation``() =
