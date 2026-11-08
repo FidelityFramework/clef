@@ -521,6 +521,8 @@ type DesignTimeVerdict =
     | IgnoresParticipants of variables: string list
     /// Source premises are unavailable; the blockers name what is missing.
     | Pending of blockers: string list
+    /// The configured solver could not be started.
+    | SolverUnavailable
     /// The solver failed, gave an unexpected answer or exceeded the budget at this stage.
     | Undecided of stage: string
 
@@ -570,26 +572,35 @@ let resolveSolver (pathVariable: string | null) (exists: string -> bool) : strin
     if onPath then "cvc5"
     else solverToolchainPaths |> List.tryFind exists |> Option.defaultValue "cvc5"
 
-let private solverExecutable =
-    lazy (resolveSolver (System.Environment.GetEnvironmentVariable "PATH") File.Exists)
+let private solverExecutable () =
+    match System.Environment.GetEnvironmentVariable "CLEF_CVC5" with
+    | null | "" -> resolveSolver (System.Environment.GetEnvironmentVariable "PATH") File.Exists, true
+    | path -> path, false
 
 type private SolverRun =
     | Answered of Result<string list, string>
     | TimedOut
+    | Unavailable of string
 
 /// One cvc5 process over one query, optionally bounded by a wall-clock limit.
-let private execute (limit: System.TimeSpan option) (text: string) : SolverRun =
+let private execute (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
     let tempPath = Path.Combine(Path.GetTempPath(), sprintf "clef-proof-%s.smt2" (System.Guid.NewGuid().ToString("N")))
     try
         File.WriteAllText(tempPath, text + "\n")
-        let psi = System.Diagnostics.ProcessStartInfo(solverExecutable.Value, sprintf "--lang smt2 \"%s\"" tempPath)
+        let psi = System.Diagnostics.ProcessStartInfo(solver, sprintf "--lang smt2 \"%s\"" tempPath)
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
         psi.UseShellExecute <- false
         use proc = new System.Diagnostics.Process(StartInfo = psi)
-        if not (proc.Start()) then
-            Answered (Error "Failed to start cvc5 process")
-        else
+        let started =
+            try
+                if proc.Start() then Ok () else Error "Failed to start cvc5 process"
+            with
+            | :? System.ComponentModel.Win32Exception as ex -> Error ex.Message
+            | :? System.UnauthorizedAccessException as ex -> Error ex.Message
+        match started with
+        | Error reason -> Unavailable (sprintf "Could not start solver '%s': %s" solver reason)
+        | Ok () ->
             let stdoutTask = proc.StandardOutput.ReadToEndAsync()
             let stderrTask = proc.StandardError.ReadToEndAsync()
             let exited =
@@ -621,37 +632,46 @@ let private execute (limit: System.TimeSpan option) (text: string) : SolverRun =
 
 /// Completed answers only. A query cut off by a budget is never recorded.
 let private solverCache =
-    System.Collections.Concurrent.ConcurrentDictionary<string, Result<string list, string>>()
+    System.Collections.Concurrent.ConcurrentDictionary<string * string, string list>()
 
 /// The compiler run: unbounded.
 let private runSolver (query: string) : Result<string list, string> =
-    solverCache.GetOrAdd(query, fun text ->
-        match execute None text with
-        | Answered answer -> answer
-        | TimedOut -> invalidOp "An unbounded cvc5 run cannot exceed a limit")
+    let solver, cacheAllowed = solverExecutable ()
+    match (if cacheAllowed then solverCache.TryGetValue((solver, query)) else (false, Unchecked.defaultof<_>)) with
+    | true, answer -> Ok answer
+    | _ ->
+        match execute solver None query with
+        | Answered (Ok answer) ->
+            if cacheAllowed then solverCache.TryAdd((solver, query), answer) |> ignore
+            Ok answer
+        | Answered (Error reason) | Unavailable reason -> Error reason
+        | TimedOut -> invalidOp "An unbounded cvc5 run cannot exceed a limit"
 
 let private milliseconds (span: System.TimeSpan) = int64 span.TotalMilliseconds
 
 /// A design-time run: every query within `PerQuery`, the run within `Total`.
-let private budgetedSolver (budget: DesignTimeBudget) : string -> Result<string list, string> =
+let private budgetedSolver (budget: DesignTimeBudget) =
     let clock = System.Diagnostics.Stopwatch.StartNew()
-    fun query ->
-        match solverCache.TryGetValue query with
-        | true, answer -> answer
-        | _ ->
-            let remaining = budget.Total - clock.Elapsed
-            if remaining <= System.TimeSpan.Zero then
-                Error (sprintf "cvc5 was not run: the design-time budget of %d ms was exhausted" (milliseconds budget.Total))
-            else
-                let cutByTotal = remaining < budget.PerQuery
-                match execute (Some (if cutByTotal then remaining else budget.PerQuery)) query with
-                | Answered answer ->
-                    solverCache.TryAdd(query, answer) |> ignore
-                    answer
-                | TimedOut when cutByTotal ->
-                    Error (sprintf "cvc5 did not answer before the design-time budget of %d ms was exhausted" (milliseconds budget.Total))
-                | TimedOut ->
-                    Error (sprintf "cvc5 did not answer within the per-query limit of %d ms" (milliseconds budget.PerQuery))
+    let mutable unavailable = false
+    let solve query =
+        // A previously successful query does not establish that the currently
+        // configured solver is still present and executable.
+        let remaining = budget.Total - clock.Elapsed
+        if remaining <= System.TimeSpan.Zero then
+            Error (sprintf "cvc5 was not run: the design-time budget of %d ms was exhausted" (milliseconds budget.Total))
+        else
+            let solver, _ = solverExecutable ()
+            let cutByTotal = remaining < budget.PerQuery
+            match execute solver (Some (if cutByTotal then remaining else budget.PerQuery)) query with
+            | Answered answer -> answer
+            | Unavailable reason ->
+                unavailable <- true
+                Error reason
+            | TimedOut when cutByTotal ->
+                Error (sprintf "cvc5 did not answer before the design-time budget of %d ms was exhausted" (milliseconds budget.Total))
+            | TimedOut ->
+                Error (sprintf "cvc5 did not answer within the per-query limit of %d ms" (milliseconds budget.PerQuery))
+    solve, (fun () -> unavailable), (fun () -> unavailable <- false)
 
 //=============================================================================
 // DISCHARGE STAGES
@@ -940,11 +960,13 @@ let discharge (obligations: ObligationInfo list) : Result<DischargeReceipt, stri
 /// the caller's budget. Each `Reason` is the text `discharge [obligation]`
 /// returns; a budget limit appears only where the compiler run has no limit.
 let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : ObligationReceipt list =
-    let solve = budgetedSolver budget
+    let solve, isUnavailable, clearUnavailable = budgetedSolver budget
     obligations |> List.map (fun ob ->
+        clearUnavailable ()
         let r = readinessWith solve overrideProjection ob
         let receipt verdict reason premises evidence =
-            { ObligationId = ob.Id; Kind = ob.Kind; Source = ob.Source; Verdict = verdict; Reason = reason
+            { ObligationId = ob.Id; Kind = ob.Kind; Source = ob.Source
+              Verdict = (if isUnavailable () then SolverUnavailable else verdict); Reason = reason
               Premises = premises; NonVacuity = r.NonVacuity; Participants = r.Participants
               IgnoredParticipants = r.Ignored; Evidence = evidence }
         match r.Stop with

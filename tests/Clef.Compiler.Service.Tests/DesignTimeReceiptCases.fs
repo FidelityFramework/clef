@@ -167,3 +167,27 @@ type DesignTimeReceiptCases() =
         Assert.Equal("/home/hhh/.local/toolchains/cvc5-1.3.0/bin/cvc5", Receipts.resolveSolver "" (exists Receipts.solverToolchainPaths))
         Assert.Equal("/tmp/cvc5-toolchain/bin/cvc5", Receipts.resolveSolver null (exists [ "/tmp/cvc5-toolchain/bin/cvc5" ]))
         Assert.Equal("cvc5", Receipts.resolveSolver onPath (exists []))
+
+[<CollectionDefinition("Solver environment", DisableParallelization = true)>]
+type SolverEnvironmentCollection() = class end
+
+[<Collection("Solver environment")>]
+type SolverEnvironmentCases() =
+    [<Fact>]
+    member _.``Solver override is resolved for each call and unavailable starts do not poison cached receipts``() =
+        let previous = Environment.GetEnvironmentVariable "CLEF_CVC5"
+        let solver = Receipts.resolveSolver (Environment.GetEnvironmentVariable "PATH") IO.File.Exists
+        let missing = IO.Path.Combine(IO.Path.GetTempPath(), "missing-cvc5-" + Guid.NewGuid().ToString("N"))
+        let obligation = DesignTimeReceiptFixture.plain ("solver_override_" + Guid.NewGuid().ToString("N")) (ObligationBody.CapacityPositive 4)
+        let discharge () = Receipts.designTimeReceipts DesignTimeReceiptFixture.budget [ obligation ] |> Assert.Single
+        try
+            Environment.SetEnvironmentVariable("CLEF_CVC5", solver)
+            Assert.Equal(Receipts.DesignTimeVerdict.Proved, (discharge ()).Verdict)
+            Environment.SetEnvironmentVariable("CLEF_CVC5", missing)
+            let unavailable = discharge ()
+            Assert.Equal(Receipts.DesignTimeVerdict.SolverUnavailable, unavailable.Verdict)
+            Assert.True(unavailable.Reason.IsSome)
+            Environment.SetEnvironmentVariable("CLEF_CVC5", solver)
+            Assert.Equal(Receipts.DesignTimeVerdict.Proved, (discharge ()).Verdict)
+        finally
+            Environment.SetEnvironmentVariable("CLEF_CVC5", previous)
