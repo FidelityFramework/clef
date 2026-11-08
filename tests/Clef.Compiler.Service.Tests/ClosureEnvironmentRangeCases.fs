@@ -150,9 +150,9 @@ type ClosureEnvironmentRangeCases() =
       | Ok _ -> ()
       | Result.Error failures -> failwithf "Expected current demand after graph-domain mutation: %A" failures
       if brokenReference then
-        let error = Assert.Throws<System.Collections.Generic.KeyNotFoundException>(fun () ->
+        let error = Assert.Throws<System.InvalidOperationException>(fun () ->
           Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run changed.Platform changed |> ignore)
-        Assert.Contains("RangeAnalysis.walk@", error.StackTrace)
+        Assert.Contains("lists child 2147483646, which is absent from the graph", error.Message)
       else
         let ranged, _ = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run changed.Platform changed
         EnvironmentRangeFixture.retainedResult "observed" 7I ranged

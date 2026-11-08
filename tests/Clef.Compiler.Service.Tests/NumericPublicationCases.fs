@@ -784,6 +784,23 @@ module private TransparentScalarFixture =
 
 type TransparentScalarCarrierCases() =
     [<Fact>]
+    member _.``Range analysis refuses an out-of-range narrower ascription with its exact reason`` () =
+        let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.authority "module NarrowAscription\n[<EntryPoint>]\nlet main _ =\n    let value = (300: int)\n    value\n"
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let annotation = graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.TypeAnnotation _ -> true | _ -> false) |> Assert.Single
+        let operand = match annotation.Kind with SemanticKind.TypeAnnotation(operand, _) -> operand | _ -> failwith "Expected an ascription."
+        // Width-named source spellings are refused earlier; exercise the range
+        // boundary on an ascription in the checked graph with a narrow type.
+        let narrowed = { annotation with Kind = SemanticKind.TypeAnnotation(operand, Types.uint8Type); Type = Types.uint8Type }
+        let graph = { graph with Nodes = graph.Nodes.Add(annotation.Id, narrowed) } |> Clef.Compiler.Nanopass.OrdinaryDemand.normalize
+        let _, diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run graph.Platform graph
+        let failures = diagnostics |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8012")
+        Assert.True(not failures.IsEmpty, sprintf "Diagnostics: %A" diagnostics)
+        let failure = Assert.Single failures
+        Assert.Equal("The range [300, 300] of 'value' in 'main' is not covered by 'uint8' (8 bits, [0, 255]), the representation its width-named spelling declares; bound the value with a comparison, a modulus or a clamp, or write `int` and declare the representation at the boundary", failure.Message)
+
+    [<Fact>]
     member _.``Sequential publication preserves its terminal callable ABI carrier`` () =
         let graph = TransparentScalarFixture.alias.Value
         let implementation, block = TransparentScalarFixture.body graph "measure"

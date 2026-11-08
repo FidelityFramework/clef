@@ -1579,7 +1579,7 @@ type LazyThunkWriteIngressCases() =
                 failure.Reason.Contains("string-origin relation premises changed", System.StringComparison.Ordinal))
         | Result.Ok _ -> failwith "Changed lazy ingress relations retained the old boundary authority."
 
-module private RuntimeSnapshotWriteFixture =
+module internal RuntimeSnapshotWriteFixture =
     let publish graph =
         Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
         |> Result.defaultWith (sprintf "%A" >> failwith)

@@ -114,6 +114,7 @@
     <Compile Include="ForeignReferenceCases.fs" />
     <Compile Include="BoundaryEmissionCases.fs" />
     <Compile Include="IntrinsicWriteCases.fs" />
+    <Compile Include="DesignTimeReceiptCases.fs" />
     <Compile Include="NumericPublicationCases.fs" />
     <Compile Include="PublicationContractCases.fs" />
     <Compile Include="CallableAggregateCases.fs" />
