@@ -20,6 +20,94 @@ type Projection = WitnessEmissionProjection
 /// Library retention is not a host-loading contract. Read only each checked
 /// public type: native values formed privately inside a body are not exports.
 let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure list =
+    let descriptors = PlatformResolution.readDescriptors graph
+    let authorizedPaths (node: SemanticNode) =
+        let rec lambdas parameters body =
+            match graph.Nodes.TryFind body with
+            | Some { Kind = SemanticKind.Lambda (more, inner, _, _, _) } -> lambdas (parameters @ more) inner
+            | _ -> parameters, body
+        let descriptorMatches typeName fieldName fieldTy =
+            let rec signature parameters ty =
+                match applySubst ty with
+                | NativeType.TFun (parameter, result) -> signature (parameter :: parameters) result
+                | result ->
+                    let parameters = List.rev parameters
+                    let parameters =
+                        match parameters with
+                        | [parameter] when Types.tryGetNTUKind (applySubst parameter) = Some NTUKind.NTUunit -> []
+                        | _ -> parameters
+                    parameters, result
+            let fnSignature =
+                match applySubst fieldTy, Types.tryGetNTUKind fieldTy with
+                | NativeType.TApp (_, [sigTy]), Some NTUKind.NTUfnptr -> Some (signature [] sigTy)
+                | _ -> None
+            graph.Nodes.Values |> Seq.exists (fun candidate ->
+                match candidate.Kind, candidate.Parent, candidate.Children with
+                | SemanticKind.Binding (_, false, _, _), parent, children when parent = node.Parent && not children.IsEmpty ->
+                    match PlatformResolution.valuePath graph (List.last children) with
+                    | Some (record, path) when PlatformResolution.typeName record = Some "CallbackDescriptor" &&
+                                               (path |> List.forall (fun id -> match graph.Nodes.TryFind id with Some { Kind = SemanticKind.Binding (_, true, _, _) } -> false | _ -> true)) &&
+                                               (path |> List.exists (fun id -> match graph.Nodes.TryFind id with Some { Kind = SemanticKind.Quote _ } -> true | _ -> false)) ->
+                        match PlatformResolution.recordOf graph record.Id with
+                        | Some (_, fields) ->
+                            let text key = PlatformResolution.field key fields |> Option.bind (PlatformResolution.stringOf graph)
+                            match text "Record", text "Field", PlatformResolution.field "Signature" fields |> Option.bind (PlatformResolution.recordOf graph) with
+                            | Some recordName, Some field, Some (signature, signatureFields) when recordName = typeName && field = fieldName && PlatformResolution.typeName signature = Some "FunctionDescriptor" ->
+                                let name = PlatformResolution.field "CName" signatureFields |> Option.bind (PlatformResolution.stringOf graph)
+                                let convention = PlatformResolution.field "CallingConvention" signatureFields |> Option.bind (PlatformResolution.caseOf graph)
+                                name |> Option.exists (System.String.IsNullOrWhiteSpace >> not) &&
+                                (match convention with Some (_, "CDecl", None) -> true | _ -> false) &&
+                                (fnSignature |> Option.exists (fun (fnParams, fnRet) ->
+                                    let parameters = PlatformResolution.field "Parameters" signatureFields |> Option.bind (PlatformResolution.elementsOf graph)
+                                    let returnType = PlatformResolution.field "ReturnType" signatureFields |> Option.bind (PlatformResolution.caseOf graph)
+                                    (parameters |> Option.exists (fun values -> List.length values = List.length fnParams)) &&
+                                    (returnType |> Option.exists (fun (_, caseName, payload) ->
+                                        (caseName = "Void" && Option.isNone payload) = (Types.tryGetNTUKind (applySubst fnRet) = Some NTUKind.NTUunit)))))
+                            | _ -> false
+                        | _ -> false
+                    | _ -> false
+                | _ -> false)
+        let rec application id arguments =
+            match graph.Nodes.TryFind id with
+            | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> application inner arguments
+            | Some { Kind = SemanticKind.Application (target, args) } -> application target (args @ arguments)
+            | Some { Kind = SemanticKind.VarRef (_, Some target) } -> Some (target, arguments)
+            | _ -> None
+        match PlatformResolution.lambdaOfBinding graph node.Id with
+        | None -> Set.empty
+        | Some (parameters, body) ->
+            let parameters, body = lambdas parameters body
+            match application body [] with
+            | Some (targetId, arguments) when
+                (match graph.Nodes.TryFind targetId, PlatformResolution.lambdaOfBinding graph targetId with
+                 | Some target, Some (formals, targetBody) when target.Parent = node.Parent && Map.containsKey "FidelityExtern.Library" target.Metadata ->
+                     descriptors.Functions |> List.exists (fun descriptor ->
+                         descriptor.Body = Some targetBody &&
+                         (descriptor.Parameters |> List.map fst) = (formals |> List.map (fun (_, _, id) -> id)) &&
+                         (match PlatformResolution.recordOf graph descriptor.Node with
+                          | Some (record, fields) ->
+                              let _, findings = PlatformResolution.readFunctionForBinding graph target "" record fields
+                              findings.IsEmpty
+                          | None -> false))
+                 | _ -> false) ->
+                parameters |> List.mapi (fun ordinal (_, ty, formal) ->
+                    match applySubst ty, AggregateTypes.shape graph ty with
+                    | NativeType.TApp (tc, _), Some (AggregateTypes.Shape.Record (_, [fieldName, fieldTy])) ->
+                        let name = tc.Name
+                        let shortName = name.Substring(name.LastIndexOf('.') + 1)
+                        let identity = NominalTypeIdentity.display (NominalTypeIdentity.ofConstructor tc)
+                        let forwarded = arguments |> List.exists (fun arg ->
+                            match graph.Nodes.TryFind arg with
+                            | Some { Kind = SemanticKind.FieldGet (receiver, field) } when field = fieldName ->
+                                match graph.Nodes.TryFind receiver with
+                                | Some { Kind = SemanticKind.VarRef (_, Some id) } -> id = formal
+                                | _ -> false
+                            | _ -> false)
+                        if forwarded && ([name; shortName; identity] |> List.exists (fun n -> descriptorMatches n fieldName fieldTy)) then
+                            Some (["public interface"] @ List.replicate ordinal "result" @ ["parameter"; fieldName])
+                        else None
+                    | _ -> None) |> List.choose id |> Set.ofList
+            | _ -> Set.empty
     let rec exposed seen participants path ty =
         let ty = applySubst ty
 
@@ -88,7 +176,9 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
                 }
             ]
         | Some node ->
+            let authorized = authorizedPaths node
             exposed Set.empty (Set.singleton id) [ "public interface" ] node.Type
+            |> List.filter (fun (path, _) -> not (Set.contains path authorized))
             |> List.map (fun (path, participants) ->
                 let location = String.concat "." path
 

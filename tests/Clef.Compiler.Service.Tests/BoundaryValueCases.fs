@@ -62,6 +62,7 @@ type BoundaryValueCases() =
     [<InlineData("let exported (flag: bool) (pointer: FnPtr<bool -> bool>) = flag\n", "result.parameter")>]
     [<InlineData("let private callback (flag: bool) = flag\nlet exported (flag: bool) : FnPtr<bool -> bool> = FnPtr.ofFunction callback\n", "result")>]
     [<InlineData("type Listener = { Entry: FnPtr<bool -> bool> }\nlet exported (listener: Listener) = true\n", "parameter.Entry")>]
+    [<InlineData("type Entry = { Invoke: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>> }\nlet exported (first: int) (second: int) (entry: Entry) (arg: CHandle<unit>) = 0\n", "result.result.parameter.Invoke")>]
     [<InlineData("let exported (pair: bool * FnPtr<bool -> bool>) = true\n", "parameter.Item2")>]
     [<InlineData("let exported (candidate: option<FnPtr<bool -> bool>>) = true\n", "parameter.Some")>]
     [<InlineData("let exported (entries: FnPtr<bool -> bool> array) = true\n", "parameter.element")>]
@@ -79,6 +80,53 @@ type BoundaryValueCases() =
             diagnostic.Code = "CCS8416" && diagnostic.Severity = NativeDiagnosticSeverity.Error &&
             diagnostic.Range = declaration.Range && List.contains declaration.Id diagnostic.RelatedNodes)
         Assert.True(Result.isError(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph))
+
+    [<Fact>]
+    member _.``Callback entry export requires its descriptor and forwarding extern``() =
+        let declarations = """type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Pointer of int
+type Passing = Value | Reference
+type CallingConvention = CDecl | StdCall
+type Ownership = Undeclared | Owned
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: Passing }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallingConvention; OwnershipTransfer: Ownership }
+type CallbackDescriptor = { Record: string; Field: string; Signature: FunctionDescriptor }
+type Entry = { Invoke: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>> }
+"""
+        let callback = """let EntryDescriptor : Expr<CallbackDescriptor> =
+    <@ { Record = "Entry"; Field = "Invoke"; Signature = { CName = "callback"; Parameters = [| { Name = "arg"; Type = Pointer 64; PassBy = Value } |]; ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } } @>
+"""
+        let wrapper = """[<FidelityExtern("c", "pthread_create")>]
+let private native (first: int) (second: int) (entry: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>>) (arg: CHandle<unit>) : int = NativeDefault.zeroed ()
+let nativeDescriptor : Expr<FunctionDescriptor> =
+    <@ { CName = "pthread_create"; Parameters = [| { Name = "first"; Type = Integer (Signed, 32); PassBy = Value }; { Name = "second"; Type = Integer (Signed, 32); PassBy = Value }; { Name = "entry"; Type = Pointer 64; PassBy = Value }; { Name = "arg"; Type = Pointer 64; PassBy = Value } |]; ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let exported (first: int) (second: int) (entry: Entry) (arg: CHandle<unit>) : int = native first second entry.Invoke arg
+"""
+        let positive = BoundaryValuesFixture.library (declarations + callback + wrapper) false
+        DimensionalCases.noErrors positive
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures positive.Graph)
+        Assert.DoesNotContain(positive.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
+
+        let pthreadResult = Clef.Compiler.Project.ProjectChecker.checkProject "/home/hhh/repos/Fidelity.Platform/Environments/Linux/x86_64/Fidelity.Pthread.fidproj"
+        Assert.True(Result.isOk pthreadResult)
+        let pthread = Result.defaultWith (fun error -> failwithf "Pthread project check failed: %A" error) pthreadResult
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors pthread)
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures pthread.CheckResult.Graph)
+        Assert.DoesNotContain(pthread.CheckResult.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
+
+        let invalidSources =
+            [ declarations + wrapper
+              declarations + callback.Replace("Field = \"Invoke\"", "Field = \"Wrong\"") + wrapper
+              declarations + callback.Replace("CallingConvention = CDecl", "CallingConvention = StdCall") + wrapper
+              declarations + callback.Replace("Parameters = [| { Name = \"arg\"; Type = Pointer 64; PassBy = Value } |]", "Parameters = [||]") + wrapper
+              declarations + callback + wrapper.Replace("[<FidelityExtern(\"c\", \"pthread_create\")>]\n", "")
+              declarations + callback + wrapper.Replace("native first second entry.Invoke arg", "0") ]
+        for source in invalidSources do
+            let result = BoundaryValuesFixture.library source false
+            let failure = BoundaryEmission.exportedInterfaceFailures result.Graph |> Assert.Single
+            Assert.Equal(WitnessProjectionFailureKind.LibraryNativeInterfaceLoading, failure.Kind)
+            Assert.Contains("result.result.parameter.Invoke", failure.Reason)
+            Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
 
     [<Fact>]
     member _.``A public boolean function does not export its private native implementation``() =
