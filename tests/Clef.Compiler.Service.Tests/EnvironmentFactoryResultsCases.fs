@@ -1129,20 +1129,20 @@ let main _ =
         Assert.Contains(preserved.Edges, fun edge ->
             edge.Role = EdgeRole.Constrains && edge.Target = finiteProof && List.contains annotation edge.Sources)
         // The added numeric participant needs its own claim even when its range
-        // is unchanged. Completeness must refuse before the owner renews proofs.
+        // is unchanged: the completeness census names the missing claim before
+        // the owner renews proofs. Publication checks currentness first (clef
+        // #120, lead ruling), so the stale finite-cell premise is its one refusal
+        // and the census is not consulted on this stale graph.
         Assert.Equal(None, Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId "numeric-carrier-coverage" preserved.Nodes[annotation])
         let claim = $"numeric_carrier_{NodeId.value annotation}"
+        Assert.Contains(Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness preserved, fun (site, reason) ->
+            site = annotation && reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
         match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project preserved with
         | Result.Error failures ->
-            Assert.Equal(2, failures.Length)
-            Assert.Contains(failures, fun failure ->
-                failure.Kind = WitnessProjectionFailureKind.Settlement &&
-                failure.Occurrence = Some originalAnchor &&
-                failure.Reason = "NumericPublication: finite-cell relation premises changed; source numeric settlement is required.")
-            Assert.Contains(failures, fun failure ->
-                failure.Kind = WitnessProjectionFailureKind.Settlement &&
-                failure.Occurrence = Some annotation &&
-                failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some originalAnchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: finite-cell relation premises changed; source numeric settlement is required.", failure.Reason)
         | Result.Ok _ -> failwith "The old numeric proof survived a change of finite support."
         let staleDemand =
             { preserved with
@@ -1180,17 +1180,18 @@ let main _ =
         | Result.Ok _ -> failwith "Stale finite-cell relation premises on a settled claim graph crossed numeric publication."
         let claimNodeId = Assert.Single current.Values[annotation].Obligations
         let missingClaimOnly = { renewed with Nodes = renewed.Nodes.Remove claimNodeId }
+        // Claim-only deletion: the census names the withdrawn claim, and
+        // publication refuses once, for the inconsistent ledger, without
+        // consulting completeness (clef #120 lead ruling; the same control as
+        // NUMERIC-STRICT-COMPLETENESS-UNREACHED in NumericPublicationCases).
+        Assert.Contains(Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness missingClaimOnly, fun (site, reason) ->
+            site = annotation && reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
         match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project missingClaimOnly with
         | Result.Error failures ->
-            Assert.Equal(2, failures.Length)
-            Assert.Contains(failures, fun failure ->
-                failure.Kind = WitnessProjectionFailureKind.Settlement &&
-                failure.Occurrence = Some renewedAnchor &&
-                failure.Reason = "NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent.")
-            Assert.Contains(failures, fun failure ->
-                failure.Kind = WitnessProjectionFailureKind.Settlement &&
-                failure.Occurrence = Some annotation &&
-                failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + claim)
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some renewedAnchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent.", failure.Reason)
         | Result.Ok _ -> failwith "Withdrawn carrier claim citizen crossed numeric publication."
         let claimNode = renewed.Nodes[claimNodeId]
         let missingClaimIdentity =
@@ -1341,17 +1342,17 @@ let main _ = if read 4 = 0 then 0 else 1
                         | EdgeRole.NumericDomain _ ->
                             { edge with Role = EdgeRole.NumericDomain { foreignDomain with FiniteCellRelations = Some [] } }
                         | _ -> edge) }
+        // The census still names the withdrawn ABI-narrowing claim, but the
+        // stale finite-cell premise is publication's one refusal: completeness
+        // is not consulted on a stale graph (clef #120, lead ruling).
+        Assert.Contains(Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness foreignWithStaleFiniteCellsAndMissingAbiNarrowing, fun (site, reason) ->
+            site = foreignUse.Application.Call && reason = "Numeric obligation completeness: missing or duplicate claim " + abiClaimId)
         match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project foreignWithStaleFiniteCellsAndMissingAbiNarrowing with
         | Result.Error failures ->
-            Assert.Equal(2, failures.Length)
-            Assert.Contains(failures, fun failure ->
-                failure.Kind = WitnessProjectionFailureKind.Settlement &&
-                failure.Occurrence = Some foreignAnchor &&
-                failure.Reason = "NumericPublication: finite-cell relation premises changed; source numeric settlement is required.")
-            Assert.Contains(failures, fun failure ->
-                failure.Kind = WitnessProjectionFailureKind.Settlement &&
-                failure.Occurrence = Some foreignUse.Application.Call &&
-                failure.Reason = "Numeric obligation completeness: missing or duplicate claim " + abiClaimId)
+            let failure = Assert.Single failures
+            Assert.Equal(WitnessProjectionFailureKind.Settlement, failure.Kind)
+            Assert.Equal(Some foreignAnchor, failure.Occurrence)
+            Assert.Equal("NumericPublication: finite-cell relation premises changed; source numeric settlement is required.", failure.Reason)
         | Result.Ok _ -> failwith "Stale finite-cell relations and missing foreign ABI-narrowing claim crossed numeric publication."
 
     [<Theory>]

@@ -2607,34 +2607,49 @@ let private contextualNode (program: Program) (node: SemanticNode) =
             | _ -> false
         | _ -> false
 
+/// The reachable occurrences inside each lexical body, read only from nodes this
+/// graph revision holds. A body, or a child a retained occurrence still lists,
+/// that is absent from the graph is refused with its exact identity: range facts
+/// are never read through a lookup that throws on a removed node (clef #120).
+let private lexicalBodies (program: Program) (roots: NodeId list) : Result<Map<NodeId, Set<NodeId>>, NodeId * string> =
+    let absent parent id =
+        match parent with
+        | Some parent ->
+            parent, sprintf "RangeAnalysis: occurrence %d lists child %d, which is absent from the graph; source settlement is required before range facts are read." (NodeId.value parent) (NodeId.value id)
+        | None ->
+            id, sprintf "RangeAnalysis: lexical body %d is absent from the graph; source settlement is required before range facts are read." (NodeId.value id)
+    let bodyOccurrences root =
+        let rec walk state (parent, id) =
+            match state with
+            | Result.Error _ -> state
+            | Result.Ok (visited, _) when Set.contains id visited -> state
+            | Result.Ok (visited, members) ->
+                match program.Graph.Nodes.TryFind id with
+                | None -> Result.Error(absent parent id)
+                | Some node ->
+                    let visited = Set.add id visited
+                    let members = if program.Reachable.ContainsKey id then Set.add id members else members
+                    // Reachability is not downward closed: an inactive retained
+                    // wrapper may contain an independently reachable occurrence.
+                    match node.Kind with
+                    | SemanticKind.Lambda _ -> Result.Ok(visited, members)
+                    | _ -> node.Children |> List.fold (fun state child -> walk state (Some id, child)) (Result.Ok(visited, members))
+        walk (Result.Ok(Set.empty, Set.empty)) (None, root) |> Result.map snd
+    roots |> List.fold (fun bodies root ->
+        bodies |> Result.bind (fun (bodies: Map<NodeId, Set<NodeId>>) ->
+            if bodies.ContainsKey root then Result.Ok bodies
+            else bodyOccurrences root |> Result.map (fun members -> bodies.Add(root, members)))) (Result.Ok Map.empty)
+
 /// A lexical body supplies occurrence context, never proof of activation or a
 /// dependency region. CallableOrigins supplies invocation rows, and every fact
 /// retains its actual reads. Nested lambda definitions do not activate bodies.
-let private contextProgram (program: Program) =
-    let bodyOccurrences root =
-        let rec walk (visited, members) id =
-            if Set.contains id visited then visited, members
-            else
-                let node = program.Graph.Nodes[id]
-                let visited = Set.add id visited
-                let members = if program.Reachable.ContainsKey id then Set.add id members else members
-                // Reachability is not downward closed: an inactive retained
-                // wrapper may contain an independently reachable occurrence.
-                match node.Kind with
-                | SemanticKind.Lambda _ -> visited, members
-                | _ -> List.fold walk (visited, members) node.Children
-        walk (Set.empty, Set.empty) root |> snd
-    // External execution has no source body activation. Its application stays
-    // in the caller's lexical region, where the result contract reads actuals.
-    let applications = program.Applications |> Map.map (fun _ targets ->
-        targets |> List.filter (fun target -> not (program.ForeignEffectBodies.Contains target.Body)))
-    let targets = applications.Values |> Seq.collect id |> Seq.distinctBy _.Lambda |> Seq.toList
+let private contextProgramOf (program: Program) (applications: Map<NodeId, CallableOrigins.CallTarget list>) (targets: CallableOrigins.CallTarget list) (lexical: Map<NodeId, Set<NodeId>>) =
     let fullParameters (target: CallableOrigins.CallTarget) =
         match program.Reachable.TryFind target.Lambda with
         | Some { Kind = SemanticKind.Lambda (parameters, _, _, _, _) } -> parameters |> List.map (fun (_, _, id) -> id)
         | _ -> target.Parameters |> List.map (fun (_, _, id) -> id)
     let bodies = targets |> List.map (fun target ->
-        target.Lambda, Set.union (bodyOccurrences target.Body) (fullParameters target |> Set.ofList)) |> Map.ofList
+        target.Lambda, Set.union lexical[target.Body] (fullParameters target |> Set.ofList)) |> Map.ofList
     let owned = bodies.Values |> Seq.fold Set.union Set.empty
     let rootMembers = Set.difference (program.Reachable.Keys |> Set.ofSeq) owned
     // Intrinsic-owned suppliers and declared ingress remain shared sources.
@@ -2686,6 +2701,15 @@ let private contextProgram (program: Program) =
     { Invocations = rows; Members = members; Parameters = parameters
       Calls = rows |> List.groupBy (fun row -> row.Caller, row.Call) |> Map.ofList
       Occurrences = occurrences; Coordinates = coordinates }
+
+let private contextProgram (program: Program) : Result<ContextProgram, NodeId * string> =
+    // External execution has no source body activation. Its application stays
+    // in the caller's lexical region, where the result contract reads actuals.
+    let applications = program.Applications |> Map.map (fun _ targets ->
+        targets |> List.filter (fun target -> not (program.ForeignEffectBodies.Contains target.Body)))
+    let targets = applications.Values |> Seq.collect id |> Seq.distinctBy _.Lambda |> Seq.toList
+    lexicalBodies program (targets |> List.map _.Body)
+    |> Result.map (contextProgramOf program applications targets)
 
 let private contextReading (contexts: ContextProgram) get context id =
     if context <> RangeContext.Shared &&
@@ -2783,8 +2807,7 @@ let private narrow (program: Program) (contexts: ContextProgram) (state: Context
 
 /// The same finite lattice solver owns every context; recursive call strings
 /// repeat existing cells instead of entering a second evaluator.
-let private fixpoint (program: Program) : State * RangeContextFacts =
-    let contexts = contextProgram program
+let private fixpoint (program: Program) (contexts: ContextProgram) : State * RangeContextFacts =
     let rec climb round state =
         if round > AscentLimit then
             failwithf "RangeAnalysis: the range fixpoint did not settle in %d rounds; the widening did not terminate the ascent" AscentLimit
@@ -3384,7 +3407,14 @@ let private retainSupport (graph: SemanticGraph) (facts: RangeContextFacts) =
 let private runValidated (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let program = readProgram context graph
     let graph = program.Graph
-    let state, contextFacts = fixpoint program
+    // The check-time pass reads the graph the checker built; a lexical body
+    // that lists a node the graph lacks is an internal invariant breach, named
+    // exactly. Publication-side readers refuse the same case instead.
+    let contexts =
+        match contextProgram program with
+        | Result.Ok contexts -> contexts
+        | Result.Error (_, reason) -> invalidOp reason
+    let state, contextFacts = fixpoint program contexts
     let nodes =
         graph.Nodes
         |> Map.map (fun id node ->
@@ -3465,9 +3495,13 @@ let issue (graph: SemanticGraph) : Result<RangeContextFacts, string> =
     match OrdinaryDemand.tryRead graph with
     | Result.Error _ -> Result.Error "Current ordinary binding demand evidence is required before range issuance."
     | Result.Ok _ ->
-        let _, facts = readProgram graph.Platform graph |> fixpoint
-        let facts = retainSupport graph facts
-        facts.SourceRelations |> Result.map (fun _ -> facts)
+        let program = readProgram graph.Platform graph
+        match contextProgram program with
+        | Result.Error (_, reason) -> Result.Error reason
+        | Result.Ok contexts ->
+            let _, facts = fixpoint program contexts
+            let facts = retainSupport graph facts
+            facts.SourceRelations |> Result.map (fun _ -> facts)
 
 /// Passive source evidence from the existing context-state/read owner. Numeric
 /// recipes consume it without reconstructing guards or executing range transfer.
@@ -3483,10 +3517,13 @@ type ForeignResultEvidence = {
 let foreignResultApplications (graph: SemanticGraph) (facts: RangeContextFacts option) : Result<ForeignResultEvidence list, NodeId * string> =
     let facts = facts |> Option.filter (Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent graph)
     let program = readProgram graph.Platform graph
-    match program.ForeignDeclarationFailure with
-    | Some reason -> Result.Error reason
-    | None ->
-        let contexts = contextProgram program
+    let contexts =
+        match program.ForeignDeclarationFailure with
+        | Some reason -> Result.Error reason
+        | None -> contextProgram program
+    match contexts with
+    | Result.Error reason -> Result.Error reason
+    | Result.Ok contexts ->
         let rows = contexts.Coordinates |> List.choose (fun (context, node) ->
             let summarized = context = RangeContext.Shared && contexts.Occurrences.ContainsKey node.Id
             if summarized then None else

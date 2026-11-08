@@ -577,7 +577,10 @@ let main _ =
         let declaration, invocation =
             match defect with
             | "recursive" -> "let rec bump () = state <- state + 1; bump ()", "bump ()"
-            | "callback" -> "let bump () = state <- state + 1", "Seq.iter bump (seq { yield () })"
+            // Since 1fe9d44 a finite sequence pull bounds its callback activations
+            // (FiniteSequenceCallbackCases), so the callback here is pulled by an
+            // unbounded producer: its activation count is genuinely unknown.
+            | "callback" -> "let bump () = state <- state + 1", "Seq.iter bump (seq { while true do yield () })"
             | _ -> "let bump () = state <- state + 1", "while true do bump ()"
         let source =
             "module CapturedFiniteRefusal\n[<EntryPoint>]\nlet main _ =\n    let mutable state = 0\n    " +

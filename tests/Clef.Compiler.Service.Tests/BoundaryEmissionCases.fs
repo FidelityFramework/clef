@@ -301,7 +301,13 @@ type BoundaryEmissionCases() =
         let changed = { graph with Nodes = graph.Nodes.Add(declared.Id, revised) }
         BoundaryEmissionFixture.rejected changed |> ignore
         Assert.True(BoundaryWitness.admit changed |> Result.isError)
-        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed
+        // Since 0a97c8d boundary projection composes numeric publication for an
+        // integer-result call, and the ownership declaration is a numeric
+        // range-context premise. Boundary-only settlement leaves that context
+        // stale; the source pipeline settles numeric before boundary.
+        let boundaryOnly = BoundaryEmissionFixture.rejected (Clef.Compiler.Nanopass.BoundarySettlement.normalize changed)
+        Assert.Contains(boundaryOnly, fun failure -> failure.Reason = "NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required.")
+        let settled = changed |> Clef.Compiler.Nanopass.NumericSettlement.normalize |> Clef.Compiler.Nanopass.BoundarySettlement.normalize
         let current = Assert.Single (BoundaryEmissionFixture.project settled).Imports.Values
         Assert.Equal(imported.Identity, current.Identity)
         Assert.Equal(imported.Binding, current.Binding)
@@ -697,7 +703,17 @@ let main _ =
         let operands = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryOperand value -> Some (edge.Ordinal, value) | _ -> None) |> List.sortBy fst
         Assert.Equal<BoundaryOperand list>(call.Arguments, operands |> List.map snd)
         let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage value -> Some value | _ -> None)
-        Assert.Equal(call.Arguments.Length + 1, coverages.Length)
+        // Since 0a97c8d the integer foreign result is owned by numeric
+        // publication (ForeignResultUses), not by the boundary coverage census:
+        // each scalar operand carries boundary coverage and the result does not.
+        Assert.Equal(Some(BoundaryScalar.Integer(32, true)), call.Result)
+        Assert.Equal<int list>([0 .. call.Arguments.Length - 1], coverages |> List.map _.Ordinal |> List.sort)
+        let numeric =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+            | Ok numeric -> numeric
+            | Error failures -> failwithf "Missing numeric projection: %A" failures
+        let account = numeric.ForeignResultUses |> List.filter (fun account -> account.Application.Call = call.Site) |> Assert.Single
+        Assert.Equal<ForeignResultProofRole list>([ForeignResultProofRole.AbiNarrowing], account.Claims |> List.map fst)
         for coverage in coverages do
             Assert.Contains(graph.Edges, fun edge -> edge.Target = coverage.Obligation && edge.Role = EdgeRole.Constrains)
             Assert.Contains(graph.Edges, fun edge -> edge.Target = coverage.Obligation && edge.Role = EdgeRole.EnrichedWith)
@@ -758,7 +774,14 @@ let main _ =
     member _.``Resolved source runtime remains authoritative without a project runtime claim``() =
         let graph = BoundaryEmissionFixture.scalar ()
         let context = { graph.Platform.Value with RuntimeModel = None }
-        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize { graph with Platform = Some context }
+        let changed = { graph with Platform = Some context }
+        // Since 0a97c8d boundary projection composes numeric publication for an
+        // integer-result call, whose invocation context retains the full
+        // platform premise. Boundary-only settlement leaves that context stale;
+        // the source pipeline settles numeric before boundary.
+        let boundaryOnly = BoundaryEmissionFixture.rejected (Clef.Compiler.Nanopass.BoundarySettlement.normalize changed)
+        Assert.Contains(boundaryOnly, fun failure -> failure.Reason = "NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required.")
+        let settled = changed |> Clef.Compiler.Nanopass.NumericSettlement.normalize |> Clef.Compiler.Nanopass.BoundarySettlement.normalize
         let projection = BoundaryEmissionFixture.project settled
         Assert.Single projection.Imports |> ignore
         Assert.Equal<Set<string>>(Set.singleton "c", projection.Links)

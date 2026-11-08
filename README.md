@@ -80,10 +80,10 @@ actor Sensor (mailbox: Mailbox<Reading>) =
 
 These examples describe the intended language surface. Exact implemented scope,
 pending actor/CE work and compiler acceptance are tracked in Composer's
-[PRD index](../Composer/docs/PRDs/README.md) and
-[coverage waypoints](../Composer/docs/Language_Coverage_Waypoints.md). Current
+[PRD index](https://forge.spkez.dev/FidelityFramework/Composer/wiki/PRDs-README) and
+[coverage waypoints](https://forge.spkez.dev/FidelityFramework/Composer/wiki/Language_Coverage_Waypoints). Current
 source, proof and native checkpoints are separated in the
-[FidelityHello progress sentinel](../Composer/docs/FidelityHello_Progress_Sentinel.md).
+[FidelityHello progress sentinel](https://forge.spkez.dev/FidelityFramework/Composer/wiki/FidelityHello_Progress_Sentinel).
 
 ## The Compilation Pipeline
 
@@ -131,7 +131,7 @@ CCS is a focused front end, not a complete compiler:
 - **No IL generation** — Clef does not target .NET IL
 - **No MSBuild integration** — project files are `.fidproj`, loaded by CCS and driven by Composer
 - **No NuGet resolution** — package management is ClefPak (`cpk`)
-- **No inherited F# Interactive host** — the planned [interactive workbench and native bridge](../Composer/docs/Interactive_Compiler_Workbench.md) is part of Composer
+- **No inherited F# Interactive host** — the planned [interactive workbench and native bridge](https://forge.spkez.dev/FidelityFramework/Composer/wiki/Interactive_Compiler_Workbench) is part of Composer
 - **No target code generation** — Composer's backend realizes the graph witnessed by Alex through the selected target pathway
 
 The planned interactive CLI is `clefx`, matching `.clefx` script files. Clef has
@@ -158,14 +158,15 @@ dotnet <Composer>/src/bin/Debug/net10.0/Composer.dll compile samples/RoundTrip/R
 ```
 
 The design of record for the graph, its obligations and the retirement of earlier designs is
-[docs/fidelity/phg/](docs/fidelity/phg/); run [`drift-gate.sh`](docs/fidelity/phg/drift-gate.sh)
+[PSG → PHG](https://forge.spkez.dev/FidelityFramework/clef/wiki/fidelity-phg-README); run [`drift-gate.sh`](https://forge.spkez.dev/FidelityFramework/clef/src/commit/ac5aab0f6685db065916e5865c4485a5f7bdc4b2/docs/fidelity/phg/drift-gate.sh)
 before proposing a documentation change anywhere in the corpus.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [docs/fidelity/README.md](docs/fidelity/README.md) | CCS architecture overview |
+| [Clef Compiler Service (CCS)](https://forge.spkez.dev/FidelityFramework/clef/wiki/fidelity-README) | CCS architecture overview |
+| [clef wiki](https://forge.spkez.dev/FidelityFramework/clef/wiki) | Design documentation (the repository `docs/` folder was retired in its favour) |
 | [clef-lang-spec](https://github.com/FidelityFramework/clef-lang-spec) | Normative Clef language specification |
 | [clef-lang.com](https://clef-lang.com) | Language documentation and design guides |
 
@@ -183,7 +184,7 @@ assembly-resolution code, localization resources and packaged build output have
 been removed. The lexer/parser, parser generators, bootstrap support, Clef
 compiler and current tests remain, with their licensing and attribution.
 
-The [history migration record](docs/handoffs/Repository_History.md) explains the
+The [history migration record](https://forge.spkez.dev/FidelityFramework/clef/wiki/handoffs-Repository_History) explains the
 boundary, commit-ID correspondence and checkout migration. Old clones must not
 merge or push the retired history back into this repository.
 

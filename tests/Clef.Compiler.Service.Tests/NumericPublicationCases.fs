@@ -888,6 +888,17 @@ type TransparentScalarCarrierCases() =
         Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidth changed block.Id).IsNone)
         Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedRepresentation changed block.Id).IsNone)
         Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth changed block.Id).IsNone)
+        if defect = "missing-final" then
+            // clef #120: a lexical body that still lists a removed node is refused
+            // with its exact parent and child, never read through a throwing lookup.
+            let expected =
+                sprintf "RangeAnalysis: occurrence %d lists child %d, which is absent from the graph; source settlement is required before range facts are read."
+                    (NodeId.value block.Id) (NodeId.value result.Id)
+            match Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.foreignResultApplications changed changed.RangeContextFacts with
+            | Error(site, reason) ->
+                Assert.Equal(block.Id, site)
+                Assert.Equal(expected, reason)
+            | Ok _ -> failwith "Range facts were read from a lexical body that lists a removed node."
         match NumericPublication.project changed with
         | Error failures -> Assert.NotEmpty failures
         | Ok _ -> failwith "Changed block path retained its prior numeric publication."
