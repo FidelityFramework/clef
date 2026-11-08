@@ -2760,6 +2760,57 @@ type RuntimeSnapshotWriteCases() =
         | Ok _ -> failwith "Cleanup projection with restored unconstrained release origin variable was discharged at design time."
         | Error reason -> Assert.Equal(expectedReleaseOriginReason, reason)
 
+        // 4b (alignment 8). The same cleanup with a Release point over the alignment-8 conversion model discharges
+        // non-vacuously with the guarded payload-offset clause, refuses the restored release origin, and refuses a misaligned payload offset.
+        let cleanupAlign8Projection =
+            match Fidelity.PSG.ResourceProof.ofCleanup (makeCleanupModel validConversionModel) with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some cleanupAlign8Projection else None) [info] with
+        | Error reason -> failwithf "Honest alignment-8 cleanup model with a Release point failed design-time discharge: %s" reason
+        | Ok receipt ->
+            Assert.Equal(2, receipt.Premises.Length)
+            for p in receipt.Premises do
+                Assert.Equal("sat", p.Verdict)
+            Assert.Equal(29, receipt.NonVacuity.Length)
+            Assert.Contains(receipt.NonVacuity, fun nv -> nv.Clause = Some "(= (mod resource_payload_offset 8) 0)")
+            for nv in receipt.NonVacuity do
+                Assert.Equal("sat", nv.Verdict)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+        Assert.Empty(Fidelity.PSG.ResourceProof.missingParticipantVariables cleanupAlign8Projection)
+        Assert.DoesNotContain("resource_origin_20", Fidelity.PSG.ResourceProof.participantVariables cleanupAlign8Projection)
+
+        let restoredAlign8ReleaseOriginProjection =
+            { cleanupAlign8Projection with
+                Declarations = cleanupAlign8Projection.Declarations @ [ "resource_origin_20", Fidelity.PSG.ResourceProof.Sort.Integer ]
+                ParticipantRoles = cleanupAlign8Projection.ParticipantRoles @ [ "origin_20", "resource_origin_20" ]
+                Conclusion =
+                    Fidelity.PSG.ResourceProof.Expr.And(
+                        Fidelity.PSG.ResourceProof.conjuncts cleanupAlign8Projection.Conclusion
+                        @ [ Fidelity.PSG.ResourceProof.Expr.Implies(
+                                Fidelity.PSG.ResourceProof.Expr.Variable "resource_nonnull",
+                                Fidelity.PSG.ResourceProof.Expr.Equal(
+                                    Fidelity.PSG.ResourceProof.Expr.Variable "resource_origin_20",
+                                    Fidelity.PSG.ResourceProof.Expr.Integer 11I)) ]) }
+        let unavailableAlign8ReleaseOrigin =
+            Clef.Compiler.Nanopass.ObligationDischarge.unavailableWithOverride
+                (fun ob -> if ob.Id = info.Id then Some restoredAlign8ReleaseOriginProjection else None)
+                [info]
+            |> Assert.Single
+        Assert.Equal<string list>([expectedReleaseOriginReason], unavailableAlign8ReleaseOrigin.MissingPremises)
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some restoredAlign8ReleaseOriginProjection else None) [info] with
+        | Ok _ -> failwith "Alignment-8 cleanup projection with restored unconstrained release origin variable was discharged at design time."
+        | Error reason -> Assert.Equal(expectedReleaseOriginReason, reason)
+
+        let misalignedCleanupAlign8Projection =
+            match Fidelity.PSG.ResourceProof.ofCleanup (makeCleanupModel { validConversionModel with PayloadOffset = 4 }) with
+            | Ok projection -> projection
+            | Error reason -> failwith reason
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithProjectionOverride (fun ob -> if ob.Id = info.Id then Some misalignedCleanupAlign8Projection else None) [info] with
+        | Ok _ -> failwith "Alignment-8 cleanup model with misaligned PayloadOffset (4 mod 8 <> 0) was discharged at design time."
+        | Error reason ->
+            Assert.Equal(sprintf "Obligation '%s' (%s) was not discharged: solver returned 'sat'" info.Id info.Source, reason)
+
         // 5. Foreign-result totality and coverage over symbolic hypotheses: per-clause guard over all Conclusion clauses
         let makeForeignObligation id lower upper (args: (int * ValueRange) list) resultRange destination abiRange : ObligationInfo =
             let hypothesis : ForeignResultHypothesis =
