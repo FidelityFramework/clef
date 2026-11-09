@@ -39,9 +39,10 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
             | Some expected, Some current when expected = current -> Numeric.sequenceRangeCurrent graph expected
             | None, None -> not domain.RequiresSequenceReview && not (Numeric.sequenceRangeActive graph)
             | _ -> false
-        let rangeCurrent =
+        let rangeCurrent () =
             match domain.RangeContextFacts, graph.RangeContextFacts with
-            | Some expected, Some current when expected = current -> Numeric.rangeContextCurrent graph expected
+            | Some expected, Some current when obj.ReferenceEquals(expected, current) || expected = current ->
+                Numeric.rangeContextCurrent graph expected
             | _ -> false
         if not sequenceCurrent then
             reject (Some anchor) participants "Finite-sequence relation premises changed or the source-to-machine range authority is absent; source settlement is required."
@@ -62,7 +63,7 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
                         Reason = "NumericPublication: " + reason
                     })
             )
-        elif not rangeCurrent then
+        elif not (rangeCurrent ()) then
             reject (Some anchor) participants "Invocation-context range premises changed or the producer receipt is absent; source range settlement is required."
         elif domain.Premises <> Numeric.premises graph then
             reject (Some anchor) participants "Source node range, type, or occurrence premises changed; source numeric settlement is required."
@@ -91,6 +92,9 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
         elif (domain.IndexTransports |> List.map _.Site |> List.sort) <> Set.toList domain.IndexRequired then
             reject (Some anchor) participants "A required source index transport is absent or duplicated."
         else
+            let valuesBySite = domain.Values |> List.map (fun carrier -> carrier.Site, carrier) |> Map.ofList
+            let firstValueBySite = domain.Values |> List.rev |> List.map (fun carrier -> carrier.Site, carrier) |> Map.ofList
+            let opProofsBySite = domain.OperationProofs |> List.groupBy _.Site |> Map.ofList
             let proofs = domain.Values |> List.collect (fun carrier ->
                 carrier.Obligations |> List.map (fun obligation -> carrier, obligation, Numeric.coverage carrier))
             let carriersValid = domain.Values |> List.forall (fun carrier ->
@@ -118,14 +122,14 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
                     let bodyAgrees = match node.Kind with SemanticKind.Obligation info -> info.Kind = "numeric-operation-proof" && info.Body = proof.Body | _ -> false
                     Numeric.owned node && bodyAgrees)))
             let operationValuesValid = domain.Operations |> List.forall (fun operation ->
-                let ownProofs = domain.OperationProofs |> List.filter (fun proof -> proof.Site = operation.Site)
+                let ownProofs = opProofsBySite.TryFind operation.Site |> Option.defaultValue []
                 let bodies = operation.Obligations |> List.map (fun id -> ownProofs |> List.tryFind (fun proof -> proof.Obligation = id) |> Option.map _.Body)
                 operation.OperationCarrier.IsSome &&
                 (Operations.requiredBodies operation |> Option.exists (fun expected -> List.map Some expected = bodies)) &&
-                (domain.Values |> List.tryFind (fun value -> value.Site = operation.Site)) = Some operation.Result &&
+                firstValueBySite.TryFind operation.Site = Some operation.Result &&
                 (operation.Operands |> List.forall (fun input -> input.Carrier |> Option.forall (fun carrier ->
-                    carrier.Site = input.Actual && (domain.Values |> List.tryFind (fun value -> value.Site = input.Actual)) = Some carrier))) &&
-                (operation.Obligations |> List.sort) = (domain.OperationProofs |> List.filter (fun proof -> proof.Site = operation.Site) |> List.map _.Obligation |> List.sort) &&
+                    carrier.Site = input.Actual && firstValueBySite.TryFind input.Actual = Some carrier))) &&
+                (operation.Obligations |> List.sort) = (ownProofs |> List.map _.Obligation |> List.sort) &&
                 domain.OperationMeets.TryFind operation.Site = Some(Operations.meets operation) &&
                 (Operations.meets operation |> List.forall (fun meet ->
                     graph.Codata.Value.Meets.TryFind operation.Site |> Option.defaultValue [] |> List.filter (fun candidate -> candidate.Operand = meet.Operand) = [meet])))
@@ -149,7 +153,7 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
                 (domain.Platform |> Option.bind (fun platform -> platform.Dimensions.TryFind "Pointer")) = Some transport.PointerBits &&
                 domain.Premises.ContainsKey transport.PointerDeclaration &&
                 transport.Carrier.Site = transport.Operand &&
-                (domain.Values |> List.tryFind (fun value -> value.Site = transport.Operand)) = Some transport.Carrier &&
+                firstValueBySite.TryFind transport.Operand = Some transport.Carrier &&
                 transport.Participants = (transport.Carrier.Participants |> Set.add transport.Site |> Set.add transport.PointerDeclaration))
             let foreignValuesValid =
                 match RangeAnalysis.foreignResultApplications graph domain.RangeContextFacts with
@@ -187,7 +191,7 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
             if not valid || not operationProofsValid || not operationValuesValid || not indexValuesValid || not foreignValuesValid || not elementForms || representationMembership <> participants || domain.SourceTypes <> (domain.Premises |> Map.map (fun _ premise -> premise.Shape.SourceType)) || membership <> targets || not (Numeric.sameRows expected actual) then
                 reject (Some anchor) participants "The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent."
             else
-                Ok { Values = domain.Values |> List.map (fun carrier -> carrier.Site, carrier) |> Map.ofList
+                Ok { Values = valuesBySite
                      ForeignResultUses = domain.ForeignResultUses
                      Operations = domain.Operations |> List.map (fun operation -> operation.Site, operation) |> Map.ofList; OperationRequired = domain.OperationRequired
                      IndexTransports = domain.IndexTransports |> List.map (fun transport -> transport.Site, transport) |> Map.ofList

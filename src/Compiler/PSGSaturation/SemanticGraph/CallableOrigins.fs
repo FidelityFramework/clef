@@ -64,8 +64,9 @@ type AggregateResolution = {
     /// Direct typed reads of this actual aggregate occurrence.
     Projections: (NodeId * CallableAggregatePathStep list) list
     /// Actual ordered transport operands, including calls and field writers.
-    Dependencies: Map<NodeId, NodeId list>
-}
+    LazyDependencies: Lazy<Map<NodeId, NodeId list>>
+} with
+    member this.Dependencies = this.LazyDependencies.Value
 type Resolution = {
     Calls: Map<NodeId, ResolvedCall>
     /// Native entry invocations retain their own boundary. They are not
@@ -77,8 +78,9 @@ type Resolution = {
     /// Final source observations; completeness is scoped by the owning Baker
     /// whole-revision authority, not by this map's direct participant IDs.
     Branches: Map<NodeId, CallableBranchObservation>
-    Aggregates: Map<NodeId, AggregateResolution>
-}
+    LazyAggregates: Lazy<Map<NodeId, AggregateResolution>>
+} with
+    member this.Aggregates = this.LazyAggregates.Value
 
 type private Origin = NodeId * int
 
@@ -125,14 +127,21 @@ let private casePayloads ty =
             Some ["None", None; "Some", Some payload]
         | _ -> None
 
-let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNode>) =
+let private branchReaders branchSelections (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNode>) =
     let sourceEdge (edge: Hyperedge) = edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference
     let edgeKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
     let recorded =
-        graph.Edges
-        |> List.filter sourceEdge
-        |> List.groupBy _.Target
-        |> Map.ofList
+        lazy (
+            let byTarget = Dictionary<NodeId, ResizeArray<Hyperedge>>()
+            for edge in graph.Edges do
+                if sourceEdge edge then
+                    match byTarget.TryGetValue edge.Target with
+                    | true, list -> list.Add edge
+                    | false, _ ->
+                        let list = ResizeArray<Hyperedge>()
+                        list.Add edge
+                        byTarget[edge.Target] <- list
+            byTarget)
     // A node's agreement with its recorded incidence depends only on the node,
     // the graph's edges and the reachable node map, all fixed for one
     // analysis; each node's structural incidence is derived once (clef #131).
@@ -152,7 +161,10 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
             | SemanticKind.Binding _ -> node.Children.Length = 1
             | SemanticKind.Intrinsic _ -> node.Children.IsEmpty
             | _ -> node.Children = children
-        let actual = recorded.TryFind node.Id |> Option.defaultValue [] |> List.map edgeKey
+        let actual =
+            match recorded.Value.TryGetValue node.Id with
+            | true, rows -> rows |> Seq.map edgeKey |> Seq.toList
+            | false, _ -> []
         childrenAgree &&
         (expected |> List.collect _.Sources |> List.forall nodes.ContainsKey) &&
         actual.Length = (List.distinct actual).Length &&
@@ -213,7 +225,8 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
             | _ -> None
         | _ -> None
     let guards =
-        nodes |> Map.toList |> List.choose (fun (id, node) -> readGuard node |> Option.map (fun guard -> id, guard)) |> Map.ofList
+        if not branchSelections then Map.empty
+        else nodes |> Map.toList |> List.choose (fun (id, node) -> readGuard node |> Option.map (fun guard -> id, guard)) |> Map.ofList
     let combine statuses =
         if List.contains MalformedTransport statuses then MalformedTransport
         elif List.contains UnsupportedTransport statuses then UnsupportedTransport
@@ -396,7 +409,7 @@ type internal OriginFixedPoint = {
 /// reader of that fact, so a change re-evaluates exactly its readers.
 let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    let sourceGuards, sourceDecision, caseAlternative, agrees = branchReaders graph nodes
+    let sourceGuards, sourceDecision, caseAlternative, agrees = branchReaders branchSelections graph nodes
     let guards, decideGuard =
         if branchSelections then sourceGuards, sourceDecision
         else Map.empty, (fun _ _ -> BothArms)
@@ -497,6 +510,11 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
             | _ -> ()
         | _ -> ()
 
+    let isNonCallableNTU ty =
+        match applySubst ty with
+        | NativeType.TApp(tycon, _) -> tycon.NTUKind.IsSome && tycon.NTUKind <> Some NTUKind.NTUfnptr
+        | _ -> false
+
     let rec invoke call seen (origins: Set<Origin>) (arguments: NodeId list) =
         origins |> Set.fold (fun results (id, offset) ->
             let key = id, offset, arguments.Length
@@ -511,7 +529,9 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
                     parameters |> List.skip (min offset parameters.Length) |> List.truncate supplied
                     |> List.iteri (fun index (_, _, parameter) ->
                         supply call parameter arguments[index]
-                        add parameter (read arguments[index]))
+                        match nodes.TryFind parameter with
+                        | Some p when isNonCallableNTU p.Type -> ()
+                        | _ -> add parameter (read arguments[index]))
                     let produced =
                         if supplied < available then Set.singleton (id, offset + supplied)
                         elif arguments.Length = supplied then read body
@@ -531,6 +551,7 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
             | SemanticKind.TypeDef _ | SemanticKind.ModuleDef _ -> ()
             | _ ->
                 match applySubst node.Type with
+                | _ when isNonCallableNTU node.Type -> ()
                 | NativeType.TFun _ | NativeType.TApp _ | NativeType.TTuple _
                 | NativeType.TAnon _ | NativeType.TUnion _ when Set.isEmpty (read id) ->
                     add id (Set.singleton (id, -1))
@@ -582,14 +603,18 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
                     | _ -> Set.empty
                 | SemanticKind.Set (target, value) ->
                     match nodes.TryFind target with
-                    | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> add definition (read value)
-                    | Some { Kind = SemanticKind.Binding _ } -> add target (read value)
+                    | Some { Kind = SemanticKind.VarRef (_, Some definition) } ->
+                        match nodes.TryFind definition with
+                        | Some defNode when isNonCallableNTU defNode.Type -> ()
+                        | _ -> add definition (read value)
+                    | Some targetNode & Some { Kind = SemanticKind.Binding _ } when not (isNonCallableNTU targetNode.Type) ->
+                        add target (read value)
                     | _ -> ()
                     Set.empty
                 | SemanticKind.DUEliminate (value, tag, name, payloadType) ->
+                    let cases = nodes.TryFind value |> Option.bind (fun source -> casePayloads source.Type)
                     read value |> Set.fold (fun values ((origin, _) as alternative) ->
                         let payload =
-                            let cases = nodes.TryFind value |> Option.bind (fun source -> casePayloads source.Type)
                             match isEmptyOrigin alternative, cases with
                             | true, _ -> Set.singleton alternative
                             | false, Some cases ->
@@ -639,7 +664,8 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
                             notify fieldReaders key
                     Set.empty
                 | _ -> Set.empty
-            add id values
+            if not (isNonCallableNTU node.Type) then
+                add id values
 
     match schedule with
     | DependencyWorklist ->
@@ -678,9 +704,54 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
         (transportInputs |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq),
         (fields |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq), evaluations
 
+type private ConservativeAnalysis = {
+    Result:
+        Map<NodeId, SemanticNode> *
+        Map<NodeId, (string * NativeType * NodeId) list * NodeId> *
+        Map<NodeId, Set<Origin>> *
+        Map<NodeId, (NodeId * NodeId) list> *
+        Map<NodeId, CallableBranchObservation> *
+        (SemanticNode -> bool) *
+        Map<NodeId, NodeId list>
+}
+let private isCallableRelevantEdge (edge: Hyperedge) =
+    edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference ||
+    (match edge.Role with
+     | EdgeRole.EnvironmentCapture false | EdgeRole.EnvironmentFormal | EdgeRole.BoundaryDeclaration _ -> true
+     | _ -> false)
+let private callableRelevantEdges (graph: SemanticGraph) =
+    graph.Edges |> List.filter isCallableRelevantEdge
+let private sameCallableEdges (left: Hyperedge list) (right: Hyperedge list) =
+    left.Length = right.Length &&
+    List.forall2 (fun (a: Hyperedge) (b: Hyperedge) ->
+        obj.ReferenceEquals(a, b) ||
+        (a.Class = b.Class && a.Role = b.Role && a.Ordinal = b.Ordinal && a.Sources = b.Sources && a.Target = b.Target)) left right
+type private NodesConservativeCache = {
+    mutable Edges: Hyperedge list
+    mutable Analysis: ConservativeAnalysis option
+}
+let private conservativeByNodes = System.Runtime.CompilerServices.ConditionalWeakTable<Map<NodeId, SemanticNode>, NodesConservativeCache>()
+let private conservativeAnalyses = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, ConservativeAnalysis>()
+let private conservativeAnalysis =
+    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, ConservativeAnalysis>.CreateValueCallback(fun graph ->
+        let entry = conservativeByNodes.GetValue(graph.Nodes, fun _ -> { Edges = []; Analysis = None })
+        let relEdges = callableRelevantEdges graph
+        lock entry (fun () ->
+            match entry.Analysis with
+            | Some cached when sameCallableEdges entry.Edges relEdges -> cached
+            | _ ->
+                let nodes, shapes, facts, inputs, branches, agrees, transportInputs, _, _ = analyzeWith DependencyWorklist false graph
+                let computed = { Result = nodes, shapes, facts, inputs, branches, agrees, transportInputs }
+                entry.Edges <- relEdges
+                entry.Analysis <- Some computed
+                computed))
+
 let private analyze branchSelections graph =
-    let nodes, shapes, facts, inputs, branches, agrees, transportInputs, _, _ = analyzeWith DependencyWorklist branchSelections graph
-    nodes, shapes, facts, inputs, branches, agrees, transportInputs
+    if not branchSelections then
+        conservativeAnalyses.GetValue(graph, conservativeAnalysis).Result
+    else
+        let nodes, shapes, facts, inputs, branches, agrees, transportInputs, _, _ = analyzeWith DependencyWorklist true graph
+        nodes, shapes, facts, inputs, branches, agrees, transportInputs
 
 /// The complete origin fixed point under a chosen schedule, for the exact-result
 /// regression control. The compiler reads origins only through `resolve`.
@@ -707,14 +778,47 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
     let slotsCache = Dictionary<TypeIdentity, AggregateTypes.Slot list>()
     let shape ty =
         let identity = Identity.ofType ty
-        match shapeCache.TryGetValue identity with
-        | true, value -> value
-        | _ -> let value = AggregateTypes.shape graph ty in shapeCache[identity] <- value; value
+        lock shapeCache (fun () ->
+            match shapeCache.TryGetValue identity with
+            | true, value -> value
+            | _ -> let value = AggregateTypes.shape graph ty in shapeCache[identity] <- value; value)
     let callableSlots ty =
         let identity = Identity.ofType ty
-        match slotsCache.TryGetValue identity with
-        | true, value -> value
-        | _ -> let value = AggregateTypes.slots graph ty in slotsCache[identity] <- value; value
+        lock slotsCache (fun () ->
+            match slotsCache.TryGetValue identity with
+            | true, value -> value
+            | _ -> let value = AggregateTypes.slots graph ty in slotsCache[identity] <- value; value)
+    // A declared foreign body is a source placeholder, not an ordinary
+    // call-target result dependency. Its declaration remains in the callee path.
+    let foreignDeclarations =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
+    let foreignBodies = foreignDeclarations |> List.map _.Body |> Set.ofList
+    let foreignFormals = foreignDeclarations |> List.collect _.Formals |> Set.ofList
+    let candidateNodes =
+        nodes |> Map.toList |> List.choose (fun (id, node) ->
+            let slots =
+                match node.Kind with
+                | SemanticKind.TypeDef _ | SemanticKind.ModuleDef _ -> []
+                // A foreign formal declares the receiving contract. Each original
+                // actual owns its aggregate construction and per-call conversion;
+                // joining callers does not create one runtime tag for this formal.
+                | SemanticKind.PatternBinding _ when foreignFormals.Contains id -> []
+                // Spatial declaration shells consume their source-owned plans.
+                // Their descriptor records are not runtime aggregate values
+                // (Reachability.hardwareDesignReferences; WitnessLiveRows.valueFacts).
+                // Ordinary references still receive their own origin reading.
+                | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule)
+                | SemanticKind.Binding(_, _, _, Some DeclRoot.KernelModule) -> []
+                | _ -> callableSlots node.Type
+            if slots.IsEmpty then None
+            else
+                match shape node.Type with
+                | None -> None
+                | Some _ -> Some(id, node, slots))
+    if candidateNodes.IsEmpty then Map.empty
+    else
+    let candidateIds = candidateNodes |> List.map (fun (id, _, _) -> id) |> Set.ofList
     let construction expected id =
         match nodes.TryFind id, shape expected with
         | Some node, Some shape when sameType node.Type expected && agrees node ->
@@ -824,16 +928,16 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
                         fields |> item ordinal |> Option.bind (fun (_, ty) ->
                             if sameType ty node.Type then Some(subject, (site, [CallableAggregatePathStep.RecordField ordinal])) else None)
                     | _ -> None)
-            if not (agrees node) then None else
             match node.Kind with
-            | SemanticKind.FieldGet(subject, name) ->
+            | SemanticKind.FieldGet(subject, name) when candidateIds.Contains subject && agrees node ->
                 nodes.TryFind subject |> Option.bind (fun source ->
                     match shape source.Type with
                     | Some(AggregateTypes.Shape.Record(_, fields)) ->
                         fields |> List.tryFindIndex (fun (field, _) -> field = name) |> Option.bind (record subject)
                     | _ -> None)
-            | SemanticKind.TupleGet(subject, ordinal) -> record subject ordinal
-            | SemanticKind.DUEliminate(subject, caseOrdinal, name, payloadType) ->
+            | SemanticKind.TupleGet(subject, ordinal) when candidateIds.Contains subject && agrees node ->
+                record subject ordinal
+            | SemanticKind.DUEliminate(subject, caseOrdinal, name, payloadType) when candidateIds.Contains subject && agrees node ->
                 nodes.TryFind subject |> Option.bind (fun source ->
                     match shape source.Type with
                     | Some(AggregateTypes.Shape.Union(_, cases)) ->
@@ -844,79 +948,62 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
                     | _ -> None)
             | _ -> None)
         |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
-    // A declared foreign body is a source placeholder, not an ordinary
-    // call-target result dependency. Its declaration remains in the callee path.
-    let foreignDeclarations =
-        graph.Edges |> List.choose (fun edge ->
-            match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
-    let foreignBodies = foreignDeclarations |> List.map _.Body |> Set.ofList
-    let foreignFormals = foreignDeclarations |> List.collect _.Formals |> Set.ofList
+    let rawDepsCache = Dictionary<NodeId, NodeId list>()
     let rawDependencies id =
-        match nodes.TryFind id with
-        | None -> []
-        | Some node ->
-            let direct =
-                match node.Kind with
-                | SemanticKind.VarRef(_, Some source) -> [source]
-                | SemanticKind.Lambda(parameters, _, _, _, _) -> parameters |> List.map (fun (_, _, formal) -> formal)
-                | SemanticKind.PatternBinding _ -> inputs.TryFind id |> Option.defaultValue [] |> List.collect (fun (call, actual) -> [call; actual])
-                | SemanticKind.Application(callee, arguments) ->
-                    [callee] @ arguments @
-                    (calls.TryFind id |> Option.toList |> List.collect (fun call ->
-                        call.Targets |> List.collect (fun target ->
-                            [target.Lambda] @ (target.Parameters |> List.map (fun (_, _, formal) -> formal)) @
-                            (if foreignBodies.Contains target.Body then [] else [target.Body]))))
-                | _ -> transportInputs.TryFind id |> Option.defaultValue node.Children
-            let writes =
-                match shape node.Type with
-                | Some(AggregateTypes.Shape.Record(_, fields)) ->
-                    fields |> List.collect (fun (name, _) -> assigned id name |> List.collect (fun (site, subject, value) -> [site; subject; value]))
-                | _ -> []
-            direct @ writes
+        lock rawDepsCache (fun () ->
+            match rawDepsCache.TryGetValue id with
+            | true, cached -> cached
+            | false, _ ->
+                let cached =
+                    match nodes.TryFind id with
+                    | None -> []
+                    | Some node ->
+                        let direct =
+                            match node.Kind with
+                            | SemanticKind.VarRef(_, Some source) -> [source]
+                            | SemanticKind.Lambda(parameters, _, _, _, _) -> parameters |> List.map (fun (_, _, formal) -> formal)
+                            | SemanticKind.PatternBinding _ -> inputs.TryFind id |> Option.defaultValue [] |> List.collect (fun (call, actual) -> [call; actual])
+                            | SemanticKind.Application(callee, arguments) ->
+                                [callee] @ arguments @
+                                (calls.TryFind id |> Option.toList |> List.collect (fun call ->
+                                    call.Targets |> List.collect (fun target ->
+                                        [target.Lambda] @ (target.Parameters |> List.map (fun (_, _, formal) -> formal)) @
+                                        (if foreignBodies.Contains target.Body then [] else [target.Body]))))
+                            | _ -> transportInputs.TryFind id |> Option.defaultValue node.Children
+                        let writes =
+                            match shape node.Type with
+                            | Some(AggregateTypes.Shape.Record(_, fields)) ->
+                                fields |> List.collect (fun (name, _) -> assigned id name |> List.collect (fun (site, subject, value) -> [site; subject; value]))
+                            | _ -> []
+                        direct @ writes
+                rawDepsCache[id] <- cached
+                cached)
     let dependencies roots =
         let rec visit rows id =
             if Map.containsKey id rows then rows else
             let direct = rawDependencies id
             List.fold visit (Map.add id direct rows) direct
         List.fold visit Map.empty roots
-    nodes |> Map.toList |> List.choose (fun (id, node) ->
-        let slots =
-            match node.Kind with
-            | SemanticKind.TypeDef _ | SemanticKind.ModuleDef _ -> []
-            // A foreign formal declares the receiving contract. Each original
-            // actual owns its aggregate construction and per-call conversion;
-            // joining callers does not create one runtime tag for this formal.
-            | SemanticKind.PatternBinding _ when foreignFormals.Contains id -> []
-            // Spatial declaration shells consume their source-owned plans.
-            // Their descriptor records are not runtime aggregate values
-            // (Reachability.hardwareDesignReferences; WitnessLiveRows.valueFacts).
-            // Ordinary references still receive their own origin reading.
-            | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule)
-            | SemanticKind.Binding(_, _, _, Some DeclRoot.KernelModule) -> []
-            | _ -> callableSlots node.Type
-        if slots.IsEmpty then None else
-        match shape node.Type with
-        | None -> None
-        | Some _ ->
-            let origins = read id
-            let alternatives, unknowns, absent =
-                origins |> Set.fold (fun (alternatives, unknowns, absent) (origin, offset) ->
-                    if isEmptyOrigin (origin, offset) then alternatives, unknowns, Set.add origin absent
-                    elif offset <> 0 || (construction node.Type origin).IsNone then
-                        alternatives, Set.add origin unknowns, absent
-                    else
-                        let selected = slots |> List.map (fun slot ->
-                            let result = fromConstruction Set.empty node.Type origin slot.Path
-                            { result with Path = slot.Path })
-                        { Construction = origin; Slots = selected } :: alternatives, unknowns, absent)
-                    ([], Set.empty, Set.empty)
-            let unknowns = if origins.IsEmpty then Set.singleton id else unknowns
-            let reads = projections.TryFind id |> Option.defaultValue []
-            let alternatives = List.rev alternatives
-            let roots = id :: (reads |> List.map fst) @ (alternatives |> List.map _.Construction)
-            Some(id, { AggregateType = Identity.ofType node.Type; Alternatives = alternatives
-                       UnknownOrigins = unknowns; AbsentOrigins = absent; Projections = reads
-                       Dependencies = dependencies roots })) |> Map.ofList
+    candidateNodes |> List.map (fun (id, node, slots) ->
+        let origins = read id
+        let alternatives, unknowns, absent =
+            origins |> Set.fold (fun (alternatives, unknowns, absent) (origin, offset) ->
+                if isEmptyOrigin (origin, offset) then alternatives, unknowns, Set.add origin absent
+                elif offset <> 0 || (construction node.Type origin).IsNone then
+                    alternatives, Set.add origin unknowns, absent
+                else
+                    let selected = slots |> List.map (fun slot ->
+                        let result = fromConstruction Set.empty node.Type origin slot.Path
+                        { result with Path = slot.Path })
+                    { Construction = origin; Slots = selected } :: alternatives, unknowns, absent)
+                ([], Set.empty, Set.empty)
+        let unknowns = if origins.IsEmpty then Set.singleton id else unknowns
+        let reads = projections.TryFind id |> Option.defaultValue []
+        let alternatives = List.rev alternatives
+        let roots = id :: (reads |> List.map fst) @ (alternatives |> List.map _.Construction)
+        id, { AggregateType = Identity.ofType node.Type; Alternatives = alternatives
+              UnknownOrigins = unknowns; AbsentOrigins = absent; Projections = reads
+              LazyDependencies = lazy (dependencies roots) }) |> Map.ofList
 
 /// Share actual value-flow evidence with range and sequence analyses. Opaque
 /// alternatives remain visible even when a known implementation also reaches
@@ -990,15 +1077,30 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
             | _ -> None)
         |> Map.ofList
     { Calls = calls; NativeCalls = nativeCalls; ParameterInputs = inputs; Lambdas = lambdas; FirstBoundaries = boundaries; Branches = branches
-      Aggregates = aggregateResolutions graph nodes facts inputs calls agrees transportInputs }
+      LazyAggregates = lazy (aggregateResolutions graph nodes facts inputs calls agrees transportInputs) }
 
 // A resolution is a function of one immutable graph value. Each graph is read
 // once per mode; every reader of the same graph shares that one reading
 // (clef #131). The tables hold no graph alive.
+type private NodesResolutionCache = {
+    mutable Edges: Hyperedge list
+    mutable Resolution: Resolution option
+}
+let private resolutionByNodes = System.Runtime.CompilerServices.ConditionalWeakTable<Map<NodeId, SemanticNode>, NodesResolutionCache>()
 let private conservativeReadings = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>()
 let private branchReadings = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>()
 let private conservativeReading =
-    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>.CreateValueCallback(fun graph -> resolveWith false graph)
+    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>.CreateValueCallback(fun graph ->
+        let entry = resolutionByNodes.GetValue(graph.Nodes, fun _ -> { Edges = []; Resolution = None })
+        let relEdges = callableRelevantEdges graph
+        lock entry (fun () ->
+            match entry.Resolution with
+            | Some cached when sameCallableEdges entry.Edges relEdges -> cached
+            | _ ->
+                let computed = resolveWith false graph
+                entry.Edges <- relEdges
+                entry.Resolution <- Some computed
+                computed))
 let private branchReading =
     System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Resolution>.CreateValueCallback(fun graph -> resolveWith true graph)
 

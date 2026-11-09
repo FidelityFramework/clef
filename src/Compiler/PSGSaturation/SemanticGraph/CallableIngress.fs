@@ -48,8 +48,9 @@ type StorageAccess = {
     Participants: Set<NodeId>
 }
 type Reading = private {
-    Evidence: Map<NodeId, Evidence>
-    RetainedEvidence: Map<NodeId, Evidence>
+    Evidence: Lazy<Map<NodeId, Evidence>>
+    RetainedEvidence: Lazy<Map<NodeId, Evidence>>
+    AllowsOccurrence: NodeId -> bool
     Access: NodeId -> Access option
     StorageAccess: NodeId -> StorageAccess option
     SlotAccess: NodeId -> NodeId -> StorageAccess option
@@ -61,46 +62,103 @@ type Reading = private {
 }
 type private Closed = { Dependencies: Set<NodeId>; Callers: Set<NodeId>; Participants: Set<NodeId>; UsedLazyForces: Set<NodeId>; Calls: Call list; Valid: bool }
 
-let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) =
+let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let initialization = ProgramInitialization.read graph
     let entry = initialization |> Option.map _.EntryLambda
-    let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
+    let incidence = lazy (nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList)
     let edgeKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
-    let grouped (rows: Hyperedge list) =
-        rows |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
-        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ values -> values |> List.map snd |> List.distinctBy edgeKey)
-    let uses = incidence |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) |> grouped
-    let recorded = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) |> grouped
-    let getUses id = uses.TryFind id |> Option.defaultValue []
-    let getRecorded id = recorded.TryFind id |> Option.defaultValue [] |> List.filter (fun edge -> nodes.ContainsKey edge.Target || not (graph.Nodes.ContainsKey edge.Target))
+    let groupBySource (rows: Hyperedge list) =
+        let bySource = Dictionary<NodeId, ResizeArray<Hyperedge>>()
+        for edge in rows do
+            for source in edge.Sources do
+                match bySource.TryGetValue source with
+                | true, list -> list.Add edge
+                | false, _ ->
+                    let list = ResizeArray<Hyperedge>()
+                    list.Add edge
+                    bySource[source] <- list
+        bySource
+    let uses =
+        lazy (
+            incidence.Value
+            |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+            |> groupBySource)
+    let recorded =
+        lazy (
+            graph.Edges
+            |> List.filter (fun edge ->
+                (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) &&
+                (nodes.ContainsKey edge.Target || not (graph.Nodes.ContainsKey edge.Target)))
+            |> groupBySource)
+    let usesCache = Dictionary<NodeId, Hyperedge list>()
+    let getUses id =
+        match usesCache.TryGetValue id with
+        | true, cached -> cached
+        | false, _ ->
+            let cached =
+                match uses.Value.TryGetValue id with
+                | true, u -> u |> Seq.distinctBy edgeKey |> Seq.toList
+                | false, _ -> []
+            usesCache[id] <- cached
+            cached
+    let getRecorded id =
+        match recorded.Value.TryGetValue id with
+        | true, r -> r |> Seq.distinctBy edgeKey |> Seq.toList
+        | false, _ -> []
     // Binding children and other owned syntax are authoritative even before
     // their Attached incidence has been materialized. Independent resident
     // references are additional uses, never erased by this structural view.
-    let observedUses id = getUses id @ getRecorded id |> List.distinctBy edgeKey
+    let observedUsesCache = Dictionary<NodeId, Hyperedge list>()
+    let observedUses id =
+        match observedUsesCache.TryGetValue id with
+        | true, cached -> cached
+        | false, _ ->
+            let cached = getUses id @ getRecorded id |> List.distinctBy edgeKey
+            observedUsesCache[id] <- cached
+            cached
     let owners =
-        nodes.Values |> Seq.collect (fun node ->
-            match node.Kind with
-            | SemanticKind.Lambda(parameters, _, _, _, _) -> parameters |> List.map (fun (_, _, formal) -> formal, node.Id)
-            | _ -> []) |> Seq.groupBy fst
-        |> Seq.choose (fun (formal, rows) -> match rows |> Seq.map snd |> Seq.distinct |> Seq.toList with [owner] -> Some(formal, owner) | _ -> None)
-        |> Map.ofSeq
+        lazy (
+            nodes.Values |> Seq.collect (fun node ->
+                match node.Kind with
+                | SemanticKind.Lambda(parameters, _, _, _, _) -> parameters |> List.map (fun (_, _, formal) -> formal, node.Id)
+                | _ -> []) |> Seq.groupBy fst
+            |> Seq.choose (fun (formal, rows) -> match rows |> Seq.map snd |> Seq.distinct |> Seq.toList with [owner] -> Some(formal, owner) | _ -> None)
+            |> Map.ofSeq)
     let structuralParents =
-        incidence |> List.filter Hyperedge.isStructural |> grouped
+        lazy (
+            let byChild = Dictionary<NodeId, ResizeArray<NodeId>>()
+            for edge in incidence.Value do
+                if Hyperedge.isStructural edge then
+                    for source in edge.Sources do
+                        match byChild.TryGetValue source with
+                        | true, list ->
+                            if not (list.Contains edge.Target) then list.Add edge.Target
+                        | false, _ ->
+                            let list = ResizeArray<NodeId>()
+                            list.Add edge.Target
+                            byChild[source] <- list
+            byChild)
+    let activationCache = Dictionary<NodeId, NodeId option>()
     let activation occurrence =
-        let rec visit seen pending found missing =
-            match pending with
-            | [] -> if not missing && Set.count found = 1 then Some(Set.minElement found) else None
-            | id :: rest when Set.contains id seen -> visit seen rest found missing
-            | id :: rest ->
-                let seen = Set.add id seen
-                match nodes.TryFind id with
-                | Some { Kind = SemanticKind.Lambda _ } -> visit seen rest (Set.add id found) missing
-                | _ ->
-                    match structuralParents.TryFind id with
-                    | Some parents when not parents.IsEmpty -> visit seen ((parents |> List.map _.Target) @ rest) found missing
-                    | _ -> visit seen rest found true
-        visit Set.empty [occurrence] Set.empty false
+        match activationCache.TryGetValue occurrence with
+        | true, cached -> cached
+        | false, _ ->
+            let rec visit seen pending found missing =
+                match pending with
+                | [] -> if not missing && Set.count found = 1 then Some(Set.minElement found) else None
+                | id :: rest when Set.contains id seen -> visit seen rest found missing
+                | id :: rest ->
+                    let seen = Set.add id seen
+                    match nodes.TryFind id with
+                    | Some { Kind = SemanticKind.Lambda _ } -> visit seen rest (Set.add id found) missing
+                    | _ ->
+                        match structuralParents.Value.TryGetValue id with
+                        | true, parents when parents.Count > 0 -> visit seen ((Seq.toList parents) @ rest) found missing
+                        | _ -> visit seen rest found true
+            let cached = visit Set.empty [occurrence] Set.empty false
+            activationCache[occurrence] <- cached
+            cached
     let complete site =
         resolution.Calls.TryFind site |> Option.filter (fun call -> call.Complete && not call.Unknown && not call.Targets.IsEmpty)
     let discards (application: SemanticNode) callee argument =
@@ -114,29 +172,34 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
         | _ -> false
     let row site (target: CallableOrigins.CallTarget) =
         { Site = site; Implementation = target.Lambda; Parameters = target.Parameters |> List.map (fun (_, _, formal) -> formal); Arguments = target.Arguments }
+    let invocationsByImplementation =
+        lazy (
+            resolution.Calls |> Map.toList |> List.collect (fun (site, call) ->
+                call.Targets |> List.map _.Lambda |> List.distinct |> List.map (fun impl -> impl, (site, call)))
+            |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows))
     let invocations implementation =
-        resolution.Calls |> Map.toList |> List.choose (fun (site, call) ->
-            if call.Targets |> List.exists (fun target -> target.Lambda = implementation) then Some(site, call) else None)
+        invocationsByImplementation.Value.TryFind implementation |> Option.defaultValue []
     let environmentOrigins = lazy (ClosureEnvironments.origins graph)
     let environmentOwner id = environmentOrigins.Value.TryFind id
     let environmentCalls = lazy (ClosureEnvironments.callEnvironments graph)
     let capturedValue = ClosureEnvironments.tryCapturedValue graph
     let sourceDeclaration = ClosureEnvironments.trySourceDeclaration graph
     let scopedDeclarations = lazy (ScopedDeclarations.read graph)
-    let promotedReferences = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.CallableReferenceOrigin) |> List.map _.Target |> Set.ofList
+    let promotedReferences = lazy (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.CallableReferenceOrigin) |> List.map _.Target |> Set.ofList)
     let capturedReads owner slot =
         nodes.Values |> Seq.choose (fun node ->
             match node.Kind with
             | SemanticKind.EnvironmentRead(environment, actual) when actual = slot && environmentOwner environment = Some owner -> Some node.Id
             | _ -> None) |> Seq.toList
     let captureUses =
-        nodes.Values |> Seq.collect (fun node ->
-            let captures =
-                match node.Kind with
-                | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.SeqExpr(_, captures) | SemanticKind.LazyExpr(_, captures) -> captures
-                | _ -> []
-            captures |> List.choose (fun capture -> capture.SourceNodeId |> Option.map (fun source -> source, (node, capture))))
-        |> Seq.groupBy fst |> Seq.map (fun (source, rows) -> source, rows |> Seq.map snd |> Seq.toList) |> Map.ofSeq
+        lazy (
+            nodes.Values |> Seq.collect (fun node ->
+                let captures =
+                    match node.Kind with
+                    | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.SeqExpr(_, captures) | SemanticKind.LazyExpr(_, captures) -> captures
+                    | _ -> []
+                captures |> List.choose (fun capture -> capture.SourceNodeId |> Option.map (fun source -> source, (node, capture))))
+            |> Seq.groupBy fst |> Seq.map (fun (source, rows) -> source, rows |> Seq.map snd |> Seq.toList) |> Map.ofSeq)
     let mutableCells = lazy (MutableCallableStorage.sourceFamilies graph |> fst)
     let lazyThunk = LazyValues.closedThunk graph
     let emptyClosed = { Dependencies = Set.empty; Callers = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Calls = []; Valid = true }
@@ -328,7 +391,7 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                     | _ -> reject ()
                 // Source captures are independent uses even when the value has
                 // no structural edge into the nested deferred body yet.
-                for node, capture in captureUses.TryFind id |> Option.defaultValue [] do
+                for node, capture in captureUses.Value.TryFind id |> Option.defaultValue [] do
                     match node.Kind with
                     | SemanticKind.Lambda _ when not capture.IsMutable -> dependency node.Id
                     | SemanticKind.Lambda _ when storage id |> Option.exists (fun cell -> cell.Captures.Contains node.Id) ->
@@ -384,8 +447,8 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                     Participants = Set.union left.Participants right.Participants
                     UsedLazyForces = Set.union left.UsedLazyForces right.UsedLazyForces
                     Calls = List.distinct (left.Calls @ right.Calls) }
-    let continuationRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationSlotAccess) |> List.groupBy _.Target |> Map.ofList
-    let originalRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationValue) |> List.groupBy _.Target |> Map.ofList
+    let continuationRows = lazy (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationSlotAccess) |> List.groupBy _.Target |> Map.ofList)
+    let originalRows = lazy (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationValue) |> List.groupBy _.Target |> Map.ofList)
     let checkedInstance = SchemeInstances.reader graph
     let rec originalIdentity seen id =
         if Set.contains id seen then None else
@@ -524,7 +587,7 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                             // ordinary/raw use would expose an additional writer.
                             let typed = applySubst borrow.Type = NativeType.TByref(applySubst nodes[cell].Type, ByrefKind.InOut)
                             if not typed || not (observedUses borrow.Id).IsEmpty ||
-                               (captureUses.TryFind borrow.Id |> Option.exists (not << List.isEmpty)) then None else
+                               (captureUses.Value.TryFind borrow.Id |> Option.exists (not << List.isEmpty)) then None else
                             let consumers = graph.Edges |> List.filter (fun edge ->
                                 match edge.Role, edge.Sources with
                                 | EdgeRole.SequenceCaptureInitializer true, [slot; value] -> slot = cell && value = borrow.Id
@@ -645,7 +708,7 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
     // while callable identity additionally checks each writer's correspondence.
     // No final placement/codata is needed for either reading.
     let continuationStorage id =
-        match nodes.TryFind id, continuationRows.TryFind id, originalRows.TryFind id with
+        match nodes.TryFind id, continuationRows.Value.TryFind id, originalRows.Value.TryFind id with
         | Some { Kind = SemanticKind.FrameRead(frame, slot); Type = valueType },
           Some [{ Class = EdgeClass.Provenance; Ordinal = 0; Sources = owner :: generator :: root :: source :: declaredWriters }],
           Some [{ Class = EdgeClass.Provenance; Ordinal = 0; Sources = [original] }]
@@ -767,7 +830,7 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 // A cloned callable-producing expression may have rewritten
                 // structural operands, but its operation and every operand
                 // must still correspond to the exact retained expression.
-                match originalRows.TryFind actual with
+                match originalRows.Value.TryFind actual with
                 | Some [{ Class = EdgeClass.Provenance; Ordinal = 0; Sources = [original] }] when original = expected ->
                     let dependencies node =
                         let derived = kindEdges node.Id node.Kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
@@ -783,68 +846,93 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                         | _ -> None) (Some(Set.ofList [expected; actual]))
                 | _ -> None
         | _ -> None
-    let rec occurrence retained seen id =
-        if Set.contains id seen then Some(empty, Set.empty) else
-        let seen = Set.add id seen
-        let all inputs =
-            inputs |> List.fold (fun found input ->
-                match found, occurrence retained seen input with
-                | Some(proof, leaves), Some(more, extra) -> Some(merge proof more, Set.union leaves extra)
-                | _ -> None) (Some(empty, Set.empty))
-        let result =
-            match (if retained then graph.Nodes.TryFind id else nodes.TryFind id) with
-            | Some { Kind = SemanticKind.Lambda _ | SemanticKind.ClosureValue _ } -> Some(empty, Set.singleton id)
-            | Some { Kind = SemanticKind.VarRef(_, Some _) } when promotedReferences.Contains id ->
-                sourceDeclaration id |> Option.bind (fun declaration -> all [declaration])
-            | Some ({ Kind = SemanticKind.VarRef(_, Some binding) } as read)
-                when (nodes.TryFind binding |> Option.exists (fun source ->
-                    match source.Kind with SemanticKind.Binding(_, true, _, None) -> true | _ -> false))
-                     && not (graph.DeclarationRoots |> List.exists (fun (root, _) -> root = binding)) ->
-                // A mutable read is its own snapshot. The existing complete
-                // source family bounds its possible values without replacing
-                // that occurrence with the cell's current value.
-                mutableCells.Value.TryFind binding
-                |> Option.filter (fun cell -> cell.Reads.Contains id && (activation binding |> Option.isSome))
-                |> Option.filter (fun _ -> applySubst read.Type = applySubst nodes[binding].Type)
-                |> Option.bind (fun cell ->
-                    let scopedWrite (site, _, value) =
-                        match activation site, nodes.TryFind value with
-                        | Some owner, Some { Kind = SemanticKind.Lambda _ } ->
-                            structuralParents.TryFind value |> Option.exists (fun parents ->
-                                not parents.IsEmpty && (parents |> List.forall (fun edge -> activation edge.Target = Some owner)))
-                        | Some owner, Some _ -> activation value = Some owner
-                        | _ -> false
-                    let values = cell.Initial :: (cell.Writes |> List.map (fun (_, _, value) -> value))
-                    let candidates = values |> List.map (occurrence retained seen)
-                    if not (cell.Writes |> List.forall scopedWrite) ||
-                       (candidates |> List.exists (function None -> true | Some (_, leaves) -> leaves.IsEmpty)) then None
-                    else
-                        let proof, leaves =
-                            candidates |> List.choose (fun candidate -> candidate) |> List.fold (fun (proof, leaves) (next, values) ->
-                                merge proof next, Set.union leaves values) (empty, Set.empty)
-                        Some({ proof with Participants = Set.union proof.Participants cell.Participants }, leaves))
-            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
-            | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) } -> all [value]
-            | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> all [value]
-            | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (fun value -> all [value])
-            | Some { Kind = SemanticKind.IfThenElse(_, yes, Some no) } -> all [yes; no]
-            | Some { Kind = SemanticKind.Match(_, cases) } -> all (cases |> List.map _.Body)
-            | Some { Kind = SemanticKind.CaseElimination(_, cases) } -> all (cases |> List.map _.Body)
-            | Some { Kind = SemanticKind.EnvironmentRead(environment, slot) } -> capturedValue environment slot |> Option.bind (fun value -> all [value])
-            | Some { Kind = SemanticKind.FieldGet _ | SemanticKind.TupleGet _ | SemanticKind.DUEliminate _ } ->
-                Clef.Compiler.Baker.Ingredients.CallableAggregateProjections.read resolution id
-                |> Option.bind (fun reading ->
-                    all reading.Inputs |> Option.map (fun (proof, leaves) ->
-                        { proof with Participants = Set.union proof.Participants reading.Participants }, leaves))
-            | Some { Kind = SemanticKind.FrameRead _ } ->
-                continuationSource Set.empty id |> Option.bind (fun (source, participants) ->
-                    occurrence true seen source |> Option.map (fun (proof, leaves) ->
-                        { proof with Participants = Set.union proof.Participants participants }, leaves))
-            | Some { Kind = SemanticKind.Application(callee, _) } ->
-                complete id |> Option.bind (fun call -> all (callee :: (call.Targets |> List.map _.Body)))
-            | Some { Kind = SemanticKind.PatternBinding _ } ->
-                owners.TryFind id |> Option.bind (fun owner ->
-                    closed owner |> Option.bind (fun required ->
+    let occurrenceMemo = Dictionary<bool * NodeId, (Evidence * Set<NodeId>) option>()
+    let rec occurrenceCore retained seen id : bool * (Evidence * Set<NodeId>) option =
+        if Set.contains id seen then true, Some(empty, Set.empty) else
+        let key = retained, id
+        match occurrenceMemo.TryGetValue key with
+        | true, cached -> false, cached
+        | false, _ ->
+            let seen = Set.add id seen
+            let all inputs =
+                inputs |> List.fold (fun (hadCycle, found) input ->
+                    let c, step = occurrenceCore retained seen input
+                    let hadCycle = hadCycle || c
+                    match found, step with
+                    | Some(proof, leaves), Some(more, extra) -> hadCycle, Some(merge proof more, Set.union leaves extra)
+                    | _ -> hadCycle, None) (false, Some(empty, Set.empty))
+            let hadCycle, result =
+                match (if retained then graph.Nodes.TryFind id else nodes.TryFind id) with
+                | Some { Kind = SemanticKind.Lambda _ | SemanticKind.ClosureValue _ } -> false, Some(empty, Set.singleton id)
+                | Some { Kind = SemanticKind.VarRef(_, Some _) } when promotedReferences.Value.Contains id ->
+                    match sourceDeclaration id with
+                    | Some declaration -> all [declaration]
+                    | None -> false, None
+                | Some ({ Kind = SemanticKind.VarRef(_, Some binding) } as read)
+                    when (nodes.TryFind binding |> Option.exists (fun source ->
+                        match source.Kind with SemanticKind.Binding(_, true, _, None) -> true | _ -> false))
+                         && not (graph.DeclarationRoots |> List.exists (fun (root, _) -> root = binding)) ->
+                    match mutableCells.Value.TryFind binding
+                          |> Option.filter (fun cell -> cell.Reads.Contains id && (activation binding |> Option.isSome))
+                          |> Option.filter (fun _ -> applySubst read.Type = applySubst nodes[binding].Type) with
+                    | None -> false, None
+                    | Some cell ->
+                        let scopedWrite (site, _, value) =
+                            match activation site, nodes.TryFind value with
+                            | Some owner, Some { Kind = SemanticKind.Lambda _ } ->
+                                match structuralParents.Value.TryGetValue value with
+                                | true, parents ->
+                                    parents.Count > 0 && (parents |> Seq.forall (fun target -> activation target = Some owner))
+                                | false, _ -> false
+                            | Some owner, Some _ -> activation value = Some owner
+                            | _ -> false
+                        let values = cell.Initial :: (cell.Writes |> List.map (fun (_, _, value) -> value))
+                        let candidateSteps = values |> List.map (occurrenceCore retained seen)
+                        let hadCycle = candidateSteps |> List.exists fst
+                        let candidates = candidateSteps |> List.map snd
+                        if not (cell.Writes |> List.forall scopedWrite) ||
+                           (candidates |> List.exists (function None -> true | Some (_, leaves) -> leaves.IsEmpty)) then hadCycle, None
+                        else
+                            let proof, leaves =
+                                candidates |> List.choose (fun candidate -> candidate) |> List.fold (fun (proof, leaves) (next, values) ->
+                                    merge proof next, Set.union leaves values) (empty, Set.empty)
+                            hadCycle, Some({ proof with Participants = Set.union proof.Participants cell.Participants }, leaves)
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
+                | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) } -> all [value]
+                | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> all [value]
+                | Some { Kind = SemanticKind.Sequential values } ->
+                    match List.tryLast values with
+                    | Some value -> all [value]
+                    | None -> false, None
+                | Some { Kind = SemanticKind.IfThenElse(_, yes, Some no) } -> all [yes; no]
+                | Some { Kind = SemanticKind.Match(_, cases) } -> all (cases |> List.map _.Body)
+                | Some { Kind = SemanticKind.CaseElimination(_, cases) } -> all (cases |> List.map _.Body)
+                | Some { Kind = SemanticKind.EnvironmentRead(environment, slot) } ->
+                    match capturedValue environment slot with
+                    | Some value -> all [value]
+                    | None -> false, None
+                | Some { Kind = SemanticKind.FieldGet _ | SemanticKind.TupleGet _ | SemanticKind.DUEliminate _ } ->
+                    match Clef.Compiler.Baker.Ingredients.CallableAggregateProjections.read resolution id with
+                    | None -> false, None
+                    | Some reading ->
+                        let c, step = all reading.Inputs
+                        c, step |> Option.map (fun (proof, leaves) ->
+                            { proof with Participants = Set.union proof.Participants reading.Participants }, leaves)
+                | Some { Kind = SemanticKind.FrameRead _ } ->
+                    match continuationSource Set.empty id with
+                    | None -> false, None
+                    | Some (source, participants) ->
+                        let c, step = occurrenceCore true seen source
+                        c, step |> Option.map (fun (proof, leaves) ->
+                            { proof with Participants = Set.union proof.Participants participants }, leaves)
+                | Some { Kind = SemanticKind.Application(callee, _) } ->
+                    match complete id with
+                    | Some call -> all (callee :: (call.Targets |> List.map _.Body))
+                    | None -> false, None
+                | Some { Kind = SemanticKind.PatternBinding _ } ->
+                    match owners.Value.TryFind id |> Option.bind (fun owner -> closed owner |> Option.map (fun req -> owner, req)) with
+                    | None -> false, None
+                    | Some (_, required) ->
                         let supplied = resolution.ParameterInputs.TryFind id |> Option.defaultValue []
                         let rows = supplied |> List.map (fun (site, actual) ->
                             complete site |> Option.bind (fun call ->
@@ -852,24 +940,25 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                                     target.Parameters.Length = target.Arguments.Length &&
                                     List.zip target.Parameters target.Arguments |> List.exists (fun ((_, _, formal), argument) -> formal = id && argument = actual))
                                 if matches.IsEmpty then None else Some(matches |> List.map (row site))))
-                        if supplied.IsEmpty || rows |> List.exists Option.isNone then None else
-                        all (supplied |> List.map snd) |> Option.map (fun (proof, leaves) ->
+                        if supplied.IsEmpty || rows |> List.exists Option.isNone then false, None else
+                        let c, step = all (supplied |> List.map snd)
+                        c, step |> Option.map (fun (proof, leaves) ->
                             let participantSet = required |> Set.fold (fun found code -> Set.union found candidates[code].Participants) proof.Participants
                             let lazyForces = required |> Set.fold (fun found code -> Set.union found candidates[code].UsedLazyForces) proof.UsedLazyForces
                             { proof with Formals = Set.add id proof.Formals; Implementations = Set.union required proof.Implementations
                                          Participants = participantSet
                                          UsedLazyForces = lazyForces
                                          Calls = List.distinct (proof.Calls @ (rows |> List.choose (fun value -> value) |> List.concat)
-                                                               @ (required |> Set.toList |> List.collect (fun code -> candidates[code].Calls))) }, leaves)))
-            | _ -> None
-        result |> Option.map (fun (proof, leaves) -> { proof with Participants = Set.add id proof.Participants }, leaves)
-    let evidence = nodes |> Map.toList |> List.choose (fun (id, node) ->
-        match applySubst node.Type with
-        | NativeType.TFun _ ->
-            occurrence false Set.empty id |> Option.bind (fun (proof, leaves) ->
-                if leaves.IsEmpty then None else
-                Some(id, { proof with Uses = proof.Participants |> Set.toList |> List.map (fun participant -> participant, observedUses participant) |> Map.ofList }))
-        | _ -> None) |> Map.ofList
+                                                               @ (required |> Set.toList |> List.collect (fun code -> candidates[code].Calls))) }, leaves)
+                | _ -> false, None
+            let finalResult = result |> Option.map (fun (proof, leaves) -> { proof with Participants = Set.add id proof.Participants }, leaves)
+            if not hadCycle then
+                occurrenceMemo[key] <- finalResult
+            hadCycle, finalResult
+    let occurrence retained seen id =
+        let _, res = occurrenceCore retained seen id
+        res
+    let gate = obj()
     let accesses = Dictionary<NodeId, Access option>()
     let access id =
         match accesses.TryGetValue id with
@@ -877,15 +966,46 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
         | _ ->
             let value = continuationSource Set.empty id |> Option.map (fun (source, participants) ->
                 { Source = source; Participants = Set.add id participants })
-            accesses.Add(id, value)
+            accesses[id] <- value
             value
-    let retained = evidence |> Map.toList |> List.choose (fun (id, _) ->
-        match nodes[id].Kind with
-        | SemanticKind.FrameRead _ ->
-            access id |> Option.bind (fun current ->
-                occurrence true Set.empty current.Source |> Option.map (fun (proof, _) ->
-                    current.Source, { proof with Participants = Set.union proof.Participants current.Participants }))
-        | _ -> None) |> Map.ofList
+    let evidence = lazy (
+        lock gate (fun () ->
+            nodes |> Map.toList |> List.choose (fun (id, node) ->
+                match applySubst node.Type with
+                | NativeType.TFun _ ->
+                    occurrence false Set.empty id |> Option.bind (fun (proof, leaves) ->
+                        if leaves.IsEmpty then None else
+                        Some(id, { proof with Uses = proof.Participants |> Set.toList |> List.map (fun participant -> participant, observedUses participant) |> Map.ofList }))
+                | _ -> None) |> Map.ofList))
+    let retained = lazy (
+        let currentEvidence = evidence.Value
+        lock gate (fun () ->
+            currentEvidence |> Map.toList |> List.choose (fun (id, _) ->
+                match nodes[id].Kind with
+                | SemanticKind.FrameRead _ ->
+                    access id |> Option.bind (fun current ->
+                        occurrence true Set.empty current.Source |> Option.map (fun (proof, _) ->
+                            current.Source, { proof with Participants = Set.union proof.Participants current.Participants }))
+                | _ -> None) |> Map.ofList))
+    let allowedOccurrences = Dictionary<NodeId, bool>()
+    let allowsOccurrenceCore id =
+        if evidence.IsValueCreated then
+            evidence.Value.ContainsKey id
+        else
+            match allowedOccurrences.TryGetValue id with
+            | true, cached -> cached
+            | false, _ ->
+                let allowed =
+                    match nodes.TryFind id with
+                    | Some node ->
+                        match applySubst node.Type with
+                        | NativeType.TFun _ ->
+                            occurrence false Set.empty id
+                            |> Option.exists (fun (_, leaves) -> not leaves.IsEmpty)
+                        | _ -> false
+                    | None -> false
+                allowedOccurrences[id] <- allowed
+                allowed
     let familyEvidence required =
         let participants = required |> Set.fold (fun found code -> Set.union found candidates[code].Participants) Set.empty
         let lazyForces = required |> Set.fold (fun found code -> Set.union found candidates[code].UsedLazyForces) Set.empty
@@ -894,21 +1014,39 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                      Calls = required |> Set.toList |> List.collect (fun code -> candidates[code].Calls) |> List.distinct
                      Uses = participants |> Set.toList |> List.map (fun id -> id, observedUses id) |> Map.ofList }
     let closedImplementation implementation = closed implementation |> Option.map familyEvidence
-    { Evidence = evidence; RetainedEvidence = retained; Access = access
-      StorageAccess = fun id -> storageAccess id |> Option.map fst
-      SlotAccess = slotAccess
+    { Evidence = evidence; RetainedEvidence = retained
+      AllowsOccurrence = fun id -> lock gate (fun () -> allowsOccurrenceCore id)
+      Access = fun id -> lock gate (fun () -> access id)
+      StorageAccess = fun id -> lock gate (fun () -> storageAccess id |> Option.map fst)
+      SlotAccess = fun owner slot -> lock gate (fun () -> slotAccess owner slot)
       ValueIdentity = fun id ->
-          originalIdentity Set.empty id |> Option.map (fun (source, participants) ->
-              { Source = source; Participants = participants })
-      ClosedImplementation = closedImplementation
+          lock gate (fun () ->
+              originalIdentity Set.empty id |> Option.map (fun (source, participants) ->
+                  { Source = source; Participants = participants }))
+      ClosedImplementation = fun implementation -> lock gate (fun () -> closedImplementation implementation)
       Family = fun implementation ->
-          family implementation |> Option.map (fun (required, reached) ->
-              { Evidence = familyEvidence required; Activated = reached })
-      ExecutionOwner = activation
-      Correspondence = fun source current -> corresponds Set.empty Set.empty source current }
+          lock gate (fun () ->
+              family implementation |> Option.map (fun (required, reached) ->
+                  { Evidence = familyEvidence required; Activated = reached }))
+      ExecutionOwner = fun id -> lock gate (fun () -> activation id)
+      Correspondence = fun source current -> lock gate (fun () -> corresponds Set.empty Set.empty source current) }
+
+let private readingsByResolution =
+    System.Runtime.CompilerServices.ConditionalWeakTable<CallableOrigins.Resolution, System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Reading>>()
+
+let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) =
+    let byGraph =
+        readingsByResolution.GetValue(
+            resolution,
+            System.Runtime.CompilerServices.ConditionalWeakTable<_, _>.CreateValueCallback(fun _ ->
+                System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Reading>()))
+    byGraph.GetValue(
+        graph,
+        System.Runtime.CompilerServices.ConditionalWeakTable<_, _>.CreateValueCallback(fun g ->
+            analyzeWithCore g resolution))
 
 let analyze graph = analyzeWith graph (CallableOrigins.resolve graph)
-let tryEvidence reading occurrence = reading.Evidence.TryFind occurrence
+let tryEvidence reading occurrence = reading.Evidence.Value.TryFind occurrence
 /// Complete implementation ingress, unlike a code-value occurrence's identity.
 let tryClosedImplementation reading implementation = reading.ClosedImplementation implementation
 /// Reuses the ingress owner's caller closure; consumers supply their own
@@ -945,7 +1083,7 @@ let closedFormalInputs (graph: SemanticGraph) (resolution: CallableOrigins.Resol
         | _ -> None
 /// Retained logical values are readable only through a validated current access;
 /// they remain absent from executable occurrence admission.
-let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.TryFind occurrence
+let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.Value.TryFind occurrence
 let tryAccess reading occurrence = reading.Access occurrence
 /// Immutable aliases preserve one actual formation frontier. Calls, formals,
 /// captured reads and frame reads remain distinct value instances; this never
@@ -956,4 +1094,4 @@ let tryStorageAccess reading occurrence = reading.StorageAccess occurrence
 /// Current control slot inputs under the checked cut/resume and storage census.
 let trySlotAccess reading owner slot = reading.SlotAccess owner slot
 let tryCorrespondence reading source current = reading.Correspondence source current
-let allowsOccurrence reading occurrence = reading.Evidence.ContainsKey occurrence
+let allowsOccurrence reading occurrence = reading.AllowsOccurrence occurrence

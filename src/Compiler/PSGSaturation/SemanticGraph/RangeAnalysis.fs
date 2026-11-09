@@ -122,6 +122,11 @@ let private joinWrites left right =
 /// binding, the refinement at every reference, the reachable constructions of every record type
 /// and the integer fields its definition declares, the values stored into arrays by element type,
 /// and the widening thresholds the platform declares.
+type private AggregateProjection =
+    | TupleSlot of int
+    | UnionPayload of int * string
+    | RecordField of TypeIdentity * string
+
 type private Program = {
     Graph: SemanticGraph
     Context: PlatformContext option
@@ -240,6 +245,11 @@ type private Program = {
     ElementSeeds: Map<TypeIdentity, ValueRange>
     Thresholds: ValueRange.Threshold list
     Fabric: bool
+    AtomsCache: System.Collections.Generic.Dictionary<NodeId * bool * int, (Compared * Refinement) list>
+    SourceEdgesByTarget: Lazy<Map<NodeId, Hyperedge list>>
+    RecordIncidenceCache: System.Collections.Generic.Dictionary<NodeId, bool>
+    ImmutableRecordFieldCache: System.Collections.Generic.Dictionary<NodeId * string, (TypeIdentity * TypeIdentity) option>
+    AggregateElementCache: System.Collections.Generic.Dictionary<NodeId * AggregateProjection list, bool * Set<NodeId>>
 }
 
 /// The parent of every node, read from the children lists (as NativeService.parentIndex).
@@ -535,23 +545,23 @@ let private isLiteralBool (program: Program) (id: NodeId) (value: bool) : bool =
 let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
     let candidates = escapingOf program.Reachable program.Ordered program.Parents
     let poisons = poisoningOf program.Reachable program.Ordered
-    let read effects id = Map.tryFind id effects |> Option.defaultValue noWrites
-    let union effects ids = ids |> List.fold (fun acc id -> joinWrites acc (read effects id)) noWrites
-    let rec invocation effects callee (args: NodeId list) =
+    let rec invocationSpec callee (args: NodeId list) : WriteEffect * NodeId list =
         match callee with
         | Callee.Direct (parameters, body) ->
-            if args.Length < parameters.Length then noWrites
-            elif program.ForeignEffectBodies.Contains body then unknownWrites
-            elif args.Length = parameters.Length then read effects body
+            if args.Length < parameters.Length then noWrites, []
+            elif program.ForeignEffectBodies.Contains body then unknownWrites, []
+            elif args.Length = parameters.Length then noWrites, [body]
             else
                 let surplus = List.skip parameters.Length args
                 let returned = Callee.Value (reachable program.Reachable candidates surplus, poisonReaches program.Reachable poisons surplus)
-                joinWrites (read effects body) (invocation effects returned surplus)
+                let subEffect, subDeps = invocationSpec returned surplus
+                subEffect, body :: subDeps
         | Callee.Value (possible, poisoned) ->
             let initial = if poisoned || List.isEmpty possible then unknownWrites else noWrites
-            possible |> List.fold (fun acc candidate ->
-                if args.Length < candidate.Parameters.Length - candidate.Offset then acc
-                else joinWrites acc (if program.ForeignEffectBodies.Contains candidate.Body then unknownWrites else read effects candidate.Body)) initial
+            possible |> List.fold (fun (accEffect, accDeps) candidate ->
+                if args.Length < candidate.Parameters.Length - candidate.Offset then accEffect, accDeps
+                elif program.ForeignEffectBodies.Contains candidate.Body then joinWrites accEffect unknownWrites, accDeps
+                else accEffect, candidate.Body :: accDeps) (initial, [])
         | Callee.Intrinsic info ->
             // The emission category is not a callback-effect declaration. Read
             // the existing callback table, and keep delayed/foreign operations
@@ -571,9 +581,9 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                 | IntrinsicCategory.Memory when List.isEmpty callbacks -> unknownWrites
                 | _ when delayed || unmodelledCallback -> unknownWrites
                 | _ -> noWrites
-            callbacks |> List.fold (fun acc (position, supplies) ->
+            callbacks |> List.fold (fun (accEffect, accDeps) (position, supplies) ->
                 match List.tryItem position args with
-                | None -> acc
+                | None -> accEffect, accDeps
                 | Some callback ->
                     let mutableCallback =
                         match Map.tryFind callback program.Reachable with
@@ -586,79 +596,104 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                         | Some { Kind = SemanticKind.VarRef (_, Some definition) } ->
                             lambdaOf program.Reachable definition |> Option.map (fun (_, _, body) -> [body])
                         | _ -> None
-                    let effect =
-                        match possible with
-                        | _ when mutableCallback -> unknownWrites
-                        | Some bodies -> union effects bodies
-                        | None ->
-                            // The callback argument supplies no concrete values
-                            // here; every escaped callable of this arity may run.
-                            let bodies = candidates |> List.filter (fun c -> c.Parameters.Length - c.Offset = supplies.Length) |> List.map (fun c -> c.Body)
-                            let seed = if List.isEmpty bodies || not (List.isEmpty poisons) then unknownWrites else noWrites
-                            joinWrites seed (union effects bodies)
-                    joinWrites acc effect) initial
-    let transfer effects (node: SemanticNode) =
-        match node.Kind with
-        | _ when program.InactiveOccurrences.Contains node.Id -> noWrites
-        | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ | SemanticKind.SeqExpr _
-        | SemanticKind.VarRef _ | SemanticKind.Quote _ -> noWrites
-        | SemanticKind.EnvironmentRead _ | SemanticKind.EnvironmentBorrow _ -> union effects node.Children
-        | SemanticKind.EnvironmentWrite(_, slot, value) ->
-            let store =
-                match program.EnvironmentCaptures.TryFind slot with
-                | Some (true, _) -> { noWrites with Definitions = Set.singleton slot }
-                | _ -> unknownWrites
-            joinWrites (union effects node.Children) (joinWrites (read effects value) store)
-        | SemanticKind.LazyWrite(_, _, value) ->
-            let store =
-                match program.LazyCaptures.TryFind node.Id with
-                | Some(slot, true, _, _) -> { noWrites with Definitions = Set.singleton slot }
-                | _ when program.LazyPrivateWrites.Contains node.Id -> noWrites
-                | _ -> unknownWrites
-            joinWrites (union effects node.Children) (joinWrites (read effects value) store)
-        | SemanticKind.FrameWrite(_, _, value) ->
-            let store =
-                match program.ContinuationWrites.TryFind node.Id with
-                | Some slot ->
-                    match program.Graph.Nodes.TryFind slot with
-                    | Some { Kind = SemanticKind.Binding(_, true, _, _) } -> { noWrites with Definitions = Set.singleton slot }
-                    | Some _ -> noWrites
-                    | None -> unknownWrites
-                | None -> unknownWrites
-            joinWrites (union effects node.Children) (joinWrites (read effects value) store)
-        | SemanticKind.Set (target, value) ->
-            let store =
-                match Map.tryFind target program.Reachable with
-                | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> { noWrites with Definitions = Set.singleton definition }
-                | _ -> unknownWrites
-            joinWrites (read effects value) store
-        | SemanticKind.Application (calleeId, arguments) ->
-            let root, _ = flattenApplication program.Reachable calleeId arguments
-            let mutableCallee =
-                match Map.tryFind root program.Reachable with
-                | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> isMutableDefinition program definition
-                | _ -> false
-            let call =
-                match Map.tryFind node.Id program.Callees with
-                | _ when mutableCallee -> unknownWrites
-                | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "moveNext" }, [iterator]) ->
-                    match program.SequencePullBodies.TryFind node.Id with
-                    | Some (actual, bodies) when actual = iterator -> union effects bodies
+                    match possible with
+                    | _ when mutableCallback -> joinWrites accEffect unknownWrites, accDeps
+                    | Some bodies -> accEffect, bodies @ accDeps
+                    | None ->
+                        // The callback argument supplies no concrete values
+                        // here; every escaped callable of this arity may run.
+                        let bodies = candidates |> List.filter (fun c -> c.Parameters.Length - c.Offset = supplies.Length) |> List.map (fun c -> c.Body)
+                        let seed = if List.isEmpty bodies || not (List.isEmpty poisons) then unknownWrites else noWrites
+                        joinWrites accEffect seed, bodies @ accDeps) (initial, [])
+    let nodeSpec (node: SemanticNode) : NodeId * WriteEffect * NodeId list =
+        let staticEffect, rawDeps =
+            match node.Kind with
+            | _ when program.InactiveOccurrences.Contains node.Id -> noWrites, []
+            | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ | SemanticKind.SeqExpr _
+            | SemanticKind.VarRef _ | SemanticKind.Quote _ -> noWrites, []
+            | SemanticKind.EnvironmentRead _ | SemanticKind.EnvironmentBorrow _ -> noWrites, node.Children
+            | SemanticKind.EnvironmentWrite(_, slot, value) ->
+                let store =
+                    match program.EnvironmentCaptures.TryFind slot with
+                    | Some (true, _) -> { noWrites with Definitions = Set.singleton slot }
                     | _ -> unknownWrites
-                | Some (Callee.Intrinsic { Module = IntrinsicModule.Seq; Operation = "getEnumerator" }, [_])
-                    when program.SequenceInitializations.Contains node.Id -> noWrites
-                | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [_])
-                    when program.SequenceCurrentReads.Contains node.Id -> noWrites
-                | Some (callee, args) -> invocation effects callee args
-                | None -> unknownWrites
-            joinWrites (union effects node.Children) call
-        | SemanticKind.LazyForce _ | SemanticKind.YieldBang _ | SemanticKind.TraitCall _ | SemanticKind.PlatformBinding _ ->
-            joinWrites (union effects node.Children) unknownWrites
-        | _ -> union effects node.Children
-    let rec settle effects =
-        let next = program.Ordered |> List.fold (fun acc node -> Map.add node.Id (transfer effects node) acc) Map.empty
-        if next = effects then effects else settle next
-    settle Map.empty
+                store, value :: node.Children
+            | SemanticKind.LazyWrite(_, _, value) ->
+                let store =
+                    match program.LazyCaptures.TryFind node.Id with
+                    | Some(slot, true, _, _) -> { noWrites with Definitions = Set.singleton slot }
+                    | _ when program.LazyPrivateWrites.Contains node.Id -> noWrites
+                    | _ -> unknownWrites
+                store, value :: node.Children
+            | SemanticKind.FrameWrite(_, _, value) ->
+                let store =
+                    match program.ContinuationWrites.TryFind node.Id with
+                    | Some slot ->
+                        match program.Graph.Nodes.TryFind slot with
+                        | Some { Kind = SemanticKind.Binding(_, true, _, _) } -> { noWrites with Definitions = Set.singleton slot }
+                        | Some _ -> noWrites
+                        | None -> unknownWrites
+                    | None -> unknownWrites
+                store, value :: node.Children
+            | SemanticKind.Set (target, value) ->
+                let store =
+                    match Map.tryFind target program.Reachable with
+                    | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> { noWrites with Definitions = Set.singleton definition }
+                    | _ -> unknownWrites
+                store, [value]
+            | SemanticKind.Application (calleeId, arguments) ->
+                let root, _ = flattenApplication program.Reachable calleeId arguments
+                let mutableCallee =
+                    match Map.tryFind root program.Reachable with
+                    | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> isMutableDefinition program definition
+                    | _ -> false
+                let callEffect, callDeps =
+                    match Map.tryFind node.Id program.Callees with
+                    | _ when mutableCallee -> unknownWrites, []
+                    | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "moveNext" }, [iterator]) ->
+                        match program.SequencePullBodies.TryFind node.Id with
+                        | Some (actual, bodies) when actual = iterator -> noWrites, bodies
+                        | _ -> unknownWrites, []
+                    | Some (Callee.Intrinsic { Module = IntrinsicModule.Seq; Operation = "getEnumerator" }, [_])
+                        when program.SequenceInitializations.Contains node.Id -> noWrites, []
+                    | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [_])
+                        when program.SequenceCurrentReads.Contains node.Id -> noWrites, []
+                    | Some (callee, args) -> invocationSpec callee args
+                    | None -> unknownWrites, []
+                callEffect, node.Children @ callDeps
+            | SemanticKind.LazyForce _ | SemanticKind.YieldBang _ | SemanticKind.TraitCall _ | SemanticKind.PlatformBinding _ ->
+                unknownWrites, node.Children
+            | _ -> noWrites, node.Children
+        node.Id, staticEffect, List.distinct rawDeps
+    let specs = program.Ordered |> List.map nodeSpec |> List.toArray
+    let effectsDict = System.Collections.Generic.Dictionary<NodeId, WriteEffect>(specs.Length)
+    for i = 0 to specs.Length - 1 do
+        let (nodeId, staticEffect, _) = specs.[i]
+        effectsDict[nodeId] <- staticEffect
+    let mutable changed = true
+    while changed do
+        changed <- false
+        for i = specs.Length - 1 downto 0 do
+            let (nodeId, _, deps) = specs.[i]
+            if not deps.IsEmpty then
+                let prevVal = effectsDict[nodeId]
+                if not prevVal.Unknown then
+                    let mutable nextVal = prevVal
+                    let mutable d = deps
+                    while not d.IsEmpty && not nextVal.Unknown do
+                        let depId = d.Head
+                        d <- d.Tail
+                        match effectsDict.TryGetValue(depId) with
+                        | true, depEffect ->
+                            if depEffect.Unknown then
+                                nextVal <- unknownWrites
+                            elif not depEffect.Definitions.IsEmpty && not (Set.isSubset depEffect.Definitions nextVal.Definitions) then
+                                nextVal <- { nextVal with Definitions = Set.union nextVal.Definitions depEffect.Definitions }
+                        | false, _ -> ()
+                    if nextVal.Unknown <> prevVal.Unknown || not (obj.ReferenceEquals(nextVal.Definitions, prevVal.Definitions)) then
+                        effectsDict[nodeId] <- nextVal
+                        changed <- true
+    effectsDict |> Seq.map (fun kvp -> kvp.Key, kvp.Value) |> Map.ofSeq
 
 let private effectAt (program: Program) id = Map.tryFind id program.Effects |> Option.defaultValue noWrites
 
@@ -707,6 +742,17 @@ let private flip (r: Relation) : Relation =
 /// a comparison of a reference against any expression, through `not`, `&&`, `||` (and Baker's
 /// conditional forms of them), a boolean binding's definition and a type annotation.
 let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarity: bool) : (Compared * Refinement) list =
+    if depth > 8 then []
+    else
+        let key = guardId, polarity, depth
+        match program.AtomsCache.TryGetValue key with
+        | true, cached -> cached
+        | false, _ ->
+            let computed = atomsUncached program depth guardId polarity
+            program.AtomsCache[key] <- computed
+            computed
+
+and private atomsUncached (program: Program) (depth: int) (guardId: NodeId) (polarity: bool) : (Compared * Refinement) list =
     if depth > 8 then []
     else
         match Map.tryFind guardId program.Reachable with
@@ -813,136 +859,188 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
             | None -> []
         | _ -> []
 
-/// The descendants of a node through its children, the node included.
-let private subtreeOf (program: Program) (rootId: NodeId) : Set<NodeId> =
-    let rec walk (acc: Set<NodeId>) (id: NodeId) =
-        if Set.contains id acc then acc
-        else
-            match Map.tryFind id program.Reachable with
-            | None -> acc
-            | Some node -> node.Children |> List.fold walk (Set.add id acc)
-    walk Set.empty rootId
-
-/// The bounds among `bounds` that a read of `operand` is subject to: through a reference, the
-/// bounds on its binding; of a binding itself (a reference's own read of its definition), the
-/// bounds on that binding; otherwise the bounds on that very node.
 let private boundsOn (program: Program) (bounds: (Compared * Refinement) list) (operand: NodeId) : Refinement list =
-    let keys =
-        match Map.tryFind operand program.Reachable with
-        | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> [ Compared.Definition defId ]
-        | Some { Kind = SemanticKind.EnvironmentRead(_, slot) } when program.EnvironmentCaptures.ContainsKey slot -> [ Compared.Definition slot ]
-        | Some { Kind = SemanticKind.LazyRead _ } ->
-            match program.LazyCaptures.TryFind operand with
-            | Some(slot, _, _, _) -> [ Compared.Definition slot ]
-            | None -> [ Compared.Node operand ]
-        | Some { Kind = SemanticKind.Binding _ } | Some { Kind = SemanticKind.PatternBinding _ } -> [ Compared.Definition operand; Compared.Node operand ]
-        | _ -> [ Compared.Node operand ]
-    bounds |> List.filter (fun (k, _) -> List.contains k keys) |> List.map snd
-
-let private addEdge (consumer: NodeId) (operand: NodeId) (refs: Refinement list)
-                    (acc: Map<NodeId, Map<NodeId, Refinement list>>) : Map<NodeId, Map<NodeId, Refinement list>> =
-    if List.isEmpty refs then acc
-    else
-        let edges = Map.tryFind consumer acc |> Option.defaultValue Map.empty
-        let existing = Map.tryFind operand edges |> Option.defaultValue []
-        Map.add consumer (Map.add operand (existing @ refs) edges) acc
-
-/// Guard facts follow evaluation order. Each parent's operand edge is recorded
-/// after that operand is evaluated, before a later operand or the call body can
-/// write a cell. A value already read therefore remains a valid snapshot.
-let private refineEdges (program: Program) (rootId: NodeId) (excluded: Set<NodeId>) (bounds: (Compared * Refinement) list)
-                        (acc: Map<NodeId, Map<NodeId, Refinement list>> * Map<NodeId, (Compared * Refinement) list>) =
-    if List.isEmpty bounds then acc
-    else
-        let mutableDefs =
-            bounds |> List.choose (fun (k, _) -> match k with Compared.Definition d when isMutableDefinition program d -> Some d | _ -> None) |> Set.ofList
-        let invalidate assigned effect =
-            Set.union assigned (if effect.Unknown then mutableDefs else effect.Definitions)
-        let live assigned inLambda =
-            bounds |> List.filter (fun (key, _) ->
-                match key with
-                | Compared.Definition definition when Set.contains definition mutableDefs ->
-                    not inLambda && not (Set.contains definition assigned)
-                | _ -> true)
-        let rec walk inLambda (assigned, edges) id =
-            match Map.tryFind id program.Reachable with
-            | None -> assigned, edges
-            | Some node ->
-                let edges =
-                    let own = live assigned inLambda
-                    if Set.contains id excluded || List.isEmpty own then edges
-                    else
-                        let previous = Map.tryFind id (snd edges) |> Option.defaultValue []
-                        fst edges, Map.add id (List.distinct (previous @ own)) (snd edges)
-                let record assigned (reads, guards) operand =
-                    if Set.contains id excluded then reads, guards
-                    else addEdge id operand (boundsOn program (live assigned inLambda) operand) reads, guards
-                let operand (assigned, edges) child =
-                    let assigned, edges = walk inLambda (assigned, edges) child
-                    assigned, record assigned edges child
-                match node.Kind with
-                | SemanticKind.VarRef (_, Some definition) -> assigned, record assigned edges definition
-                | SemanticKind.EnvironmentRead(environment, slot) ->
-                    let assigned, edges = operand (assigned, edges) environment
-                    assigned, record assigned edges slot
-                | SemanticKind.LazyRead(environment, _) ->
-                    let assigned, edges = operand (assigned, edges) environment
-                    match program.LazyCaptures.TryFind id with
-                    | Some(slot, _, _, _) -> assigned, record assigned edges slot
-                    | None -> assigned, edges
-                | SemanticKind.Set (_, value) ->
-                    let assigned, edges = operand (assigned, edges) value
-                    invalidate assigned (effectAt program id), edges
-                | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ | SemanticKind.SeqExpr _ ->
-                    // Constructing a delayed value does not execute its body.
-                    // Immutable observations can still refine its later reads.
-                    let _, edges = node.Children |> List.fold (walk true) (assigned, edges)
-                    assigned, edges
-                | SemanticKind.IfThenElse (guard, yes, no) ->
-                    let afterGuard, edges = operand (assigned, edges) guard
-                    let afterYes, edges = operand (afterGuard, edges) yes
-                    let afterNo, edges =
-                        match no with
-                        | Some branch -> operand (afterGuard, edges) branch
-                        | None -> afterGuard, edges
-                    Set.union afterYes afterNo, edges
-                | SemanticKind.WhileLoop _ | SemanticKind.ForLoop _ | SemanticKind.ForEach _ ->
-                    // Outer guard facts must survive every iteration, including
-                    // transitive calls, to constrain even the loop's first read.
-                    let assigned = invalidate assigned (effectAt program id)
-                    node.Children |> List.fold operand (assigned, edges)
-                | _ ->
-                    let assigned, edges = node.Children |> List.fold operand (assigned, edges)
-                    invalidate assigned (effectAt program id), edges
-        snd (walk false (Set.empty, acc) rootId)
+    match bounds with
+    | [] -> []
+    | _ ->
+        let k1, k2Opt =
+            match Map.tryFind operand program.Reachable with
+            | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> Compared.Definition defId, ValueNone
+            | Some { Kind = SemanticKind.EnvironmentRead(_, slot) } when program.EnvironmentCaptures.ContainsKey slot -> Compared.Definition slot, ValueNone
+            | Some { Kind = SemanticKind.LazyRead _ } ->
+                match program.LazyCaptures.TryFind operand with
+                | Some(slot, _, _, _) -> Compared.Definition slot, ValueNone
+                | None -> Compared.Node operand, ValueNone
+            | Some { Kind = SemanticKind.Binding _ } | Some { Kind = SemanticKind.PatternBinding _ } ->
+                Compared.Definition operand, ValueSome (Compared.Node operand)
+            | _ -> Compared.Node operand, ValueNone
+        match k2Opt with
+        | ValueNone ->
+            bounds |> List.choose (fun (k, r) -> if k = k1 then Some r else None)
+        | ValueSome k2 ->
+            bounds |> List.choose (fun (k, r) -> if k = k1 || k = k2 then Some r else None)
 
 /// The refinements of the whole program: for every reachable `if`, the guard's bounds on the
 /// then-branch's reads and their complements on the else-branch's, the `if`'s own read of each
 /// branch included; for every `while`, the guard's bounds on the body's reads.
 let private refinementsOf (program: Program) =
-    program.Ordered
-    |> List.fold (fun acc node ->
+    let emptyHashSet = System.Collections.Generic.HashSet<NodeId>()
+    let subtreeCache = System.Collections.Generic.Dictionary<NodeId, System.Collections.Generic.HashSet<NodeId>>()
+    let cachedSubtree (id: NodeId) : System.Collections.Generic.HashSet<NodeId> =
+        match subtreeCache.TryGetValue(id) with
+        | true, cached -> cached
+        | false, _ ->
+            let seen = System.Collections.Generic.HashSet<NodeId>()
+            let pending = System.Collections.Generic.Stack<NodeId>()
+            pending.Push id
+            while pending.Count > 0 do
+                let current = pending.Pop()
+                match Map.tryFind current program.Reachable with
+                | Some node when seen.Add current ->
+                    for child in node.Children do pending.Push child
+                | _ -> ()
+            subtreeCache[id] <- seen
+            seen
+    let readsAcc = System.Collections.Generic.Dictionary<NodeId, System.Collections.Generic.Dictionary<NodeId, ResizeArray<Refinement>>>()
+    let guardsAcc = System.Collections.Generic.Dictionary<NodeId, ResizeArray<Compared * Refinement>>()
+    let addEdgeMut (consumer: NodeId) (operand: NodeId) (refs: Refinement list) =
+        match refs with
+        | [] -> ()
+        | _ ->
+            let inner =
+                match readsAcc.TryGetValue(consumer) with
+                | true, d -> d
+                | false, _ ->
+                    let d = System.Collections.Generic.Dictionary<NodeId, ResizeArray<Refinement>>(2)
+                    readsAcc[consumer] <- d
+                    d
+            let list =
+                match inner.TryGetValue(operand) with
+                | true, l -> l
+                | false, _ ->
+                    let l = ResizeArray<Refinement>(4)
+                    inner[operand] <- l
+                    l
+            for r in refs do
+                list.Add(r)
+    let addGuardMut (id: NodeId) (own: (Compared * Refinement) list) =
+        match own with
+        | [] -> ()
+        | _ ->
+            let list =
+                match guardsAcc.TryGetValue(id) with
+                | true, l -> l
+                | false, _ ->
+                    let l = ResizeArray<Compared * Refinement>(4)
+                    guardsAcc[id] <- l
+                    l
+            for item in own do
+                if not (list.Contains(item)) then
+                    list.Add(item)
+    let refineEdgesMut (rootId: NodeId) (excl1: System.Collections.Generic.HashSet<NodeId>) (excl2: System.Collections.Generic.HashSet<NodeId>) (bounds: (Compared * Refinement) list) =
+        if not (List.isEmpty bounds) then
+            let mutableDefs =
+                bounds |> List.choose (fun (k, _) -> match k with Compared.Definition d when isMutableDefinition program d -> Some d | _ -> None) |> Set.ofList
+            let hasMutables = not mutableDefs.IsEmpty
+            let invalidate assigned effect =
+                if not hasMutables then Set.empty
+                else Set.union assigned (if effect.Unknown then mutableDefs else effect.Definitions)
+            let live (assigned: Set<NodeId>) inLambda =
+                if not hasMutables then bounds
+                elif not inLambda && assigned.IsEmpty then bounds
+                else
+                    bounds |> List.filter (fun (key, _) ->
+                        match key with
+                        | Compared.Definition definition when Set.contains definition mutableDefs ->
+                            not inLambda && not (Set.contains definition assigned)
+                        | _ -> true)
+            let inline isExcluded (id: NodeId) = excl1.Contains(id) || excl2.Contains(id)
+            let rec walk inLambda (assigned: Set<NodeId>) (id: NodeId) : Set<NodeId> =
+                match Map.tryFind id program.Reachable with
+                | None -> assigned
+                | Some node ->
+                    let excluded = isExcluded id
+                    if not excluded then
+                        let own = live assigned inLambda
+                        addGuardMut id own
+                    let record (curAssigned: Set<NodeId>) (operand: NodeId) =
+                        if not excluded then
+                            addEdgeMut id operand (boundsOn program (live curAssigned inLambda) operand)
+                    let operand (curAssigned: Set<NodeId>) (child: NodeId) : Set<NodeId> =
+                        let nextAssigned = walk inLambda curAssigned child
+                        record nextAssigned child
+                        nextAssigned
+                    match node.Kind with
+                    | SemanticKind.VarRef (_, Some definition) ->
+                        record assigned definition
+                        assigned
+                    | SemanticKind.EnvironmentRead(environment, slot) ->
+                        let nextAssigned = operand assigned environment
+                        record nextAssigned slot
+                        nextAssigned
+                    | SemanticKind.LazyRead(environment, _) ->
+                        let nextAssigned = operand assigned environment
+                        match program.LazyCaptures.TryFind id with
+                        | Some(slot, _, _, _) -> record nextAssigned slot
+                        | None -> ()
+                        nextAssigned
+                    | SemanticKind.Set (_, value) ->
+                        let nextAssigned = operand assigned value
+                        invalidate nextAssigned (effectAt program id)
+                    | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ | SemanticKind.SeqExpr _ ->
+                        for child in node.Children do
+                            walk true assigned child |> ignore
+                        assigned
+                    | SemanticKind.IfThenElse (guard, yes, no) ->
+                        let afterGuard = operand assigned guard
+                        let afterYes = operand afterGuard yes
+                        let afterNo =
+                            match no with
+                            | Some branch -> operand afterGuard branch
+                            | None -> afterGuard
+                        Set.union afterYes afterNo
+                    | SemanticKind.WhileLoop _ | SemanticKind.ForLoop _ | SemanticKind.ForEach _ ->
+                        let nextAssigned = invalidate assigned (effectAt program id)
+                        node.Children |> List.fold operand nextAssigned
+                    | _ ->
+                        let nextAssigned = node.Children |> List.fold operand assigned
+                        invalidate nextAssigned (effectAt program id)
+            walk false Set.empty rootId |> ignore
+    for node in program.Ordered do
         match node.Kind with
         | SemanticKind.IfThenElse (guardId, thenId, elseId) ->
             let positive = atoms program 0 guardId true
             let negative = atoms program 0 guardId false
-            if List.isEmpty positive && List.isEmpty negative then acc
-            else
-                let guardSet = subtreeOf program guardId
-                let thenSet = subtreeOf program thenId
-                let elseSet = elseId |> Option.map (subtreeOf program) |> Option.defaultValue Set.empty
-                let acc = refineEdges program thenId (Set.union guardSet elseSet) positive acc
-                let acc = addEdge node.Id thenId (boundsOn program positive thenId) (fst acc), snd acc
+            if not (List.isEmpty positive && List.isEmpty negative) then
+                let guardSet = cachedSubtree guardId
+                let thenSet = cachedSubtree thenId
+                let elseSet = elseId |> Option.map cachedSubtree |> Option.defaultValue emptyHashSet
+                refineEdgesMut thenId guardSet elseSet positive
+                addEdgeMut node.Id thenId (boundsOn program positive thenId)
                 match elseId with
                 | Some e ->
-                    let acc = refineEdges program e (Set.union guardSet thenSet) negative acc
-                    addEdge node.Id e (boundsOn program negative e) (fst acc), snd acc
-                | None -> acc
+                    refineEdgesMut e guardSet thenSet negative
+                    addEdgeMut node.Id e (boundsOn program negative e)
+                | None -> ()
         | SemanticKind.WhileLoop (guardId, bodyId) ->
             let positive = atoms program 0 guardId true
-            if List.isEmpty positive then acc
-            else refineEdges program bodyId (subtreeOf program guardId) positive acc
-        | _ -> acc) (Map.empty, Map.empty)
+            if not (List.isEmpty positive) then
+                refineEdgesMut bodyId (cachedSubtree guardId) emptyHashSet positive
+        | _ -> ()
+    let readsMap =
+        readsAcc
+        |> Seq.map (fun kvp ->
+            let innerMap =
+                kvp.Value
+                |> Seq.map (fun innerKvp -> innerKvp.Key, Seq.toList innerKvp.Value)
+                |> Map.ofSeq
+            kvp.Key, innerMap)
+        |> Map.ofSeq
+    let guardsMap =
+        guardsAcc
+        |> Seq.map (fun kvp -> kvp.Key, Seq.toList kvp.Value)
+        |> Map.ofSeq
+    readsMap, guardsMap
 
 /// The range `r` met with the bound `r Relation k`.
 let private refine (r: ValueRange) (relation: Relation) (k: ValueRange) : ValueRange =
@@ -1135,16 +1233,19 @@ let private sequenceEffectSources (currentCorrespondence: Lazy<Clef.Compiler.Bak
                     else pulls, initializers
                 | _ -> pulls, initializers
             | _ -> pulls, initializers) (Map.empty, Set.empty)
-    let consumers = Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.structuralConsumers graph
     let currentReads =
-        edges |> List.choose (fun certificate ->
-            match certificate.Role, certificate.Sources with
-            | EdgeRole.IteratorCurrentAdmitted, [_; _; loop] ->
-                nodes.TryFind loop
-                |> Option.bind (Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.forLoop graph consumers)
-                |> Option.bind (fun actual ->
-                    if actual.Target = certificate.Target && actual.Sources = certificate.Sources then Some actual.Target else None)
-            | _ -> None) |> Set.ofList
+        let certificates = edges |> List.filter (fun edge -> edge.Role = EdgeRole.IteratorCurrentAdmitted)
+        if certificates.IsEmpty then Set.empty
+        else
+            let consumers = Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.structuralConsumers graph
+            certificates |> List.choose (fun certificate ->
+                match certificate.Sources with
+                | [_; _; loop] ->
+                    nodes.TryFind loop
+                    |> Option.bind (Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.forLoop graph consumers)
+                    |> Option.bind (fun actual ->
+                        if actual.Target = certificate.Target && actual.Sources = certificate.Sources then Some actual.Target else None)
+                | _ -> None) |> Set.ofList
     let currentReads = currentCorrespondence.Value |> List.fold (fun sites proof -> Set.add proof.Current sites) currentReads
     pullBodies, initializations, currentReads
 
@@ -1156,18 +1257,19 @@ let private environmentCaptureSources (graph: SemanticGraph) =
         graph.Edges |> List.choose (fun edge ->
             match edge.Class, edge.Role, edge.Sources with
             | EdgeClass.Provenance, EdgeRole.EnvironmentCapture isMutable, [owner; slot; value] ->
-                Some (edge.Target, edge.Ordinal, owner, slot, value, isMutable)
+                Some ((edge.Target, edge.Ordinal, slot), (owner, value, isMutable))
             | _ -> None)
+        |> List.groupBy fst
+        |> Map.ofList
     graph.Nodes.Values
     |> Seq.filter _.IsReachable
     |> Seq.collect (fun node ->
         match node.Kind with
         | SemanticKind.EnvironmentCreate(owner, initializers) ->
             initializers |> List.mapi (fun ordinal (slot, value) ->
-                let rows = captures |> List.filter (fun (target, order, _, source, _, _) -> target = node.Id && order = ordinal && source = slot)
                 let admitted =
-                    match rows with
-                    | [(_, _, actualOwner, _, actualValue, isMutable)]
+                    match Map.tryFind (node.Id, ordinal, slot) captures with
+                    | Some [(_, (actualOwner, actualValue, isMutable))]
                         when actualOwner = owner && actualValue = value && graph.Nodes.ContainsKey slot && graph.Nodes.ContainsKey value ->
                         Some (isMutable, (node.Id, value))
                     | _ -> None
@@ -1420,6 +1522,16 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         ElementSeeds = Map.empty
         Thresholds = thresholdsOf context
         Fabric = context |> Option.exists (fun ctx -> PlatformContext.substrateKind ctx = SubstrateKind.FPGA)
+        AtomsCache = System.Collections.Generic.Dictionary<NodeId * bool * int, (Compared * Refinement) list>()
+        SourceEdgesByTarget =
+            lazy (
+                graph.Edges
+                |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+                |> List.groupBy _.Target
+                |> Map.ofList)
+        RecordIncidenceCache = System.Collections.Generic.Dictionary<NodeId, bool>()
+        ImmutableRecordFieldCache = System.Collections.Generic.Dictionary<NodeId * string, (TypeIdentity * TypeIdentity) option>()
+        AggregateElementCache = System.Collections.Generic.Dictionary<NodeId * AggregateProjection list, bool * Set<NodeId>>()
     }
     let parameters =
         ordered
@@ -1816,18 +1928,23 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         | Some { Kind = SemanticKind.Intrinsic _ } -> None
         | _ -> Some []
     let referenceParameters = descriptors.Functions |> List.collect (fun f -> f.References) |> Map.ofList
+    let arrayAllocationDefaults =
+        graph.Edges
+        |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.ArrayAllocationConstruction construction ->
+                construction.Default |> Option.map (fun value -> construction.Site, value)
+            | _ -> None)
+        |> List.groupBy fst
+        |> Map.ofList
     let (elementStores, elementSeeds) =
         ordered
         |> List.fold (fun (stores: Map<TypeIdentity, (NodeId * NodeId) list>, seeds: Map<TypeIdentity, ValueRange>) node ->
             let typeOf (id: NodeId) = Map.tryFind id reachableNodes |> Option.map (fun n -> n.Type)
             match node.Kind with
             | SemanticKind.ArrayAllocate _ ->
-                let defaults=graph.Edges |> List.choose(fun edge ->
-                    match edge.Role with
-                    | EdgeRole.ArrayAllocationConstruction construction when construction.Site=node.Id -> construction.Default
-                    | _ -> None)
-                match arrayElementType node.Type,defaults with
-                | Some elem,[value] -> store (elementKey elem) node.Id value stores,seeds
+                match arrayElementType node.Type, Map.tryFind node.Id arrayAllocationDefaults with
+                | Some elem, Some [(_, value)] -> store (elementKey elem) node.Id value stores,seeds
                 | _ -> stores,seeds
             | SemanticKind.ArrayExpr elements ->
                 match arrayElementType node.Type with
@@ -2138,74 +2255,80 @@ let private indexBelow (n: ValueRange) : ValueRange =
     | Some (_, ValueRange.Endpoint.PosInf) -> ValueRange.Above bigint.Zero
     | _ -> ValueRange.Empty
 
-type private AggregateProjection =
-    | TupleSlot of int
-    | UnionPayload of int * string
-    | RecordField of TypeIdentity * string
-
 /// Kind/Children own syntax incidence. Native F can omit cached copies, but
 /// every recorded copy must agree and must occur only once.
 let private recordIncidenceAgrees (program: Program) (node: SemanticNode) =
-    let sourceEdge (edge: Hyperedge) = edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference
-    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources
-    let actual =
-        program.Graph.Edges
-        |> List.filter (fun edge -> edge.Target = node.Id && sourceEdge edge)
-        |> List.map key
-    let expected =
-        Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node
-        |> List.filter sourceEdge
-        |> List.map key
-    actual.Length = (List.distinct actual).Length && List.forall (fun row -> List.contains row expected) actual
+    match program.RecordIncidenceCache.TryGetValue node.Id with
+    | true, cached -> cached
+    | false, _ ->
+        let sourceEdge (edge: Hyperedge) = edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference
+        let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources
+        let expected =
+            Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node
+            |> List.filter sourceEdge
+            |> List.map key
+        let agrees =
+            program.SourceEdgesByTarget.Value.TryFind node.Id
+            |> Option.forall (fun edges ->
+                let actual = edges |> List.map key
+                actual.Length = (List.distinct actual).Length && List.forall (fun row -> List.contains row expected) actual)
+        program.RecordIncidenceCache[node.Id] <- agrees
+        agrees
 
 /// A construction can supply an aggregate-valued field only when the exact
 /// source declaration makes that field immutable. Mutable field stores need a
 /// separate complete write census; a cached scalar FieldRanges entry is not it.
 let private immutableRecordField (program: Program) recordId field =
-    match Map.tryFind recordId program.Reachable with
-    | Some receiver ->
-        match applySubst receiver.Type with
-        | NativeType.TApp(constructor, _) ->
-            let nominal = NominalTypeIdentity.ofConstructor constructor
-            match RecordInstances.tryDefinition nominal program.Graph with
-            | Some declaration ->
-                match declaration.Kind, declaration.Metadata.TryFind "TypeDef.MutableFields" with
-                | SemanticKind.TypeDef(_, TypeDefKind.RecordDef _, _), Some(MetadataValue.StringList mutableFields)
-                    when not (List.contains field mutableFields) ->
-                    let affects receiverId name =
-                        name = field &&
-                        (match Map.tryFind receiverId program.Reachable with
-                         | Some target ->
-                             match applySubst target.Type with
-                             | NativeType.TApp(actual, _) -> NominalTypeIdentity.ofConstructor actual = nominal
-                             | _ -> true
-                         | None -> true)
-                    let written =
-                        program.Ordered
-                        |> List.exists (fun node ->
-                            match node.Kind with
-                            | SemanticKind.FieldSet(receiver, name, _) | SemanticKind.FieldAddress(receiver, name) -> affects receiver name
-                            | SemanticKind.Set(target, _) ->
-                                match Map.tryFind target program.Reachable with
-                                | Some { Kind = SemanticKind.FieldGet(receiver, name) } -> affects receiver name
-                                | _ -> false
-                            | SemanticKind.AddressOf(target, _) ->
-                                match Map.tryFind target program.Reachable with
-                                | Some { Kind = SemanticKind.FieldGet(receiver, name) } -> affects receiver name
-                                // No address-origin algebra is claimed by this
-                                // bounded immutable-field reader.
-                                | _ -> true
-                            | SemanticKind.CellAddress _ -> true
-                            | _ -> false)
-                    if written then None
-                    else
-                        match RecordInstances.tryFields receiver.Type program.Graph |> Option.map (List.filter (fst >> (=) field)) with
-                        | Some [_, fieldType] -> Some(RecordInstances.layoutKey receiver.Type, RecordInstances.layoutKey fieldType)
+    match program.ImmutableRecordFieldCache.TryGetValue((recordId, field)) with
+    | true, cached -> cached
+    | false, _ ->
+        let computed =
+            match Map.tryFind recordId program.Reachable with
+            | Some receiver ->
+                match applySubst receiver.Type with
+                | NativeType.TApp(constructor, _) ->
+                    let nominal = NominalTypeIdentity.ofConstructor constructor
+                    match RecordInstances.tryDefinition nominal program.Graph with
+                    | Some declaration ->
+                        match declaration.Kind, declaration.Metadata.TryFind "TypeDef.MutableFields" with
+                        | SemanticKind.TypeDef(_, TypeDefKind.RecordDef _, _), Some(MetadataValue.StringList mutableFields)
+                            when not (List.contains field mutableFields) ->
+                            let affects receiverId name =
+                                name = field &&
+                                (match Map.tryFind receiverId program.Reachable with
+                                 | Some target ->
+                                     match applySubst target.Type with
+                                     | NativeType.TApp(actual, _) -> NominalTypeIdentity.ofConstructor actual = nominal
+                                     | _ -> true
+                                 | None -> true)
+                            let written =
+                                program.Ordered
+                                |> List.exists (fun node ->
+                                    match node.Kind with
+                                    | SemanticKind.FieldSet(receiver, name, _) | SemanticKind.FieldAddress(receiver, name) -> affects receiver name
+                                    | SemanticKind.Set(target, _) ->
+                                        match Map.tryFind target program.Reachable with
+                                        | Some { Kind = SemanticKind.FieldGet(receiver, name) } -> affects receiver name
+                                        | _ -> false
+                                    | SemanticKind.AddressOf(target, _) ->
+                                        match Map.tryFind target program.Reachable with
+                                        | Some { Kind = SemanticKind.FieldGet(receiver, name) } -> affects receiver name
+                                        // No address-origin algebra is claimed by this
+                                        // bounded immutable-field reader.
+                                        | _ -> true
+                                    | SemanticKind.CellAddress _ -> true
+                                    | _ -> false)
+                            if written then None
+                            else
+                                match RecordInstances.tryFields receiver.Type program.Graph |> Option.map (List.filter (fst >> (=) field)) with
+                                | Some [_, fieldType] -> Some(RecordInstances.layoutKey receiver.Type, RecordInstances.layoutKey fieldType)
+                                | _ -> None
                         | _ -> None
+                    | None -> None
                 | _ -> None
             | None -> None
-        | _ -> None
-    | None -> None
+        program.ImmutableRecordFieldCache[(recordId, field)] <- computed
+        computed
 
 /// The range of a projection of an aggregate-valued expression, read through the constructions the
 /// expression can evaluate to (a tuple is not a node with one range; its elements are joined by
@@ -2217,104 +2340,121 @@ let private immutableRecordField (program: Program) recordId field =
 /// Projection paths compose: extracting a tuple slot from a DU payload first selects the
 /// union payload, then the slot. Tags never stand in for payload values. Opaque alternatives
 /// and recursive aggregate origins remain unbounded rather than disappearing from a join.
-let rec private aggregateElement (program: Program) (value: Reading) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : ValueRange =
-    if List.isEmpty path then value exprId
-    elif Set.contains exprId visited then ValueRange.Unbounded
+let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : bool * bool * Set<NodeId> =
+    if List.isEmpty path then false, false, Set.singleton exprId
+    elif Set.contains exprId visited then true, true, Set.empty
     else
-        let visited = Set.add exprId visited
-        let project id path = aggregateElement program value visited id path
-        let recurse id = project id path
-        let joinAll (ids: NodeId list) = ids |> List.fold (fun acc id -> ValueRange.join acc (recurse id)) ValueRange.Empty
-        match Map.tryFind exprId program.Reachable with
-        | None -> ValueRange.Unbounded
-        | Some node ->
-            match node.Kind with
-            | SemanticKind.TupleExpr elements ->
-                match path with
-                | TupleSlot index :: rest ->
-                    match List.tryItem index elements with
-                    | Some elementId -> project elementId rest
-                    | None -> ValueRange.Unbounded
-                | _ -> ValueRange.Unbounded
-            | SemanticKind.RecordExpr(fields, copied) ->
-                match path with
-                | RecordField(expected, field) :: rest
-                    when node.Children = (Option.toList copied @ List.map snd fields) && recordIncidenceAgrees program node ->
-                    match immutableRecordField program node.Id field with
-                    | Some(actual, fieldType) when actual = expected ->
-                        match fields |> List.filter (fst >> (=) field) with
-                        | [_, value] ->
-                            match Map.tryFind value program.Reachable with
-                            | Some valueNode when RecordInstances.layoutKey valueNode.Type = fieldType -> project value rest
-                            | _ -> ValueRange.Unbounded
-                        | [] -> copied |> Option.map recurse |> Option.defaultValue ValueRange.Unbounded
-                        | _ -> ValueRange.Unbounded
-                    | _ -> ValueRange.Unbounded
-                | _ -> ValueRange.Unbounded
-            | SemanticKind.UnionCase(name, tag, payload)
-            | SemanticKind.DUConstruct(name, tag, payload, _) ->
-                match path with
-                | UnionPayload(expectedTag, expectedName) :: rest ->
-                    if tag <> expectedTag then ValueRange.Empty
-                    elif name <> expectedName then ValueRange.Unbounded
-                    else payload |> Option.map (fun id -> project id rest) |> Option.defaultValue ValueRange.Unbounded
-                | _ -> ValueRange.Unbounded
-            | SemanticKind.DUEliminate(value, tag, name, _) -> project value (UnionPayload(tag, name) :: path)
-            | SemanticKind.TupleGet(value, index) -> project value (TupleSlot index :: path)
-            | SemanticKind.FieldGet(value, field) ->
-                match immutableRecordField program value field with
-                | Some(identity, fieldType)
-                    when node.Children = [value] && RecordInstances.layoutKey node.Type = fieldType && recordIncidenceAgrees program node ->
-                    project value (RecordField(identity, field) :: path)
-                | _ -> ValueRange.Unbounded
-            | SemanticKind.VarRef (_, Some defId) -> recurse defId
-            | SemanticKind.Binding (_, isMutable, _, _) ->
-                let value =
-                    match List.tryLast node.Children with
-                    | Some valueId -> recurse valueId
-                    | None -> ValueRange.Unbounded
-                if isMutable then
-                    Map.tryFind node.Id program.Assignments |> Option.defaultValue [] |> List.fold (fun acc a -> ValueRange.join acc (recurse a)) value
-                else value
-            | SemanticKind.PatternBinding _ when Set.contains node.Id program.Parameters ->
-                if program.RootParameters.TryFind node.Id = Some DeclRoot.LibraryExport then
-                    ValueRange.Unbounded
-                else
-                    match Map.tryFind node.Id program.CallArguments with
-                    | Some args ->
-                        args
-                        |> List.fold (fun acc (_, a) -> ValueRange.join acc (recurse a)) ValueRange.Empty
-                    | None -> ValueRange.Unbounded
-            | SemanticKind.PatternBinding _ ->
-                match List.tryLast node.Children with
-                | Some valueId -> recurse valueId
-                | None -> ValueRange.Unbounded
-            | SemanticKind.IfThenElse (_, t, e) ->
-                ValueRange.join (recurse t) (e |> Option.map recurse |> Option.defaultValue ValueRange.Empty)
-            | SemanticKind.Match (_, cases) -> joinAll (cases |> List.map (fun c -> c.Body))
-            | SemanticKind.CaseElimination (_, arms) -> joinAll (arms |> List.map (fun a -> a.Body))
-            | SemanticKind.Sequential ids ->
-                match List.tryLast ids with
-                | Some lastId -> recurse lastId
-                | None -> ValueRange.Unbounded
-            | SemanticKind.TypeAnnotation (inner, _) -> recurse inner
-            | SemanticKind.Application _ ->
-                match Map.tryFind node.Id program.Callees with
-                | Some (Callee.Direct (_, bodyId), _) -> recurse bodyId
-                | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) -> joinAll (candidates |> List.map (fun c -> c.Body))
-                | Some (Callee.Intrinsic { Module = IntrinsicModule.Array; Operation = "get" }, arrId :: _) ->
-                    match Map.tryFind arrId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
-                    | Some elem -> joinAll (Map.tryFind (elementKey elem) program.ElementStores |> Option.defaultValue [] |> List.map snd)
-                    | None -> ValueRange.Unbounded
-                | _ -> ValueRange.Unbounded
-            | SemanticKind.IndexGet (arrId, _) ->
-                match Map.tryFind arrId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
-                | Some elem ->
-                    match Map.tryFind (elementKey elem) program.ElementStores with
-                    | Some stores -> joinAll (stores |> List.map snd)
-                    | None -> ValueRange.Unbounded
-                | None -> ValueRange.Unbounded
-            | _ -> ValueRange.Unbounded
+        match program.AggregateElementCache.TryGetValue((exprId, path)) with
+        | true, (u, l) -> false, u, l
+        | false, _ ->
+            let visited = Set.add exprId visited
+            let project id nextPath = aggregateElementOrigins program visited id nextPath
+            let recurse id = project id path
+            let emptyResult = false, false, Set.empty
+            let unboundedResult = false, true, Set.empty
+            let combine (c1, u1, l1) (c2, u2, l2) =
+                c1 || c2, u1 || u2, Set.union l1 l2
+            let joinAll (ids: NodeId list) =
+                ids |> List.fold (fun acc id -> combine acc (recurse id)) emptyResult
+            let hadCycle, u, l =
+                match Map.tryFind exprId program.Reachable with
+                | None -> unboundedResult
+                | Some node ->
+                    match node.Kind with
+                    | SemanticKind.TupleExpr elements ->
+                        match path with
+                        | TupleSlot index :: rest ->
+                            match List.tryItem index elements with
+                            | Some elementId -> project elementId rest
+                            | None -> unboundedResult
+                        | _ -> unboundedResult
+                    | SemanticKind.RecordExpr(fields, copied) ->
+                        match path with
+                        | RecordField(expected, field) :: rest
+                            when node.Children = (Option.toList copied @ List.map snd fields) && recordIncidenceAgrees program node ->
+                            match immutableRecordField program node.Id field with
+                            | Some(actual, fieldType) when actual = expected ->
+                                match fields |> List.filter (fst >> (=) field) with
+                                | [_, value] ->
+                                    match Map.tryFind value program.Reachable with
+                                    | Some valueNode when RecordInstances.layoutKey valueNode.Type = fieldType -> project value rest
+                                    | _ -> unboundedResult
+                                | [] -> copied |> Option.map recurse |> Option.defaultValue unboundedResult
+                                | _ -> unboundedResult
+                            | _ -> unboundedResult
+                        | _ -> unboundedResult
+                    | SemanticKind.UnionCase(name, tag, payload)
+                    | SemanticKind.DUConstruct(name, tag, payload, _) ->
+                        match path with
+                        | UnionPayload(expectedTag, expectedName) :: rest ->
+                            if tag <> expectedTag then emptyResult
+                            elif name <> expectedName then unboundedResult
+                            else payload |> Option.map (fun id -> project id rest) |> Option.defaultValue unboundedResult
+                        | _ -> unboundedResult
+                    | SemanticKind.DUEliminate(value, tag, name, _) -> project value (UnionPayload(tag, name) :: path)
+                    | SemanticKind.TupleGet(value, index) -> project value (TupleSlot index :: path)
+                    | SemanticKind.FieldGet(value, field) ->
+                        match immutableRecordField program value field with
+                        | Some(identity, fieldType)
+                            when node.Children = [value] && RecordInstances.layoutKey node.Type = fieldType && recordIncidenceAgrees program node ->
+                            project value (RecordField(identity, field) :: path)
+                        | _ -> unboundedResult
+                    | SemanticKind.VarRef (_, Some defId) -> recurse defId
+                    | SemanticKind.Binding (_, isMutable, _, _) ->
+                        let value =
+                            match List.tryLast node.Children with
+                            | Some valueId -> recurse valueId
+                            | None -> unboundedResult
+                        if isMutable then
+                            Map.tryFind node.Id program.Assignments |> Option.defaultValue [] |> List.fold (fun acc a -> combine acc (recurse a)) value
+                        else value
+                    | SemanticKind.PatternBinding _ when Set.contains node.Id program.Parameters ->
+                        if program.RootParameters.TryFind node.Id = Some DeclRoot.LibraryExport then
+                            unboundedResult
+                        else
+                            match Map.tryFind node.Id program.CallArguments with
+                            | Some args ->
+                                args
+                                |> List.fold (fun acc (_, a) -> combine acc (recurse a)) emptyResult
+                            | None -> unboundedResult
+                    | SemanticKind.PatternBinding _ ->
+                        match List.tryLast node.Children with
+                        | Some valueId -> recurse valueId
+                        | None -> unboundedResult
+                    | SemanticKind.IfThenElse (_, tBranch, eBranch) ->
+                        combine (recurse tBranch) (eBranch |> Option.map recurse |> Option.defaultValue emptyResult)
+                    | SemanticKind.Match (_, cases) -> joinAll (cases |> List.map (fun c -> c.Body))
+                    | SemanticKind.CaseElimination (_, arms) -> joinAll (arms |> List.map (fun a -> a.Body))
+                    | SemanticKind.Sequential ids ->
+                        match List.tryLast ids with
+                        | Some lastId -> recurse lastId
+                        | None -> unboundedResult
+                    | SemanticKind.TypeAnnotation (inner, _) -> recurse inner
+                    | SemanticKind.Application _ ->
+                        match Map.tryFind node.Id program.Callees with
+                        | Some (Callee.Direct (_, bodyId), _) -> recurse bodyId
+                        | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) -> joinAll (candidates |> List.map (fun c -> c.Body))
+                        | Some (Callee.Intrinsic { Module = IntrinsicModule.Array; Operation = "get" }, arrId :: _) ->
+                            match Map.tryFind arrId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
+                            | Some elem -> joinAll (Map.tryFind (elementKey elem) program.ElementStores |> Option.defaultValue [] |> List.map snd)
+                            | None -> unboundedResult
+                        | _ -> unboundedResult
+                    | SemanticKind.IndexGet (arrId, _) ->
+                        match Map.tryFind arrId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
+                        | Some elem ->
+                            match Map.tryFind (elementKey elem) program.ElementStores with
+                            | Some stores -> joinAll (stores |> List.map snd)
+                            | None -> unboundedResult
+                        | None -> unboundedResult
+                    | _ -> unboundedResult
+            if not hadCycle then
+                program.AggregateElementCache[(exprId, path)] <- (u, l)
+            hadCycle, u, l
+
+let private aggregateElement (program: Program) (value: Reading) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : ValueRange =
+    let _, unbounded, leaves = aggregateElementOrigins program visited exprId path
+    let initial = if unbounded then ValueRange.Unbounded else ValueRange.Empty
+    leaves |> Set.fold (fun acc leafId -> ValueRange.join acc (value leafId)) initial
 
 /// Match existing direct formal/body correspondence, never a C symbol or a new callee walk.
 let private foreignDeclaration (program: Program) call =
@@ -2665,39 +2805,108 @@ let private contextProgramOf (program: Program) (applications: Map<NodeId, Calla
         let sites = match parent with RangeContext.Invocation sites -> sites | RangeContext.Shared -> []
         let sites = sites @ [call]
         RangeContext.Invocation (sites |> List.skip (max 0 (sites.Length - InvocationContextDepth)))
-    let rec discover (members: Map<RangeContext, Set<NodeId>>) (rows: Set<RangeInvocationRow>) pending =
-        match pending with
-        | [] -> members, rows
-        | parent :: rest ->
-            let additions =
-                members[parent]
-                |> Seq.collect (fun call ->
-                    applications.TryFind call |> Option.defaultValue [] |> List.map (fun target ->
-                        { RangeInvocationRow.Context = childContext parent call
-                          Caller = parent; Call = call; Target = target.Lambda; Body = target.Body
-                          Arguments = List.zip (target.Parameters |> List.map (fun (_, _, id) -> id)) target.Arguments }))
-                |> Set.ofSeq |> fun found -> Set.difference found rows
-            let members, changed = additions |> Set.fold (fun (members, changed) row ->
-                let previous = Map.tryFind row.Context members |> Option.defaultValue Set.empty
-                let next = Set.union previous bodies[row.Target]
-                if next = previous then members, changed
-                else Map.add row.Context next members, Set.add row.Context changed) (members, Set.empty)
-            discover members (Set.union rows additions) (rest @ Set.toList changed)
-    let members, rows = discover (Map.ofList [root, rootMembers]) Set.empty [root]
-    let rows = Set.toList rows
+    let callSites = applications.Keys |> Set.ofSeq
+    let callsByTarget = bodies |> Map.map (fun _ bodyNodes -> Set.intersect bodyNodes callSites)
+    let appTargetsWithArgs =
+        applications |> Map.map (fun _ appTargets ->
+            appTargets |> List.map (fun target ->
+                target, List.zip (target.Parameters |> List.map (fun (_, _, id) -> id)) target.Arguments))
+    let targetsInContext = System.Collections.Generic.Dictionary<RangeContext, System.Collections.Generic.HashSet<NodeId>>()
+    let expandedCallsInContext = System.Collections.Generic.Dictionary<RangeContext, System.Collections.Generic.HashSet<NodeId>>()
+    let allContexts = System.Collections.Generic.HashSet<RangeContext>()
+    allContexts.Add(root) |> ignore
+    let rootCalls = Set.intersect rootMembers callSites
+    expandedCallsInContext[root] <- System.Collections.Generic.HashSet<NodeId>(rootCalls)
+    let queue = System.Collections.Generic.Queue<RangeContext * NodeId list>()
+    if not rootCalls.IsEmpty then
+        queue.Enqueue(root, Set.toList rootCalls)
+    let rowsAcc = ResizeArray<RangeInvocationRow>()
+    while queue.Count > 0 do
+        let parent, callsToExpand = queue.Dequeue()
+        for call in callsToExpand do
+            match appTargetsWithArgs.TryFind call with
+            | None -> ()
+            | Some targetRows ->
+                let ctx = childContext parent call
+                allContexts.Add(ctx) |> ignore
+                for (target, zippedArgs) in targetRows do
+                    rowsAcc.Add(
+                        { RangeInvocationRow.Context = ctx
+                          Caller = parent
+                          Call = call
+                          Target = target.Lambda
+                          Body = target.Body
+                          Arguments = zippedArgs })
+                    let tSet =
+                        match targetsInContext.TryGetValue(ctx) with
+                        | true, s -> s
+                        | false, _ ->
+                            let s = System.Collections.Generic.HashSet<NodeId>()
+                            targetsInContext[ctx] <- s
+                            s
+                    if tSet.Add(target.Lambda) then
+                        let cSet =
+                            match expandedCallsInContext.TryGetValue(ctx) with
+                            | true, s -> s
+                            | false, _ ->
+                                let s = System.Collections.Generic.HashSet<NodeId>()
+                                expandedCallsInContext[ctx] <- s
+                                s
+                        let newCalls =
+                            [ for c in callsByTarget[target.Lambda] do
+                                  if cSet.Add(c) then yield c ]
+                        if not newCalls.IsEmpty then
+                            queue.Enqueue(ctx, newCalls)
+    let rows = rowsAcc |> Set.ofSeq |> Set.toList
     let parameters =
         rows |> List.collect (fun row ->
             row.Arguments |> List.map (fun (formal, actual) -> (row.Context, formal), (row.Caller, row.Call, actual)))
         |> List.groupBy fst |> List.map (fun (key, inputs) -> key, inputs |> List.map snd |> List.distinct) |> Map.ofList
-    let members = members |> Map.map (fun context nodes -> nodes |> Set.filter (fun id ->
-        contextualNode program program.Reachable[id] &&
-        (not (program.Parameters.Contains id) || parameters.ContainsKey (context, id))))
+    let contextualNodes =
+        program.Ordered
+        |> List.choose (fun n -> if contextualNode program n then Some n.Id else None)
+        |> Set.ofList
+    let contextualParams = Set.intersect contextualNodes program.Parameters
+    let targetContextualAll = bodies |> Map.map (fun _ b -> Set.intersect b contextualNodes)
+    let targetContextualNonParam = targetContextualAll |> Map.map (fun _ b -> Set.difference b contextualParams)
+    let targetContextualParam = targetContextualAll |> Map.map (fun _ b -> Set.intersect b contextualParams)
+    let rootContextualAll = Set.intersect rootMembers contextualNodes
+    let rootContextualNonParam = Set.difference rootContextualAll contextualParams
+    let rootContextualParam = Set.intersect rootContextualAll contextualParams
+    let members =
+        [ for context in allContexts do
+              let baseSet =
+                  if context = root then
+                      let activeRootParams = rootContextualParam |> Set.filter (fun id -> parameters.ContainsKey (context, id))
+                      Set.union rootContextualNonParam activeRootParams
+                  else Set.empty
+              let ctxMembers =
+                  match targetsInContext.TryGetValue(context) with
+                  | false, _ -> baseSet
+                  | true, tSet ->
+                      let mutable acc = baseSet
+                      for targetLambda in tSet do
+                          let tParams = targetContextualParam[targetLambda]
+                          let tSetForCtx =
+                              if tParams |> Set.forall (fun id -> parameters.ContainsKey (context, id)) then
+                                  targetContextualAll[targetLambda]
+                              else
+                                  Set.union targetContextualNonParam[targetLambda] (tParams |> Set.filter (fun id -> parameters.ContainsKey (context, id)))
+                          acc <- if acc.IsEmpty then tSetForCtx else Set.union acc tSetForCtx
+                      acc
+              yield context, ctxMembers ]
+        |> Map.ofList
     let occurrences = members |> Map.toList |> List.collect (fun (context, nodes) -> nodes |> Set.toList |> List.map (fun id -> id, context))
                       |> List.groupBy fst |> List.map (fun (id, entries) -> id, entries |> List.map snd) |> Map.ofList
+    let isCoordinateNode (node: SemanticNode) =
+        isRanged node ||
+        (match node.Kind with
+         | SemanticKind.UnionCase _ | SemanticKind.DUConstruct _ | SemanticKind.DUGetTag _ -> true
+         | _ -> false)
     let coordinates =
-        (program.Ordered |> List.map (fun node -> RangeContext.Shared, node)) @
+        (program.Ordered |> List.choose (fun node -> if isCoordinateNode node then Some(RangeContext.Shared, node) else None)) @
         (members |> Map.toList |> List.collect (fun (context, nodes) ->
-            program.Ordered |> List.choose (fun node -> if nodes.Contains node.Id then Some(context, node) else None)))
+            nodes |> Set.toList |> List.map (fun id -> context, program.Reachable[id])))
     { Invocations = rows; Members = members; Parameters = parameters
       Calls = rows |> List.groupBy (fun row -> row.Caller, row.Call) |> Map.ofList
       Occurrences = occurrences; Coordinates = coordinates }
@@ -2762,69 +2971,1249 @@ let [<Literal>] private NarrowingRounds = 8
 /// the program has; this is a stop for a defect, not a figure of the design.
 let [<Literal>] private AscentLimit = 8192
 
-/// The constants the analysis has settled so far: every point range in the state. They are the
-/// widening's thresholds beside the declared representations (`ValueRange.widen`).
-let private constantsOf (state: ContextState) =
-    state.Values |> Map.toList |> List.choose (fun (key, range) ->
-        match range with ValueRange.Bounded(lo, hi) when lo = hi -> Some(key, lo) | _ -> None)
+type private ElementReadPlan =
+    | ElemConst of ValueRange
+    | ElemStores of init: ValueRange * unrefinedKeys: int[] * refinedPairs: struct(NodeId * NodeId)[]
 
-/// Shared and contextual cells participate in one ascent, widening and narrowing
-/// policy. Read incidence belongs to the issued state, including widening inputs.
-let private ascend (program: Program) (contexts: ContextProgram) round (state: ContextState) =
-    let constants = if round > WideningDelay then constantsOf state else []
-    contexts.Coordinates |> List.fold (fun (state: ContextState, changed) (context, node) ->
-        let key = context, node.Id
-        let computed, dependencies = evaluate program contexts state context node
-        match computed with
-        | None -> state, changed
-        | Some computed ->
-            let previous = state.Values.TryFind key
-            let next, dependencies =
-                match previous with
-                | None -> computed, dependencies
-                | Some old ->
-                    let grown = ValueRange.join old computed
-                    if ValueRange.contains old grown then old, dependencies
-                    elif round > WideningDelay then
-                        let next = ValueRange.widen program.Thresholds (constants |> List.map snd |> List.distinct) old grown
-                        next, Set.union dependencies (constants |> List.map fst |> Set.ofList)
-                    else grown, dependencies
-            let dependencies = Set.union dependencies (state.Reads.TryFind key |> Option.defaultValue Set.empty)
-            { Values = state.Values.Add(key, next); Reads = state.Reads.Add(key, dependencies) },
-            changed || previous <> Some next) (state, false)
+type private IntrinsicArgPlan =
+    struct
+        val NodeId: NodeId
+        val IsRanged: bool
+        val Type: NativeType
+        val Literal: NativeLiteral option
+        val ElemPlan: ElementReadPlan voption
+        new(nodeId, isRanged, ty, lit, elemPlan) =
+            { NodeId = nodeId; IsRanged = isRanged; Type = ty; Literal = lit; ElemPlan = elemPlan }
+    end
 
-let private narrow (program: Program) (contexts: ContextProgram) (state: ContextState) =
-    contexts.Coordinates |> List.fold (fun (state: ContextState, changed) (context, node) ->
-        let key = context, node.Id
-        let computed, dependencies = evaluate program contexts state context node
-        match computed with
-        | None -> state, changed
-        | Some computed ->
-            let old = state.Values.TryFind key |> Option.defaultValue ValueRange.Empty
-            let next = if ValueRange.contains computed old || not (ValueRange.contains old computed) then old else computed
-            let dependencies = Set.union dependencies (state.Reads.TryFind key |> Option.defaultValue Set.empty)
-            { Values = state.Values.Add(key, next); Reads = state.Reads.Add(key, dependencies) }, changed || old <> next) (state, false)
+[<RequireQualifiedAccess>]
+type private NodeTransferPlan =
+    | Unset
+    | NotRanged
+    | Constant of ValueRange
+    | SingleRead of operand: NodeId * carrier: ValueRange voption
+    | Parameter of unrefinedKeys: int[] * refinedSupplied: struct(NodeId * NodeId)[] * seeded: struct(NodeId * NodeId)[] * carrier: ValueRange voption
+    | MutableBinding of initId: NodeId voption * fallback: ValueRange * assignments: NodeId[] * carrier: ValueRange voption
+    | IfThenElse of t: NodeId * e: NodeId voption * trueOk: bool * trueAtoms: (Compared * Refinement)[] * falseOk: bool * falseAtoms: (Compared * Refinement)[]
+    | BranchJoin of bodies: NodeId[]
+    | SharedStores of init: ValueRange * unrefinedKeys: int[] * refinedPairs: struct(NodeId * NodeId)[] * carrier: ValueRange voption
+    | SharedLeaves of init: ValueRange * leafKeys: int[] * carrier: ValueRange voption
+    | ContextualApp of fallback: ValueRange * carrier: ValueRange voption
+    | DirectApp of bodyKeyId: int
+    | IntrinsicApp of info: IntrinsicInfo * args: IntrinsicArgPlan[] * fallback: ValueRange * carrier: ValueRange voption
+    | General of node: SemanticNode
 
-/// The same finite lattice solver owns every context; recursive call strings
-/// repeat existing cells instead of entering a second evaluator.
 let private fixpoint (program: Program) (contexts: ContextProgram) : State * RangeContextFacts =
-    let rec climb round state =
+    let ctxToId = System.Collections.Generic.Dictionary<RangeContext, int>()
+    let idToCtxList = ResizeArray<RangeContext>()
+    let getOrAddCtx (ctx: RangeContext) =
+        match ctxToId.TryGetValue(ctx) with
+        | true, id -> id
+        | false, _ ->
+            let id = idToCtxList.Count
+            ctxToId[ctx] <- id
+            idToCtxList.Add(ctx)
+            id
+    let _ = getOrAddCtx RangeContext.Shared
+    for kvp in contexts.Members do getOrAddCtx kvp.Key |> ignore
+    for (ctx, _) in contexts.Coordinates do getOrAddCtx ctx |> ignore
+    for row in contexts.Invocations do
+        getOrAddCtx row.Context |> ignore
+        getOrAddCtx row.Caller |> ignore
+    for kvp in contexts.Calls do
+        getOrAddCtx (fst kvp.Key) |> ignore
+        for row in kvp.Value do getOrAddCtx row.Context |> ignore
+    for kvp in contexts.Parameters do
+        getOrAddCtx (fst kvp.Key) |> ignore
+        for (caller, _, _) in kvp.Value do getOrAddCtx caller |> ignore
+    for kvp in contexts.Occurrences do
+        for ctx in kvp.Value do getOrAddCtx ctx |> ignore
+    let idToCtx = idToCtxList.ToArray()
+    let mutable maxNodeVal = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeId program.Graph
+    let inline observeNode (NodeId n) =
+        if n > maxNodeVal then maxNodeVal <- n
+    for (_, node) in contexts.Coordinates do observeNode node.Id
+    for kvp in contexts.Members do
+        for id in kvp.Value do observeNode id
+    for kvp in contexts.Calls do
+        observeNode (snd kvp.Key)
+        for row in kvp.Value do observeNode row.Body
+    for kvp in contexts.Parameters do
+        observeNode (snd kvp.Key)
+        for (_, call, actual) in kvp.Value do
+            observeNode call
+            observeNode actual
+    for kvp in contexts.Occurrences do observeNode kvp.Key
+    let sharedKeyByNode = Array.create (max 0 maxNodeVal + 1) -1
+    let sharedOverflow = System.Collections.Generic.Dictionary<NodeId, int>()
+    let ctxKeyDict = System.Collections.Generic.Dictionary<int64, int>(contexts.Coordinates.Length + 16)
+    let keyToPairList = ResizeArray<RangeContext * NodeId>(contexts.Coordinates.Length + program.Graph.Nodes.Count + 16)
+    let keyToSharedNodeList = ResizeArray<NodeId voption>(contexts.Coordinates.Length + program.Graph.Nodes.Count + 16)
+    let inline packRaw (ctxId: int) (NodeId nodeId) : int64 =
+        (int64 ctxId <<< 32) ||| int64 (uint32 nodeId)
+    let getOrAddSharedKey (NodeId n as nodeId) : int =
+        if n >= 0 && n < sharedKeyByNode.Length then
+            let k = sharedKeyByNode.[n]
+            if k >= 0 then k
+            else
+                let newKey = keyToPairList.Count
+                sharedKeyByNode.[n] <- newKey
+                keyToPairList.Add(RangeContext.Shared, nodeId)
+                keyToSharedNodeList.Add(ValueSome nodeId)
+                newKey
+        else
+            match sharedOverflow.TryGetValue(nodeId) with
+            | true, k -> k
+            | false, _ ->
+                let newKey = keyToPairList.Count
+                sharedOverflow[nodeId] <- newKey
+                keyToPairList.Add(RangeContext.Shared, nodeId)
+                keyToSharedNodeList.Add(ValueSome nodeId)
+                newKey
+    let getOrAddKey (ctxId: int) (nodeId: NodeId) : int =
+        if ctxId = 0 then getOrAddSharedKey nodeId
+        else
+            let raw = packRaw ctxId nodeId
+            match ctxKeyDict.TryGetValue(raw) with
+            | true, k -> k
+            | false, _ ->
+                let newKey = keyToPairList.Count
+                ctxKeyDict[raw] <- newKey
+                keyToPairList.Add(idToCtx.[ctxId], nodeId)
+                keyToSharedNodeList.Add(ValueNone)
+                newKey
+    for nodeId in program.Graph.Nodes.Keys do
+        getOrAddSharedKey nodeId |> ignore
+    for edge in program.Graph.Edges do
+        getOrAddSharedKey edge.Target |> ignore
+        for s in edge.Sources do getOrAddSharedKey s |> ignore
+    let nodeArraySize = max 0 maxNodeVal + 1
+    let isContextualNode : bool[] = Array.create nodeArraySize false
+    let contextualNodeIndex : int[] = Array.create nodeArraySize -1
+    let mutable numContextualNodes = 0
+    for kvp in contexts.Occurrences do
+        let (NodeId n) = kvp.Key
+        if n >= 0 && n < nodeArraySize then
+            isContextualNode.[n] <- true
+            contextualNodeIndex.[n] <- numContextualNodes
+            numContextualNodes <- numContextualNodes + 1
+    let useFlatCtxTable = numContextualNodes > 0 && int64 idToCtx.Length * int64 numContextualNodes <= 8_000_000L
+    let ctxKeyTable : int[] =
+        if useFlatCtxTable then Array.create (idToCtx.Length * numContextualNodes) -1
+        else Array.empty
+    let memberMapsByCtxId : System.Collections.Generic.Dictionary<int, int> voption[] =
+        Array.init idToCtx.Length (fun ctxId ->
+            if ctxId = 0 then ValueNone
+            else
+                match contexts.Members.TryFind idToCtx.[ctxId] with
+                | Some s ->
+                    if useFlatCtxTable then
+                        let rowOffset = ctxId * numContextualNodes
+                        for (NodeId n as id) in s do
+                            let kId = getOrAddKey ctxId id
+                            if n >= 0 && n < nodeArraySize then
+                                let cIdx = contextualNodeIndex.[n]
+                                if cIdx >= 0 then
+                                    ctxKeyTable.[rowOffset + cIdx] <- kId
+                        ValueNone
+                    else
+                        let dict = System.Collections.Generic.Dictionary<int, int>(s.Count)
+                        for (NodeId n as id) in s do
+                            dict[n] <- getOrAddKey ctxId id
+                        ValueSome dict
+                | None -> ValueNone)
+    let resolveKeyInCtx (cId: int) (NodeId n as id) : int =
+        if cId = 0 then getOrAddSharedKey id
+        elif useFlatCtxTable && n >= 0 && n < nodeArraySize then
+            let cIdx = contextualNodeIndex.[n]
+            if cIdx >= 0 then
+                let kId = ctxKeyTable.[cId * numContextualNodes + cIdx]
+                if kId >= 0 then kId else getOrAddSharedKey id
+            else getOrAddSharedKey id
+        else
+            match memberMapsByCtxId.[cId] with
+            | ValueSome memberMap ->
+                match memberMap.TryGetValue(n) with
+                | true, kId -> kId
+                | false, _ -> getOrAddSharedKey id
+            | ValueNone -> getOrAddSharedKey id
+    let coords =
+        contexts.Coordinates
+        |> List.map (fun (ctx, node) ->
+            let ctxId = getOrAddCtx ctx
+            let keyId = getOrAddKey ctxId node.Id
+            struct(ctxId, keyId, node))
+        |> List.toArray
+    let tempCalls = ResizeArray<int * int[]>()
+    for kvp in contexts.Calls do
+        let callerCtx, callId = kvp.Key
+        let callKeyId = getOrAddKey (getOrAddCtx callerCtx) callId
+        let rowKeyIds =
+            kvp.Value
+            |> List.map (fun row -> resolveKeyInCtx (getOrAddCtx row.Context) row.Body)
+            |> List.toArray
+        tempCalls.Add(callKeyId, rowKeyIds)
+    let tempParams = ResizeArray<int * (int * NodeId * NodeId)[]>()
+    for kvp in contexts.Parameters do
+        let ctx, paramId = kvp.Key
+        let paramKeyId = getOrAddKey (getOrAddCtx ctx) paramId
+        let rows = kvp.Value |> List.map (fun (caller, call, actual) -> getOrAddCtx caller, call, actual) |> List.toArray
+        tempParams.Add(paramKeyId, rows)
+    let isApplicationNode : bool[] = Array.create nodeArraySize false
+    for appId in program.Applications.Keys do
+        let (NodeId n) = appId
+        if n >= 0 && n < nodeArraySize then
+            isApplicationNode.[n] <- true
+    let occurrencesByNodeArr : int[] voption[] = Array.create nodeArraySize ValueNone
+    for kvp in contexts.Occurrences do
+        let (NodeId n as nodeId) = kvp.Key
+        if n >= 0 && n < nodeArraySize then
+            occurrencesByNodeArr.[n] <- ValueSome (kvp.Value |> List.map (fun ctx -> getOrAddKey (getOrAddCtx ctx) nodeId) |> List.toArray)
+    let numKeys = keyToPairList.Count + 64
+    let valuesArr : ValueRange[] = Array.create numKeys ValueRange.Empty
+    let hasValueArr : bool[] = Array.create numKeys false
+    let callsByKey : int[] voption[] = Array.create numKeys ValueNone
+    for (callKeyId, rowKeyIds) in tempCalls do
+        callsByKey.[callKeyId] <- ValueSome rowKeyIds
+    let paramsByKey : (int * NodeId * NodeId)[] voption[] = Array.create numKeys ValueNone
+    for (paramKeyId, rows) in tempParams do
+        paramsByKey.[paramKeyId] <- ValueSome rows
+    let hasReads : bool[] = Array.create coords.Length false
+    let climbLastReads : int[][] = Array.create coords.Length Array.empty
+    let descendLastReads : int[][] = Array.create coords.Length Array.empty
+    let extraReadsAcc : ResizeArray<int> voption[] = Array.create coords.Length ValueNone
+    let lastRecordedDeps : int[] voption[] = Array.create coords.Length ValueNone
+    let dependentsOfKey : ResizeArray<int> voption[] = Array.create numKeys ValueNone
+    let inline addDependentFirst (depKey: int) (coordIdx: int) =
+        match dependentsOfKey.[depKey] with
+        | ValueSome list ->
+            list.Add(coordIdx)
+        | ValueNone ->
+            let list = ResizeArray<int>(4)
+            list.Add(coordIdx)
+            dependentsOfKey.[depKey] <- ValueSome list
+    let addDependent (depKey: int) (coordIdx: int) =
+        match dependentsOfKey.[depKey] with
+        | ValueSome list ->
+            let n = list.Count
+            if n = 0 || list.[n - 1] < coordIdx then
+                list.Add(coordIdx)
+            elif list.[n - 1] <> coordIdx then
+                let mutable found = false
+                let mutable j = 0
+                while not found && j < n do
+                    if list.[j] = coordIdx then found <- true
+                    j <- j + 1
+                if not found then list.Add(coordIdx)
+        | ValueNone ->
+            let list = ResizeArray<int>(4)
+            list.Add(coordIdx)
+            dependentsOfKey.[depKey] <- ValueSome list
+    let addNewDependents (prev: int[]) (currentReads: int[]) (coordIdx: int) =
+        let mutable i = 0
+        let mutable j = 0
+        let nPrev = prev.Length
+        let nCur = currentReads.Length
+        while j < nCur do
+            let curKey = currentReads.[j]
+            while i < nPrev && prev.[i] < curKey do
+                i <- i + 1
+            if i < nPrev && prev.[i] = curKey then
+                i <- i + 1
+            else
+                addDependent curKey coordIdx
+            j <- j + 1
+    let usedConstSetIds : Set<int>[] = Array.create coords.Length Set.empty
+    let constSetArrays = ResizeArray<int[]>()
+    let readsBuffer = Array.zeroCreate<int> 1024
+    let mutable readCursor = 0
+    let readsOverflow = ResizeArray<int>()
+    let inline get (kId: int) =
+        let idx = readCursor
+        if idx < readsBuffer.Length then
+            readsBuffer.[idx] <- kId
+        else
+            readsOverflow.Add(kId)
+        readCursor <- idx + 1
+        valuesArr.[kId]
+    let extractDeps (prevOpt: int[] voption) : struct(int[] * bool) =
+        let n = readCursor
+        if n = 0 then
+            match prevOpt with
+            | ValueSome prev when prev.Length = 0 -> struct(prev, false)
+            | _ -> struct(Array.empty, true)
+        elif n = 1 then
+            let k0 = readsBuffer.[0]
+            match prevOpt with
+            | ValueSome prev when prev.Length = 1 && prev.[0] = k0 -> struct(prev, false)
+            | _ -> struct([| k0 |], true)
+        elif n = 2 then
+            let k0 = readsBuffer.[0]
+            let k1 = readsBuffer.[1]
+            if k0 = k1 then
+                match prevOpt with
+                | ValueSome prev when prev.Length = 1 && prev.[0] = k0 -> struct(prev, false)
+                | _ -> struct([| k0 |], true)
+            else
+                let lo = if k0 < k1 then k0 else k1
+                let hi = if k0 < k1 then k1 else k0
+                match prevOpt with
+                | ValueSome prev when prev.Length = 2 && prev.[0] = lo && prev.[1] = hi -> struct(prev, false)
+                | _ -> struct([| lo; hi |], true)
+        elif n <= readsBuffer.Length then
+            if n <= 16 then
+                for i = 1 to n - 1 do
+                    let key = readsBuffer.[i]
+                    let mutable j = i - 1
+                    while j >= 0 && readsBuffer.[j] > key do
+                        readsBuffer.[j + 1] <- readsBuffer.[j]
+                        j <- j - 1
+                    readsBuffer.[j + 1] <- key
+            else
+                System.Array.Sort(readsBuffer, 0, n)
+            let mutable uniqueCount = 1
+            for i = 1 to n - 1 do
+                let v = readsBuffer.[i]
+                if v <> readsBuffer.[uniqueCount - 1] then
+                    readsBuffer.[uniqueCount] <- v
+                    uniqueCount <- uniqueCount + 1
+            match prevOpt with
+            | ValueSome prev when prev.Length = uniqueCount ->
+                let mutable same = true
+                let mutable i = 0
+                while same && i < uniqueCount do
+                    if prev.[i] <> readsBuffer.[i] then same <- false
+                    i <- i + 1
+                if same then struct(prev, false)
+                else
+                    let arr = Array.zeroCreate<int> uniqueCount
+                    System.Array.Copy(readsBuffer, 0, arr, 0, uniqueCount)
+                    struct(arr, true)
+            | _ ->
+                let arr = Array.zeroCreate<int> uniqueCount
+                System.Array.Copy(readsBuffer, 0, arr, 0, uniqueCount)
+                struct(arr, true)
+        else
+            let total = readsBuffer.Length + readsOverflow.Count
+            let arr = Array.zeroCreate<int> total
+            System.Array.Copy(readsBuffer, 0, arr, 0, readsBuffer.Length)
+            readsOverflow.CopyTo(arr, readsBuffer.Length)
+            readsOverflow.Clear()
+            System.Array.Sort(arr)
+            let mutable uniqueCount = 1
+            for i = 1 to total - 1 do
+                if arr.[i] <> arr.[uniqueCount - 1] then
+                    arr.[uniqueCount] <- arr.[i]
+                    uniqueCount <- uniqueCount + 1
+            let finalArr =
+                if uniqueCount = total then arr
+                else
+                    let trimmed = Array.zeroCreate<int> uniqueCount
+                    System.Array.Copy(arr, 0, trimmed, 0, uniqueCount)
+                    trimmed
+            match prevOpt with
+            | ValueSome prev when prev.Length = finalArr.Length ->
+                let mutable same = true
+                let mutable i = 0
+                while same && i < finalArr.Length do
+                    if prev.[i] <> finalArr.[i] then same <- false
+                    i <- i + 1
+                if same then struct(prev, false) else struct(finalArr, true)
+            | _ -> struct(finalArr, true)
+    let shared (NodeId n as id) =
+        if n >= 0 && n < nodeArraySize then
+            let k = sharedKeyByNode.[n]
+            if k >= 0 then get k else get (getOrAddSharedKey id)
+        else get (getOrAddSharedKey id)
+    let inline readInCtx (ctxId: int) (NodeId n as id) : ValueRange =
+        if ctxId = 0 then
+            if n >= 0 && n < nodeArraySize then
+                let k = sharedKeyByNode.[n]
+                if k >= 0 then get k else get (getOrAddSharedKey id)
+            else get (getOrAddSharedKey id)
+        elif n >= 0 && n < nodeArraySize then
+            let cIdx = contextualNodeIndex.[n]
+            if cIdx < 0 then
+                let k = sharedKeyByNode.[n]
+                if k >= 0 then get k else get (getOrAddSharedKey id)
+            elif useFlatCtxTable then
+                let kId = ctxKeyTable.[ctxId * numContextualNodes + cIdx]
+                if kId >= 0 then get kId
+                else
+                    let k = sharedKeyByNode.[n]
+                    if k >= 0 then get k else get (getOrAddSharedKey id)
+            else
+                match memberMapsByCtxId.[ctxId] with
+                | ValueSome memberMap ->
+                    match memberMap.TryGetValue(n) with
+                    | true, kId -> get kId
+                    | false, _ ->
+                        let k = sharedKeyByNode.[n]
+                        if k >= 0 then get k else get (getOrAddSharedKey id)
+                | ValueNone ->
+                    let k = sharedKeyByNode.[n]
+                    if k >= 0 then get k else get (getOrAddSharedKey id)
+        else
+            match memberMapsByCtxId.[ctxId] with
+            | ValueSome memberMap ->
+                match memberMap.TryGetValue(n) with
+                | true, kId -> get kId
+                | false, _ -> get (getOrAddSharedKey id)
+            | ValueNone -> get (getOrAddSharedKey id)
+    let readingByCtxId : (NodeId -> ValueRange)[] =
+        Array.init idToCtx.Length (fun cId ->
+            if cId = 0 then shared
+            else
+                fun id -> readInCtx cId id)
+    let applicationByCtxId : (NodeId -> ValueRange option)[] =
+        Array.init idToCtx.Length (fun cId ->
+            fun (call: NodeId) ->
+                let callKeyId = getOrAddKey cId call
+                match callsByKey.[callKeyId] with
+                | ValueSome rowKeyIds ->
+                    let mutable range = ValueRange.Empty
+                    for i = 0 to rowKeyIds.Length - 1 do
+                        range <- ValueRange.join range (get rowKeyIds.[i])
+                    Some range
+                | ValueNone -> None)
+    let refinementsByConsumer : struct(NodeId * Refinement[])[] voption[] = Array.create nodeArraySize ValueNone
+    for kvp in program.Refinements do
+        let (NodeId c) = kvp.Key
+        if c >= 0 && c < nodeArraySize && not kvp.Value.IsEmpty then
+            let arr =
+                kvp.Value
+                |> Seq.map (fun inner -> struct(inner.Key, List.toArray inner.Value))
+                |> Seq.toArray
+            refinementsByConsumer.[c] <- ValueSome arr
+    let inline currentBoundCtx (ctxId: int) (bound: Bound) : ValueRange =
+        match bound with
+        | Bound.Of id -> readInCtx ctxId id
+        | Bound.Diff (a, b) -> ValueRange.sub (readInCtx ctxId a) (readInCtx ctxId b)
+        | Bound.Sum (a, b) -> ValueRange.add (readInCtx ctxId a) (readInCtx ctxId b)
+    let inline readFastCtx (ctxId: int) (NodeId c as consumer) (operand: NodeId) : ValueRange =
+        let initial = readInCtx ctxId operand
+        if c >= 0 && c < nodeArraySize then
+            match refinementsByConsumer.[c] with
+            | ValueNone -> initial
+            | ValueSome arr ->
+                let mutable acc = initial
+                for i = 0 to arr.Length - 1 do
+                    let struct(opId, refs) = arr.[i]
+                    if opId = operand then
+                        for j = 0 to refs.Length - 1 do
+                            let x = refs.[j]
+                            acc <- refine acc x.Relation (currentBoundCtx ctxId x.Bound)
+                acc
+        else
+            read program readingByCtxId.[ctxId] consumer operand
+    let guardAtomsByNode : (Compared * Refinement)[] voption[] = Array.create nodeArraySize ValueNone
+    for kvp in program.GuardRefinements do
+        let (NodeId n) = kvp.Key
+        if n >= 0 && n < nodeArraySize && not kvp.Value.IsEmpty then
+            guardAtomsByNode.[n] <- ValueSome (List.toArray kvp.Value)
+    let inline feasibleAtomsArrCtx (ctxId: int) (bounds: (Compared * Refinement)[]) =
+        let mutable ok = true
+        let mutable i = 0
+        while ok && i < bounds.Length do
+            let (compared, refinement) = bounds.[i]
+            let id = match compared with Compared.Definition id | Compared.Node id -> id
+            if refine (readInCtx ctxId id) refinement.Relation (currentBoundCtx ctxId refinement.Bound) = ValueRange.Empty then
+                ok <- false
+            i <- i + 1
+        ok
+    let inline occurrenceFeasibleFastCtx (ctxId: int) (NodeId n as id) =
+        if n >= 0 && n < nodeArraySize then
+            match guardAtomsByNode.[n] with
+            | ValueNone -> true
+            | ValueSome bounds -> feasibleAtomsArrCtx ctxId bounds
+        else occurrenceFeasible program readingByCtxId.[ctxId] id
+    let inline applyCarrier (carrier: ValueRange voption) (r: ValueRange) : ValueRange =
+        match carrier with
+        | ValueNone -> r
+        | ValueSome declared -> if ValueRange.isObservable r then r else declared
+    let hasRefinementOn (NodeId c) (operand: NodeId) =
+        if c >= 0 && c < nodeArraySize then
+            match refinementsByConsumer.[c] with
+            | ValueNone -> false
+            | ValueSome arr ->
+                let mutable found = false
+                for i = 0 to arr.Length - 1 do
+                    let struct(opId, _) = arr.[i]
+                    if opId = operand then found <- true
+                found
+        else
+            program.Refinements.TryFind(NodeId c) |> Option.exists (fun m -> m.ContainsKey operand)
+    let splitSharedPairs (pairs: (NodeId * NodeId) list) : int[] * struct(NodeId * NodeId)[] =
+        let unrefined = ResizeArray<int>()
+        let refined = ResizeArray<struct(NodeId * NodeId)>()
+        for (c, op) in pairs do
+            if hasRefinementOn c op then
+                refined.Add(struct(c, op))
+            else
+                unrefined.Add(getOrAddSharedKey op)
+        let uArr = unrefined.ToArray()
+        if uArr.Length > 1 then
+            System.Array.Sort(uArr)
+            let mutable uCount = 1
+            for i = 1 to uArr.Length - 1 do
+                if uArr.[i] <> uArr.[uCount - 1] then
+                    uArr.[uCount] <- uArr.[i]
+                    uCount <- uCount + 1
+            if uCount = uArr.Length then uArr, refined.ToArray()
+            else
+                let trimmed = Array.zeroCreate<int> uCount
+                System.Array.Copy(uArr, 0, trimmed, 0, uCount)
+                trimmed, refined.ToArray()
+        else
+            uArr, refined.ToArray()
+    let elemPlanCache = System.Collections.Generic.Dictionary<TypeIdentity, ElementReadPlan>()
+    let fieldPlanCache = System.Collections.Generic.Dictionary<NominalTypeIdentity * string, ValueRange * int[] * struct(NodeId * NodeId)[]>()
+    let buildElementReadPlan (elem: NativeType) : ElementReadPlan =
+        match Types.tryGetNTUKind elem |> Option.bind (RangeSources.declaredRangeOfKind program.Context) with
+        | Some declared -> ElemConst declared
+        | None ->
+            let key = elementKey elem
+            match elemPlanCache.TryGetValue(key) with
+            | true, cached -> cached
+            | false, _ ->
+                let stores = Map.tryFind key program.ElementStores |> Option.defaultValue []
+                let seed = Map.tryFind key program.ElementSeeds
+                let plan =
+                    match stores, seed with
+                    | [], None -> ElemConst ValueRange.Unbounded
+                    | _ ->
+                        let uKeys, rPairs = splitSharedPairs stores
+                        ElemStores (seed |> Option.defaultValue ValueRange.Empty, uKeys, rPairs)
+                elemPlanCache[key] <- plan
+                plan
+    let buildNodePlan (node: SemanticNode) : NodeTransferPlan =
+        let nodeId = node.Id
+        let hasSpecialOwner =
+            program.ArrayLengths.ContainsKey nodeId ||
+            program.ForeignBodies.Contains nodeId ||
+            program.BoundarySeeds.ContainsKey nodeId ||
+            program.LazyResults.ContainsKey nodeId ||
+            program.LoopAccumulations.ContainsKey nodeId ||
+            program.SequenceAccumulationTargets.ContainsKey nodeId ||
+            program.LoopLinear.ContainsKey nodeId ||
+            program.TailRecurrences.ContainsKey nodeId ||
+            program.FiniteCells.ContainsKey nodeId ||
+            program.LazyEffects.ContainsKey nodeId
+        if hasSpecialOwner then
+            NodeTransferPlan.General node
+        else
+            match node.Kind with
+            | SemanticKind.UnionCase (_, caseIndex, _)
+            | SemanticKind.DUConstruct (_, caseIndex, _, _) ->
+                NodeTransferPlan.Constant (ValueRange.point (bigint caseIndex))
+            | SemanticKind.DUGetTag (_, duType) ->
+                let cases =
+                    match duType with
+                    | NativeType.TUnion (_, cases) -> List.length cases
+                    | NativeType.TApp (tycon, _) -> tycon.CaseCount
+                    | _ -> 0
+                NodeTransferPlan.Constant (ValueRange.Bounded (bigint.Zero, bigint (max 0 (cases - 1))))
+            | _ when not (isRanged node) ->
+                NodeTransferPlan.NotRanged
+            | _ ->
+                let fallback =
+                    if isBoolNode node then ValueRange.boolean
+                    elif isCharNode node then ValueRange.codePoint
+                    else ValueRange.Unbounded
+                let carrier =
+                    if isIntegerNode node && isSource program node then
+                        match Types.tryGetNTUKind node.Type |> Option.bind (RangeSources.declaredRangeOfKind program.Context) with
+                        | Some declared -> ValueSome declared
+                        | None -> ValueNone
+                    else ValueNone
+                match node.Kind with
+                | SemanticKind.Literal (NativeLiteral.Int (v, _)) ->
+                    NodeTransferPlan.Constant (applyCarrier carrier (ValueRange.point (bigint v)))
+                | SemanticKind.Literal (NativeLiteral.UInt (v, _)) ->
+                    NodeTransferPlan.Constant (applyCarrier carrier (ValueRange.point (bigint v)))
+                | SemanticKind.Literal (NativeLiteral.Bool _) ->
+                    NodeTransferPlan.Constant (applyCarrier carrier ValueRange.boolean)
+                | SemanticKind.Literal (NativeLiteral.Char c) ->
+                    NodeTransferPlan.Constant (applyCarrier carrier (ValueRange.point (bigint (int c))))
+                | SemanticKind.Literal _ ->
+                    NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                | SemanticKind.VarRef (_, Some defId)
+                | SemanticKind.TypeAnnotation (defId, _)
+                | SemanticKind.EagerExpr defId
+                | SemanticKind.Upcast (defId, _)
+                | SemanticKind.Downcast (defId, _) ->
+                    NodeTransferPlan.SingleRead (defId, carrier)
+                | SemanticKind.VarRef (_, None) ->
+                    NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                | SemanticKind.PatternBinding _ when Set.contains nodeId program.Parameters ->
+                    let supplied = Map.tryFind nodeId program.CallArguments |> Option.defaultValue []
+                    let seeded = Map.tryFind nodeId program.IndexSeeds |> Option.defaultValue []
+                    if program.RootParameters.TryFind nodeId = Some DeclRoot.LibraryExport then
+                        NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                    elif program.InactiveFormals.Contains nodeId then
+                        NodeTransferPlan.Constant (applyCarrier carrier ValueRange.Empty)
+                    elif List.isEmpty supplied && List.isEmpty seeded then
+                        NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                    else
+                        let uKeys, rSup = splitSharedPairs supplied
+                        let seedArr = seeded |> List.map (fun (c, n) -> struct(c, n)) |> List.toArray
+                        NodeTransferPlan.Parameter (uKeys, rSup, seedArr, carrier)
+                | SemanticKind.PatternBinding _ ->
+                    match List.tryLast node.Children with
+                    | Some valueId -> NodeTransferPlan.SingleRead (valueId, carrier)
+                    | None -> NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                | SemanticKind.Binding (_, false, _, _) ->
+                    match List.tryLast node.Children with
+                    | Some valueId -> NodeTransferPlan.SingleRead (valueId, carrier)
+                    | None -> NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                | SemanticKind.Binding (_, true, _, _) ->
+                    let initOpt = match List.tryLast node.Children with Some v -> ValueSome v | None -> ValueNone
+                    let assigns = Map.tryFind nodeId program.Assignments |> Option.defaultValue [] |> List.toArray
+                    NodeTransferPlan.MutableBinding (initOpt, fallback, assigns, carrier)
+                | SemanticKind.Sequential ids ->
+                    match List.tryLast ids with
+                    | Some lastId -> NodeTransferPlan.SingleRead (lastId, carrier)
+                    | None -> NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                | SemanticKind.IfThenElse (guard, t, e) ->
+                    let trueOk = not (isLiteralBool program guard false)
+                    let trueAtoms = if trueOk then atoms program 0 guard true |> List.toArray else Array.empty
+                    let falseOk = not (isLiteralBool program guard true)
+                    let falseAtoms = if falseOk then atoms program 0 guard false |> List.toArray else Array.empty
+                    let eOpt = match e with Some eid -> ValueSome eid | None -> ValueNone
+                    NodeTransferPlan.IfThenElse (t, eOpt, trueOk, trueAtoms, falseOk, falseAtoms)
+                | SemanticKind.Match (_, cases) ->
+                    NodeTransferPlan.BranchJoin (cases |> List.map (fun c -> c.Body) |> List.toArray)
+                | SemanticKind.CaseElimination (_, arms) ->
+                    NodeTransferPlan.BranchJoin (arms |> List.map (fun a -> a.Body) |> List.toArray)
+                | SemanticKind.FieldGet (exprId, field) ->
+                    match Map.tryFind exprId program.Reachable with
+                    | Some { Type = NativeType.TApp (tycon, _) } ->
+                        let typeName = NominalTypeIdentity.ofConstructor tycon
+                        if Map.containsKey typeName program.Constructions || Map.containsKey typeName program.InputSeeds then
+                            let declared = Map.tryFind typeName program.InputSeeds |> Option.bind (Map.tryFind field)
+                            match declared with
+                            | Some d when ValueRange.isObservable d ->
+                                NodeTransferPlan.Constant (applyCarrier carrier d)
+                            | _ ->
+                                let init, uKeys, rPairs =
+                                    match fieldPlanCache.TryGetValue((typeName, field)) with
+                                    | true, cached -> cached
+                                    | false, _ ->
+                                        let pairs =
+                                            Map.tryFind typeName program.Constructions
+                                            |> Option.defaultValue []
+                                            |> List.collect (fun (recordId, fields) ->
+                                                fields |> List.choose (fun (name, valueId) -> if name = field then Some (recordId, valueId) else None))
+                                        let uKeys, rPairs = splitSharedPairs pairs
+                                        let computed = declared |> Option.defaultValue ValueRange.Empty, uKeys, rPairs
+                                        fieldPlanCache[(typeName, field)] <- computed
+                                        computed
+                                NodeTransferPlan.SharedStores (init, uKeys, rPairs, carrier)
+                        else
+                            NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                    | _ ->
+                        NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                | SemanticKind.TupleGet (tupleId, index) ->
+                    let _, unbounded, leaves = aggregateElementOrigins program Set.empty tupleId [TupleSlot index]
+                    let init = if unbounded then ValueRange.Unbounded else ValueRange.Empty
+                    if leaves.IsEmpty then NodeTransferPlan.Constant (applyCarrier carrier init)
+                    else
+                        let leafKeys = leaves |> Seq.map getOrAddSharedKey |> Seq.toArray
+                        System.Array.Sort(leafKeys)
+                        NodeTransferPlan.SharedLeaves (init, leafKeys, carrier)
+                | SemanticKind.DUEliminate (value, tag, name, _) ->
+                    let _, unbounded, leaves = aggregateElementOrigins program Set.empty value [UnionPayload(tag, name)]
+                    let init = if unbounded then ValueRange.Unbounded else ValueRange.Empty
+                    if leaves.IsEmpty then NodeTransferPlan.Constant (applyCarrier carrier init)
+                    else
+                        let leafKeys = leaves |> Seq.map getOrAddSharedKey |> Seq.toArray
+                        System.Array.Sort(leafKeys)
+                        NodeTransferPlan.SharedLeaves (init, leafKeys, carrier)
+                | SemanticKind.IndexGet (exprId, _) ->
+                    match Map.tryFind exprId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
+                    | Some elem ->
+                        match buildElementReadPlan elem with
+                        | ElemConst r -> NodeTransferPlan.Constant (applyCarrier carrier r)
+                        | ElemStores (init, uKeys, rPairs) -> NodeTransferPlan.SharedStores (init, uKeys, rPairs, carrier)
+                    | None ->
+                        NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                | SemanticKind.Application _ ->
+                    if program.ForeignEntryCalls.ContainsKey nodeId then
+                        NodeTransferPlan.General node
+                    else
+                        match Map.tryFind nodeId program.Callees with
+                        | Some (Callee.Direct(_, body), _) when program.ForeignEffectBodies.Contains body ->
+                            NodeTransferPlan.General node
+                        | Some (Callee.Value(candidates, _), _) when candidates |> List.exists (fun candidate -> program.ForeignEffectBodies.Contains candidate.Body) ->
+                            NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                        | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [_]) ->
+                            NodeTransferPlan.General node
+                        | Some (Callee.Intrinsic info, args) ->
+                            let argPlans =
+                                args
+                                |> List.map (fun a ->
+                                    match Map.tryFind a program.Reachable with
+                                    | Some an ->
+                                        let lit = match an.Kind with SemanticKind.Literal l -> Some l | _ -> None
+                                        let elemPlan =
+                                            match arrayElementType an.Type with
+                                            | Some elem -> ValueSome (buildElementReadPlan elem)
+                                            | None -> ValueNone
+                                        IntrinsicArgPlan(a, isRanged an, an.Type, lit, elemPlan)
+                                    | None ->
+                                        IntrinsicArgPlan(a, false, NativeType.TError "unreachable", None, ValueNone))
+                                |> List.toArray
+                            NodeTransferPlan.IntrinsicApp (info, argPlans, fallback, carrier)
+                        | _ when program.Applications.ContainsKey nodeId ->
+                            NodeTransferPlan.ContextualApp (fallback, carrier)
+                        | Some (Callee.Direct (_, bodyId), _) ->
+                            NodeTransferPlan.DirectApp (getOrAddSharedKey bodyId)
+                        | _ ->
+                            NodeTransferPlan.General node
+                | _ ->
+                    NodeTransferPlan.General node
+    let planByNode : NodeTransferPlan[] = Array.create nodeArraySize NodeTransferPlan.Unset
+    for i = 0 to coords.Length - 1 do
+        let struct(_, _, node) = coords.[i]
+        let (NodeId n) = node.Id
+        if n >= 0 && n < nodeArraySize then
+            match planByNode.[n] with
+            | NodeTransferPlan.Unset -> planByNode.[n] <- buildNodePlan node
+            | _ -> ()
+    let evalPlan (ctxId: int) (keyId: int) (nodeId: NodeId) (plan: NodeTransferPlan) : ValueRange option =
+        match plan with
+        | NodeTransferPlan.NotRanged -> None
+        | NodeTransferPlan.Constant r -> Some r
+        | NodeTransferPlan.SingleRead (operand, carrier) ->
+            Some (applyCarrier carrier (readFastCtx ctxId nodeId operand))
+        | NodeTransferPlan.Parameter (uKeys, rSup, seeded, carrier) ->
+            let mutable range = ValueRange.Empty
+            for i = 0 to uKeys.Length - 1 do
+                range <- ValueRange.join range (get uKeys.[i])
+            for i = 0 to rSup.Length - 1 do
+                let struct(callId, a) = rSup.[i]
+                range <- ValueRange.join range (readFastCtx 0 callId a)
+            for i = 0 to seeded.Length - 1 do
+                let struct(callId, nId) = seeded.[i]
+                range <- ValueRange.join range (indexBelow (readFastCtx 0 callId nId))
+            Some (applyCarrier carrier range)
+        | NodeTransferPlan.MutableBinding (initOpt, fallback, assigns, carrier) ->
+            let mutable range =
+                match initOpt with
+                | ValueSome valueId -> readFastCtx ctxId nodeId valueId
+                | ValueNone -> fallback
+            for i = 0 to assigns.Length - 1 do
+                range <- ValueRange.join range (readFastCtx ctxId nodeId assigns.[i])
+            Some (applyCarrier carrier range)
+        | NodeTransferPlan.IfThenElse (t, eOpt, trueOk, trueAtoms, falseOk, falseAtoms) ->
+            let yes =
+                if trueOk && feasibleAtomsArrCtx ctxId trueAtoms then readFastCtx ctxId nodeId t
+                else ValueRange.Empty
+            let no =
+                match eOpt with
+                | ValueSome e when falseOk && feasibleAtomsArrCtx ctxId falseAtoms -> readFastCtx ctxId nodeId e
+                | _ -> ValueRange.Empty
+            Some (ValueRange.join yes no)
+        | NodeTransferPlan.BranchJoin bodies ->
+            let mutable range = ValueRange.Empty
+            for i = 0 to bodies.Length - 1 do
+                range <- ValueRange.join range (readFastCtx ctxId nodeId bodies.[i])
+            Some range
+        | NodeTransferPlan.SharedStores (init, uKeys, rPairs, carrier) ->
+            let mutable range = init
+            for i = 0 to uKeys.Length - 1 do
+                range <- ValueRange.join range (get uKeys.[i])
+            for i = 0 to rPairs.Length - 1 do
+                let struct(storer, valueId) = rPairs.[i]
+                range <- ValueRange.join range (readFastCtx 0 storer valueId)
+            Some (applyCarrier carrier range)
+        | NodeTransferPlan.SharedLeaves (init, leafKeys, carrier) ->
+            let mutable range = init
+            for i = 0 to leafKeys.Length - 1 do
+                range <- ValueRange.join range (get leafKeys.[i])
+            Some (applyCarrier carrier range)
+        | NodeTransferPlan.ContextualApp (fallback, carrier) ->
+            let raw =
+                match callsByKey.[keyId] with
+                | ValueSome rowKeyIds ->
+                    let mutable range = ValueRange.Empty
+                    for i = 0 to rowKeyIds.Length - 1 do
+                        range <- ValueRange.join range (get rowKeyIds.[i])
+                    range
+                | ValueNone -> fallback
+            Some (applyCarrier carrier raw)
+        | NodeTransferPlan.DirectApp bodyKeyId ->
+            Some (get bodyKeyId)
+        | NodeTransferPlan.IntrinsicApp (info, argPlans, fallback, carrier) ->
+            let arguments =
+                match argPlans.Length with
+                | 0 -> []
+                | 1 ->
+                    let p0 = argPlans.[0]
+                    [ { RangeSources.Argument.Range = (if p0.IsRanged then readFastCtx ctxId nodeId p0.NodeId else ValueRange.Unbounded)
+                        RangeSources.Argument.Type = p0.Type
+                        RangeSources.Argument.Literal = p0.Literal } ]
+                | 2 ->
+                    let p0 = argPlans.[0]
+                    let r0 = if p0.IsRanged then readFastCtx ctxId nodeId p0.NodeId else ValueRange.Unbounded
+                    let p1 = argPlans.[1]
+                    let r1 = if p1.IsRanged then readFastCtx ctxId nodeId p1.NodeId else ValueRange.Unbounded
+                    [ { RangeSources.Argument.Range = r0; RangeSources.Argument.Type = p0.Type; RangeSources.Argument.Literal = p0.Literal }
+                      { RangeSources.Argument.Range = r1; RangeSources.Argument.Type = p1.Type; RangeSources.Argument.Literal = p1.Literal } ]
+                | len ->
+                    [ for i = 0 to len - 1 do
+                        let p = argPlans.[i]
+                        let r = if p.IsRanged then readFastCtx ctxId nodeId p.NodeId else ValueRange.Unbounded
+                        yield { RangeSources.Argument.Range = r; RangeSources.Argument.Type = p.Type; RangeSources.Argument.Literal = p.Literal } ]
+            let raw =
+                match RangeSources.intrinsic program.Context info arguments with
+                | RangeSources.Result.Fact r -> r
+                | RangeSources.Result.ElementOf i ->
+                    if i >= 0 && i < argPlans.Length then
+                        match argPlans.[i].ElemPlan with
+                        | ValueSome (ElemConst r) -> r
+                        | ValueSome (ElemStores (init, uKeys, rPairs)) ->
+                            let mutable range = init
+                            for j = 0 to uKeys.Length - 1 do
+                                range <- ValueRange.join range (get uKeys.[j])
+                            for j = 0 to rPairs.Length - 1 do
+                                let struct(storer, valueId) = rPairs.[j]
+                                range <- ValueRange.join range (readFastCtx 0 storer valueId)
+                            range
+                        | ValueNone -> fallback
+                    else fallback
+                | RangeSources.Result.Untabled -> fallback
+            Some (applyCarrier carrier raw)
+        | NodeTransferPlan.General node ->
+            transfer program shared readingByCtxId.[ctxId] applicationByCtxId.[ctxId] node
+        | NodeTransferPlan.Unset ->
+            None
+    let splitParams : struct(int[] * struct(int * NodeId * NodeId)[]) voption[] = Array.create numKeys ValueNone
+    for (paramKeyId, rows) in tempParams do
+        let uKeys = ResizeArray<int>(rows.Length)
+        let rInputs = ResizeArray<struct(int * NodeId * NodeId)>()
+        for (callerId, call, actual) in rows do
+            let (NodeId cn) = call
+            let hasGuard = cn < 0 || cn >= nodeArraySize || guardAtomsByNode.[cn].IsSome
+            if hasGuard || hasRefinementOn call actual then
+                rInputs.Add(struct(callerId, call, actual))
+            else
+                uKeys.Add(resolveKeyInCtx callerId actual)
+        let uArr = uKeys.ToArray()
+        let finalUArr =
+            if uArr.Length > 1 then
+                System.Array.Sort(uArr)
+                let mutable uCount = 1
+                for i = 1 to uArr.Length - 1 do
+                    if uArr.[i] <> uArr.[uCount - 1] then
+                        uArr.[uCount] <- uArr.[i]
+                        uCount <- uCount + 1
+                if uCount = uArr.Length then uArr
+                else
+                    let trimmed = Array.zeroCreate<int> uCount
+                    System.Array.Copy(uArr, 0, trimmed, 0, uCount)
+                    trimmed
+            else uArr
+        splitParams.[paramKeyId] <- ValueSome (struct(finalUArr, rInputs.ToArray()))
+    let singleKeyArrayCache : int[] voption[] = Array.create numKeys ValueNone
+    let getSingleKeyArray (k: int) =
+        match singleKeyArrayCache.[k] with
+        | ValueSome arr -> arr
+        | ValueNone ->
+            let arr = [| k |]
+            singleKeyArrayCache.[k] <- ValueSome arr
+            arr
+    let coordDirectReadKey : int[] = Array.create coords.Length -1
+    let coordDirectCarrier : ValueRange voption[] = Array.create coords.Length ValueNone
+    let coordConstValue : ValueRange voption[] = Array.create coords.Length ValueNone
+    let coordNotRanged : bool[] = Array.create coords.Length false
+    for coordIdx = 0 to coords.Length - 1 do
+        let struct(ctxId, keyId, node) = coords.[coordIdx]
+        let (NodeId n as nodeId) = node.Id
+        if n >= 0 && n < nodeArraySize then
+            let isApp0 = ctxId = 0 && isApplicationNode.[n]
+            let hasGuard = ctxId <> 0 && guardAtomsByNode.[n].IsSome
+            let hasParam = ctxId <> 0 && paramsByKey.[keyId].IsSome
+            if not isApp0 && not hasGuard && not hasParam then
+                match planByNode.[n] with
+                | NodeTransferPlan.NotRanged ->
+                    coordNotRanged.[coordIdx] <- true
+                | NodeTransferPlan.Constant r ->
+                    coordConstValue.[coordIdx] <- ValueSome r
+                | NodeTransferPlan.SingleRead (operand, carrier) when not (hasRefinementOn nodeId operand) ->
+                    let dk = resolveKeyInCtx ctxId operand
+                    coordDirectReadKey.[coordIdx] <- dk
+                    coordDirectCarrier.[coordIdx] <- carrier
+                    let singleArr = getSingleKeyArray dk
+                    lastRecordedDeps.[coordIdx] <- ValueSome singleArr
+                    climbLastReads.[coordIdx] <- singleArr
+                    descendLastReads.[coordIdx] <- singleArr
+                    hasReads.[coordIdx] <- true
+                    addDependentFirst dk coordIdx
+                | NodeTransferPlan.DirectApp bodyKeyId ->
+                    coordDirectReadKey.[coordIdx] <- bodyKeyId
+                    coordDirectCarrier.[coordIdx] <- ValueNone
+                    let singleArr = getSingleKeyArray bodyKeyId
+                    lastRecordedDeps.[coordIdx] <- ValueSome singleArr
+                    climbLastReads.[coordIdx] <- singleArr
+                    descendLastReads.[coordIdx] <- singleArr
+                    hasReads.[coordIdx] <- true
+                    addDependentFirst bodyKeyId coordIdx
+                | _ -> ()
+    let inline evaluateCoord (coordIdx: int) (ctxId: int) (keyId: int) (node: SemanticNode) =
+        readCursor <- 0
+        if readsOverflow.Count > 0 then readsOverflow.Clear()
+        let directKey = coordDirectReadKey.[coordIdx]
+        if directKey >= 0 then
+            Some (applyCarrier coordDirectCarrier.[coordIdx] (get directKey))
+        else
+            let (NodeId n as nodeId) = node.Id
+            let plan = if n >= 0 && n < nodeArraySize then planByNode.[n] else NodeTransferPlan.General node
+            if ctxId = 0 then
+                if n >= 0 && n < nodeArraySize && isApplicationNode.[n] then
+                    match occurrencesByNodeArr.[n] with
+                    | ValueSome occs ->
+                        let mutable range = ValueRange.Empty
+                        for i = 0 to occs.Length - 1 do
+                            range <- ValueRange.join range (get occs.[i])
+                        Some range
+                    | ValueNone ->
+                        evalPlan 0 keyId nodeId plan
+                else
+                    evalPlan 0 keyId nodeId plan
+            else
+                if not (occurrenceFeasibleFastCtx ctxId nodeId) then Some ValueRange.Empty
+                else
+                    match splitParams.[keyId] with
+                    | ValueSome (struct(uKeys, rInputs)) ->
+                        let mutable range = ValueRange.Empty
+                        for i = 0 to uKeys.Length - 1 do
+                            range <- ValueRange.join range (get uKeys.[i])
+                        for i = 0 to rInputs.Length - 1 do
+                            let struct(callerId, call, actual) = rInputs.[i]
+                            if occurrenceFeasibleFastCtx callerId call then
+                                range <- ValueRange.join range (readFastCtx callerId call actual)
+                        Some range
+                    | ValueNone ->
+                        evalPlan ctxId keyId nodeId plan
+    let hasUintThresholds = program.Thresholds |> List.exists (fun t -> t.Family = "uint")
+    let buildSortedBigints (baseList: bigint list) (constPairs: seq<bigint>) : bigint[] =
+        let s = System.Collections.Generic.SortedSet<bigint>(baseList)
+        for v in constPairs do s.Add(v) |> ignore
+        let arr = Array.zeroCreate<bigint> s.Count
+        s.CopyTo(arr)
+        arr
+    let baseUintHi = program.Thresholds |> List.choose (fun t -> if t.Family = "uint" then Some t.Hi else None)
+    let baseIntHi = program.Thresholds |> List.choose (fun t -> if t.Family = "int" then Some t.Hi else None)
+    let baseUintLo = program.Thresholds |> List.choose (fun t -> if t.Family = "uint" then Some t.Lo else None)
+    let baseIntLo = program.Thresholds |> List.choose (fun t -> if t.Family = "int" then Some t.Lo else None)
+    let uintHiNoConsts = buildSortedBigints baseUintHi Seq.empty
+    let intHiNoConsts = buildSortedBigints baseIntHi Seq.empty
+    let uintLoNoConsts = buildSortedBigints baseUintLo Seq.empty
+    let intLoNoConsts = buildSortedBigints baseIntLo Seq.empty
+    let mutable uintHiWithConsts = uintHiNoConsts
+    let mutable intHiWithConsts = intHiNoConsts
+    let mutable uintLoWithConsts = uintLoNoConsts
+    let mutable intLoWithConsts = intLoNoConsts
+    let inline minAbove (arr: bigint[]) (g: bigint) : ValueRange.Endpoint =
+        let idx = System.Array.BinarySearch(arr, g)
+        let i = if idx >= 0 then idx else ~~~idx
+        if i < arr.Length then ValueRange.Endpoint.Finite arr.[i] else ValueRange.Endpoint.PosInf
+    let inline maxBelow (arr: bigint[]) (g: bigint) : ValueRange.Endpoint =
+        let idx = System.Array.BinarySearch(arr, g)
+        let i = if idx >= 0 then idx else (~~~idx) - 1
+        if i >= 0 then ValueRange.Endpoint.Finite arr.[i] else ValueRange.Endpoint.NegInf
+    let inline widenWithSorted (hiUint: bigint[]) (hiInt: bigint[]) (loUint: bigint[]) (loInt: bigint[]) (old: ValueRange) (grown: ValueRange) : ValueRange =
+        match ValueRange.endpoints old, ValueRange.endpoints grown with
+        | _, None -> old
+        | None, _ -> grown
+        | Some (olo, ohi), Some (glo, ghi) ->
+            let isUint =
+                hasUintThresholds &&
+                (match glo with ValueRange.Endpoint.Finite g -> g >= bigint.Zero | ValueRange.Endpoint.PosInf -> true | ValueRange.Endpoint.NegInf -> false)
+            let hi =
+                if ghi <= ohi then ohi
+                else
+                    match ghi with
+                    | ValueRange.Endpoint.Finite g -> minAbove (if isUint then hiUint else hiInt) g
+                    | _ -> ValueRange.Endpoint.PosInf
+            let lo =
+                if glo >= olo then olo
+                else
+                    match glo with
+                    | ValueRange.Endpoint.Finite g -> maxBelow (if isUint then loUint else loInt) g
+                    | _ -> ValueRange.Endpoint.NegInf
+            ValueRange.ofEndpoints lo hi
+    let pointKeysByVal = System.Collections.Generic.Dictionary<bigint, System.Collections.Generic.HashSet<int>>()
+    let mutable pointConstantsDirty = true
+    let updatePointConstant (kId: int) (hasPrev: bool) (old: ValueRange) (next: ValueRange) =
+        if hasPrev then
+            match old with
+            | ValueRange.Bounded(lo, hi) when lo = hi ->
+                match pointKeysByVal.TryGetValue(lo) with
+                | true, s ->
+                    if s.Remove(kId) then
+                        if s.Count = 0 then
+                            pointKeysByVal.Remove(lo) |> ignore
+                            pointConstantsDirty <- true
+                | false, _ -> ()
+            | _ -> ()
+        match next with
+        | ValueRange.Bounded(lo, hi) when lo = hi ->
+            match pointKeysByVal.TryGetValue(lo) with
+            | true, s ->
+                s.Add(kId) |> ignore
+            | false, _ ->
+                let s = System.Collections.Generic.HashSet<int>()
+                s.Add(kId) |> ignore
+                pointKeysByVal[lo] <- s
+                pointConstantsDirty <- true
+        | _ -> ()
+    let refreshConstantsIfNeeded () =
+        if pointConstantsDirty then
+            pointConstantsDirty <- false
+            let hiConsts = ResizeArray<bigint>(pointKeysByVal.Count * 2)
+            let loConsts = ResizeArray<bigint>(pointKeysByVal.Count * 2)
+            for c in pointKeysByVal.Keys do
+                hiConsts.Add(c - bigint.One)
+                hiConsts.Add(c)
+                loConsts.Add(c)
+                loConsts.Add(c + bigint.One)
+            uintHiWithConsts <- buildSortedBigints baseUintHi hiConsts
+            intHiWithConsts <- buildSortedBigints baseIntHi hiConsts
+            uintLoWithConsts <- buildSortedBigints baseUintLo loConsts
+            intLoWithConsts <- buildSortedBigints baseIntLo loConsts
+    let mutable activeThis = Array.init coords.Length (fun i -> not coordNotRanged.[i])
+    let mutable activeNext = Array.create coords.Length false
+    let rec climb round (minActive: int) (maxActive: int) =
         if round > AscentLimit then
             failwithf "RangeAnalysis: the range fixpoint did not settle in %d rounds; the widening did not terminate the ascent" AscentLimit
-        else
-            let next, changed = ascend program contexts round state
-            if changed then climb (round + 1) next else next
-    let rec descend round state =
-        if round > NarrowingRounds then state
-        else
-            let next, changed = narrow program contexts state
-            if changed then descend (round + 1) next else next
-    let state = climb 1 { Values = Map.empty; Reads = Map.empty } |> descend 1
-    let shared = state.Values |> Map.toList |> List.choose (fun ((context, id), range) ->
-        if context = RangeContext.Shared then Some(id, range) else None) |> Map.ofList
+        elif minActive <= maxActive then
+            let roundConstants =
+                if round > WideningDelay then
+                    refreshConstantsIfNeeded ()
+                    let keys = pointKeysByVal.Values |> Seq.collect id |> Seq.toArray
+                    let setId = constSetArrays.Count
+                    constSetArrays.Add keys
+                    ValueSome setId
+                else ValueNone
+            let mutable curMaxActive = maxActive
+            let mutable nextMinActive = coords.Length
+            let mutable nextMaxActive = -1
+            let mutable coordIdx = minActive
+            while coordIdx <= curMaxActive do
+                if activeThis.[coordIdx] then
+                    activeThis.[coordIdx] <- false
+                    let struct(ctxId, keyId, node) = coords.[coordIdx]
+                    let directKey = coordDirectReadKey.[coordIdx]
+                    let computed =
+                        if directKey >= 0 then
+                            Some (applyCarrier coordDirectCarrier.[coordIdx] valuesArr.[directKey])
+                        else
+                            match coordConstValue.[coordIdx] with
+                            | ValueSome r ->
+                                hasReads.[coordIdx] <- true
+                                Some r
+                            | ValueNone ->
+                                evaluateCoord coordIdx ctxId keyId node
+                    match computed with
+                    | None -> ()
+                    | Some computed ->
+                        if directKey < 0 && coordConstValue.[coordIdx].IsNone then
+                            let struct(currentReads, depsChanged) = extractDeps lastRecordedDeps.[coordIdx]
+                            hasReads.[coordIdx] <- true
+                            climbLastReads.[coordIdx] <- currentReads
+                            if depsChanged then
+                                match lastRecordedDeps.[coordIdx] with
+                                | ValueSome prev ->
+                                    let acc =
+                                        match extraReadsAcc.[coordIdx] with
+                                        | ValueSome list -> list
+                                        | ValueNone ->
+                                            let list = ResizeArray<int>(prev.Length)
+                                            extraReadsAcc.[coordIdx] <- ValueSome list
+                                            list
+                                    for i = 0 to prev.Length - 1 do
+                                        acc.Add(prev.[i])
+                                    lastRecordedDeps.[coordIdx] <- ValueSome currentReads
+                                    addNewDependents prev currentReads coordIdx
+                                | ValueNone ->
+                                    lastRecordedDeps.[coordIdx] <- ValueSome currentReads
+                                    for i = 0 to currentReads.Length - 1 do
+                                        addDependentFirst currentReads.[i] coordIdx
+                        let hasPrev = hasValueArr.[keyId]
+                        let old = valuesArr.[keyId]
+                        let next =
+                            if not hasPrev then computed
+                            else
+                                let grown = ValueRange.join old computed
+                                if ValueRange.contains old grown then old
+                                elif round > WideningDelay then
+                                    match roundConstants with
+                                    | ValueSome setId -> usedConstSetIds.[coordIdx] <- usedConstSetIds.[coordIdx].Add setId
+                                    | ValueNone -> ()
+                                    widenWithSorted uintHiWithConsts intHiWithConsts uintLoWithConsts intLoWithConsts old grown
+                                else grown
+                        if not hasPrev then
+                            hasValueArr.[keyId] <- true
+                        if old <> next then
+                            updatePointConstant keyId hasPrev old next
+                            valuesArr.[keyId] <- next
+                            match dependentsOfKey.[keyId] with
+                            | ValueSome depCoords ->
+                                for i = 0 to depCoords.Count - 1 do
+                                    let depCoord = depCoords.[i]
+                                    if depCoord > coordIdx then
+                                        activeThis.[depCoord] <- true
+                                        if depCoord > curMaxActive then curMaxActive <- depCoord
+                                    else
+                                        activeNext.[depCoord] <- true
+                                        if depCoord < nextMinActive then nextMinActive <- depCoord
+                                        if depCoord > nextMaxActive then nextMaxActive <- depCoord
+                            | ValueNone -> ()
+                coordIdx <- coordIdx + 1
+            if nextMinActive <= nextMaxActive then
+                let swap = activeThis
+                activeThis <- activeNext
+                activeNext <- swap
+                climb (round + 1) nextMinActive nextMaxActive
+    let rec descend round (minActive: int) (maxActive: int) =
+        if round <= NarrowingRounds && minActive <= maxActive then
+            let mutable curMaxActive = maxActive
+            let mutable nextMinActive = coords.Length
+            let mutable nextMaxActive = -1
+            let mutable coordIdx = minActive
+            while coordIdx <= curMaxActive do
+                if activeThis.[coordIdx] then
+                    activeThis.[coordIdx] <- false
+                    let struct(ctxId, keyId, node) = coords.[coordIdx]
+                    let directKey = coordDirectReadKey.[coordIdx]
+                    let computed =
+                        if directKey >= 0 then
+                            Some (applyCarrier coordDirectCarrier.[coordIdx] valuesArr.[directKey])
+                        else
+                            evaluateCoord coordIdx ctxId keyId node
+                    match computed with
+                    | None -> ()
+                    | Some computed ->
+                        if directKey < 0 then
+                            let struct(currentReads, depsChanged) = extractDeps lastRecordedDeps.[coordIdx]
+                            hasReads.[coordIdx] <- true
+                            descendLastReads.[coordIdx] <- currentReads
+                            if depsChanged then
+                                match lastRecordedDeps.[coordIdx] with
+                                | ValueSome prev ->
+                                    let acc =
+                                        match extraReadsAcc.[coordIdx] with
+                                        | ValueSome list -> list
+                                        | ValueNone ->
+                                            let list = ResizeArray<int>(prev.Length)
+                                            extraReadsAcc.[coordIdx] <- ValueSome list
+                                            list
+                                    for i = 0 to prev.Length - 1 do
+                                        acc.Add(prev.[i])
+                                    lastRecordedDeps.[coordIdx] <- ValueSome currentReads
+                                    addNewDependents prev currentReads coordIdx
+                                | ValueNone ->
+                                    lastRecordedDeps.[coordIdx] <- ValueSome currentReads
+                                    for i = 0 to currentReads.Length - 1 do
+                                        addDependentFirst currentReads.[i] coordIdx
+                        let old = if hasValueArr.[keyId] then valuesArr.[keyId] else ValueRange.Empty
+                        let next = if ValueRange.contains computed old || not (ValueRange.contains old computed) then old else computed
+                        let valueChanged = old <> next
+                        if valueChanged then
+                            hasValueArr.[keyId] <- true
+                            valuesArr.[keyId] <- next
+                            match dependentsOfKey.[keyId] with
+                            | ValueSome depCoords ->
+                                for i = 0 to depCoords.Count - 1 do
+                                    let depCoord = depCoords.[i]
+                                    if depCoord > coordIdx then
+                                        activeThis.[depCoord] <- true
+                                        if depCoord > curMaxActive then curMaxActive <- depCoord
+                                    else
+                                        activeNext.[depCoord] <- true
+                                        if depCoord < nextMinActive then nextMinActive <- depCoord
+                                        if depCoord > nextMaxActive then nextMaxActive <- depCoord
+                            | ValueNone -> ()
+                coordIdx <- coordIdx + 1
+            if nextMinActive <= nextMaxActive then
+                let swap = activeThis
+                activeThis <- activeNext
+                activeNext <- swap
+                descend (round + 1) nextMinActive nextMaxActive
+    if coords.Length > 0 then
+        climb 1 0 (coords.Length - 1)
+    if coords.Length > 0 then
+        for i = 0 to coords.Length - 1 do
+            activeThis.[i] <- not coordNotRanged.[i] && coordConstValue.[i].IsNone
+        System.Array.Fill(activeNext, false)
+        descend 1 0 (coords.Length - 1)
+    let keyToPair = keyToPairList.ToArray()
+    let keyToSharedNode = keyToSharedNodeList.ToArray()
+    let valuesMap =
+        seq {
+            for kId = 0 to keyToPair.Length - 1 do
+                if hasValueArr.[kId] then
+                    yield keyToPair.[kId], valuesArr.[kId]
+        }
+        |> Map.ofSeq
+    let readsMap =
+        let singleConstSetCache = System.Collections.Generic.Dictionary<int, Set<RangeContext * NodeId>>()
+        let getSingleConstSet (constSetId: int) =
+            match singleConstSetCache.TryGetValue(constSetId) with
+            | true, s -> s
+            | false, _ ->
+                let arr = constSetArrays.[constSetId]
+                let s = arr |> Array.map (fun kId -> keyToPair.[kId]) |> Set.ofArray
+                singleConstSetCache[constSetId] <- s
+                s
+        let comboCache = System.Collections.Generic.Dictionary<Set<int>, Set<RangeContext * NodeId>>()
+        let getComboSet (combo: Set<int>) =
+            if combo.IsEmpty then Set.empty
+            elif combo.Count = 1 then getSingleConstSet (Seq.head combo)
+            else
+                match comboCache.TryGetValue(combo) with
+                | true, s -> s
+                | false, _ ->
+                    let s =
+                        combo
+                        |> Seq.fold (fun (acc: Set<RangeContext * NodeId>) constSetId ->
+                            let part = getSingleConstSet constSetId
+                            if acc.IsEmpty then part else Set.union acc part) Set.empty
+                    comboCache[combo] <- s
+                    s
+        seq {
+            for coordIdx = 0 to coords.Length - 1 do
+                if hasReads.[coordIdx] then
+                    let struct(_, keyId, _) = coords.[coordIdx]
+                    let mutable unpackedDeps = getComboSet usedConstSetIds.[coordIdx]
+                    let cReads = climbLastReads.[coordIdx]
+                    for i = 0 to cReads.Length - 1 do
+                        unpackedDeps <- unpackedDeps.Add(keyToPair.[cReads.[i]])
+                    let dReads = descendLastReads.[coordIdx]
+                    for i = 0 to dReads.Length - 1 do
+                        unpackedDeps <- unpackedDeps.Add(keyToPair.[dReads.[i]])
+                    match extraReadsAcc.[coordIdx] with
+                    | ValueSome extra ->
+                        for i = 0 to extra.Count - 1 do
+                            unpackedDeps <- unpackedDeps.Add(keyToPair.[extra.[i]])
+                    | ValueNone -> ()
+                    yield keyToPair.[keyId], unpackedDeps
+        }
+        |> Map.ofSeq
+    let shared =
+        seq {
+            for kId = 0 to keyToSharedNode.Length - 1 do
+                if hasValueArr.[kId] then
+                    match keyToSharedNode.[kId] with
+                    | ValueSome nodeId -> yield nodeId, valuesArr.[kId]
+                    | ValueNone -> ()
+        }
+        |> Map.ofSeq
     shared,
     { ContextDepth = InvocationContextDepth; Invocations = contexts.Invocations
-      Values = state.Values; Reads = state.Reads; Premises = Map.empty
+      Values = valuesMap; Reads = readsMap; Premises = Map.empty
       CaptureRelations = []; SourceRelations = Ok []; Platform = None; Roots = [] }
 
 /// Diagnostics follow issued read incidence; they never replay the solver.

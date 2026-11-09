@@ -43,15 +43,38 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
                 let pointerBits = graph.Platform |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption) |> Option.map (fun bytes -> int64 bytes * 8L)
                 Option.isSome pointerBits && PlatformResolution.int64Of graph bitsId = pointerBits && isPointerSlot
             | Some (_, "Integer", Some pairId) ->
-                Types.isIntegerType ty &&
-                (match PlatformResolution.valueOf graph pairId with
-                 | Some { Kind = SemanticKind.TupleExpr [signId; bitsId] } ->
-                     match PlatformResolution.caseOf graph signId, PlatformResolution.int64Of graph bitsId with
-                     | Some (_, ("Signed" | "Unsigned"), None), Some bits -> bits > 0L
-                     | _ -> false
-                 | _ -> false)
+                let pointerBits = graph.Platform |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption) |> Option.map (fun bytes -> int64 bytes * 8L)
+                let offered family bits =
+                    match graph.Platform with
+                    | Some ctx when not ctx.Representations.IsEmpty ->
+                        ctx.Representations.Values
+                        |> Seq.exists (fun r -> r.Family = family && int64 r.Bits = bits && NumericRepresentation.isOffered r)
+                    | _ -> false
+                match PlatformResolution.valueOf graph pairId with
+                | Some { Kind = SemanticKind.TupleExpr [signId; bitsId] } ->
+                    match PlatformResolution.caseOf graph signId, PlatformResolution.int64Of graph bitsId, Types.tryGetNTUKind ty with
+                    | Some (_, "Signed", None), Some bits, Some (NTUKind.NTUint (NTUWidth.Fixed w)) -> bits = int64 w && offered "int" bits
+                    | Some (_, "Signed", None), Some bits, Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)) -> Some bits = pointerBits && offered "int" bits
+                    | Some (_, "Signed", None), Some bits, Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) -> offered "int" bits
+                    | Some (_, "Signed", None), Some bits, Some NTUKind.NTUdiff -> Some bits = pointerBits && offered "int" bits
+                    | Some (_, "Unsigned", None), Some bits, Some (NTUKind.NTUuint (NTUWidth.Fixed w)) -> bits = int64 w && offered "uint" bits
+                    | Some (_, "Unsigned", None), Some bits, Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)) -> Some bits = pointerBits && offered "uint" bits
+                    | Some (_, "Unsigned", None), Some bits, Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register)) -> offered "uint" bits
+                    | Some (_, "Unsigned", None), Some bits, Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) -> offered "uint" bits
+                    | Some (_, "Unsigned", None), Some bits, Some NTUKind.NTUsize -> Some bits = pointerBits && offered "uint" bits
+                    | _ -> false
+                | _ -> false
             | Some (_, "Float", Some bitsId) ->
-                Types.isFloatType ty && (PlatformResolution.int64Of graph bitsId |> Option.exists (fun bits -> bits = 32L || bits = 64L))
+                let offeredFloat bits =
+                    match graph.Platform with
+                    | Some ctx when not ctx.Representations.IsEmpty ->
+                        ctx.Representations.Values
+                        |> Seq.exists (fun r -> r.Family = "ieee" && int64 r.Bits = bits && NumericRepresentation.isOffered r)
+                    | _ -> false
+                match PlatformResolution.int64Of graph bitsId, Types.tryGetNTUKind ty with
+                | Some bits, Some (NTUKind.NTUfloat (NTUWidth.Fixed w)) -> bits = int64 w && offeredFloat bits
+                | Some bits, Some (NTUKind.NTUfloat (NTUWidth.Resolved WidthDimension.Register)) -> offeredFloat bits
+                | _ -> false
             | Some (_, "Named", Some nameId) ->
                 match PlatformResolution.stringOf graph nameId, ty with
                 | Some name, NativeType.TApp (tc, _) -> tc.Name = name || tc.Name.EndsWith("." + name)
@@ -62,7 +85,7 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
             | Some (paramRecord, paramFields) when PlatformResolution.typeName paramRecord = Some "ParameterInfo" ->
                 let passByOk =
                     match PlatformResolution.field "PassBy" paramFields |> Option.bind (PlatformResolution.caseOf graph) with
-                    | Some (_, "Value", None) | None -> true
+                    | Some (_, "Value", None) -> true
                     | _ -> false
                 let typeOk =
                     PlatformResolution.field "Type" paramFields |> Option.exists (fun typeId -> typeRefMatches typeId ty)
@@ -113,41 +136,65 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
             | Some { Kind = SemanticKind.Application (target, args) } -> application target (args @ arguments)
             | Some { Kind = SemanticKind.VarRef (_, Some target) } -> Some (target, arguments)
             | _ -> None
-        match PlatformResolution.lambdaOfBinding graph node.Id with
-        | None -> Set.empty
-        | Some (parameters, body) ->
+        let hasValidLifetime =
+            match node.Children with
+            | [implementation] ->
+                Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryImplementation graph implementation
+                |> Option.exists (fun entry -> entry.Lifetime.Binding = node.Id)
+            | _ -> false
+        match hasValidLifetime, PlatformResolution.lambdaOfBinding graph node.Id with
+        | true, Some (parameters, body) ->
             let parameters, body = lambdas parameters body
             match application body [] with
-            | Some (targetId, arguments) when
-                (match graph.Nodes.TryFind targetId, PlatformResolution.lambdaOfBinding graph targetId with
-                 | Some target, Some (formals, targetBody) when target.Parent = node.Parent && Map.containsKey "FidelityExtern.Library" target.Metadata ->
-                     descriptors.Functions |> List.exists (fun descriptor ->
-                         descriptor.Body = Some targetBody &&
-                         (descriptor.Parameters |> List.map fst) = (formals |> List.map (fun (_, _, id) -> id)) &&
-                         (match PlatformResolution.recordOf graph descriptor.Node with
-                          | Some (record, fields) ->
-                              let _, findings = PlatformResolution.readFunctionForBinding graph target "" record fields
-                              findings.IsEmpty
-                          | None -> false))
-                 | _ -> false) ->
-                parameters |> List.mapi (fun ordinal (_, ty, formal) ->
-                    match applySubst ty, AggregateTypes.shape graph ty with
-                    | NativeType.TApp (tc, _), Some (AggregateTypes.Shape.Record (_, [fieldName, fieldTy])) ->
-                        let name = tc.Name
-                        let shortName = name.Substring(name.LastIndexOf('.') + 1)
-                        let identity = NominalTypeIdentity.display (NominalTypeIdentity.ofConstructor tc)
-                        let forwarded = arguments |> List.exists (fun arg ->
-                            match graph.Nodes.TryFind arg with
-                            | Some { Kind = SemanticKind.FieldGet (receiver, field) } when field = fieldName ->
-                                match graph.Nodes.TryFind receiver with
-                                | Some { Kind = SemanticKind.VarRef (_, Some id) } -> id = formal
-                                | _ -> false
-                            | _ -> false)
-                        if forwarded && ([name; shortName; identity] |> List.exists (fun n -> descriptorMatches n fieldName fieldTy)) then
-                            Some (["public interface"] @ List.replicate ordinal "result" @ ["parameter"; fieldName])
-                        else None
-                    | _ -> None) |> List.choose id |> Set.ofList
+            | Some (targetId, arguments) ->
+                match graph.Nodes.TryFind targetId, PlatformResolution.lambdaOfBinding graph targetId with
+                | Some target, Some (formals, targetBody) when
+                    target.Parent = node.Parent &&
+                    Map.containsKey "FidelityExtern.Library" target.Metadata &&
+                    List.length parameters = List.length formals &&
+                    List.length formals = List.length arguments &&
+                    (descriptors.Functions |> List.exists (fun descriptor ->
+                        descriptor.Body = Some targetBody &&
+                        (descriptor.Parameters |> List.map fst) = (formals |> List.map (fun (_, _, id) -> id)) &&
+                        (match PlatformResolution.recordOf graph descriptor.Node with
+                         | Some (record, fields) ->
+                             let _, findings = PlatformResolution.readFunctionForBinding graph target "" record fields
+                             findings.IsEmpty
+                         | None -> false))) ->
+                    let parameterOutcomes =
+                        parameters |> List.mapi (fun ordinal (_, ty, formal) ->
+                            let (_, formalTy, _), arg = formals[ordinal], arguments[ordinal]
+                            match applySubst ty, AggregateTypes.shape graph ty with
+                            | NativeType.TApp (tc, _), Some (AggregateTypes.Shape.Record (_, [fieldName, fieldTy]))
+                                when Types.tryGetNTUKind fieldTy = Some NTUKind.NTUfnptr ->
+                                let name = tc.Name
+                                let shortName = name.Substring(name.LastIndexOf('.') + 1)
+                                let identity = NominalTypeIdentity.display (NominalTypeIdentity.ofConstructor tc)
+                                let fieldIdentity = TypeIdentity.ofType (applySubst fieldTy)
+                                let forwarded =
+                                    TypeIdentity.ofType (applySubst formalTy) = fieldIdentity &&
+                                    match graph.Nodes.TryFind arg with
+                                    | Some { Kind = SemanticKind.FieldGet (receiver, field) } when field = fieldName ->
+                                        match graph.Nodes.TryFind receiver with
+                                        | Some { Kind = SemanticKind.VarRef (_, Some id) } -> id = formal
+                                        | _ -> false
+                                    | _ -> false
+                                if forwarded && ([name; shortName; identity] |> List.exists (fun n -> descriptorMatches n fieldName fieldTy)) then
+                                    Ok (Some (["public interface"] @ List.replicate ordinal "result" @ ["parameter"; fieldName]))
+                                else Error ()
+                            | _ ->
+                                let directForwarded =
+                                    TypeIdentity.ofType (applySubst formalTy) = TypeIdentity.ofType (applySubst ty) &&
+                                    match graph.Nodes.TryFind arg with
+                                    | Some { Kind = SemanticKind.VarRef (_, Some id) } -> id = formal
+                                    | _ -> false
+                                if directForwarded then Ok None else Error ())
+                    if parameterOutcomes |> List.forall Result.isOk then
+                        parameterOutcomes |> List.choose (function Ok (Some slot) -> Some slot | _ -> None) |> Set.ofList
+                    else Set.empty
+                | _ -> Set.empty
             | _ -> Set.empty
+        | _ -> Set.empty
     let rec exposed seen participants path ty =
         let ty = applySubst ty
 

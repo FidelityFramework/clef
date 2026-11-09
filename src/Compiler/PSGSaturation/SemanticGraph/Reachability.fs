@@ -219,15 +219,18 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
             | _ -> None)
         |> Map.ofList
 
-    let rec walk root (visited: Map<NodeId, Set<'Root>>) (nodeId: NodeId) =
-        let held = visited.TryFind nodeId |> Option.defaultValue Set.empty
-        if held.Contains root then
-            visited
-        else
-            match SemanticGraph.tryGetNode nodeId graph with
-            | None -> visited
-            | Some node ->
-                let visited = visited.Add(nodeId, held.Add root)
+    let bindingByName =
+        graph.Nodes
+        |> Map.fold (fun acc id node ->
+            match node.Kind with
+            | SemanticKind.Binding (bindingName, _, _, _) when not (Map.containsKey bindingName acc) ->
+                Map.add bindingName id acc
+            | _ -> acc) Map.empty
+    let refsCache = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
+    let getAllRefs (node: SemanticNode) =
+        match refsCache.TryGetValue node.Id with
+        | true, cached -> cached
+        | false, _ ->
                 // Follow structural children and semantic references
                 let refs =
                     match Map.tryFind node.Id mappedReferences with
@@ -236,7 +239,10 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
                 // Also follow type references to ensure TypeDefs are reachable
                 let typeRefs = getTypeDefRefs node graph
                 // Follow intrinsic implementation function references
-                let intrinsicRef = getIntrinsicImplementationRef node graph |> Option.toList
+                let intrinsicRef =
+                    match node.Kind with
+                    | SemanticKind.Intrinsic info -> Map.tryFind (intrinsicImplementationName info) bindingByName |> Option.toList
+                    | _ -> []
                 // Follow string-literal symbol references (dlsym reachability)
                 let symbolRef = getStringLiteralBindingRef node qualifiedIndex |> Option.toList
                 // A module's quotation bindings are declarations the compiler reads, not values the
@@ -268,19 +274,44 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
                     match foreignBodies.TryFind node.Id with
                     | Some placeholder -> allRefs |> List.filter ((<>) placeholder)
                     | None -> allRefs
-                allRefs |> List.fold (walk root) visited
+                refsCache[node.Id] <- allRefs
+                allRefs
 
-    entries
-    |> List.filter (fun (nodeId, _) -> not (isQuotationBinding graph nodeId))
-    |> List.fold (fun visited (nodeId, root) -> walk root visited nodeId) Map.empty
+    let visited = System.Collections.Generic.Dictionary<NodeId, System.Collections.Generic.HashSet<'Root>>()
+    let rec walk (root: 'Root) (nodeId: NodeId) =
+        match SemanticGraph.tryGetNode nodeId graph with
+        | None -> ()
+        | Some node ->
+            let held =
+                match visited.TryGetValue nodeId with
+                | true, h -> h
+                | false, _ ->
+                    let h = System.Collections.Generic.HashSet<'Root>()
+                    visited[nodeId] <- h
+                    h
+            if held.Add root then
+                for r in getAllRefs node do
+                    walk root r
+
+    for (nodeId, root) in entries do
+        if not (isQuotationBinding graph nodeId) then
+            walk root nodeId
+
+    visited |> Seq.map (fun kv -> kv.Key, Set.ofSeq kv.Value) |> Map.ofSeq
+
+let private declarationPurposesCache =
+    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Map<NodeId, Set<NodeId * DeclRoot>>>()
 
 /// The same dependency walk carries each declaration's purpose. A binding can
 /// contribute both library retention and concrete commitment; neither row may
 /// erase the other. Read this from the current graph after allocating rewrites.
 let declarationPurposes (graph: SemanticGraph) : Map<NodeId, Set<NodeId * DeclRoot>> =
-    graph.DeclarationRoots
-    |> List.map (fun ((id, _) as root) -> id, root)
-    |> computeContributions graph
+    declarationPurposesCache.GetValue(
+        graph,
+        System.Runtime.CompilerServices.ConditionalWeakTable<_, _>.CreateValueCallback(fun g ->
+            g.DeclarationRoots
+            |> List.map (fun ((id, _) as root) -> id, root)
+            |> computeContributions g))
 
 /// Only an accounted, exclusively retained node avoids concrete representation
 /// commitment. Missing purpose evidence grants no exemption.
@@ -339,12 +370,237 @@ let markUnreachable (graph: SemanticGraph) : SemanticGraph =
         failwithf "Missing %d intrinsic implementation function(s). Cannot continue compilation." missingImplementations.Length
 
     let reachable = computeReachable graph (graph.DeclarationRoots |> List.map fst)
-    let updatedNodes =
-        graph.Nodes
-        |> Map.map (fun id node ->
-            { node with IsReachable = Set.contains id reachable })
+    if graph.Nodes |> Map.forall (fun id node -> node.IsReachable = Set.contains id reachable) then
+        graph
+    else
+        let updatedNodes =
+            graph.Nodes
+            |> Map.map (fun id node ->
+                { node with IsReachable = Set.contains id reachable })
 
-    { graph with Nodes = updatedNodes }
+        { graph with Nodes = updatedNodes }
+
+/// A conservative, read-only description of the part of a reachable graph
+/// connected to a change. It does not authorize reuse of analysis results.
+type ReachableDeltaCone = {
+    SeedRoots: Set<NodeId>
+    NewlyLitNodes: Set<NodeId>
+    ExtinguishedNodes: Set<NodeId>
+    AffectedCone: Set<NodeId>
+    RetainedReachable: Set<NodeId>
+}
+
+/// Compare two already-marked graphs. Within a declaration, parent/child
+/// structure is bidirectional; across declarations and hyperedges, invalidation
+/// propagates forward along directed causal dependencies (from definitions and
+/// hyperedge source premises to their target sites and consumers). Lexical
+/// ModuleDef containers propagate parent-to-child containment without lifting
+/// child edits back into sibling declarations.
+let computeShadowCone (baseline: SemanticGraph) (current: SemanticGraph) : ReachableDeltaCone =
+    let isModuleDef (node: SemanticNode) =
+        match node.Kind with
+        | SemanticKind.ModuleDef _ -> true
+        | _ -> false
+
+    let moduleMemberPairs (graph: SemanticGraph) =
+        graph.Nodes
+        |> Map.fold (fun acc id node ->
+            match node.Kind with
+            | SemanticKind.ModuleDef(_, members) ->
+                (node.Children @ members)
+                |> List.fold (fun a childId -> if childId <> id then Set.add (id, childId) a else a) acc
+            | _ ->
+                match node.Parent with
+                | Some parentId when parentId <> id ->
+                    match graph.Nodes.TryFind parentId with
+                    | Some parentNode when isModuleDef parentNode -> Set.add (parentId, id) acc
+                    | _ -> acc
+                | _ -> acc) Set.empty
+
+    let allModuleMemberPairs =
+        Set.union (moduleMemberPairs baseline) (moduleMemberPairs current)
+
+    let sameNode (a: SemanticNode) (b: SemanticNode) =
+        match a.Kind, b.Kind with
+        | SemanticKind.ModuleDef(nameA, _), SemanticKind.ModuleDef(nameB, _) ->
+            a.Id = b.Id && nameA = nameB && a.Parent = b.Parent && a.Type = b.Type &&
+            a.SRTPResolution = b.SRTPResolution && a.ArenaAffinity = b.ArenaAffinity &&
+            a.LayoutHint = b.LayoutHint && a.Metadata = b.Metadata &&
+            a.EmissionStrategy = b.EmissionStrategy && a.ValueRange = b.ValueRange
+        | _ ->
+            a.Id = b.Id && a.Kind = b.Kind && a.Range = b.Range && a.Type = b.Type &&
+            a.SRTPResolution = b.SRTPResolution && a.ArenaAffinity = b.ArenaAffinity &&
+            a.LayoutHint = b.LayoutHint && a.Children = b.Children && a.Parent = b.Parent &&
+            a.Metadata = b.Metadata && a.EmissionStrategy = b.EmissionStrategy &&
+            a.ValueRange = b.ValueRange
+
+    let edgeKey (edge: Hyperedge) =
+        edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources
+
+    let sameEdgeMultiset xs ys =
+        let rec loop remaining = function
+            | [] -> List.isEmpty remaining
+            | h :: t ->
+                let rec removeFirst acc = function
+                    | [] -> None
+                    | x :: rest when x = h -> Some(List.rev acc @ rest)
+                    | x :: rest -> removeFirst (x :: acc) rest
+                match removeFirst [] remaining with
+                | Some remaining' -> loop remaining' t
+                | None -> false
+        List.length xs = List.length ys && loop ys xs
+
+    let incidentEdges (graph: SemanticGraph) =
+        graph.Edges
+        |> List.fold (fun index edge ->
+            let key = edgeKey edge
+            let previous = Map.tryFind edge.Target index |> Option.defaultValue []
+            Map.add edge.Target (key :: previous) index) Map.empty
+
+    let oldIncident = incidentEdges baseline
+    let newIncident = incidentEdges current
+
+    let baselineReachable =
+        baseline.Nodes
+        |> Map.fold (fun ids id node ->
+            if node.IsReachable then Set.add id ids else ids) Set.empty
+
+    let reachable =
+        current.Nodes
+        |> Map.fold (fun ids id node ->
+            if node.IsReachable then Set.add id ids else ids) Set.empty
+
+    let newlyLit = Set.difference reachable baselineReachable
+    let extinguished = Set.difference baselineReachable reachable
+
+    let changedNodes =
+        current.Nodes
+        |> Map.fold (fun changed id node ->
+            match baseline.Nodes.TryFind id with
+            | Some old when sameNode old node -> changed
+            | _ -> Set.add id changed) Set.empty
+
+    let incidenceChanged =
+        Set.union (oldIncident |> Map.keys |> Set.ofSeq) (newIncident |> Map.keys |> Set.ofSeq)
+        |> Set.filter (fun id ->
+            Set.contains id reachable &&
+            let oldEdges = Map.tryFind id oldIncident |> Option.defaultValue []
+            let newEdges = Map.tryFind id newIncident |> Option.defaultValue []
+            not (sameEdgeMultiset oldEdges newEdges))
+
+    let changedRoots =
+        let oldRoots = Set.ofList baseline.DeclarationRoots
+        let newRoots = Set.ofList current.DeclarationRoots
+        Set.union (Set.difference oldRoots newRoots) (Set.difference newRoots oldRoots)
+        |> Set.map fst
+        |> Set.filter current.Nodes.ContainsKey
+
+    let localLinksFor (graph: SemanticGraph) =
+        let qualifiedIndex = buildQualifiedBindingIndex graph
+        let bindingByName =
+            graph.Nodes |> Map.fold (fun index id node ->
+                match node.Kind with
+                | SemanticKind.Binding(name, _, _, _) when not (Map.containsKey name index) -> Map.add name id index
+                | _ -> index) Map.empty
+        graph.Nodes
+        |> Map.fold (fun index id node ->
+            let intrinsic =
+                match node.Kind with
+                | SemanticKind.Intrinsic info -> Map.tryFind (intrinsicImplementationName info) bindingByName |> Option.toList
+                | _ -> []
+            let parentLink = node.Parent |> Option.toList
+            let ownLinks =
+                match node.Kind with
+                | SemanticKind.ModuleDef _ ->
+                    (parentLink @ getTypeDefRefs node graph)
+                    |> List.filter graph.Nodes.ContainsKey
+                    |> Set.ofList
+                | _ ->
+                    (parentLink @ node.Children @ getSemanticReferences node @ getTypeDefRefs node graph
+                     @ intrinsic @ (getStringLiteralBindingRef node qualifiedIndex |> Option.toList))
+                    |> List.filter graph.Nodes.ContainsKey
+                    |> Set.ofList
+            Map.add id ownLinks index) Map.empty
+
+    let oldLinks = localLinksFor baseline
+    let newLinks = localLinksFor current
+    let linksChanged =
+        Set.union (oldLinks |> Map.keys |> Set.ofSeq) (newLinks |> Map.keys |> Set.ofSeq)
+        |> Set.filter (fun id ->
+            Set.contains id reachable &&
+            Map.tryFind id oldLinks <> Map.tryFind id newLinks)
+
+    let causalSuccessors (graph: SemanticGraph) =
+        let addDirected fromId toId index =
+            if not (graph.Nodes.ContainsKey fromId) || not (graph.Nodes.ContainsKey toId) || fromId = toId then
+                index
+            else
+                let held = Map.tryFind fromId index |> Option.defaultValue Set.empty
+                Map.add fromId (Set.add toId held) index
+        let addStructuralContainment parentId childId index =
+            let index = addDirected parentId childId index
+            if Set.contains (parentId, childId) allModuleMemberPairs then
+                index
+            else
+                addDirected childId parentId index
+        let qualifiedIndex = buildQualifiedBindingIndex graph
+        let bindingByName =
+            graph.Nodes |> Map.fold (fun index id node ->
+                match node.Kind with
+                | SemanticKind.Binding(name, _, _, _) when not (Map.containsKey name index) -> Map.add name id index
+                | _ -> index) Map.empty
+        graph.Nodes
+        |> Map.fold (fun index id node ->
+            let structuralChildren =
+                node.Children @
+                (kindEdges id node.Kind
+                 |> List.filter Hyperedge.isStructural
+                 |> List.map Hyperedge.soleSource)
+            let index =
+                structuralChildren
+                |> List.fold (fun acc childId -> addStructuralContainment id childId acc) index
+            let index =
+                match node.Parent with
+                | Some parentId -> addStructuralContainment parentId id index
+                | None -> index
+            let intrinsic =
+                match node.Kind with
+                | SemanticKind.Intrinsic info -> Map.tryFind (intrinsicImplementationName info) bindingByName |> Option.toList
+                | _ -> []
+            let referencedDefs =
+                (kindEdges id node.Kind
+                 |> List.filter Hyperedge.isReference
+                 |> List.map Hyperedge.soleSource)
+                @ getTypeDefRefs node graph
+                @ intrinsic
+                @ (getStringLiteralBindingRef node qualifiedIndex |> Option.toList)
+            referencedDefs
+            |> List.fold (fun acc defId -> addDirected defId id acc) index) Map.empty
+        |> fun index ->
+            graph.Edges
+            |> List.fold (fun index edge ->
+                edge.Sources
+                |> List.fold (fun acc sourceId -> addDirected sourceId edge.Target acc) index) index
+
+    let seeds = Set.unionMany [changedNodes; newlyLit; extinguished; incidenceChanged; changedRoots; linksChanged]
+    let successors = causalSuccessors current
+
+    let rec visit pending seen =
+        match pending with
+        | [] -> seen
+        | id :: rest when Set.contains id seen -> visit rest seen
+        | id :: rest when not (Set.contains id reachable) && not (Set.contains id seeds) -> visit rest seen
+        | id :: rest ->
+            let next = Map.tryFind id successors |> Option.defaultValue Set.empty
+            visit (Set.toList next @ rest) (Set.add id seen)
+
+    let visited = visit (Set.toList seeds) Set.empty
+    let affected = Set.intersect visited reachable
+    { SeedRoots = seeds
+      NewlyLitNodes = newlyLit
+      ExtinguishedNodes = extinguished
+      AffectedCone = affected
+      RetainedReachable = Set.difference reachable affected }
 
 /// Get counts of reachable and unreachable nodes
 let getReachabilityStats (graph: SemanticGraph) : int * int =

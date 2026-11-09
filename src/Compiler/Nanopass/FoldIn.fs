@@ -201,8 +201,23 @@ let private updateChildRefs (replacementMap: Map<NodeId, NodeId>) (children: Nod
 /// Fold a RecipeSet into a PSG, producing a fresh PSG.
 ///
 /// This is Pass 2 (Intrinsic Fold-In) or Pass 4 (Saturation Fold-In).
+let private parentLinkedMaps =
+    System.Runtime.CompilerServices.ConditionalWeakTable<Map<NodeId, SemanticNode>, obj>()
+let private linkedSentinel = obj()
+
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     let replacementMap = recipeSet.ReplacementMap
+    let nonIdentityReplacements = replacementMap |> Map.filter (fun k v -> k <> v)
+    let hasNonIdentity = not nonIdentityReplacements.IsEmpty
+    let alreadyParentLinked, _ = parentLinkedMaps.TryGetValue(graph.Nodes)
+    let isIdentityFoldIn =
+        recipeSet.Recipes.IsEmpty && not hasNonIdentity && alreadyParentLinked &&
+        not graph.FieldRanges.IsValueCreated && graph.RangeContextFacts.IsNone && not graph.ElementRanges.IsValueCreated &&
+        not graph.Layouts.IsValueCreated && graph.StaticStringPool.IsNone && graph.LiteralStorage.IsEmpty &&
+        not graph.Escaping.IsValueCreated && not graph.Codata.IsValueCreated &&
+        graph.WitnessProvenance.IsNone && graph.SequenceRangeProvenance.IsNone
+    if isIdentityFoldIn then graph
+    else
     let historical (edge: Hyperedge) =
         edge.Class = EdgeClass.Provenance &&
         match edge.Role with
@@ -211,10 +226,22 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     // Historical derivations have two identity domains: their sources are
     // immutable snapshot identities; their target names current execution.
     // Retaining the former never adds declaration roots or live execution.
+    let candidateHistoryIds =
+        let set = System.Collections.Generic.HashSet<NodeId>()
+        for KeyValue(id, r) in recipeSet.Recipes do
+            set.Add id |> ignore
+            for n in r.NewNodes do set.Add n.Id |> ignore
+        set
     let historicalParticipants =
-        graph.Edges
-        |> List.filter historical
-        |> List.collect _.Sources |> Set.ofList
+        if candidateHistoryIds.Count = 0 then Set.empty
+        else
+            let mutable found = Set.empty
+            for edge in graph.Edges do
+                if historical edge then
+                    for s in edge.Sources do
+                        if candidateHistoryIds.Contains s then
+                            found <- Set.add s found
+            found
     let preserveHistory id metadata =
         match graph.Nodes.TryFind id with
         | Some original when historicalParticipants.Contains id ->
@@ -231,12 +258,22 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         |> Map.toSeq |> Seq.map snd
         |> Seq.collect (fun r -> r.NewNodes)
         |> Seq.map (fun n ->
-            // Update references in recipe-created nodes
-            let updatedKind = remapKindReferences replacementMap n.Kind
-            let updatedChildren = updateChildRefs replacementMap n.Children
-            let updatedNode = { n with Kind = updatedKind; Children = updatedChildren
-                                       Metadata = remapSchemeReferences replacementMap n.Metadata |> Map.remove SchemeMetadata.HistoricalOnly |> preserveHistory n.Id }
-            n.Id, updatedNode)
+            if hasNonIdentity then
+                let updatedKind = remapKindReferences nonIdentityReplacements n.Kind
+                let updatedChildren = updateChildRefs nonIdentityReplacements n.Children
+                let updatedNode = { n with Kind = updatedKind; Children = updatedChildren
+                                           Metadata = remapSchemeReferences nonIdentityReplacements n.Metadata |> Map.remove SchemeMetadata.HistoricalOnly |> preserveHistory n.Id }
+                n.Id, updatedNode
+            else
+                let inheritedParent =
+                    match n.Parent with
+                    | Some _ as p -> p
+                    | None ->
+                        match graph.Nodes.TryFind n.Id |> Option.bind _.Parent with
+                        | Some p when not (RecipeSet.hasRecipe p recipeSet) -> Some p
+                        | _ -> None
+                let updatedNode = { n with Parent = inheritedParent; Metadata = n.Metadata |> Map.remove SchemeMetadata.HistoricalOnly |> preserveHistory n.Id }
+                n.Id, updatedNode)
         |> Map.ofSeq
 
     // Build the new nodes map:
@@ -244,31 +281,45 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     // 2. For existing nodes: include if not being replaced, with updated references
     // 3. If a new node exists at the same NodeId, the new node wins (in-place replacement)
     let newNodes =
-        graph.Nodes
-        |> Map.fold (fun acc nodeId node ->
-            if RecipeSet.hasRecipe nodeId recipeSet then
-                // Historical participants survive replacement, with their
-                // original snapshot metadata and no executable reachability.
-                if historicalParticipants.Contains nodeId && not (Map.containsKey nodeId acc) then
-                    Map.add nodeId { node with IsReachable = false; Metadata = node.Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) } acc
-                else acc
-            elif Map.containsKey nodeId acc then
-                // A new node already exists at this ID (e.g., Binding replacing PatternBinding)
-                // Keep the new node - it has the proper value source
-                acc
-            else
-                // Update references and include
-                let updatedKind = remapKindReferences replacementMap node.Kind
-                let updatedChildren = updateChildRefs replacementMap node.Children
-                let updatedParent = node.Parent |> Option.map (updateRef replacementMap)
-                let updatedNode =
-                    { node with
-                        Kind = updatedKind
-                        Children = updatedChildren
-                        Metadata = remapSchemeReferences replacementMap node.Metadata
-                        Parent = updatedParent }
-                Map.add nodeId updatedNode acc
-        ) newNodesFromRecipes
+        if not hasNonIdentity then
+            let afterRemovals =
+                recipeSet.Recipes
+                |> Map.fold (fun acc nodeId _ ->
+                    if historicalParticipants.Contains nodeId && not (Map.containsKey nodeId newNodesFromRecipes) then
+                        match Map.tryFind nodeId acc with
+                        | Some node ->
+                            Map.add nodeId { node with IsReachable = false; Metadata = node.Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) } acc
+                        | None -> acc
+                    else
+                        Map.remove nodeId acc) graph.Nodes
+            newNodesFromRecipes
+            |> Map.fold (fun acc id node -> Map.add id node acc) afterRemovals
+        else
+            graph.Nodes
+            |> Map.fold (fun acc nodeId node ->
+                if RecipeSet.hasRecipe nodeId recipeSet then
+                    // Historical participants survive replacement, with their
+                    // original snapshot metadata and no executable reachability.
+                    if historicalParticipants.Contains nodeId && not (Map.containsKey nodeId acc) then
+                        Map.add nodeId { node with IsReachable = false; Metadata = node.Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) } acc
+                    else acc
+                elif Map.containsKey nodeId acc then
+                    // A new node already exists at this ID (e.g., Binding replacing PatternBinding)
+                    // Keep the new node - it has the proper value source
+                    acc
+                else
+                    // Update references and include
+                    let updatedKind = remapKindReferences nonIdentityReplacements node.Kind
+                    let updatedChildren = updateChildRefs nonIdentityReplacements node.Children
+                    let updatedParent = node.Parent |> Option.map (updateRef nonIdentityReplacements)
+                    let updatedNode =
+                        { node with
+                            Kind = updatedKind
+                            Children = updatedChildren
+                            Metadata = remapSchemeReferences nonIdentityReplacements node.Metadata
+                            Parent = updatedParent }
+                    Map.add nodeId updatedNode acc
+            ) newNodesFromRecipes
 
     //=========================================================================
     // PARENT EDGE LINKAGE
@@ -282,39 +333,87 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     // Module membership is lexical, while a startup spine may execute the
     // same declaration. Preserve lexical symbol/source identity independently
     // of the structural execution edges used for activation analysis.
-    let lexicalParents =
-        newNodes.Values |> Seq.collect (fun node ->
-            match node.Metadata.TryFind SchemeMetadata.HistoricalOnly, node.Kind with
-            | Some(MetadataValue.Bool true), _ -> Seq.empty
-            | _, SemanticKind.ModuleDef(_, members) -> members |> Seq.map (fun memberId -> memberId, node.Id)
-            | _ -> Seq.empty) |> Map.ofSeq
+    let touchesModuleDef =
+        (recipeSet.Recipes |> Map.exists (fun id _ ->
+            match graph.Nodes.TryFind id with
+            | Some { Kind = SemanticKind.ModuleDef _ } -> true
+            | _ -> false))
+        || (newNodesFromRecipes.Values |> Seq.exists (fun n ->
+            match n.Kind with
+            | SemanticKind.ModuleDef _ -> true
+            | _ -> false))
+    let canIncrementalParentLink =
+        not hasNonIdentity && alreadyParentLinked && not touchesModuleDef
     let nodesWithParents =
-        newNodes
-        |> Map.fold (fun acc parentId parentNode ->
-            (match parentNode.Metadata.TryFind SchemeMetadata.HistoricalOnly with
-             | Some(MetadataValue.Bool true) -> []
-             | _ -> parentNode.Children)
-            |> List.fold (fun acc' childId ->
-                match Map.tryFind childId acc' with
-                | Some (childNode: SemanticNode) ->
-                    let lexicalParent = lexicalParents.TryFind childId |> Option.defaultValue parentId
-                    let updatedChild: SemanticNode = { childNode with Parent = Some lexicalParent }
-                    Map.add childId updatedChild acc'
-                | None -> acc'
-            ) acc
-        ) newNodes
+        if canIncrementalParentLink then
+            newNodesFromRecipes
+            |> Map.fold (fun acc parentId parentNode ->
+                (match parentNode.Metadata.TryFind SchemeMetadata.HistoricalOnly with
+                 | Some(MetadataValue.Bool true) -> []
+                 | _ -> parentNode.Children)
+                |> List.fold (fun acc' childId ->
+                    match Map.tryFind childId acc' with
+                    | Some (childNode: SemanticNode) ->
+                        let keepLexicalModuleParent =
+                            match childNode.Parent with
+                            | Some existingParentId ->
+                                match Map.tryFind existingParentId acc' with
+                                | Some existingParent ->
+                                    match existingParent.Metadata.TryFind SchemeMetadata.HistoricalOnly, existingParent.Kind with
+                                    | Some(MetadataValue.Bool true), _ -> false
+                                    | _, SemanticKind.ModuleDef(_, members) -> List.contains childId members
+                                    | _ -> false
+                                | None -> false
+                            | None -> false
+                        let targetParent = if keepLexicalModuleParent then childNode.Parent.Value else parentId
+                        if childNode.Parent = Some targetParent then acc'
+                        else
+                            let updatedChild: SemanticNode = { childNode with Parent = Some targetParent }
+                            Map.add childId updatedChild acc'
+                    | None -> acc'
+                ) acc
+            ) newNodes
+        else
+            let lexicalParents =
+                newNodes.Values |> Seq.collect (fun node ->
+                    match node.Metadata.TryFind SchemeMetadata.HistoricalOnly, node.Kind with
+                    | Some(MetadataValue.Bool true), _ -> Seq.empty
+                    | _, SemanticKind.ModuleDef(_, members) -> members |> Seq.map (fun memberId -> memberId, node.Id)
+                    | _ -> Seq.empty) |> Map.ofSeq
+            newNodes
+            |> Map.fold (fun acc parentId parentNode ->
+                (match parentNode.Metadata.TryFind SchemeMetadata.HistoricalOnly with
+                 | Some(MetadataValue.Bool true) -> []
+                 | _ -> parentNode.Children)
+                |> List.fold (fun acc' childId ->
+                    match Map.tryFind childId acc' with
+                    | Some (childNode: SemanticNode) ->
+                        let lexicalParent = lexicalParents.TryFind childId |> Option.defaultValue parentId
+                        if childNode.Parent = Some lexicalParent then acc'
+                        else
+                            let updatedChild: SemanticNode = { childNode with Parent = Some lexicalParent }
+                            Map.add childId updatedChild acc'
+                    | None -> acc'
+                ) acc
+            ) newNodes
+    parentLinkedMaps.AddOrUpdate(nodesWithParents, linkedSentinel)
     
     // Update declaration roots if any were replaced
     let updatedDeclRoots =
-        graph.DeclarationRoots |> List.map (fun (id, root) -> (updateRef replacementMap id, root))
+        if not hasNonIdentity then graph.DeclarationRoots
+        else graph.DeclarationRoots |> List.map (fun (id, root) -> (updateRef nonIdentityReplacements id, root))
 
     // Update module mappings
     let updatedModules =
-        graph.Modules
-        |> Map.map (fun _path nodeIds -> nodeIds |> List.map (updateRef replacementMap))
+        if not hasNonIdentity then graph.Modules
+        else
+            graph.Modules
+            |> Map.map (fun _path nodeIds -> nodeIds |> List.map (updateRef nonIdentityReplacements))
 
+    let recipeNewEdges = recipeSet.Recipes.Values |> Seq.collect _.NewEdges |> Seq.toList
     // Build fresh graph
-    let resultGraph = {
+    let resultGraph =
+      {
         Nodes = nodesWithParents
         DeclarationRoots = updatedDeclRoots
         Modules = updatedModules
@@ -333,32 +432,35 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         // Current incidence follows replacements. Historical sources do not:
         // rewriting them would silently turn "original" into "replacement".
         Edges =
-            (graph.Edges @ (recipeSet.Recipes.Values |> Seq.collect _.NewEdges |> Seq.toList))
-            |> List.map (fun e ->
-                { e with
-                    Role =
-                        match e.Role with
-                        | EdgeRole.StringCheckedConstruction construction when not(historical e) ->
-                            let current = updateRef replacementMap
-                            EdgeRole.StringCheckedConstruction
-                                { construction with Owner=current construction.Owner;Input=current construction.Input
-                                                    Snapshot=current construction.Snapshot;Length=current construction.Length
-                                                    Validation=current construction.Validation;Decision=current construction.Decision
-                                                    Text=current construction.Text;Success=current construction.Success
-                                                    Failure=current construction.Failure;Retirement=current construction.Retirement
-                                                    Returned=construction.Returned |> Option.map(fun life ->
-                                                        {life with Application=current life.Application;Callee=current life.Callee;Declaration=current life.Declaration
-                                                                   Implementation=current life.Implementation;Argument=current life.Argument;Formal=current life.Formal
-                                                                   Body=current life.Body;Caller=current life.Caller;Actual=current life.Actual;Elimination=current life.Elimination
-                                                                   SomeUse=current life.SomeUse;NoneUse=current life.NoneUse
-                                                                   SomeBackingRetirement=current life.SomeBackingRetirement;SomeCarrierRetirement=current life.SomeCarrierRetirement
-                                                                   NoneCarrierRetirement=current life.NoneCarrierRetirement;Uses=List.map current life.Uses
-                                                                   Platform=current life.Platform;Space=current life.Space;Capacity=current life.Capacity}) }
-                        | role -> role
-                    Sources =
-                        if historical e then e.Sources
-                        else e.Sources |> List.map (updateRef replacementMap)
-                    Target = updateRef replacementMap e.Target })
+            if not hasNonIdentity then
+                if recipeNewEdges.IsEmpty then graph.Edges else graph.Edges @ recipeNewEdges
+            else
+                (graph.Edges @ recipeNewEdges)
+                |> List.map (fun e ->
+                    { e with
+                        Role =
+                            match e.Role with
+                            | EdgeRole.StringCheckedConstruction construction when not(historical e) ->
+                                let current = updateRef nonIdentityReplacements
+                                EdgeRole.StringCheckedConstruction
+                                    { construction with Owner=current construction.Owner;Input=current construction.Input
+                                                        Snapshot=current construction.Snapshot;Length=current construction.Length
+                                                        Validation=current construction.Validation;Decision=current construction.Decision
+                                                        Text=current construction.Text;Success=current construction.Success
+                                                        Failure=current construction.Failure;Retirement=current construction.Retirement
+                                                        Returned=construction.Returned |> Option.map(fun life ->
+                                                            {life with Application=current life.Application;Callee=current life.Callee;Declaration=current life.Declaration
+                                                                       Implementation=current life.Implementation;Argument=current life.Argument;Formal=current life.Formal
+                                                                       Body=current life.Body;Caller=current life.Caller;Actual=current life.Actual;Elimination=current life.Elimination
+                                                                       SomeUse=current life.SomeUse;NoneUse=current life.NoneUse
+                                                                       SomeBackingRetirement=current life.SomeBackingRetirement;SomeCarrierRetirement=current life.SomeCarrierRetirement
+                                                                       NoneCarrierRetirement=current life.NoneCarrierRetirement;Uses=List.map current life.Uses
+                                                                       Platform=current life.Platform;Space=current life.Space;Capacity=current life.Capacity}) }
+                            | role -> role
+                        Sources =
+                            if historical e then e.Sources
+                            else e.Sources |> List.map (updateRef nonIdentityReplacements)
+                        Target = updateRef nonIdentityReplacements e.Target })
         WitnessProvenance = None
         SequenceRangeProvenance = None
     }

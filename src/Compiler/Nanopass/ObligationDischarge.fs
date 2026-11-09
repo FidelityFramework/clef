@@ -582,15 +582,22 @@ type private SolverRun =
     | TimedOut
     | Unavailable of string
 
+let solverStartInfo (solver: string) (tempPath: string) : System.Diagnostics.ProcessStartInfo =
+    let psi = System.Diagnostics.ProcessStartInfo(solver)
+    psi.ArgumentList.Add "--lang"
+    psi.ArgumentList.Add "smt2"
+    psi.ArgumentList.Add tempPath
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    psi.UseShellExecute <- false
+    psi
+
 /// One cvc5 process over one query, optionally bounded by a wall-clock limit.
-let private execute (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
-    let tempPath = Path.Combine(Path.GetTempPath(), sprintf "clef-proof-%s.smt2" (System.Guid.NewGuid().ToString("N")))
+let private executeAt (tempDir: string) (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
+    let tempPath = Path.Combine(tempDir, sprintf "clef-proof-%s.smt2" (System.Guid.NewGuid().ToString("N")))
     try
         File.WriteAllText(tempPath, text + "\n")
-        let psi = System.Diagnostics.ProcessStartInfo(solver, sprintf "--lang smt2 \"%s\"" tempPath)
-        psi.RedirectStandardOutput <- true
-        psi.RedirectStandardError <- true
-        psi.UseShellExecute <- false
+        let psi = solverStartInfo solver tempPath
         use proc = new System.Diagnostics.Process(StartInfo = psi)
         let started =
             try
@@ -629,6 +636,14 @@ let private execute (solver: string) (limit: System.TimeSpan option) (text: stri
                     |> Answered
     finally
         if File.Exists tempPath then File.Delete tempPath
+
+let private execute (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
+    let tempDir =
+        match System.Environment.GetEnvironmentVariable "CLEF_PROOF_TEMP_DIR" with
+        | null | "" -> Path.GetTempPath()
+        | value when System.String.IsNullOrWhiteSpace value -> Path.GetTempPath()
+        | value -> value
+    executeAt tempDir solver limit text
 
 /// Completed answers only. A query cut off by a budget is never recorded.
 let private solverCache =

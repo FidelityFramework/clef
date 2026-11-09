@@ -178,12 +178,15 @@ let tryFindCall (graph: SemanticGraph) (funcId: NodeId) =
 /// The scoped callback and adapter report status through the declared Register
 /// carrier. The zeroed source placeholder is never evidence that status is zero.
 let numericBoundary (graph: SemanticGraph) (nodeId: NodeId) : DeclaredParameter option =
-    let mapped =
-        match SemanticGraph.tryGetNode nodeId graph with
-        | Some { Kind = SemanticKind.Application(funcId, _); Type = ty } when Types.isIntegerType ty -> tryFindCall graph funcId
-        | _ -> (read graph).Mappings |> List.tryFind (fun m ->
-            lambdaOfBinding graph m.Binding |> Option.exists (fun (_, body) -> body = nodeId))
-    mapped |> Option.bind (fun mapping ->
-        graph.Platform |> Option.bind (fun platform ->
-            PlatformContext.tryWidth platform (WidthDimension.name WidthDimension.Register) |> Result.toOption)
-        |> Option.map (fun bits -> { Node = nodeId; Name = mapping.BindingName; Bits = bits; Range = ValueRange.twosComplement bits }))
+    let mappings = (read graph).Mappings
+    if mappings.IsEmpty then None
+    else
+        let mapped =
+            match SemanticGraph.tryGetNode nodeId graph with
+            | Some { Kind = SemanticKind.Application(funcId, _); Type = ty } when Types.isIntegerType ty -> tryFindCall graph funcId
+            | _ -> mappings |> List.tryFind (fun m ->
+                lambdaOfBinding graph m.Binding |> Option.exists (fun (_, body) -> body = nodeId))
+        mapped |> Option.bind (fun mapping ->
+            graph.Platform |> Option.bind (fun platform ->
+                PlatformContext.tryWidth platform (WidthDimension.name WidthDimension.Register) |> Result.toOption)
+            |> Option.map (fun bits -> { Node = nodeId; Name = mapping.BindingName; Bits = bits; Range = ValueRange.twosComplement bits }))

@@ -18,129 +18,130 @@ let private sequenceType ty =
 
 let resolve (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    // Actual callable boundaries own formal/actual and returned-value flow.
-    // Earlier supplies in declaration partials remain inputs, while a returned
-    // callable is a separate invocation; its arguments are not flattened into
-    // the first call. Opaque alternatives remain visible beside known targets.
-    let calls = CallableOrigins.resolve graph
-    // A realized sequence/iterator read inherits only its complete current
-    // storage inputs. Retained slot names and propagated origin annotations
-    // are not authority for the value physically held in that slot.
-    let continuationIngress = lazy (CallableIngress.analyzeWith graph calls)
-    let parameterInputs =
-        calls.ParameterInputs |> Map.map (fun _ inputs -> inputs |> List.map snd |> List.distinct)
-    // The computed and cached arms return the same thunk result only under
-    // the current formation and store-before-publication protocol. This is
-    // source-origin correspondence, not equality of runtime instances or
-    // evidence that the deferred body has already executed.
-    let lazySources, capturedLazySource =
-        if graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.LazyInstance) then
-            let settled = LazyValues.settle graph
-            let sources =
-                if not settled.Residuals.IsEmpty then Map.empty
-                else
-                    settled.Forces.Values |> Seq.collect (fun force ->
-                        match settled.Instances.TryFind force.Formation, nodes.TryFind force.CachedRead with
-                        | Some instance, Some { Kind = SemanticKind.LazyRead(environment, _); Children = [actual] }
-                            when environment = actual ->
-                            [force.Site, instance.ThunkBody; force.Conditional, instance.ThunkBody
-                             force.CachedRead, instance.ThunkBody]
-                        | _ -> [])
-                    |> Seq.groupBy fst
-                    |> Seq.choose (fun (site, rows) ->
-                        match rows |> Seq.map snd |> Seq.distinct |> Seq.toList with
-                        | [body] -> Some(site, body)
-                        | _ -> None)
-                    |> Map.ofSeq
-            sources, LazyValues.tryCapturedSourceReference graph
-        else Map.empty, (fun _ -> None)
-    let environmentInputs =
-        graph.Edges |> List.choose (fun edge ->
-            match edge.Class, edge.Role, edge.Sources, nodes.TryFind edge.Target with
-            | EdgeClass.Provenance, EdgeRole.EnvironmentCapture false, [owner; slot; value],
-              Some { Kind = SemanticKind.EnvironmentCreate(actual, initializers) }
-                when owner = actual && List.contains (slot, value) initializers -> Some((owner, slot), value)
-            | _ -> None)
-        |> List.groupBy fst |> Map.ofList
-        |> Map.map (fun _ rows -> rows |> List.map snd |> List.distinct)
-    let environmentInput environment slot =
-        ClosureEnvironments.tryEnvironmentOwner graph environment
-        |> Option.bind (fun owner ->
-            match environmentInputs.TryFind (owner, slot) with Some [value] -> Some value | _ -> None)
-    let mutations =
-        nodes |> Map.toList |> List.choose (fun (_, node) ->
-            match node.Kind with
-            | SemanticKind.Set (target, value) ->
-                match nodes.TryFind target with
-                | Some { Kind = SemanticKind.VarRef (_, Some declaration) } -> Some (declaration, value)
-                | _ -> None
-            | _ -> None)
-        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ pairs -> List.map snd pairs)
-    let yielded =
-        graph.Edges |> List.choose (fun edge ->
-            match edge.Class, edge.Role, edge.Sources, nodes.TryFind edge.Target with
-            | EdgeClass.Suspension, EdgeRole.Delimiter, [owner; _], Some { Kind = SemanticKind.Yield payload } -> Some (owner, payload)
-            | _ -> None)
-        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ pairs -> List.map snd pairs)
     let tracked = nodes |> Map.filter (fun _ node -> sequenceType node.Type)
-    let rec fixedPoint (facts: Map<NodeId, Set<Origin>>) =
-        let read id = facts.TryFind id |> Option.defaultValue Set.empty
-        let union ids = ids |> List.fold (fun values id -> Set.union values (read id)) Set.empty
-        let callResult id =
-            match calls.Calls.TryFind id with
-            | Some call ->
-                let known = call.Targets |> List.map _.Body |> union
-                if call.Unknown then Set.add (Origin.Unknown id) known else known
-            | None -> Set.singleton (Origin.Unknown id)
-        let next = tracked |> Map.map (fun id node ->
-            let unknown () = Set.singleton (Origin.Unknown id)
-            let produced =
-                match lazySources.TryFind id, node.Kind with
-                | Some body, _ -> read body
-                | None, SemanticKind.SeqExpr _ -> Set.singleton (Origin.Known id)
-                | None, SemanticKind.ContinuationAllocate owner -> Set.singleton (Origin.Known owner)
-                | None, SemanticKind.Binding _ -> union node.Children
-                | None, SemanticKind.VarRef (_, Some declaration) -> read declaration
-                | None, SemanticKind.PatternBinding _ ->
-                    match parameterInputs.TryFind id with Some arguments -> union arguments | None -> unknown ()
-                | None, SemanticKind.EnvironmentRead(environment, slot) ->
-                    environmentInput environment slot |> Option.map read |> Option.defaultWith unknown
-                | None, SemanticKind.FrameRead _ ->
-                    match CallableIngress.tryStorageAccess continuationIngress.Value id with
-                    | Some access when not access.Inputs.IsEmpty &&
-                                       (access.Inputs |> List.forall (fun (_, value) ->
-                                           nodes.TryFind value |> Option.exists (fun value -> sequenceType value.Type))) ->
-                        access.Inputs |> List.map snd |> union
+    if tracked.IsEmpty then Map.empty, Map.empty else
+        // Actual callable boundaries own formal/actual and returned-value flow.
+        // Earlier supplies in declaration partials remain inputs, while a returned
+        // callable is a separate invocation; its arguments are not flattened into
+        // the first call. Opaque alternatives remain visible beside known targets.
+        let calls = CallableOrigins.resolve graph
+        // A realized sequence/iterator read inherits only its complete current
+        // storage inputs. Retained slot names and propagated origin annotations
+        // are not authority for the value physically held in that slot.
+        let continuationIngress = lazy (CallableIngress.analyzeWith graph calls)
+        let parameterInputs =
+            calls.ParameterInputs |> Map.map (fun _ inputs -> inputs |> List.map snd |> List.distinct)
+        // The computed and cached arms return the same thunk result only under
+        // the current formation and store-before-publication protocol. This is
+        // source-origin correspondence, not equality of runtime instances or
+        // evidence that the deferred body has already executed.
+        let lazySources, capturedLazySource =
+            if graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.LazyInstance) then
+                let settled = LazyValues.settle graph
+                let sources =
+                    if not settled.Residuals.IsEmpty then Map.empty
+                    else
+                        settled.Forces.Values |> Seq.collect (fun force ->
+                            match settled.Instances.TryFind force.Formation, nodes.TryFind force.CachedRead with
+                            | Some instance, Some { Kind = SemanticKind.LazyRead(environment, _); Children = [actual] }
+                                when environment = actual ->
+                                [force.Site, instance.ThunkBody; force.Conditional, instance.ThunkBody
+                                 force.CachedRead, instance.ThunkBody]
+                            | _ -> [])
+                        |> Seq.groupBy fst
+                        |> Seq.choose (fun (site, rows) ->
+                            match rows |> Seq.map snd |> Seq.distinct |> Seq.toList with
+                            | [body] -> Some(site, body)
+                            | _ -> None)
+                        |> Map.ofSeq
+                sources, LazyValues.tryCapturedSourceReference graph
+            else Map.empty, (fun _ -> None)
+        let environmentInputs =
+            graph.Edges |> List.choose (fun edge ->
+                match edge.Class, edge.Role, edge.Sources, nodes.TryFind edge.Target with
+                | EdgeClass.Provenance, EdgeRole.EnvironmentCapture false, [owner; slot; value],
+                  Some { Kind = SemanticKind.EnvironmentCreate(actual, initializers) }
+                    when owner = actual && List.contains (slot, value) initializers -> Some((owner, slot), value)
+                | _ -> None)
+            |> List.groupBy fst |> Map.ofList
+            |> Map.map (fun _ rows -> rows |> List.map snd |> List.distinct)
+        let environmentInput environment slot =
+            ClosureEnvironments.tryEnvironmentOwner graph environment
+            |> Option.bind (fun owner ->
+                match environmentInputs.TryFind (owner, slot) with Some [value] -> Some value | _ -> None)
+        let mutations =
+            nodes |> Map.toList |> List.choose (fun (_, node) ->
+                match node.Kind with
+                | SemanticKind.Set (target, value) ->
+                    match nodes.TryFind target with
+                    | Some { Kind = SemanticKind.VarRef (_, Some declaration) } -> Some (declaration, value)
+                    | _ -> None
+                | _ -> None)
+            |> List.groupBy fst |> Map.ofList |> Map.map (fun _ pairs -> List.map snd pairs)
+        let yielded =
+            graph.Edges |> List.choose (fun edge ->
+                match edge.Class, edge.Role, edge.Sources, nodes.TryFind edge.Target with
+                | EdgeClass.Suspension, EdgeRole.Delimiter, [owner; _], Some { Kind = SemanticKind.Yield payload } -> Some (owner, payload)
+                | _ -> None)
+            |> List.groupBy fst |> Map.ofList |> Map.map (fun _ pairs -> List.map snd pairs)
+        let rec fixedPoint (facts: Map<NodeId, Set<Origin>>) =
+            let read id = facts.TryFind id |> Option.defaultValue Set.empty
+            let union ids = ids |> List.fold (fun values id -> Set.union values (read id)) Set.empty
+            let callResult id =
+                match calls.Calls.TryFind id with
+                | Some call ->
+                    let known = call.Targets |> List.map _.Body |> union
+                    if call.Unknown then Set.add (Origin.Unknown id) known else known
+                | None -> Set.singleton (Origin.Unknown id)
+            let next = tracked |> Map.map (fun id node ->
+                let unknown () = Set.singleton (Origin.Unknown id)
+                let produced =
+                    match lazySources.TryFind id, node.Kind with
+                    | Some body, _ -> read body
+                    | None, SemanticKind.SeqExpr _ -> Set.singleton (Origin.Known id)
+                    | None, SemanticKind.ContinuationAllocate owner -> Set.singleton (Origin.Known owner)
+                    | None, SemanticKind.Binding _ -> union node.Children
+                    | None, SemanticKind.VarRef (_, Some declaration) -> read declaration
+                    | None, SemanticKind.PatternBinding _ ->
+                        match parameterInputs.TryFind id with Some arguments -> union arguments | None -> unknown ()
+                    | None, SemanticKind.EnvironmentRead(environment, slot) ->
+                        environmentInput environment slot |> Option.map read |> Option.defaultWith unknown
+                    | None, SemanticKind.FrameRead _ ->
+                        match CallableIngress.tryStorageAccess continuationIngress.Value id with
+                        | Some access when not access.Inputs.IsEmpty &&
+                                           (access.Inputs |> List.forall (fun (_, value) ->
+                                               nodes.TryFind value |> Option.exists (fun value -> sequenceType value.Type))) ->
+                            access.Inputs |> List.map snd |> union
+                        | _ -> unknown ()
+                    | None, SemanticKind.LazyRead _ ->
+                        capturedLazySource id |> Option.bind (fun declaration ->
+                            match nodes.TryFind declaration with
+                            | Some { Kind = SemanticKind.Binding(_, false, _, _) | SemanticKind.PatternBinding _ } -> Some(read declaration)
+                            | _ -> None) |> Option.defaultWith unknown
+                    | None, SemanticKind.TypeAnnotation (value, _) -> read value
+                    | None, SemanticKind.EagerExpr value when ExplicitDemand.operand graph id = Some value -> read value
+                    | None, SemanticKind.Sequential values -> values |> List.tryLast |> Option.map read |> Option.defaultWith unknown
+                    | None, SemanticKind.IfThenElse (_, yes, Some no) -> union [yes; no]
+                    | None, SemanticKind.Application (callee, [argument]) ->
+                        match nodes.TryFind callee with
+                        | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Seq; Operation = "getEnumerator" } } -> read argument
+                        | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" } } ->
+                            read argument |> Set.fold (fun values origin ->
+                                let current =
+                                    match origin with
+                                    | Origin.Known owner -> yielded.TryFind owner |> Option.map union |> Option.defaultWith unknown
+                                    | Origin.Unknown site -> Set.singleton (Origin.Unknown site)
+                                Set.union values current) Set.empty
+                        | _ -> callResult id
+                    | None, SemanticKind.Application _ -> callResult id
                     | _ -> unknown ()
-                | None, SemanticKind.LazyRead _ ->
-                    capturedLazySource id |> Option.bind (fun declaration ->
-                        match nodes.TryFind declaration with
-                        | Some { Kind = SemanticKind.Binding(_, false, _, _) | SemanticKind.PatternBinding _ } -> Some(read declaration)
-                        | _ -> None) |> Option.defaultWith unknown
-                | None, SemanticKind.TypeAnnotation (value, _) -> read value
-                | None, SemanticKind.EagerExpr value when ExplicitDemand.operand graph id = Some value -> read value
-                | None, SemanticKind.Sequential values -> values |> List.tryLast |> Option.map read |> Option.defaultWith unknown
-                | None, SemanticKind.IfThenElse (_, yes, Some no) -> union [yes; no]
-                | None, SemanticKind.Application (callee, [argument]) ->
-                    match nodes.TryFind callee with
-                    | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Seq; Operation = "getEnumerator" } } -> read argument
-                    | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" } } ->
-                        read argument |> Set.fold (fun values origin ->
-                            let current =
-                                match origin with
-                                | Origin.Known owner -> yielded.TryFind owner |> Option.map union |> Option.defaultWith unknown
-                                | Origin.Unknown site -> Set.singleton (Origin.Unknown site)
-                            Set.union values current) Set.empty
-                    | _ -> callResult id
-                | None, SemanticKind.Application _ -> callResult id
-                | _ -> unknown ()
-            let assigned = mutations.TryFind id |> Option.map union |> Option.defaultValue Set.empty
-            Set.union (read id) (Set.union produced assigned))
-        if next = facts then facts else fixedPoint next
-    let facts = fixedPoint (tracked |> Map.map (fun _ _ -> Set.empty))
-    let unique = facts |> Map.toList |> List.choose (fun (id, origins) ->
-        match Set.toList origins with [Origin.Known owner] -> Some (id, owner) | _ -> None) |> Map.ofList
-    unique, facts
+                let assigned = mutations.TryFind id |> Option.map union |> Option.defaultValue Set.empty
+                Set.union (read id) (Set.union produced assigned))
+            if next = facts then facts else fixedPoint next
+        let facts = fixedPoint (tracked |> Map.map (fun _ _ -> Set.empty))
+        let unique = facts |> Map.toList |> List.choose (fun (id, origins) ->
+            match Set.toList origins with [Origin.Known owner] -> Some (id, owner) | _ -> None) |> Map.ofList
+        unique, facts
 
 /// Retain the actual typed occurrence and every alternative. Representation
 /// rewrites may supply their explicit source-to-value facts before publication;

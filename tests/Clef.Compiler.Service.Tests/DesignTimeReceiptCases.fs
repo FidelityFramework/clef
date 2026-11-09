@@ -191,3 +191,28 @@ type SolverEnvironmentCases() =
             Assert.Equal(Receipts.DesignTimeVerdict.Proved, (discharge ()).Verdict)
         finally
             Environment.SetEnvironmentVariable("CLEF_CVC5", previous)
+
+    [<Fact>]
+    member _.``ObligationDischarge launches cvc5 with one ArgumentList item per argument and handles spaces in the query path``() =
+        let previousSolver = Environment.GetEnvironmentVariable "CLEF_CVC5"
+        let previousTempDir = Environment.GetEnvironmentVariable "CLEF_PROOF_TEMP_DIR"
+        let solver = Receipts.resolveSolver (Environment.GetEnvironmentVariable "PATH") IO.File.Exists
+        let scratchRoot = IO.Path.GetFullPath(IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "artifacts", "scratch", "design-time-receipt-cases"))
+        let spacedDir = IO.Path.Combine(scratchRoot, "clef \"proof\" space " + Guid.NewGuid().ToString("N"))
+        try
+            IO.Directory.CreateDirectory spacedDir |> ignore
+            let sampleTempPath = IO.Path.Combine(spacedDir, "clef-proof-sample.smt2")
+            let psi = Receipts.solverStartInfo solver sampleTempPath
+            Assert.Equal("", psi.Arguments)
+            Assert.Equal<string list>([ "--lang"; "smt2"; sampleTempPath ], psi.ArgumentList |> Seq.toList)
+            let obligation = DesignTimeReceiptFixture.plain ("solver_spaced_path_" + Guid.NewGuid().ToString("N")) (ObligationBody.CapacityPositive 4)
+            Environment.SetEnvironmentVariable("CLEF_CVC5", solver)
+            Environment.SetEnvironmentVariable("CLEF_PROOF_TEMP_DIR", spacedDir)
+            let receipt = Receipts.designTimeReceipts DesignTimeReceiptFixture.budget [ obligation ] |> Assert.Single
+            Assert.Equal(Receipts.DesignTimeVerdict.Proved, receipt.Verdict)
+        finally
+            Environment.SetEnvironmentVariable("CLEF_CVC5", previousSolver)
+            Environment.SetEnvironmentVariable("CLEF_PROOF_TEMP_DIR", previousTempDir)
+            if IO.Directory.Exists spacedDir then IO.Directory.Delete(spacedDir, true)
+            if IO.Directory.Exists scratchRoot && (IO.Directory.EnumerateFileSystemEntries scratchRoot |> Seq.isEmpty) then
+                IO.Directory.Delete(scratchRoot, false)

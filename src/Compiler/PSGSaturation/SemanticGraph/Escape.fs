@@ -7,6 +7,7 @@
 /// `Codata.Escapes`; the allocation site's witness reads its placement here and decides nothing.
 module Clef.Compiler.PSGSaturation.SemanticGraph.Escape
 
+open System.Collections.Generic
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
@@ -17,26 +18,6 @@ type private SiteKind =
     | Record
     | StringCall
     | Closure
-
-/// The enclosing function scope of a node: the nearest Lambda, or a top-level Binding.
-let rec private enclosingFunction (graph: SemanticGraph) (nodeId: NodeId) : NodeId option =
-    match SemanticGraph.tryGetNode nodeId graph with
-    | None -> None
-    | Some node ->
-        match node.Kind with
-        | SemanticKind.Lambda _ | SemanticKind.Binding _ -> Some nodeId
-        | _ -> node.Parent |> Option.bind (enclosingFunction graph)
-
-/// Whether a value is referenced from outside its defining scope.
-let private escapesScope (graph: SemanticGraph) (scopeId: NodeId) (valueId: NodeId) : bool =
-    graph.Nodes
-    |> Seq.exists (fun kvp ->
-        match kvp.Value.Kind with
-        | SemanticKind.VarRef (_, Some defId) when defId = valueId ->
-            match enclosingFunction graph kvp.Key with
-            | None -> true
-            | Some useScope -> useScope <> scopeId
-        | _ -> false)
 
 /// Whether a value is the last expression of its function, or referenced by it.
 let private isReturned (graph: SemanticGraph) (valueId: NodeId) (scopeId: NodeId) : bool =
@@ -60,50 +41,101 @@ let private isString (ty: NativeType) : bool =
     | NativeType.TApp (tycon, _) -> tycon.NTUKind = Some NTUKind.NTUstring
     | _ -> false
 
-let private sites (graph: SemanticGraph) : (NodeId * SiteKind) list =
-    graph.Nodes
-    |> Seq.choose (fun kvp ->
-        match kvp.Value.Kind with
-        | SemanticKind.DUConstruct _ -> Some (kvp.Key, SiteKind.Union)
-        | SemanticKind.RecordExpr _ -> Some (kvp.Key, SiteKind.Record)
-        | SemanticKind.Application _ when isString kvp.Value.Type -> Some (kvp.Key, SiteKind.StringCall)
-        | SemanticKind.Lambda (_, _, captures, _, _)
-            when not captures.IsEmpty ||
-                 (kvp.Value.Metadata |> Map.tryFind ClosureMetadata.RequiresClosurePair = Some (MetadataValue.Bool true)) ->
-            Some (kvp.Key, SiteKind.Closure)
-        | _ -> None)
-    |> Seq.toList
-
-let private escapeOf (graph: SemanticGraph) (siteId: NodeId) (kind: SiteKind) : EscapeKind =
-    match kind with
-    // a closure's environment is part of the pair it returns: structurally escaping
-    | SiteKind.Closure when ScopedCallbacks.isStackLambda graph siteId -> EscapeKind.StackScoped
-    | SiteKind.Closure -> EscapeKind.EscapesViaReturn
-    | _ ->
-        // a union or record construction is the value; a string-returning call is traced through
-        // the binding that holds it
-        let valueId =
-            match kind with
-            | SiteKind.StringCall ->
-                graph.Nodes
-                |> Seq.tryPick (fun kvp ->
-                    match kvp.Value.Kind, kvp.Value.Children with
-                    | SemanticKind.Binding _, valueChild :: _ when valueChild = siteId -> Some kvp.Key
-                    | _ -> None)
-                |> Option.defaultValue siteId
-            | _ -> siteId
-        match enclosingFunction graph valueId with
-        | None -> EscapeKind.StaticLifetime
-        | Some scopeId ->
-            if escapesScope graph scopeId valueId then EscapeKind.EscapesViaReturn
-            elif isTransitivelyReturned graph valueId scopeId then EscapeKind.EscapesViaReturn
-            else EscapeKind.StackScoped
-
 /// The escape kind of every allocating site in the graph.
 let analyze (graph: SemanticGraph) : Map<NodeId, EscapeKind> =
-    sites graph
-    |> List.map (fun (siteId, kind) -> siteId, escapeOf graph siteId kind)
-    |> Map.ofList
+    let varRefsByDef = Dictionary<NodeId, ResizeArray<NodeId>>()
+    let bindingByFirstChild = Dictionary<NodeId, NodeId>()
+    let siteList = ResizeArray<struct(NodeId * SiteKind)>()
+
+    for kvp in graph.Nodes do
+        let id = kvp.Key
+        let node = kvp.Value
+        match node.Kind with
+        | SemanticKind.VarRef (_, Some defId) ->
+            match varRefsByDef.TryGetValue(defId) with
+            | true, list -> list.Add(id)
+            | false, _ ->
+                let list = ResizeArray<NodeId>(4)
+                list.Add(id)
+                varRefsByDef.[defId] <- list
+        | SemanticKind.Binding _ ->
+            match node.Children with
+            | valueChild :: _ ->
+                if not (bindingByFirstChild.ContainsKey(valueChild)) then
+                    bindingByFirstChild.[valueChild] <- id
+            | [] -> ()
+        | SemanticKind.DUConstruct _ ->
+            siteList.Add(struct(id, SiteKind.Union))
+        | SemanticKind.RecordExpr _ ->
+            siteList.Add(struct(id, SiteKind.Record))
+        | SemanticKind.Application _ when isString node.Type ->
+            siteList.Add(struct(id, SiteKind.StringCall))
+        | SemanticKind.Lambda (_, _, captures, _, _)
+            when not captures.IsEmpty ||
+                 (node.Metadata |> Map.tryFind ClosureMetadata.RequiresClosurePair = Some (MetadataValue.Bool true)) ->
+            siteList.Add(struct(id, SiteKind.Closure))
+        | _ -> ()
+
+    if siteList.Count = 0 then
+        Map.empty
+    else
+        let enclosingCache = Dictionary<NodeId, NodeId option>()
+        let rec enclosingFunction (nodeId: NodeId) : NodeId option =
+            match enclosingCache.TryGetValue(nodeId) with
+            | true, cached -> cached
+            | false, _ ->
+                let result =
+                    match SemanticGraph.tryGetNode nodeId graph with
+                    | None -> None
+                    | Some node ->
+                        match node.Kind with
+                        | SemanticKind.Lambda _ | SemanticKind.Binding _ -> Some nodeId
+                        | _ -> node.Parent |> Option.bind enclosingFunction
+                enclosingCache.[nodeId] <- result
+                result
+
+        let escapesScope (scopeId: NodeId) (valueId: NodeId) : bool =
+            match varRefsByDef.TryGetValue(valueId) with
+            | false, _ -> false
+            | true, refs ->
+                let mutable found = false
+                let mutable i = 0
+                while i < refs.Count && not found do
+                    match enclosingFunction refs.[i] with
+                    | None -> found <- true
+                    | Some useScope -> if useScope <> scopeId then found <- true
+                    i <- i + 1
+                found
+
+        let stackLambdas = lazy ((ScopedCallbacks.read graph).StackLambdas)
+
+        let escapeOf (siteId: NodeId) (kind: SiteKind) : EscapeKind =
+            match kind with
+            // a closure's environment is part of the pair it returns: structurally escaping
+            | SiteKind.Closure when Set.contains siteId stackLambdas.Value -> EscapeKind.StackScoped
+            | SiteKind.Closure -> EscapeKind.EscapesViaReturn
+            | _ ->
+                // a union or record construction is the value; a string-returning call is traced through
+                // the binding that holds it
+                let valueId =
+                    match kind with
+                    | SiteKind.StringCall ->
+                        match bindingByFirstChild.TryGetValue(siteId) with
+                        | true, bId -> bId
+                        | false, _ -> siteId
+                    | _ -> siteId
+                match enclosingFunction valueId with
+                | None -> EscapeKind.StaticLifetime
+                | Some scopeId ->
+                    if escapesScope scopeId valueId then EscapeKind.EscapesViaReturn
+                    elif isTransitivelyReturned graph valueId scopeId then EscapeKind.EscapesViaReturn
+                    else EscapeKind.StackScoped
+
+        let mutable result = Map.empty
+        for i = 0 to siteList.Count - 1 do
+            let struct(siteId, kind) = siteList.[i]
+            result <- Map.add siteId (escapeOf siteId kind) result
+        result
 
 /// Whether no lambda encloses a node: it belongs to the program, not to an activation.
 let rec private outsideEveryLambda (graph: SemanticGraph) (nodeId: NodeId) : bool =

@@ -107,12 +107,79 @@ let exported (first: int) (second: int) (entry: Entry) (arg: CHandle<unit>) : in
         Assert.Empty(BoundaryEmission.exportedInterfaceFailures positive.Graph)
         Assert.DoesNotContain(positive.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
 
-        let pthreadResult = Clef.Compiler.Project.ProjectChecker.checkProject "/home/hhh/repos/Fidelity.Platform/Environments/Linux/x86_64/Fidelity.Pthread.fidproj"
+        let pthreadPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../../Fidelity.Platform/Environments/Linux/x86_64/Fidelity.Pthread.fidproj"))
+        let pthreadResult = Clef.Compiler.Project.ProjectChecker.checkProject pthreadPath
         Assert.True(Result.isOk pthreadResult)
         let pthread = Result.defaultWith (fun error -> failwithf "Pthread project check failed: %A" error) pthreadResult
         Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors pthread)
         Assert.Empty(BoundaryEmission.exportedInterfaceFailures pthread.CheckResult.Graph)
         Assert.DoesNotContain(pthread.CheckResult.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
+
+        let intDeclarations = declarations.Replace("type Entry = { Invoke: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>> }", "type Entry = { Invoke: FnPtr<int -> int> }")
+        let intCallback = """let EntryDescriptor : Expr<CallbackDescriptor> =
+    <@ { Record = "Entry"; Field = "Invoke"; Signature = { CName = "callback"; Parameters = [| { Name = "arg"; Type = Integer (Signed, 32); PassBy = Value } |]; ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } } @>
+"""
+        let intWrapper = wrapper.Replace("entry: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>>", "entry: FnPtr<int -> int>")
+        let intPositive = BoundaryValuesFixture.library (intDeclarations + intCallback + intWrapper) false
+        DimensionalCases.noErrors intPositive
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures intPositive.Graph)
+
+        let unsignedCallback = intCallback.Replace("Type = Integer (Signed, 32)", "Type = Integer (Unsigned, 32)")
+        let unsignedPositive = BoundaryValuesFixture.library (intDeclarations + unsignedCallback + intWrapper) false
+        DimensionalCases.noErrors unsignedPositive
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures unsignedPositive.Graph)
+
+        let floatDeclarations =
+            declarations
+                .Replace("type TypeRef = Integer of Signedness * int | Pointer of int", "type TypeRef = Integer of Signedness * int | Float of int | Pointer of int")
+                .Replace("type Entry = { Invoke: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>> }", "type Entry = { Invoke: FnPtr<float -> float> }")
+        let floatCallback = """let EntryDescriptor : Expr<CallbackDescriptor> =
+    <@ { Record = "Entry"; Field = "Invoke"; Signature = { CName = "callback"; Parameters = [| { Name = "arg"; Type = Float 64; PassBy = Value } |]; ReturnType = Float 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } } @>
+"""
+        let floatWrapper = wrapper.Replace("entry: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>>", "entry: FnPtr<float -> float>")
+        let floatPlatform =
+            let f32 : NumericRepresentation = { Name = "float32"; Capability = "native"; Family = "ieee"; Bits = 32; MinMagnitude = "0"; MaxMagnitude = "1"; Boundary = "saturate" }
+            let f64 : NumericRepresentation = { Name = "float64"; Capability = "native"; Family = "ieee"; Bits = 64; MinMagnitude = "0"; MaxMagnitude = "1"; Boundary = "saturate" }
+            { SourcePlatformFixture.platform with
+                Representations =
+                    SourcePlatformFixture.platform.Representations
+                    |> Map.add "float32" f32
+                    |> Map.add "float64" f64 }
+        let floatAuthority =
+            SourcePlatformFixture.authority.Replace(
+                "Representations = [| ",
+                "Representations = [| { Name = \"float32\"; Capability = \"native\"; Family = \"ieee\"; Bits = 32; MinMagnitude = \"0\"; MaxMagnitude = \"1\"; Boundary = \"saturate\" }; { Name = \"float64\"; Capability = \"native\"; Family = \"ieee\"; Bits = 64; MinMagnitude = \"0\"; MaxMagnitude = \"1\"; Boundary = \"saturate\" }; ")
+        let floatLibrary source =
+            let path = System.IO.Path.GetFullPath "library-native.clef"
+            let parse text file =
+                match parseStringWithDefaults text file with
+                | ParseSuccess input -> input
+                | ParseError errors -> failwithf "Library native source did not parse: %A" errors
+            checkParsedInputsWithDeclarations
+                [ parse floatAuthority "write-authority.clef"
+                  parse ("module LibraryNative\n" + source) path ]
+                (Some floatPlatform)
+                Set.empty
+                (Some(Set.singleton path))
+                None
+        let floatPositive = floatLibrary (floatDeclarations + floatCallback + floatWrapper)
+        DimensionalCases.noErrors floatPositive
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures floatPositive.Graph)
+        let floatMismatch = floatLibrary (floatDeclarations + floatCallback.Replace("Type = Float 64", "Type = Float 32") + floatWrapper)
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures floatMismatch.Graph)
+        let floatUnoffered = floatLibrary (floatDeclarations + floatCallback.Replace("Type = Float 64", "Type = Float 80") + floatWrapper)
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures floatUnoffered.Graph)
+
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures { positive.Graph with Platform = None })
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures { positive.Graph with Platform = Some { SourcePlatformFixture.platform with Dimensions = Map.empty } })
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures { intPositive.Graph with Platform = Some { SourcePlatformFixture.platform with Representations = Map.empty } })
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures { floatPositive.Graph with Platform = Some { floatPlatform with Representations = Map.empty } })
+
+        let swappedWrapper =
+            wrapper
+                .Replace("(second: int) (entry: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>>)", "(entry: FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>>) (second: int)")
+                .Replace("{ Name = \"second\"; Type = Integer (Signed, 32); PassBy = Value }; { Name = \"entry\"; Type = Pointer 64; PassBy = Value }", "{ Name = \"entry\"; Type = Pointer 64; PassBy = Value }; { Name = \"second\"; Type = Integer (Signed, 32); PassBy = Value }")
+                .Replace("native first second entry.Invoke arg", "native first entry.Invoke second arg")
 
         let invalidSources =
             [ declarations + wrapper
@@ -122,6 +189,12 @@ let exported (first: int) (second: int) (entry: Entry) (arg: CHandle<unit>) : in
               declarations + callback.Replace("Type = Pointer 64; PassBy = Value", "Type = Integer (Signed, 32); PassBy = Value") + wrapper
               declarations + callback.Replace("Type = Pointer 64; PassBy = Value", "Type = Pointer 64; PassBy = Reference") + wrapper
               declarations + callback.Replace("ReturnType = Pointer 64", "ReturnType = Integer (Signed, 32)") + wrapper
+              declarations + callback.Replace("Pointer 64", "Pointer 32") + wrapper
+              intDeclarations + intCallback.Replace("Type = Integer (Signed, 32)", "Type = Integer (Signed, 24)") + intWrapper
+              intDeclarations + intCallback.Replace("Type = Integer (Signed, 32)", "Type = Integer (Unsigned, 24)") + intWrapper
+              intDeclarations + callback + intWrapper
+              declarations + callback + swappedWrapper
+              declarations + callback + wrapper.Replace("native first second entry.Invoke arg", "native second first entry.Invoke arg")
               declarations + callback + wrapper.Replace("[<FidelityExtern(\"c\", \"pthread_create\")>]\n", "")
               declarations + callback + wrapper.Replace("native first second entry.Invoke arg", "0") ]
         for index, source in List.indexed invalidSources do
@@ -195,6 +268,9 @@ let main _ =
         Assert.Contains("exported", nodes)
         Assert.Contains("native", nodes)
         Assert.Contains("callback", nodes)
+        Assert.Contains(revision.Emission.Callable.Contracts.Values, fun contract -> contract.Kind = Fidelity.PSG.CallableKind.NativeEntry)
+        Assert.NotEmpty revision.Emission.Callable.AggregateDependencies
+        Assert.Empty(Fidelity.PSG.Integrity.callableAggregates revision)
 
     [<Fact>]
     member _.``A public boolean function does not export its private native implementation``() =

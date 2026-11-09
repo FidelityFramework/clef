@@ -6,6 +6,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module LazyValues = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
 module LazyElaboration = Clef.Compiler.Nanopass.LazyElaboration
+module OrdinaryDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 
 module private LazyFixture =
     let platform pointerBits : PlatformContext =
@@ -49,6 +50,30 @@ let main _ =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "LazyValues")>]
 type LazyValueCases() =
+    [<Fact>]
+    member _.``Omitted lazy force stays deferred unless its actual is eager`` () =
+        let graph = LazyFixture.check """
+module LazyDemand
+let discard (value: bool) = 0
+[<EntryPoint>]
+let main _ =
+    let delayed = lazy true
+    discard (Lazy.force delayed) + discard (eager (Lazy.force delayed))
+"""
+        let reading = OrdinaryDemand.read graph
+        let formal =
+            reading.Formals.Values
+            |> Seq.filter (fun proof -> graph.Nodes[proof.Formal].Kind = SemanticKind.PatternBinding "value")
+            |> Assert.Single
+        let calls = reading.Calls.Values |> Seq.filter (fun call -> call.Implementation = formal.Implementation) |> Seq.toList
+        Assert.Equal(2, calls.Length)
+        for call in calls do Assert.Equal<Set<int>>(Set.singleton 0, call.Omitted)
+        let cold = calls |> List.filter (fun call -> call.Eager.IsEmpty) |> Assert.Single
+        let eager = calls |> List.filter (fun call -> call.Eager = Set.singleton 0) |> Assert.Single
+        let deferred = OrdinaryDemand.deferredOnly graph
+        Assert.Contains(cold.Actuals.Head, deferred)
+        Assert.DoesNotContain(eager.Actuals.Head, deferred)
+
     [<Fact>]
     member _.``Baker makes the real guarded cache read and result before publication sequence`` () =
         let graph = LazyFixture.normalized ()

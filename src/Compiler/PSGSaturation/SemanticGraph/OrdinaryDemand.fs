@@ -94,42 +94,79 @@ let analyze (graph: SemanticGraph) : Reading =
     let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
     let recorded = graph.Edges |> List.filter (fun edge ->
         edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
-    let uses =
-        incidence @ recorded
-        |> List.filter (fun edge -> nodes.ContainsKey edge.Target)
-        |> List.distinctBy key
-        |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
-        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
+    let usesBySource =
+        let bySource = System.Collections.Generic.Dictionary<NodeId, ResizeArray<Hyperedge>>()
+        let inline addEdge (edge: Hyperedge) =
+            if nodes.ContainsKey edge.Target then
+                for source in edge.Sources do
+                    match bySource.TryGetValue source with
+                    | true, list -> list.Add edge
+                    | false, _ ->
+                        let list = ResizeArray<Hyperedge>()
+                        list.Add edge
+                        bySource[source] <- list
+        for edge in incidence do addEdge edge
+        for edge in recorded do addEdge edge
+        bySource
+    let usesCache = System.Collections.Generic.Dictionary<NodeId, Hyperedge list>()
+    let getUses id =
+        match usesCache.TryGetValue id with
+        | true, cached -> cached
+        | false, _ ->
+            let cached =
+                match usesBySource.TryGetValue id with
+                | true, list -> list |> Seq.distinctBy key |> Seq.toList
+                | false, _ -> []
+            usesCache[id] <- cached
+            cached
     // Resides is a resource constraint, not a competing spelling of
     // syntactic containment/reference. It remains in the complete use
     // census above, including any formal it names as a premise. The recorded
     // rows are read per target; the order within a target is the edge order.
     let recordedAt =
-        recorded
-        |> List.filter (fun edge -> not (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Resides))
-        |> List.groupBy _.Target |> Map.ofList
+        let byTarget = System.Collections.Generic.Dictionary<NodeId, ResizeArray<Hyperedge>>()
+        for edge in recorded do
+            if not (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Resides) then
+                match byTarget.TryGetValue edge.Target with
+                | true, list -> list.Add edge
+                | false, _ ->
+                    let list = ResizeArray<Hyperedge>()
+                    list.Add edge
+                    byTarget[edge.Target] <- list
+        byTarget
     // Each node's agreement with its recorded incidence is one fact of this
-    // graph, derived once for every reachable node (clef #131).
-    let validity =
-        nodes |> Map.map (fun id node ->
-            let expected = Incidence.structuralIncidence node
-            let actual = recordedAt.TryFind id |> Option.defaultValue []
-            let children = kindEdges id node.Kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
-            let childrenAgree =
-                match node.Kind with
-                | SemanticKind.Binding _ | SemanticKind.Intrinsic _ -> true
-                | SemanticKind.EnvironmentCreate(_, initializers) | SemanticKind.LazyEnvironment(_, initializers) ->
-                    // Kind carries every initializer reference, including
-                    // direct captures whose already-available value needs no
-                    // attached traversal. Forwarded reads may be attached by
-                    // their owning recipe; no unrelated or repeated child is
-                    // an admitted part of this formation.
-                    node.Children = List.distinct node.Children &&
-                    node.Children |> List.forall (fun child -> initializers |> List.exists (fun (_, value) -> value = child))
-                | _ -> node.Children = children
-            childrenAgree && actual.Length = (actual |> List.distinctBy key |> List.length) &&
-            (actual |> List.forall (fun edge -> expected |> List.exists (fun candidate -> key candidate = key edge))))
-    let valid id = validity.TryFind id = Some true
+    // graph, derived once per queried reachable node (clef #131).
+    let validityCache = System.Collections.Generic.Dictionary<NodeId, bool>()
+    let valid id =
+        match validityCache.TryGetValue id with
+        | true, cached -> cached
+        | false, _ ->
+            let cached =
+                match nodes.TryFind id with
+                | None -> false
+                | Some node ->
+                    let expected = Incidence.structuralIncidence node
+                    let actual =
+                        match recordedAt.TryGetValue id with
+                        | true, list -> Seq.toList list
+                        | false, _ -> []
+                    let children = kindEdges id node.Kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
+                    let childrenAgree =
+                        match node.Kind with
+                        | SemanticKind.Binding _ | SemanticKind.Intrinsic _ -> true
+                        | SemanticKind.EnvironmentCreate(_, initializers) | SemanticKind.LazyEnvironment(_, initializers) ->
+                            // Kind carries every initializer reference, including
+                            // direct captures whose already-available value needs no
+                            // attached traversal. Forwarded reads may be attached by
+                            // their owning recipe; no unrelated or repeated child is
+                            // an admitted part of this formation.
+                            node.Children = List.distinct node.Children &&
+                            node.Children |> List.forall (fun child -> initializers |> List.exists (fun (_, value) -> value = child))
+                        | _ -> node.Children = children
+                    childrenAgree && actual.Length = (actual |> List.distinctBy key |> List.length) &&
+                    (actual |> List.forall (fun edge -> expected |> List.exists (fun candidate -> key candidate = key edge)))
+            validityCache[id] <- cached
+            cached
     let resolution = CallableOrigins.resolve graph
     let ingress = CallableIngress.analyzeWith graph resolution
     // Every source node a lambda, sequence or lazy expression captures raw.
@@ -179,25 +216,32 @@ let analyze (graph: SemanticGraph) : Reading =
             match code.Kind, CallableIngress.tryClosedImplementation ingress code.Id with
             | SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure), Some proof
                 when not (externalImplementations.Contains code.Id) && valid code.Id && valid body && directUses proof ->
+                let candidateFormals =
+                    parameters |> List.mapi (fun ordinal (_, ty, formal) ->
+                        let declared =
+                            match nodes.TryFind formal with
+                            | Some { Kind = SemanticKind.PatternBinding _; Type = actual } -> valid formal && applySubst actual = applySubst ty
+                            | _ -> false
+                        let allUses = getUses formal
+                        let absent = allUses |> List.forall (fun edge ->
+                            edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Parameter &&
+                            edge.Target = code.Id && edge.Ordinal = ordinal && edge.Sources = [formal])
+                        if not declared || not absent || hidden.Contains formal || rawCapture formal then None
+                        else Some(ordinal, formal))
+                    |> List.choose id
+                if candidateFormals.IsEmpty then [] else
+                let fullType = List.foldBack (fun (_, ty, _) result -> NativeType.TFun(ty, result)) parameters nodes[body].Type
+                if applySubst code.Type <> applySubst fullType then [] else
                 let bodyNodes = bodyParticipants body
+                if bodyNodes |> Set.exists (valid >> not) then [] else
                 let incoming = proof.Calls |> List.collect (fun call ->
                     call.Site :: call.Implementation :: (call.Parameters @ call.Arguments)) |> Set.ofList
-                let fullType = List.foldBack (fun (_, ty, _) result -> NativeType.TFun(ty, result)) parameters nodes[body].Type
-                if applySubst code.Type <> applySubst fullType || bodyNodes |> Set.exists (valid >> not) then [] else
-                parameters |> List.mapi (fun ordinal (_, ty, formal) ->
-                    let declared =
-                        match nodes.TryFind formal with
-                        | Some { Kind = SemanticKind.PatternBinding _; Type = actual } -> valid formal && applySubst actual = applySubst ty
-                        | _ -> false
-                    let allUses = uses.TryFind formal |> Option.defaultValue []
-                    let absent = allUses |> List.forall (fun edge ->
-                        edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Parameter &&
-                        edge.Target = code.Id && edge.Ordinal = ordinal && edge.Sources = [formal])
-                    if not declared || not absent || hidden.Contains formal || rawCapture formal then None else
-                    Some(formal, { Implementation = code.Id; Formal = formal; Ordinal = ordinal
-                                   Participants = Set.unionMany [proof.Participants; incoming; entryParticipants; bodyNodes
-                                                                 Set.ofList(code.Id :: (parameters |> List.map (fun (_, _, id) -> id)))] }))
-                |> List.choose id
+                let sharedParticipants =
+                    Set.unionMany [proof.Participants; incoming; entryParticipants; bodyNodes
+                                   Set.ofList(code.Id :: (parameters |> List.map (fun (_, _, id) -> id)))]
+                candidateFormals |> List.map (fun (ordinal, formal) ->
+                    formal, { Implementation = code.Id; Formal = formal; Ordinal = ordinal
+                              Participants = sharedParticipants })
             | _ -> []) |> Map.ofSeq
     let calls =
         resolution.Calls |> Map.toList |> List.choose (fun (site, resolved) ->
@@ -246,31 +290,52 @@ let analyze (graph: SemanticGraph) : Reading =
         formals.Values |> Seq.map _.Implementation |> Set.ofSeq |> Set.filter (fun implementation ->
             let sites = sitesByImplementation.TryFind implementation |> Option.defaultValue []
             not sites.IsEmpty && sites |> List.forall calls.ContainsKey)
-    let structuralParents =
-        incidence |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge.Target))
-        |> List.groupBy fst |> List.map (fun (child, rows) -> child, rows |> List.map snd |> List.distinct) |> Map.ofList
-    let excludedByImplementation implementation =
-        let ownedByImplementation id =
+    let excludedByOwner =
+        lazy (
+            let structuralParents =
+                let byChild = System.Collections.Generic.Dictionary<NodeId, ResizeArray<NodeId>>()
+                for edge in incidence do
+                    for source in edge.Sources do
+                        match byChild.TryGetValue source with
+                        | true, list ->
+                            if not (list.Contains edge.Target) then list.Add edge.Target
+                        | false, _ ->
+                            let list = ResizeArray<NodeId>()
+                            list.Add edge.Target
+                            byChild[source] <- list
+                byChild
+            let byOwner = System.Collections.Generic.Dictionary<NodeId, ResizeArray<NodeId>>()
+            let addExcluded owner id =
+                match byOwner.TryGetValue(owner) with
+                | true, list -> list.Add(id)
+                | false, _ ->
+                    let list = ResizeArray<NodeId>()
+                    list.Add(id)
+                    byOwner[owner] <- list
             // Read the finite owner chain iteratively. A nested lambda owns
             // itself, so only its unique structural parent supplies the next
             // owner. Ambiguous parents and revisited owners refuse exclusion.
-            Seq.unfold (function
-                | None -> None
-                | Some(id, seen) ->
-                    match CallableIngress.tryExecutionOwner ingress id with
-                    | Some owner when owner = implementation -> Some(true, None)
-                    | Some owner when owner = id ->
-                        match structuralParents.TryFind id with
-                        | Some [parent] when not (Set.contains parent seen) ->
-                            Some(false, Some(parent, Set.add id seen))
-                        | _ -> Some(false, None)
-                    | Some owner when not (Set.contains owner seen) ->
-                        Some(false, Some(owner, Set.add owner seen))
-                    | _ -> Some(false, None)) (Some(id, Set.empty))
-            |> Seq.tryLast |> Option.defaultValue false
-        let excluded = nodes.Keys |> Seq.filter (fun id ->
-            id <> implementation && ownedByImplementation id) |> Set.ofSeq
-        excluded
+            for startId in nodes.Keys do
+                let rec walk cur seen =
+                    match CallableIngress.tryExecutionOwner ingress cur with
+                    | None -> ()
+                    | Some owner ->
+                        if owner <> startId then
+                            addExcluded owner startId
+                        if owner = cur then
+                            match structuralParents.TryGetValue cur with
+                            | true, parents when parents.Count = 1 && not (Set.contains parents[0] seen) ->
+                                walk parents[0] (Set.add cur seen)
+                            | _ -> ()
+                        elif not (Set.contains owner seen) then
+                            walk owner (Set.add owner seen)
+                walk startId Set.empty
+            byOwner
+        )
+    let excludedByImplementation implementation =
+        match excludedByOwner.Value.TryGetValue(implementation) with
+        | true, list -> Set.ofSeq list
+        | false, _ -> Set.empty
     let inactivity =
         nodes.Values |> Seq.choose (fun code ->
             match code.Kind, CallableIngress.tryFamily ingress code.Id with
@@ -342,7 +407,7 @@ let analyze (graph: SemanticGraph) : Reading =
                          not (roots.Contains cell.Initial) && not (roots.Contains codeId) &&
                          not (externalImplementations.Contains codeId) && valid cell.Binding && valid cell.Initial ->
                     let onlyFormation id target =
-                        (uses.TryFind id |> Option.defaultValue []) |> List.forall (fun edge ->
+                        getUses id |> List.forall (fun edge ->
                             edge.Class = EdgeClass.Structural && edge.Target = target && edge.Sources = [id])
                     let formationOnly =
                         onlyFormation cell.Initial cell.Binding &&
@@ -365,7 +430,7 @@ let analyze (graph: SemanticGraph) : Reading =
                         let participants =
                             [cell.Participants; excluded; roots; startupSupport
                              Set.ofList(codeId :: cell.Initial :: body :: (parameters |> List.map (fun (_, _, id) -> id)))] |> Set.unionMany
-                        let useProof = participants |> Set.toList |> List.map (fun id -> id, uses.TryFind id |> Option.defaultValue []) |> Map.ofList
+                        let useProof = participants |> Set.toList |> List.map (fun id -> id, getUses id) |> Map.ofList
                         Some(codeId, { Implementation = codeId; Body = body
                                        Parameters = parameters |> List.map (fun (_, _, id) -> id)
                                        Excluded = excluded; Calls = calls
@@ -384,7 +449,7 @@ let analyze (graph: SemanticGraph) : Reading =
         | None -> Map.empty
         | Some plan ->
             let consumers = Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.structuralConsumers graph
-            let allUses id admit = uses.TryFind id |> Option.defaultValue [] |> List.forall admit
+            let allUses id admit = getUses id |> List.forall admit
             let soleFormation id target = allUses id (fun edge ->
                 edge.Class = EdgeClass.Structural && edge.Target = target && edge.Sources = [id])
             let operation modl operation id =
@@ -460,7 +525,7 @@ let analyze (graph: SemanticGraph) : Reading =
                                                 |> List.collect (fun id -> kindEdges id nodes[id].Kind |> List.collect _.Sources)
                                                 |> Set.ofList
                                             let participants = Set.unionMany [route; operationSupport; startupSupport; excluded; roots; Set.ofList (body :: (parameters |> List.map (fun (_, _, id) -> id)))]
-                                            let useProof = participants |> Set.toList |> List.map (fun id -> id, uses.TryFind id |> Option.defaultValue []) |> Map.ofList
+                                            let useProof = participants |> Set.toList |> List.map (fun id -> id, getUses id) |> Map.ofList
                                             Some(codeId, { Implementation = codeId; Body = body
                                                            Parameters = parameters |> List.map (fun (_, _, id) -> id)
                                                            Excluded = excluded; Calls = calls
@@ -480,8 +545,8 @@ let analyze (graph: SemanticGraph) : Reading =
             | SemanticKind.Binding(_, false, false, None), [initializer], Some parent
                 when binding.Metadata.TryFind "SourceBinding.Local" = Some(MetadataValue.Bool true) &&
                      not (roots.Contains binding.Id) && valid binding.Id && valid initializer && valid parent ->
-                match nodes[parent].Kind, uses.TryFind binding.Id, ExplicitDemand.direct graph initializer with
-                | SemanticKind.Sequential statements, Some [definition], Ok None
+                match nodes[parent].Kind, getUses binding.Id, ExplicitDemand.direct graph initializer with
+                | SemanticKind.Sequential statements, [definition], Ok None
                     when not statements.IsEmpty && List.last statements <> binding.Id &&
                          definition.Class = EdgeClass.Structural && definition.Target = parent &&
                          definition.Sources = [binding.Id] ->
@@ -500,7 +565,7 @@ let analyze (graph: SemanticGraph) : Reading =
         sourceCells.Values
         |> Seq.choose (fun cell ->
             let binding = nodes[cell.Binding]
-            let parents = uses.TryFind binding.Id |> Option.defaultValue [] |> List.filter Hyperedge.isStructural
+            let parents = getUses binding.Id |> List.filter Hyperedge.isStructural
             let owners = activations |> List.filter (fun activation ->
                 activation.Entry.IsEmpty && (activation.Slots |> List.exists (fun slot -> slot.Statement = binding.Id)))
             let formation =
@@ -533,7 +598,7 @@ let analyze (graph: SemanticGraph) : Reading =
                      (recorded |> List.filter (fun edge -> key edge = key initializerUse) |> List.length) <= 1 ->
                 let slots = activation.Slots |> List.indexed
                 let uniqueSlots = slots |> List.forall (fun (_, slot) ->
-                    let parents = uses.TryFind slot.Statement |> Option.defaultValue [] |> List.filter Hyperedge.isStructural
+                    let parents = getUses slot.Statement |> List.filter Hyperedge.isStructural
                     match nodes.TryFind slot.Statement, parents with
                     | Some statement, [edge] ->
                         valid slot.Statement && valid slot.Parent && statement.Parent = Some slot.Parent &&
@@ -681,62 +746,88 @@ let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<OrdinaryOmi
         ({ Site = initializer.Binding; Origin = OrdinaryOmissionOrigin.BindingInitializer
            Actual = initializer.Initializer }: OrdinaryOmission)) |> Set.ofSeq
     let omissions = Set.union calls initializers
-    let definitions = reading.Initializers.Values |> Seq.choose (fun proof ->
-        if proof.ExcludesBinding then Some(key proof.Definition) else proof.InitializerUse |> Option.map key) |> Set.ofSeq
-    let incidence =
-        (graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.collect Incidence.structuralIncidence |> Seq.toList)
-        @ (graph.Edges |> List.filter (fun edge ->
-            (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) &&
-            graph.Nodes.TryFind edge.Target |> Option.exists _.IsReachable))
-        |> List.distinctBy key
-    let uses = incidence |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
-               |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
-    let rec expand pending found =
-        match pending with
-        | [] -> found
-        | id :: rest when Set.contains id found -> expand rest found
-        | id :: rest ->
-            match graph.Nodes.TryFind id with
-            | Some node when node.IsReachable ->
-                let dependencies = Incidence.structuralIncidence node |> List.collect _.Sources
-                expand (dependencies @ rest) (Set.add id found)
-            | _ -> expand rest found
-    let containing = omissions |> Set.toList |> List.map (fun omission ->
-        let seeds =
-            match omission.Origin with
-            | OrdinaryOmissionOrigin.CallArgument _ -> [omission.Actual]
-            | OrdinaryOmissionOrigin.BindingInitializer ->
-                if reading.Initializers[omission.Site].ExcludesBinding then [omission.Site; omission.Actual] else [omission.Actual]
-        omission, expand seeds Set.empty)
-    let candidates = containing |> List.map snd |> Set.unionMany
-    let roots = graph.DeclarationRoots |> List.map fst |> Set.ofList
-    let rec retain found =
-        let next = found |> Set.filter (fun id ->
-            not (roots.Contains id) &&
-            (uses.TryFind id |> Option.defaultValue [] |> List.forall (fun edge ->
-                found.Contains edge.Target ||
-                (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Member) ||
-                definitions.Contains(key edge) ||
-                (edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Argument && omitted.Contains(edge.Target, edge.Ordinal, id)))))
-        if next = found then found else retain next
-    retain candidates |> Seq.map (fun id ->
-        id, containing |> List.filter (snd >> Set.contains id) |> List.map fst |> Set.ofList) |> Map.ofSeq
+    if omissions.IsEmpty then Map.empty
+    else
+        let rec expand pending found =
+            match pending with
+            | [] -> found
+            | id :: rest when Set.contains id found -> expand rest found
+            | id :: rest ->
+                match graph.Nodes.TryFind id with
+                | Some node when node.IsReachable ->
+                    let dependencies = Incidence.structuralIncidence node |> List.collect _.Sources
+                    expand (dependencies @ rest) (Set.add id found)
+                | _ -> expand rest found
+        let containing = omissions |> Set.toList |> List.map (fun omission ->
+            let seeds =
+                match omission.Origin with
+                | OrdinaryOmissionOrigin.CallArgument _ -> [omission.Actual]
+                | OrdinaryOmissionOrigin.BindingInitializer ->
+                    if reading.Initializers[omission.Site].ExcludesBinding then [omission.Site; omission.Actual] else [omission.Actual]
+            omission, expand seeds Set.empty)
+        let candidates = containing |> List.map snd |> Set.unionMany
+        if candidates.IsEmpty then Map.empty
+        else
+            let definitions = reading.Initializers.Values |> Seq.choose (fun proof ->
+                if proof.ExcludesBinding then Some(key proof.Definition) else proof.InitializerUse |> Option.map key) |> Set.ofSeq
+            let incidence =
+                (graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.collect Incidence.structuralIncidence
+                 |> Seq.filter (fun edge -> edge.Sources |> List.exists candidates.Contains) |> Seq.toList)
+                @ (graph.Edges |> List.filter (fun edge ->
+                    (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) &&
+                    (edge.Sources |> List.exists candidates.Contains) &&
+                    graph.Nodes.TryFind edge.Target |> Option.exists _.IsReachable))
+                |> List.distinctBy key
+            let uses =
+                incidence
+                |> List.collect (fun edge ->
+                    edge.Sources |> List.choose (fun source -> if candidates.Contains source then Some(source, edge) else None))
+                |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
+            let roots = graph.DeclarationRoots |> List.map fst |> Set.ofList
+            let rec retain found =
+                let next = found |> Set.filter (fun id ->
+                    not (roots.Contains id) &&
+                    (uses.TryFind id |> Option.defaultValue [] |> List.forall (fun edge ->
+                        found.Contains edge.Target ||
+                        (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Member) ||
+                        definitions.Contains(key edge) ||
+                        (edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Argument && omitted.Contains(edge.Target, edge.Ordinal, id)))))
+                if next = found then found else retain next
+            retain candidates |> Seq.map (fun id ->
+                id, containing |> List.filter (snd >> Set.contains id) |> List.map fst |> Set.ofList) |> Map.ofSeq
 
 let private deferredFrom graph reading = deferralsFrom graph reading |> Map.keys |> Set.ofSeq
 
-let deferredOnly graph = deferredFrom graph (read graph)
-let tryDeferredOnly graph = tryRead graph |> Result.map (deferredFrom graph)
+type private CachedDeferrals = {
+    Deferrals: Result<Map<NodeId, Set<OrdinaryOmission>>, WitnessProjectionFailure list>
+    DeferredOnly: Result<Set<NodeId>, WitnessProjectionFailure list>
+}
+let private deferralsCache = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, CachedDeferrals>()
+let private getCachedDeferrals (graph: SemanticGraph) =
+    deferralsCache.GetValue(graph, fun g ->
+        let deferrals = tryRead g |> Result.map (deferralsFrom g)
+        let deferredOnly = deferrals |> Result.map (Map.keys >> Set.ofSeq)
+        { Deferrals = deferrals; DeferredOnly = deferredOnly })
+
+let deferredOnly graph =
+    match (getCachedDeferrals graph).DeferredOnly with
+    | Ok deferred -> deferred
+    | Error _ -> deferredFrom graph (read graph)
+let tryDeferredOnly graph = (getCachedDeferrals graph).DeferredOnly
 
 /// Each node that only omitted actuals demand, with the omission relations
 /// whose actual contains it. A call among these nodes is never entered. The
 /// static string pool excludes the same nodes and states these relations as the
 /// premise of each literal it does not place (`tryDeferrals`); the calls that
 /// reach a formal are read through `Baker.Ingredients.FormalDemand`.
-let deferrals graph = deferralsFrom graph (read graph)
+let deferrals graph =
+    match (getCachedDeferrals graph).Deferrals with
+    | Ok deferrals -> deferrals
+    | Error _ -> deferralsFrom graph (read graph)
 
 /// The same reading, or the located failures of the current graph, for a stage
 /// that owns a diagnostic list.
-let tryDeferrals graph = tryRead graph |> Result.map (deferralsFrom graph)
+let tryDeferrals graph = (getCachedDeferrals graph).Deferrals
 
 let private inactivityProjection (graph: SemanticGraph) (reading: Reading) : Map<NodeId, OrdinaryInactivityProjection> =
     reading.Inactivity |> Map.map (fun _ inactive ->
