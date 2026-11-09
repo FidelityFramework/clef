@@ -2,6 +2,7 @@ namespace Clef.Compiler.Service.Tests
 
 open System
 open Xunit
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Receipts = Clef.Compiler.Nanopass.ObligationDischarge
 
@@ -216,3 +217,247 @@ type SolverEnvironmentCases() =
             if IO.Directory.Exists spacedDir then IO.Directory.Delete(spacedDir, true)
             if IO.Directory.Exists scratchRoot && (IO.Directory.EnumerateFileSystemEntries scratchRoot |> Seq.isEmpty) then
                 IO.Directory.Delete(scratchRoot, false)
+
+module Segments = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation
+module Rebuild = Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild
+
+/// Small, fully indexed source graphs keep the invalidation controls independent
+/// of unrelated platform settlement. Every fixture stays in the primary graph.
+module internal SelectiveRebuildFixture =
+    let graph shift =
+        let checkedGraph = (DimensionalCases.check "let identity (value: int) = value\n").Graph
+        let template = checkedGraph.Nodes.Values |> Seq.head
+        let id number = NodeId(number + shift)
+        let node number parent kind children =
+            { template with Id = id number; Parent = parent |> Option.map id; Kind = kind
+                            Type = Types.intType; Children = List.map id children
+                            IsReachable = true; Metadata = Map.empty; ValueRange = None
+                            SRTPResolution = None; LayoutHint = None; EmissionStrategy = EmissionStrategy.Inline }
+        let lambda number parent parameters body children =
+            node number (Some parent) (SemanticKind.Lambda(parameters |> List.map (fun n -> "arg", Types.intType, id n), id body, [], None, LambdaContext.RegularClosure)) children
+        let nodes =
+            [ node 1 None (SemanticKind.ModuleDef("Selective", [2;6;11;14;16;27] |> List.map id)) [2;6;11;14;16;27]
+              node 2 (Some 1) (SemanticKind.Binding("provider", false, false, None)) [3]
+              lambda 3 2 [4] 5 [4;5]
+              node 4 (Some 3) (SemanticKind.PatternBinding "arg") []
+              node 5 (Some 3) (SemanticKind.Sequential([20;22;25] |> List.map id)) [20;22;25]
+              node 20 (Some 5) (SemanticKind.Binding("local", true, false, None)) [21]
+              node 21 (Some 20) (SemanticKind.Literal(NativeLiteral.Int(1L, NTUKind.NTUint(NTUWidth.Fixed 32)))) []
+              node 22 (Some 5) (SemanticKind.Set(id 23, id 24)) [23;24]
+              node 23 (Some 22) (SemanticKind.VarRef("local", Some(id 20))) []
+              node 24 (Some 22) (SemanticKind.Literal(NativeLiteral.Int(2L, NTUKind.NTUint(NTUWidth.Fixed 32)))) []
+              node 25 (Some 5) (SemanticKind.VarRef("local", Some(id 20))) []
+              node 6 (Some 1) (SemanticKind.Binding("caller", false, false, None)) [7]
+              lambda 7 6 [] 8 [8]
+              node 8 (Some 7) (SemanticKind.Application(id 9, [id 10])) [9;10]
+              node 9 (Some 8) (SemanticKind.VarRef("provider", Some(id 2))) []
+              node 10 (Some 8) (SemanticKind.VarRef("shared", Some(id 14))) []
+              node 11 (Some 1) (SemanticKind.Binding("sibling", false, false, None)) [12]
+              lambda 12 11 [] 13 [13]
+              node 13 (Some 12) (SemanticKind.Literal(NativeLiteral.Int(99L, NTUKind.NTUint(NTUWidth.Fixed 32)))) []
+              node 14 (Some 1) (SemanticKind.Binding("shared", true, false, None)) [15]
+              node 15 (Some 14) (SemanticKind.Literal(NativeLiteral.Int(7L, NTUKind.NTUint(NTUWidth.Fixed 32)))) []
+              node 16 (Some 1) (SemanticKind.Binding("factory", false, false, None)) [17]
+              lambda 17 16 [] 18 [18]
+              node 18 (Some 17) (SemanticKind.ClosureValue(id 26, id 19)) [19]
+              node 19 (Some 18) (SemanticKind.EnvironmentCreate(id 26, [id 14, id 31])) [31]
+              node 31 (Some 19) (SemanticKind.VarRef("shared", Some(id 14))) []
+              node 27 (Some 1) (SemanticKind.Binding("capturedCode", false, false, None)) [26]
+              lambda 26 27 [29] 28 [29;28]
+              node 29 (Some 26) (SemanticKind.PatternBinding "__environment") []
+              node 28 (Some 26) (SemanticKind.EnvironmentRead(id 30, id 14)) [30]
+              node 30 (Some 28) (SemanticKind.VarRef("__environment", Some(id 29))) [] ]
+            |> List.map (fun node -> node.Id, node) |> Map.ofList
+        let slot =
+            { Source = id 14; ValueType = Types.intType
+              Field = { Name = "shared"; Slot = SettledSlot.Integer(32, None); Offset = Some 0; Size = Some 4; Align = Some 4 }
+              Holds = CaptureSlotKind.Scalar(SettledSlot.Integer(32, None)); IsCapture = true }
+        let layout =
+            { Owner = id 26; Implementation = id 26; Formal = id 29
+              Slots = [slot]; Bytes = 4; Alignment = 4; Obligations = [] }
+        { checkedGraph with Nodes = nodes; Edges = []; DeclarationRoots = [id 6, DeclRoot.EntryPoint]
+                            Codata = lazy { Codata.empty with EnvironmentLayouts = Map.ofList [id 26, layout];
+                                                             EnvironmentOrigins = Map.ofList [id 19, id 26; id 30, id 26] }
+                            WitnessProvenance = None; SequenceRangeProvenance = None; RangeContextFacts = None }
+
+    let admitted = function Result.Ok result -> result | Result.Error errors -> failwithf "%A" errors
+    let change number value (graph: SemanticGraph) =
+        let node = graph.Nodes[NodeId number]
+        { graph with Nodes = graph.Nodes.Add(node.Id, { node with Kind = SemanticKind.Literal(NativeLiteral.Int(int64 value, NTUKind.NTUint(NTUWidth.Fixed 32))) }) }
+    let disposition name (schedule: Rebuild.RebuildSchedule) = schedule.Regions["module:Selective/binding:" + name]
+
+type SelectiveRebuildCases() =
+    [<Fact>]
+    member _.``Calls and local storage invalidate their owning callable and dependent caller while retaining siblings``() =
+        let baseline = SelectiveRebuildFixture.graph 0
+        let plan = Segments.segment baseline |> SelectiveRebuildFixture.admitted
+        Assert.Contains(plan.Dependencies, fun edge ->
+            edge.Consumer = "module:Selective/binding:caller" && edge.Provider = "module:Selective/binding:provider" && edge.Kind = Segments.DependencyKind.Call)
+        let candidate = SelectiveRebuildFixture.change 21 42 baseline
+        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "provider" schedule)
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "caller" schedule)
+        for name in ["sibling"; "shared"; "factory"; "capturedCode"] do
+            Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition name schedule)
+        Assert.Contains(NodeId 21, schedule.Receipt.Cone.AffectedCone)
+        Assert.DoesNotContain(NodeId 13, schedule.Scopes)
+
+    [<Fact>]
+    member _.``Module storage closes over callers environment formation and captured code without coupling siblings``() =
+        let baseline = SelectiveRebuildFixture.graph 0
+        let candidate = SelectiveRebuildFixture.change 15 12 baseline
+        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
+        for name in ["shared"; "caller"; "factory"; "capturedCode"] do
+            Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition name schedule)
+        for name in ["provider"; "sibling"] do
+            Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition name schedule)
+        Assert.Contains(schedule.Candidate.SupportEdges, fun edge ->
+            edge.Domain = "ClosureDomain.Layouts" && edge.SupportNodes.Contains(NodeId 14))
+        // Code identity and the actual formation remain distinct regions.
+        Assert.NotEqual(schedule.Candidate.NodeOwners[NodeId 19], schedule.Candidate.NodeOwners[NodeId 26])
+
+    [<Fact>]
+    member _.``Proof support layout changes invalidate consumers even when executable nodes are unchanged``() =
+        let baseline = SelectiveRebuildFixture.graph 0
+        let codata = baseline.Codata.Value
+        let layout = codata.EnvironmentLayouts[NodeId 26]
+        let candidate =
+            { baseline with Codata = lazy { codata with EnvironmentLayouts = codata.EnvironmentLayouts.Add(layout.Owner, { layout with Bytes = 8; Alignment = 8 }) } }
+        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "capturedCode" schedule)
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "factory" schedule)
+        Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition "sibling" schedule)
+        Assert.Empty schedule.Receipt.Cone.AffectedCone
+
+    [<Fact>]
+    member _.``NodeId reset and renumbering preserve declaration fingerprints retention and empty recipe scheduling``() =
+        let baseline = SelectiveRebuildFixture.graph 0
+        NodeId.reset()
+        let candidate = SelectiveRebuildFixture.graph 1000
+        let _, schedule, recipes = Rebuild.rebuildSelective baseline candidate |> SelectiveRebuildFixture.admitted
+        for KeyValue(identity, region) in schedule.Baseline.Regions do
+            Assert.Equal(region.Fingerprint, schedule.Candidate.Regions[identity].Fingerprint)
+            Assert.Equal(Rebuild.RegionDisposition.Retained, schedule.Regions[identity])
+        Assert.Equal(NodeId 1002, schedule.Receipt.Alignment[NodeId 2])
+        Assert.Empty schedule.Scopes
+        Assert.Empty recipes.Recipes
+        Assert.Empty recipes.Diagnostics
+        Assert.Empty schedule.Receipt.Cone.AffectedCone
+        Assert.Empty schedule.Receipt.Cone.NewlyLitNodes
+        Assert.Empty schedule.Receipt.Cone.ExtinguishedNodes
+
+    [<Fact>]
+    member _.``Unresolved callable targets have an exact typed refusal and never enter Baker``() =
+        let baseline = SelectiveRebuildFixture.graph 0
+        let target = baseline.Nodes[NodeId 9]
+        let candidate =
+            { baseline with Nodes = baseline.Nodes.Add(target.Id, { target with Kind = SemanticKind.VarRef("unknown", None) }) }
+        let expected = Segments.SegmentationFailure.UnresolvedCallable(NodeId 8, NodeId 9)
+        match Segments.segment candidate with
+        | Result.Error errors -> Assert.Contains(expected, errors)
+        | Result.Ok _ -> failwith "An unresolved callable target was segmented."
+        match Rebuild.rebuildSelective baseline candidate with
+        | Result.Error(Rebuild.RebuildFailure.InvalidCandidate errors) -> Assert.Contains(expected, errors)
+        | result -> failwithf "Expected a typed refusal before recipe creation: %A" result
+
+    [<Fact>]
+    member _.``Broken environment layout and invalid baseline are refused without whole graph fallback``() =
+        let baseline = SelectiveRebuildFixture.graph 0
+        let candidate = { baseline with Codata = lazy { baseline.Codata.Value with EnvironmentLayouts = Map.empty } }
+        let expected = Segments.SegmentationFailure.BrokenEnvironment(NodeId 19, "Environment formation requires its exact indexed layout and slots.")
+        match Rebuild.rebuildSelective baseline candidate with
+        | Result.Error(Rebuild.RebuildFailure.InvalidCandidate errors) -> Assert.Contains(expected, errors)
+        | result -> failwithf "Expected an environment refusal: %A" result
+        let broken = { baseline with Nodes = baseline.Nodes.Remove(NodeId 2) }
+        match Rebuild.rebuildSelective broken baseline with
+        | Result.Error(Rebuild.RebuildFailure.InvalidBaseline errors) ->
+            Assert.Contains(errors, function Segments.SegmentationFailure.InvalidGraph(_, "A structural or reference target is absent from the graph.") -> true | _ -> false)
+        | result -> failwithf "Expected an invalid baseline refusal: %A" result
+        match Rebuild.rebuildSelective { baseline with Nodes = Map.empty } baseline with
+        | Result.Error Rebuild.RebuildFailure.MissingBaseline -> ()
+        | result -> failwithf "Expected a missing baseline refusal: %A" result
+
+    [<Theory>]
+    [<InlineData("address")>]
+    [<InlineData("deref")>]
+    [<InlineData("field-get")>]
+    [<InlineData("field-set")>]
+    [<InlineData("index-get")>]
+    [<InlineData("index-set")>]
+    [<InlineData("set")>]
+    member _.``Storage forms preserve their program-storage dependency without coupling siblings`` shape =
+        let source = SelectiveRebuildFixture.graph 0
+        let operand = NodeId 10
+        let kind =
+            match shape with
+            | "address" -> SemanticKind.AddressOf(operand, true)
+            | "deref" -> SemanticKind.Deref operand
+            | "field-get" -> SemanticKind.FieldGet(operand, "value")
+            | "field-set" -> SemanticKind.FieldSet(operand, "value", operand)
+            | "index-get" -> SemanticKind.IndexGet(operand, operand)
+            | "index-set" -> SemanticKind.IndexSet(operand, operand, operand)
+            | _ -> SemanticKind.Set(operand, operand)
+        let old = source.Nodes[NodeId 8]
+        let baseline = { source with Nodes = source.Nodes.Add(old.Id, { old with Kind = kind; Children = [operand] }) }
+        let candidate = SelectiveRebuildFixture.change 15 16 baseline
+        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "caller" schedule)
+        Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition "sibling" schedule)
+
+    [<Fact>]
+    member _.``Callable contract support changes schedule only its implementation and callers``() =
+        let source = SelectiveRebuildFixture.graph 0
+        let identity = NodeId 900
+        let sourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType Types.intType
+        let contract: CallableContract =
+            { Identity = identity; Kind = CallableKind.OrdinaryFlatClosure; Convention = CallableConvention.Ordinary
+              ParameterTypes = [sourceType]; OmittedParameters = []
+              ParameterRepresentations = [0, ValueRepresentation.Scalar(SettledSlot.Integer(32, None))]
+              ResultType = sourceType; ResultRepresentation = ValueRepresentation.Scalar(SettledSlot.Integer(32, None))
+              EnvironmentBytes = None; SourcePremises = Map.empty
+              Participants = [{ Node = NodeId 3; Role = ParticipantRole.CallableImplementation; Ordinal = 0; Group = identity }] }
+        let baseline = { source with Codata = lazy { source.Codata.Value with CallableContracts = Map.ofList [identity, contract] } }
+        let candidate = { baseline with Codata = lazy { baseline.Codata.Value with CallableContracts = Map.ofList [identity, { contract with EnvironmentBytes = Some 8 }] } }
+        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
+        Assert.Contains(schedule.Candidate.SupportEdges, fun edge -> edge.Domain = "CallableContracts" && edge.Consumer = "module:Selective/binding:provider")
+        for name in ["provider"; "caller"] do
+            Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition name schedule)
+        Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition "sibling" schedule)
+        Assert.Empty schedule.Receipt.Cone.AffectedCone
+
+    [<Fact>]
+    member _.``Memory domain support changes invalidate its consumer without changing the executable shadow cone``() =
+        let source = SelectiveRebuildFixture.graph 0
+        let domain: MemoryDomain =
+            { Premises = Map.empty; Platform = None; Meets = Map.empty; Guards = [NodeId 8, [NodeId 14]]
+              Requirements = []; StringRelations = []; AllocationConstructions = []; CopyConstructions = []
+              ArrayCopies = []; Proofs = []; Required = Set.singleton(NodeId 8); Operations = []; Unresolved = Map.empty }
+        let edge =
+            { Class = EdgeClass.Provenance; Role = EdgeRole.MemoryDomain domain; Ordinal = 0; Sources = []; Target = NodeId 1 }
+        let baseline = { source with Edges = [edge] }
+        let candidate = { source with Edges = [{ edge with Role = EdgeRole.MemoryDomain { domain with Guards = [NodeId 8, [NodeId 2]] } }] }
+        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "caller" schedule)
+        Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition "sibling" schedule)
+        Assert.Contains(schedule.Candidate.SupportEdges, fun support -> support.Domain = "MemoryDomain" && support.Consumer = "module:Selective/binding:caller")
+        Assert.Empty schedule.Receipt.Cone.AffectedCone
+
+    [<Fact>]
+    member _.``Source Lambda captures keep explicit dependencies before environment materialization``() =
+        let source = SelectiveRebuildFixture.graph 0
+        let implementation = source.Nodes[NodeId 26]
+        let capture: CaptureInfo =
+            { Name = "shared"; Type = Types.intType; IsMutable = true; SourceNodeId = Some(NodeId 14) }
+        let kind =
+            match implementation.Kind with
+            | SemanticKind.Lambda(parameters, body, _, enclosing, context) ->
+                SemanticKind.Lambda(parameters, body, [capture], enclosing, context)
+            | _ -> failwith "Expected the source implementation."
+        let baseline = { source with Nodes = source.Nodes.Add(implementation.Id, { implementation with Kind = kind }) }
+        let candidate = SelectiveRebuildFixture.change 15 18 baseline
+        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
+        Assert.Contains(schedule.Candidate.Dependencies, fun edge ->
+            edge.Kind = Segments.DependencyKind.CapturedEnvironment &&
+            edge.Consumer = "module:Selective/binding:capturedCode" && edge.Provider = "module:Selective/binding:shared")
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "capturedCode" schedule)
+        Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition "sibling" schedule)

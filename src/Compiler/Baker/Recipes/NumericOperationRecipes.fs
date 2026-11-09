@@ -149,6 +149,26 @@ let private settleCore (graph: SemanticGraph) anchor (values: Map<NodeId, Scalar
                 | _ -> raise (MissingOperation "A real comparison requires one exact offered IEEE representation declaration for its settled operands.")
             let operands = List.zip actuals inputs |> List.map (fun (id, carrier) -> { Actual = id; Carrier = Some carrier; Adaptation = None })
             make NumericOperationForm.Real (Some slot) (Some declared.Representation) (Some declared.Node) None operands None []
+        elif scalarInput.Value |> List.forall (fun carrier -> match carrier.Slot with SettledSlot.Real _ -> true | _ -> false) then
+            let reason = "The real operation requires its exact source format, intermediate capacity and arithmetic fidelity contract before witnessing."
+            let inputs = scalarInput.Value
+            require (Operations.realArithmetic kind && inputs.Length = Operations.arity kind &&
+                     (inputTypes |> List.forall (function Some(NTUKind.NTUfloat _) -> true | _ -> false)) &&
+                     (match Types.tryGetNTUKind node.Type with Some(NTUKind.NTUfloat _) -> true | _ -> false)) reason
+            let bits = match result.Slot with SettledSlot.Real bits when bits = 32 || bits = 64 -> bits | _ -> raise (MissingOperation reason)
+            require (inputs |> List.forall (fun carrier -> carrier.Slot = result.Slot)) reason
+            let core = core |> need reason
+            let declared =
+                match core.Representations |> List.filter (fun declaration ->
+                    let representation = declaration.Representation
+                    representation.Family = "ieee" && representation.Bits = bits && NumericRepresentation.isOffered representation &&
+                    not (System.String.IsNullOrWhiteSpace representation.Boundary) &&
+                    not (System.String.IsNullOrWhiteSpace representation.MinMagnitude) &&
+                    not (System.String.IsNullOrWhiteSpace representation.MaxMagnitude)) with
+                | [declared] -> declared
+                | _ -> raise (MissingOperation reason)
+            let operands = List.zip actuals inputs |> List.map (fun (id, carrier) -> { Actual = id; Carrier = Some carrier; Adaptation = None })
+            make NumericOperationForm.Real (Some result.Slot) (Some declared.Representation) (Some declared.Node) None operands None []
         else
             raise (MissingOperation "The real operation requires its exact source format, intermediate capacity and arithmetic fidelity contract before witnessing.")
     graph.Nodes |> Map.fold (fun (enrichment, operations, unresolved, required, proofs) id node ->

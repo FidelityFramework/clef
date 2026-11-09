@@ -765,9 +765,8 @@ and private atomsUncached (program: Program) (depth: int) (guardId: NodeId) (pol
             | Some { Module = IntrinsicModule.Operators; Operation = "op_BooleanOr" }, [ x; y ] ->
                 if polarity then [] else afterEffect program (effectAt program y) (atoms program (depth + 1) x false) @ atoms program (depth + 1) y false
             | Some { Module = IntrinsicModule.Operators; Operation = op }, [ x; y ] ->
-                match relationOf op with
-                | None -> []
-                | Some relation ->
+                match relationOf op, Map.tryFind x program.Reachable, Map.tryFind y program.Reachable with
+                | Some relation, Some nx, Some ny when isRanged nx && isRanged ny ->
                     let relation = if polarity then relation else complement relation
                     let ofDefinition (side: NodeId) (bound: Bound) (r: Relation) =
                         match readDefinition program side with
@@ -795,6 +794,7 @@ and private atomsUncached (program: Program) (depth: int) (guardId: NodeId) (pol
                         | None -> []
                     afterEffect program (joinWrites (effectAt program x) (effectAt program y)) (ofSide x y relation)
                     @ afterEffect program (effectAt program y) (ofSide y x (flip relation))
+                | _ -> []
             | None, _ ->
                 // A call of a boolean function whose body is comparison atoms over its parameters
                 // (`Cursor.fits data offset count`, ruling 3): the body's atoms, with each parameter

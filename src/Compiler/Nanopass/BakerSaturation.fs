@@ -677,6 +677,11 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
 let fanOut (graph: SemanticGraph) : RecipeSet =
     FanOut.fanOut "Saturation" needsSaturationBasic createSaturationRecipe graph
 
+/// Selective rebuild keeps the complete graph available to recipes, while
+/// admitting only invalidated source occurrences to recipe creation.
+let fanOutScopes (scopes: Set<NodeId>) (graph: SemanticGraph) : RecipeSet =
+    FanOut.fanOut "Saturation" (fun node -> scopes.Contains node.Id && needsSaturationBasic node) createSaturationRecipe graph
+
 //-------------------------------------------------------------------------
 // Pass 4: Saturation Fold-In
 //-------------------------------------------------------------------------

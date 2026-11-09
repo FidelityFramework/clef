@@ -54,7 +54,7 @@ let private unionValues ty (value: obj) =
 /// Length-delimited, culture-independent structural encoding. Types are frozen
 /// here, while Baker still owns checker substitutions. Unknown identities or
 /// host objects refuse a separate region; they never disappear from the key.
-let private encoder (identities: Map<NodeId, string>) =
+let internal encoder (identities: Map<NodeId, string>) =
     let rec encode (value: objnull) : string =
         let atom (text: string) = string text.Length + ":" + text
         match value with
@@ -157,6 +157,7 @@ let private comparison (graph: SemanticGraph) (members: Set<NodeId>) (operation:
         when members.Contains operation.Callee && callee = operation.Callee &&
              actuals = (operation.Operands |> List.map _.Actual) && List.forall members.Contains actuals &&
              info.Module = IntrinsicModule.Operators &&
+             Clef.Compiler.Baker.Ingredients.NumericOperations.comparison operation.Kind &&
              Clef.Compiler.Baker.Ingredients.NumericOperations.classify info.Operation = Some operation.Kind &&
              operation.Form = NumericOperationForm.Real &&
              Clef.Compiler.Baker.Ingredients.NumericOperations.requiredBodies operation = Some [] -> true

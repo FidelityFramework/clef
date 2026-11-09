@@ -37,6 +37,50 @@ module RealComparisonFixture =
         Clef.Compiler.NativeService.checkParsedInputsWithPlatform [parse declaration "write-authority.clef"; parse source "real-comparison.clef"] (Some platform)
 
 type NumericOperationCases() =
+    [<Fact>]
+    member _.``HelloDimensionsProof division settles its exact IEEE arithmetic contract and publishes dependent domains`` () =
+        let source = "module HelloDimensionsProof\n[<Measure>] type m\n[<Measure>] type s\nlet speed (distance: float<m>) (elapsed: float<s>) = distance / elapsed\n[<EntryPoint>]\nlet main _ = if speed 10.0<m> 2.0<s> > 0.0<m/s> then 0 else 1\n"
+        let result = RealComparisonFixture.check RealComparisonFixture.authority source
+        DimensionalCases.noErrors result
+        let facts = OperationPublication.project result.Graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let operation = NumericOperationFixture.operation NumericOperationKind.Divide facts
+        Assert.Equal(NumericOperationForm.Real, operation.Form)
+        Assert.Equal(Some(SettledSlot.Real 64), operation.OperationCarrier)
+        Assert.Equal(SettledSlot.Real 64, operation.Result.Slot)
+        Assert.Equal(Some "float64", operation.Representation |> Option.map _.Name)
+        Assert.Equal(Some [], Clef.Compiler.Baker.Ingredients.NumericOperations.requiredBodies operation)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> Result.isOk)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.SpatialPublication.project result.Graph |> Result.isOk)
+        Assert.Contains(result.Graph.Edges, fun edge -> match edge.Role with EdgeRole.MemoryDomain _ -> true | _ -> false)
+        Assert.Contains(result.Graph.Edges, fun edge -> match edge.Role with EdgeRole.SpatialModuleDomain _ -> true | _ -> false)
+        for changed in [ { operation.Representation.Value with Boundary = "" }
+                         { operation.Representation.Value with MinMagnitude = "" }
+                         { operation.Representation.Value with MaxMagnitude = "" } ] do
+            Assert.True(Clef.Compiler.Baker.Ingredients.NumericOperations.requiredBodies { operation with Representation = Some changed } |> Option.isNone)
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("unavailable")>]
+    [<InlineData("duplicate")>]
+    member _.``Real division refuses the exact missing arithmetic fidelity contract without emitting a real operation`` defect =
+        let authority =
+            match defect with
+            | "missing" -> IntrinsicWriteFixture.authority
+            | "unavailable" -> RealComparisonFixture.authority.Replace("Name = \"float64\"; Capability = \"native\"", "Name = \"float64\"; Capability = \"unavailable\"")
+            | _ -> RealComparisonFixture.authority.Replace("Representations = [|", "Representations = [| { Name = \"other64\"; Capability = \"native\"; Family = \"ieee\"; Bits = 64; MinMagnitude = \"-1.7976931348623157e308\"; MaxMagnitude = \"1.7976931348623157e308\"; Boundary = \"wrap\" }; ")
+        let source = "module RefusedDimensions\n[<Measure>] type m\n[<Measure>] type s\nlet speed (distance: float<m>) (elapsed: float<s>) = distance / elapsed\n[<EntryPoint>]\nlet main _ = if speed 10.0<m> 2.0<s> > 0.0<m/s> then 0 else 1\n"
+        let result = RealComparisonFixture.check authority source
+        let reason = "NumericPublication: The real operation requires its exact source format, intermediate capacity and arithmetic fidelity contract before witnessing."
+        match OperationPublication.project result.Graph with
+        | Ok _ -> failwith "A real division without its source fidelity contract was admitted."
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason = reason)
+        if defect = "duplicate" then
+            Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8403" && diagnostic.Message.Contains reason)
+        else
+            Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8204")
+        Assert.DoesNotContain(result.Graph.Edges, fun edge ->
+            match edge.Role with EdgeRole.NumericOperation operation -> operation.Form = NumericOperationForm.Real | _ -> false)
+
     [<Theory>]
     [<InlineData("=")>]
     [<InlineData("<>")>]

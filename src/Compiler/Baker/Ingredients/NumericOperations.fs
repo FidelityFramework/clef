@@ -37,6 +37,12 @@ let arity = function
     | NumericOperationKind.Negate | NumericOperationKind.Complement | NumericOperationKind.Identity | NumericOperationKind.LogicalNot -> 1
     | _ -> 2
 
+let realArithmetic = function
+    | NumericOperationKind.Add | NumericOperationKind.Subtract | NumericOperationKind.Multiply
+    | NumericOperationKind.Divide | NumericOperationKind.Remainder
+    | NumericOperationKind.Negate | NumericOperationKind.Identity -> true
+    | _ -> false
+
 /// Identity-preserving wrappers participate in the one source operation row.
 /// The complete source snapshot retains membership and absence dependencies.
 let operation (graph: SemanticGraph) (node: SemanticNode) =
@@ -131,6 +137,20 @@ let requiredBodies (operation: NumericOperationWitness) =
                  representation.Family = "ieee" && representation.Bits = width && NumericRepresentation.isOffered representation &&
                  operation.Result.Slot = SettledSlot.Bool && operation.ResultAdaptation.IsNone && operation.Range.IsNone &&
                  operation.Participants.Contains declaration && operation.Operands.Length = 2 &&
+                 Set.isSubset operation.Result.Participants operation.Participants &&
+                 (operation.Operands |> List.forall (fun operand ->
+                     operand.Adaptation.IsNone && (operand.Carrier |> Option.exists (fun carrier ->
+                         carrier.Site = operand.Actual && carrier.Slot = slot &&
+                         Set.isSubset carrier.Participants operation.Participants)))) -> Some []
+        | Some(SettledSlot.Real width as slot), Some representation, Some declaration
+            when realArithmetic operation.Kind && (width = 32 || width = 64) &&
+                 operation.Result.Slot = slot && operation.ResultAdaptation.IsNone &&
+                 representation.Family = "ieee" && representation.Bits = width && NumericRepresentation.isOffered representation &&
+                 not (System.String.IsNullOrWhiteSpace representation.Boundary) &&
+                 not (System.String.IsNullOrWhiteSpace representation.MinMagnitude) &&
+                 not (System.String.IsNullOrWhiteSpace representation.MaxMagnitude) &&
+                 operation.Participants.Contains declaration &&
+                 operation.Operands.Length = arity operation.Kind &&
                  Set.isSubset operation.Result.Participants operation.Participants &&
                  (operation.Operands |> List.forall (fun operand ->
                      operand.Adaptation.IsNone && (operand.Carrier |> Option.exists (fun carrier ->

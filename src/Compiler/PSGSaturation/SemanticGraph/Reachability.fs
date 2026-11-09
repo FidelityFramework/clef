@@ -569,7 +569,7 @@ let computeShadowCone (baseline: SemanticGraph) (current: SemanticGraph) : Reach
                 | _ -> []
             let referencedDefs =
                 (kindEdges id node.Kind
-                 |> List.filter Hyperedge.isReference
+                 |> List.filter (fun edge -> Hyperedge.isReference edge && edge.Role <> EdgeRole.Member)
                  |> List.map Hyperedge.soleSource)
                 @ getTypeDefRefs node graph
                 @ intrinsic
