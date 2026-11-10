@@ -27,6 +27,32 @@ module MemoryAccessFixture =
 
 type MemoryAccessCases() =
     [<Fact>]
+    member _.``Local scalar cells and for counters publish explicit stack accounts`` () =
+        let source = MemoryAccessFixture.source "    let mutable total = 0\n    for index = 0 to 2 do\n        total <- index\n    if total = 2 then 37 else 1\n"
+        let graph, facts = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source
+        let locals = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.LocalScalar row -> Some row | _ -> None) |> Seq.toList
+        Assert.Equal(2, locals.Length)
+        let published = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check published)
+        for row in locals do
+            Assert.True(match row.Residence with MemoryResidence.Stack _ -> true | _ -> false)
+            Assert.NotEmpty row.Reads
+            Assert.NotEmpty row.Writes
+            let proof = [row.Layout;row.Capacity] |> List.map (fun id -> match graph.Nodes[id].Kind with SemanticKind.Obligation info -> info.Body | _ -> failwith "Missing source proof")
+            Assert.Contains(ObligationBody.CapacityFits(int64 row.Bytes,4096L),proof)
+            Assert.Contains(ObligationBody.ContinuationLayout([0,row.Bytes,row.Alignment],row.Bytes,row.Alignment),proof)
+            let initial = graph.Nodes[row.Initializer]
+            let changed = {graph with Nodes=graph.Nodes.Add(initial.Id,{initial with Kind=SemanticKind.Literal(NativeLiteral.Bool true)})}
+            Assert.True(MemoryPublication.project changed |> Result.isError)
+
+    [<Fact>]
+    member _.``Local scalar permission is absent without stack authority or for addressed cells`` () =
+        let source = MemoryAccessFixture.source "    let mutable value = 7\n    value <- 11\n    if value = 11 then 37 else 1\n"
+        for authority,text in [IntrinsicWriteFixture.authority,source;MemoryAccessFixture.stackAuthority,MemoryAccessFixture.cellAddress] do
+            let _,facts = MemoryAccessFixture.admittedSource authority text
+            Assert.DoesNotContain(facts.Operations.Values,fun row -> match row with MemoryWitnessOperation.LocalScalar _ -> true | _ -> false)
+
+    [<Fact>]
     member _.``Snapshot stores publish the exact adapted value while retaining its guarded evaluation`` () =
         let source = "module StringSnapshots\n[<EntryPoint>]\nlet main _ =\n    let text = \"A\\000B\"\n    let first = eager (String.toBytes text)\n    let second = eager (String.toBytes text)\n    first.[0] <- 512\n    if second.[0] = 65 && first.[0] = 512 then 0 else 1\n"
         let graph, facts = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source

@@ -1799,8 +1799,23 @@ type MemoryStringViewWitness = {
     Participants: Set<NodeId>
 }
 
+type MemoryLocalScalarWitness = {
+    Site: NodeId
+    Initializer: NodeId
+    Element: SettledSlot
+    Bytes: int
+    Alignment: int
+    Residence: MemoryResidence
+    Reads: Set<NodeId>
+    Writes: (NodeId * NodeId) list
+    Platform: NodeId
+    Layout: NodeId
+    Capacity: NodeId
+}
+
 [<RequireQualifiedAccess>]
 type MemoryWitnessOperation =
+    | LocalScalar of MemoryLocalScalarWitness
     | BufferExtent of MemoryExtentWitness
     | ArrayExtent of MemoryArrayExtentWitness
     | ArrayAccess of MemoryArrayAccessWitness

@@ -2021,6 +2021,12 @@ and mapMemoryStringViewWitness (value: S.MemoryStringViewWitness) : Fidelity.PSG
 
 and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.MemoryWitnessOperation =
     match value with
+    | S.MemoryWitnessOperation.LocalScalar row ->
+        Fidelity.PSG.MemoryWitnessOperation.LocalScalar {
+            Site = nodeId row.Site; Initializer = nodeId row.Initializer; Element = mapSettledSlot row.Element
+            Bytes = row.Bytes; Alignment = row.Alignment; Residence = mapMemoryResidence row.Residence
+            Reads = Set.map nodeId row.Reads; Writes = row.Writes |> List.map (fun (site,value) -> nodeId site,nodeId value)
+            Platform = nodeId row.Platform; Layout = nodeId row.Layout; Capacity = nodeId row.Capacity }
     | S.MemoryWitnessOperation.BufferExtent(a0) -> Fidelity.PSG.MemoryWitnessOperation.BufferExtent(mapMemoryExtentWitness a0)
     | S.MemoryWitnessOperation.ArrayExtent(a0) -> Fidelity.PSG.MemoryWitnessOperation.ArrayExtent(mapMemoryArrayExtentWitness a0)
     | S.MemoryWitnessOperation.ArrayAccess(a0) -> Fidelity.PSG.MemoryWitnessOperation.ArrayAccess(mapMemoryArrayAccessWitness a0)
