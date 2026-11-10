@@ -201,11 +201,12 @@ module FidprojLoader =
     let private parseRuntimeModel (s: string) : Result<RuntimeModel, string> =
         match s.ToLowerInvariant() with
         | "libc" -> Ok RuntimeModel.Libc
+        | "win32" -> Ok RuntimeModel.Win32
         | "freestanding" -> Ok RuntimeModel.Freestanding
         | "bare" -> Ok RuntimeModel.Bare
         | "rocm" -> Ok RuntimeModel.ROCm
         | "xdna" -> Ok RuntimeModel.XDNA
-        | unknown -> Error $"Unrecognized runtime_model '%s{unknown}'. Expected: libc, freestanding, bare, rocm, xdna"
+        | unknown -> Error $"Unrecognized runtime_model '%s{unknown}'. Expected: libc, win32, freestanding, bare, rocm, xdna"
 
     /// Parses a [platform] section from a TOML document.
     let private parsePlatformSection (doc: TomlDocument) : Result<PlatformSection, string> =

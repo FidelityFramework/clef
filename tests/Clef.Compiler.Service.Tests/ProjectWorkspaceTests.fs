@@ -141,6 +141,41 @@ type ProjectWorkspaceCollection() = class end
 [<Collection("ProjectWorkspace"); Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProjectWorkspace")>]
 type ProjectWorkspaceTests() =
     [<Theory>]
+    [<InlineData("windows", "win32", "x86_64-pc-windows-msvc", true)>]
+    [<InlineData("windows", "win32", "x86_64-unknown-linux-gnu", false)>]
+    [<InlineData("windows", "win32", "x86_64-w64-windows-gnu", false)>]
+    [<InlineData("linux", "win32", "x86_64-unknown-linux-gnu", false)>]
+    [<InlineData("windows", "libc", "x86_64-pc-windows-msvc", false)>]
+    member _.``Windows source core requires the declared Win32 AMD64 ABI``(os: string, runtime: string, triple: string, admitted: bool) =
+        use files = new WorkspaceFiles()
+        let authority =
+            SourcePlatformFixture.authority
+                .Replace("Os = \"linux\"", "Os = \"" + os + "\"")
+                .Replace("Runtime = \"freestanding\"", "Runtime = \"" + runtime + "\"")
+                .Replace("x86_64-unknown-linux-gnu", triple)
+                .Replace("Surfaces = [| { Endpoints = [| write |] } |]", "Surfaces = [||]")
+        let parse source path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults source path with
+            | Clef.Compiler.NativeService.ParseSuccess value -> value
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
+        let result = Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                        [parse authority "write-authority.clef"; parse "module App\n[<EntryPoint>]\nlet main _ = 37\n" files.Source]
+                        (Some SourcePlatformFixture.platform)
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read result.Graph
+        if admitted then
+            Assert.Empty reading.Findings
+            Assert.Equal(Some RuntimeModel.Win32, reading.Platform |> Option.bind _.Core |> Option.bind Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.runtimeModel)
+        else
+            Assert.Contains(reading.Findings, fun finding -> finding.Message.Contains("Windows") || finding.Message.Contains("triple"))
+
+    [<Fact>]
+    member _.``Win32 runtime is an explicit platform capability distinct from libc``() =
+        use files = new WorkspaceFiles()
+        File.WriteAllText(files.Project, "[package]\nname=\"WindowsPlatform\"\n[compilation]\ntarget=\"cpu\"\n[build]\noutput_kind=\"library\"\nsources=[\"App.clef\"]\n[platform]\nruntime_model=\"win32\"\nos=\"windows\"\narch=\"x86_64\"\n")
+        let platform = FidprojLoader.loadBindingPlatformSection files.Project |> WorkspaceCases.need
+        Assert.Equal(RuntimeModel.Win32, platform.RuntimeModel)
+
+    [<Theory>]
     [<InlineData("EK_RA6M5_HelloBlinky", "arm_cortex_m33", "mcu-renesas-ra6m5-ek-ra6m5", "CortexM33")>]
     [<InlineData("STM32H747I_DISCO_HelloDISCO", "arm_cortex_m7", "stm32h747i-disco-hellodisco-internal", "CortexM7")>]
     member _.``Tracked profile aliases retain readable source WordSize declarations``(profile: string, architecture: string, identity: string, cpu: string) =

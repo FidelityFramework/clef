@@ -2801,6 +2801,7 @@ and mapReturnBound (value: N.ReturnBound) : Fidelity.PSG.ReturnBound =
 and mapRuntimeModel (value: N.RuntimeModel) : Fidelity.PSG.RuntimeModel =
     match value with
     | N.RuntimeModel.Libc -> Fidelity.PSG.RuntimeModel.Libc
+    | N.RuntimeModel.Win32 -> Fidelity.PSG.RuntimeModel.Win32
     | N.RuntimeModel.Freestanding -> Fidelity.PSG.RuntimeModel.Freestanding
     | N.RuntimeModel.Bare -> Fidelity.PSG.RuntimeModel.Bare
     | N.RuntimeModel.ROCm -> Fidelity.PSG.RuntimeModel.ROCm

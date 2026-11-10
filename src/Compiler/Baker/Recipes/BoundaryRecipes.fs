@@ -2383,7 +2383,9 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
           // Native entries and callback accounts require their selected source loading
           // even when every import is libc; ordinary direct libc calls keep no account.
-          Loading = if entries.IsEmpty && closedEntries.IsEmpty && callbackInvocations.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else loading |> Result.toOption
+          Loading = if entries.IsEmpty && closedEntries.IsEmpty && callbackInvocations.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c"))
+                       && not (graph.Platform |> Option.exists (fun platform -> platform.RuntimeModel = Some RuntimeModel.Win32 && platform.PlatformLoading.IsSome))
+                    then None else loading |> Result.toOption
           Entries = Map.keys entries |> Seq.toList
           CallbackInvocations = Map.keys callbackInvocations |> Seq.toList
           CallbackAbsences = Map.keys callbackAbsences |> Seq.toList
