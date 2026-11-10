@@ -143,7 +143,7 @@ let readWritableBuffer1Descriptor : Expr<WritableBufferDescriptor> = <@ {
 
     let applicationForAuthority authority source moduleName body =
         let root =
-            System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/resource-application-tests", System.Guid.NewGuid().ToString("N")))
+            System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/scratch/resource-application-tests", System.Guid.NewGuid().ToString("N")))
         System.IO.Directory.CreateDirectory root |> ignore
         let write (name:string) (text:string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root,name),text)
         write "authority.clef" authority
@@ -1271,6 +1271,40 @@ type ForeignReferenceTests() =
         match Clef.Compiler.Project.ProjectChecker.publish result with
         | Error reason -> failwithf "A complete source resource model could not publish: %s" reason
         | Ok revision -> Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``Resource application retains annotated platform and nested module premises in published revision``() =
+        let annotatedAuthority =
+            SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+                .Replace("let rodata = {", "let rodata: MemorySpace = {")
+                .Replace("let description = {", "let description: PlatformDescription =\n                  {")
+        let result =
+            ForeignCases.applicationForAuthority annotatedAuthority ForeignCases.resourceSource "ResourceApplicationAnnotatedMain"
+                "    match Foreign.mallocFirst 8 with\n    | Some handle -> Foreign.freeFirst handle; 0\n    | None -> 0\n"
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result, String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        let revision =
+            Clef.Compiler.Project.ProjectChecker.publish result
+            |> Result.defaultWith (fun reason -> failwithf "An annotated resource platform could not publish: %s" reason)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let evidence = revision.Emission.Boundary.ResourceEvidence.Value
+        Assert.True(evidence.Premises.ContainsKey evidence.Platform)
+        let annotation = evidence.Premises[evidence.Platform].Shape.Parent.Value
+        Assert.True(evidence.Premises.ContainsKey annotation)
+        Assert.Equal("annotation", evidence.Premises[annotation].Shape.Form)
+        let binding = evidence.Premises[annotation].Shape.Parent.Value
+        Assert.True(evidence.Premises.ContainsKey binding)
+        Assert.Equal("binding", evidence.Premises[binding].Shape.Form)
+        let enclosingModule = evidence.Premises[binding].Shape.Parent.Value
+        Assert.True(evidence.Premises.ContainsKey enclosingModule)
+        Assert.Equal("module", evidence.Premises[enclosingModule].Shape.Form)
+        let rec assertModuleAncestors id =
+            match evidence.Premises[id].Shape.Parent with
+            | Some parent ->
+                Assert.True(evidence.Premises.ContainsKey parent)
+                Assert.Equal("module", evidence.Premises[parent].Shape.Form)
+                assertModuleAncestors parent
+            | None -> ()
+        assertModuleAncestors enclosingModule
 
     [<Fact>]
     member _.``Resource handle tuple containment refuses before cleanup authority``() =

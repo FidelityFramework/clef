@@ -2329,6 +2329,18 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
             // lexical declarations, original lambda formals, and context
             // wrappers remain metadata rather than executable body roots.
             let metadataIds =
+                let rec context (seen: Set<NodeId>) id =
+                    match boundaryPremises.TryFind id with
+                    | Some premise ->
+                        match premise.Shape.Parent with
+                        | Some parent when not (seen.Contains parent) ->
+                            match graph.Nodes.TryFind parent with
+                            | Some { Kind = SemanticKind.TypeAnnotation _ | SemanticKind.Quote _ | SemanticKind.Binding _ | SemanticKind.ModuleDef _ } ->
+                                parent :: context (Set.add parent seen) parent
+                            | _ -> []
+                        | _ -> []
+                    | None -> []
+
                 ids
                 |> Set.toList
                 |> List.collect (fun id ->
@@ -2344,17 +2356,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                 List.take (int arity) shape.References
                             | _ -> []
 
-                        let context =
-                            shape.Parent
-                            |> Option.filter (fun parent ->
-                                match graph.Nodes.TryFind parent with
-                                | Some {
-                                           Kind = SemanticKind.Binding _ | SemanticKind.ModuleDef _
-                                       } -> true
-                                | _ -> false)
-                            |> Option.toList
-
-                        members @ context)
+                        members @ ((id :: members) |> List.collect (fun memberId -> context (Set.singleton memberId) memberId)))
                 |> Set.ofList
 
             let ids = Set.union ids metadataIds
