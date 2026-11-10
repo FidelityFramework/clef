@@ -7,6 +7,8 @@
 *.csproj text merge=union
 *.vbproj text merge=union
 *.fsproj text merge=union
+# Multiline source fixtures are compared and edited using exact LF strings.
+tests/Clef.Compiler.Service.Tests/*.fs text eol=lf
 *.dbproj text merge=union
 
 # Standard to msysgit

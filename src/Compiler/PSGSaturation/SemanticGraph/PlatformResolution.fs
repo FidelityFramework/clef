@@ -590,7 +590,7 @@ let private declaredByBinding (graph: SemanticGraph) : SemanticNode -> bool =
                 | null -> full
                 | parent -> parent
         let root = directory.TrimEnd('/') + "/"
-        fun node -> node.Range.File <> "" && (normalise node.Range.File).StartsWith root
+        fun node -> node.Range.File <> "" && (normalise node.Range.File).StartsWith(root, if System.OperatingSystem.IsWindows() then System.StringComparison.OrdinalIgnoreCase else System.StringComparison.Ordinal)
 
 /// Find the platform description compiled into this graph and read it, with
 /// every finding about it. No description at all (a program compiled without a
@@ -689,8 +689,7 @@ let private explicitDescription graph binding = explicitRecord graph isDescripti
 let private inSelectedSources (graph: SemanticGraph) (node: SemanticNode) =
     node.Range.File <> "" &&
     (graph.Platform |> Option.exists (fun ctx ->
-        let path = (System.IO.Path.GetFullPath node.Range.File).Replace('\\', '/')
-        Set.contains path ctx.PlatformSourcePaths))
+        ctx.PlatformSourcePaths |> Set.exists (Clef.Compiler.Utilities.HostTools.samePath node.Range.File)))
 
 /// A root inside the closure must not obtain its core, spaces or aliased value
 /// from an unrelated dependency that happened to be loaded first. Preserve

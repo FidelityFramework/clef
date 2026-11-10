@@ -54,7 +54,7 @@ module private PreparedScopeFixture =
             "[package]"; "name=\"MmioCheck\""; "version=\"0.1.0\""
             "[compilation]"; "target=\"mcu\""
             "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; "arch=\"arm_cortex_m33\""
-            "[dependencies]"; sprintf "platform={path=%A}" platform
+            "[dependencies]"; sprintf "platform={path=%s}" (System.Text.Json.JsonSerializer.Serialize platform)
             "[build]"; "sources=[\"Main.clef\"]"; "output=\"test.elf\""; "output_kind=\"embedded\"" ])
         let result = Clef.Compiler.Project.ProjectChecker.checkProject project
                      |> Result.defaultWith (fun failures -> failwithf "Real MMIO project failed before returning its final graph: %A" failures)
@@ -375,7 +375,7 @@ module private MmioMeetFixture =
             "[package]"; "name=\"DeviceAccessCheck\""; "version=\"0.1.0\""
             "[compilation]"; "target=\"" + (if guest then "cpu" else "mcu") + "\""
             "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; "arch=\"" + (if guest then "x86_64" else "arm_cortex_m33") + "\""
-            "[dependencies]"; sprintf "platform={path=%A}" platform
+            "[dependencies]"; sprintf "platform={path=%s}" (System.Text.Json.JsonSerializer.Serialize platform)
             "[build]"; "sources=[\"Declarations.clef\",\"Main.clef\"]"; "output=\"test.elf\""; "output_kind=\"embedded\"" ])
         Clef.Compiler.CheckExecution.synchronized (fun () -> Clef.Compiler.Project.ProjectChecker.checkProject project)
         |> Result.defaultWith (fun errors -> failwithf "MMIO meet source setup failed: %A" errors)

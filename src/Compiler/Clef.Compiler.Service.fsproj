@@ -67,6 +67,7 @@
 
   <ItemGroup>
     <Compile Include="Utilities\NullnessShims.fs" />
+    <Compile Include="Utilities\HostTools.fs" />
     <EmbeddedText Include="FSComp.txt">
       <Link>FSComp.txt</Link>
     </EmbeddedText>
