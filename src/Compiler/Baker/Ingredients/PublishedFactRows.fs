@@ -366,8 +366,8 @@ and mapBoundaryOptionalEntry (value: S.BoundaryOptionalEntry) : Fidelity.PSG.Bou
 and mapBoundaryOptionalEntryChoice (value: S.BoundaryOptionalEntryChoice) : Fidelity.PSG.BoundaryOptionalEntryChoice =
     match value with
     | S.BoundaryOptionalEntryChoice.Direct entry -> Fidelity.PSG.BoundaryOptionalEntryChoice.Direct (mapBoundaryOptionalEntry entry)
-    | S.BoundaryOptionalEntryChoice.Conditional(selection, whenTrue, whenFalse) ->
-        Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(nodeId selection, mapBoundaryOptionalEntry whenTrue, mapBoundaryOptionalEntry whenFalse)
+    | S.BoundaryOptionalEntryChoice.Conditional(selection, tagProjection, whenTrue, whenFalse) ->
+        Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(nodeId selection, nodeId tagProjection, mapBoundaryOptionalEntry whenTrue, mapBoundaryOptionalEntry whenFalse)
 
 and mapBoundaryOperand (value: S.BoundaryOperand) : Fidelity.PSG.BoundaryOperand =
     ({

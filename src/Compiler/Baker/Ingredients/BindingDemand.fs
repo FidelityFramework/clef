@@ -46,7 +46,18 @@ let private currentValidity (graph: SemanticGraph) (nodes: Map<NodeId, SemanticN
                     let expected = Incidence.structuralIncidence node |> List.map key
                     let actual = recordedAt.TryFind id |> Option.defaultValue [] |> List.filter (fun edge -> edge.Role <> EdgeRole.Resides) |> List.map key
                     let children = kindEdges id node.Kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
-                    let childrenAgree = match node.Kind with SemanticKind.Binding _ -> node.Children.Length = 1 | _ -> node.Children = children
+                    let childrenAgree =
+                        match node.Kind with
+                        | SemanticKind.Binding _ -> node.Children.Length = 1
+                        | SemanticKind.Application _ ->
+                            let attached = node.Children |> List.skip (min node.Children.Length children.Length)
+                            node.Children |> List.truncate children.Length = children &&
+                            attached |> List.forall (fun child ->
+                                match nodes.TryFind child with
+                                | Some { Kind = SemanticKind.DUGetTag _; Metadata = meta } ->
+                                    meta.ContainsKey "Baker.BoundaryOptionalTagProjection"
+                                | _ -> false)
+                        | _ -> node.Children = children
                     childrenAgree && (node.Children |> List.forall nodes.ContainsKey) &&
                     actual.Length = (List.distinct actual).Length && actual |> List.forall (fun row -> List.contains row expected)
             validity.Add(id, value)

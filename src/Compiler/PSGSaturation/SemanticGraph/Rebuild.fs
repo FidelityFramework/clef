@@ -115,21 +115,62 @@ let scheduleRebuild (baseline: SemanticGraph) (candidate: SemanticGraph) : Resul
         Result.Ok { Baseline = oldPlan; Candidate = newPlan; Regions = dispositions; Scopes = scopes
                     Receipt = { Alignment = alignment; Cone = receipt; InvalidatedRegions = invalid } }
 
+let private retainedCandidateNodes (schedule: RebuildSchedule) (graph: SemanticGraph) : Set<NodeId> =
+    let affected = schedule.Receipt.Cone.AffectedCone
+    let codata = graph.Codata.Value
+    schedule.Receipt.Alignment
+    |> Map.fold (fun acc _ candId ->
+        if Set.contains candId schedule.Scopes || Set.contains candId affected then
+            acc
+        else
+            match schedule.Candidate.NodeOwners.TryFind candId with
+            | Some owner when schedule.Regions.TryFind owner = Some RegionDisposition.Retained ->
+                Set.add candId acc
+            | None ->
+                match graph.Nodes.TryFind candId with
+                | Some { Kind = SemanticKind.ModuleDef _ } -> Set.add candId acc
+                | _ ->
+                    match codata.CallableContracts.TryFind candId with
+                    | Some contract ->
+                        let retainedContract =
+                            contract.Participants
+                            |> List.tryFind (fun p -> p.Role = ParticipantRole.CallableImplementation)
+                            |> Option.bind (fun p -> schedule.Candidate.NodeOwners.TryFind p.Node)
+                            |> Option.exists (fun owner -> schedule.Regions.TryFind owner = Some RegionDisposition.Retained)
+                        if retainedContract then Set.add candId acc else acc
+                    | None ->
+                        if codata.CallableAggregateSlots.ContainsKey candId then
+                            Set.add candId acc
+                        else
+                            acc
+            | _ -> acc) Set.empty
+
 /// Only admitted scopes enter Baker fan-out. Retained nodes stay in the full
 /// graph for recipe lookups and fold-in; there is no reduced-graph fallback.
+/// Unchanged structure outside the delta cone retains its baseline NodeIds and
+/// SSA assignments; re-elaborated or newly introduced nodes advance monotonically.
 let rebuildSelective baseline candidate =
     scheduleRebuild baseline candidate
     |> Result.bind (fun schedule ->
-        let recipes = Clef.Compiler.Nanopass.BakerSaturation.fanOutScopes schedule.Scopes candidate
-        let refusal =
-            recipes.Diagnostics |> List.tryPick (fun diagnostic ->
-                match diagnostic.Result with
-                | Clef.Compiler.Nanopass.Recipe.CreationFailed(reason, _) -> Some(RebuildFailure.RecipeRefused(diagnostic.NodeId, reason))
-                | _ -> None)
-        match refusal with
-        | Some refusal -> Result.Error refusal
-        | None ->
-            let graph =
-                if recipes.Recipes.IsEmpty then candidate
-                else Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes candidate
-            Result.Ok(graph, schedule, recipes))
+        Core.SemanticGraph.withEnrichment baseline (fun () ->
+            Core.SemanticGraph.withEnrichment candidate (fun () ->
+                let recipes = Clef.Compiler.Nanopass.BakerSaturation.fanOutScopes schedule.Scopes candidate
+                let refusal =
+                    recipes.Diagnostics |> List.tryPick (fun diagnostic ->
+                        match diagnostic.Result with
+                        | Clef.Compiler.Nanopass.Recipe.CreationFailed(reason, _) -> Some(RebuildFailure.RecipeRefused(diagnostic.NodeId, reason))
+                        | _ -> None)
+                match refusal with
+                | Some refusal -> Result.Error refusal
+                | None ->
+                    let saturated =
+                        if recipes.Recipes.IsEmpty then candidate
+                        else Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes candidate
+                    let retained = retainedCandidateNodes schedule saturated
+                    let reconciled, _ =
+                        Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign
+                            baseline
+                            schedule.Receipt.Alignment
+                            retained
+                            saturated
+                    Result.Ok(reconciled, schedule, recipes))))

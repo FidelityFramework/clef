@@ -600,12 +600,22 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
                     | BoundaryScalar.WritableBytes declaration -> writable |> Option.exists(fun row->row.Call=site.Id && row.Declaration=declaration && entry.IsNone && resource.IsNone)
                     | _ -> true))
             "A writable byte ABI requires its exact direct application, allocation and current count/storage proof account."
+    let baseChildren =
+        site.Children
+        |> List.filter (fun child -> not (graph.Nodes.TryFind child |> Option.exists BoundaryDeclarations.isOptionalTagProjection))
+    let attachedProjections =
+        site.Children
+        |> List.skip baseChildren.Length
     let ordered =
         match entry, site.Kind with
-        | None, _ -> site.Children = callee :: args
+        | None, _ ->
+            baseChildren = callee :: args
+            && site.Children = baseChildren @ attachedProjections
         | Some _, SemanticKind.Application(intrinsic, operands) ->
-            operands = callee :: args && site.Children = intrinsic :: operands &&
-            (target graph intrinsic |> Option.exists (fun (node, _) ->
+            operands = callee :: args
+            && baseChildren = intrinsic :: operands
+            && site.Children = baseChildren @ attachedProjections
+            && (target graph intrinsic |> Option.exists (fun (node, _) ->
                 match node.Kind with SemanticKind.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = "invoke" } -> true | _ -> false))
         | _ -> false
     do! require ordered "The boundary application's ordered operands disagree with its source structural children."
@@ -615,7 +625,7 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
         | _ -> args, []
     do! require (operands.Length = import.Parameters.Length) "The external call does not supply exactly the declared ordered scalar arguments."
     let! supportedArguments =
-        List.zip operands import.Parameters |> List.map (fun (actual, (formal, abi)) -> checked' {
+        List.zip operands import.Parameters |> List.indexed |> List.map (fun (ordinal, (actual, (formal, abi))) -> checked' {
             let! node = graph.Nodes.TryFind actual |> needed "An actual boundary argument is absent from the source graph."
             let! optionalEntry, optionalSupport =
                 match abi with
@@ -712,8 +722,33 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
                             else Error "The optional branch leaves differ from their source condition order."
                         do! require (Set.ofList [whenTrue.CaseOrdinal; whenFalse.CaseOrdinal] = Set.ofList [0; 1])
                                 "The optional branch requires distinct present and absent cases."
-                        let support = Set.unionMany [participants; whenTrue.Transport; whenFalse.Transport; Set.ofList [whenTrue.Construction; whenFalse.Construction]]
-                        return Some (BoundaryOptionalEntryChoice.Conditional(select.Occurrence, whenTrue, whenFalse)), support }
+                        let expectedIdentity = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type
+                        let! tagProjection =
+                            attachedProjections
+                            |> List.filter (fun child ->
+                                match graph.Nodes.TryFind child with
+                                | Some projectionNode ->
+                                    match
+                                        projectionNode.Kind,
+                                        projectionNode.Metadata.TryFind "Baker.BoundaryOptionalTagProjection",
+                                        projectionNode.Metadata.TryFind "Baker.BoundaryOptionalTagParameter"
+                                    with
+                                    | SemanticKind.DUGetTag(targetActual, targetType),
+                                      Some(MetadataValue.NodeIdList [callId; metaActual]),
+                                      Some(MetadataValue.Int paramOrdinal) ->
+                                        callId = site.Id
+                                        && paramOrdinal = ordinal
+                                        && targetActual = actual
+                                        && metaActual = actual
+                                        && projectionNode.Children = [actual]
+                                        && Clef.Compiler.NativeTypedTree.TypeIdentities.ofType targetType = expectedIdentity
+                                    | _ -> false
+                                | None -> false)
+                            |> function
+                                | [projectionId] -> Ok projectionId
+                                | _ -> Error "The conditional optional callback lacks its Baker-authored option-tag projection."
+                        let support = Set.unionMany [participants; whenTrue.Transport; whenFalse.Transport; Set.ofList [tagProjection; whenTrue.Construction; whenFalse.Construction]]
+                        return Some (BoundaryOptionalEntryChoice.Conditional(select.Occurrence, tagProjection, whenTrue, whenFalse)), support }
                 | _ -> Ok (None, Set.empty)
             do! require (match abi with BoundaryScalar.Entry _ when optionalEntry.IsSome -> true | BoundaryScalar.ResourceHandle _ -> resource.IsSome | BoundaryScalar.WritableBytes _ -> writable |> Option.exists(fun row->row.Buffer=actual) | _ -> supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
             do! require (import.SourceTypes.TryFind formal = Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type))
@@ -727,6 +762,13 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
                     return! adaptation graph site.Id actual sourceBits (scalarBits abi) range }
             return { Actual = actual; Formal = formal; Abi = abi; Adaptation = meet; OptionalEntry=optionalEntry }, optionalSupport }) |> collect
     let arguments = supportedArguments |> List.map fst
+    let expectedProjections =
+        arguments
+        |> List.choose (fun argument ->
+            match argument.OptionalEntry with
+            | Some(BoundaryOptionalEntryChoice.Conditional(_, tagProjection, _, _)) -> Some tagProjection
+            | _ -> None)
+    do! require (attachedProjections = expectedProjections) "The boundary application's attached option-tag projections disagree with its conditional optional arguments."
     let! resultAdaptation =
         match import.Result with
         | None -> checked' {
@@ -990,7 +1032,7 @@ type private IntrinsicDomain = {
     Errors: (NodeId * Set<NodeId> * string) list
 }
 
-let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
+let private intrinsicWrites (retained: Ingredients.RetainedBoundaryNodes) enrichId anchor (graph: SemanticGraph) =
     let views = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringByteView view -> Some view | _ -> None)
     let extents = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringExtent extent -> Some extent | _ -> None)
     let declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.IntrinsicWriteAbi import -> Some(edge.Target, import) | _ -> None)
@@ -1132,7 +1174,7 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
                                     "source-checked snapshot/copy/allocation count correspondence; SMT establishes the finite nonnegative count domain"
                                 | _ -> "the exact ordered intrinsic write has covered scalars and a count-contained immutable borrow"
                               Source = fmtRange node.Range; Refs = []; Body = body }
-                        let obligation = obligationNode node enrichId info |> Ingredients.markOwned
+                        let obligation = Ingredients.ownedObligationNode retained node enrichId info
                         let proof = { Site = node.Id; Obligation = obligation.Id; Ordinal = ordinal; Body = body; Participants = call.Participants }
                         let errors = if Bytes.proofOutcome body = BoundaryProofOutcome.Proven then errors else (node.Id, call.Participants, "The intrinsic write obligation was refuted.") :: errors
                         proof :: proofs, Enrichment.combine enrichment { NewNodes = [obligation]; Annotated = []; NewEdges = Bytes.proofRows proof }, errors) (state.Proofs, state.Enrichment, state.Errors)
@@ -1144,10 +1186,10 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
 
 /// Late stage: all source ranges and ordinary numeric meets are already fixed.
 /// The complete source domain records negative membership dependencies too.
-let private elaborateCore (graph: SemanticGraph) : Enrichment =
+let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: SemanticGraph) : Enrichment =
     let enrichId = Elaboration.freshId ()
-    let anchor = Ingredients.anchor enrichId graph
-    let intrinsic = intrinsicWrites enrichId anchor.Id graph
+    let anchor = Ingredients.anchorWithRetained retained enrichId graph
+    let intrinsic = intrinsicWrites retained enrichId anchor.Id graph
     let lengthComparisons = StringComparisonRecipes.lengthConstructions graph
     let lengthErrors = graph.Nodes.Values |> Seq.choose (fun node ->
         if node.Metadata.TryFind "Baker.StringLengthComparison" <> Some(MetadataValue.Bool true) then None else
@@ -1336,14 +1378,14 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                 let info={Id=anchor declaration "adapter";Kind="foreign-writable-buffer-adapter";Logic="QF_LIA"
                           Statement="A declared writable byte application requires its exact source storage/count coverage and a separately settled native reference adapter."
                           Source=fmtRange node.Range;Refs=refs declaration;Body=ObligationBody.Pending [reason]}
-                let citizen=obligationNode node enrichId info |> Ingredients.markOwned
+                let citizen=Ingredients.ownedObligationNode retained node enrichId info
                 Enrichment.combine enrichment {NewNodes=[citizen];Annotated=[];NewEdges=[constrains participants citizen]},errors
             let coverage declaration participants role body =
                 let info={Id=anchor declaration role;Kind="foreign-writable-buffer-"+role;Logic="QF_LIA"
                           Statement=(if role="storage" then "The complete inferred local-store and declared foreign-ingress value domain fits the explicitly offered unsigned-8 representation."
                                      else "The inferred count domain is contained in the original allocation's byte-slot capacity; exact source incidence is a separate premise, not a solver pointer claim.")
                           Source=fmtRange node.Range;Refs=refs declaration;Body=body}
-                let citizen=obligationNode node enrichId info |> Ingredients.markOwned
+                let citizen=Ingredients.ownedObligationNode retained node enrichId info
                 {NewNodes=[citizen];Annotated=[];NewEdges=[constrains participants citizen]}
             match observed with
             | Error failure ->
@@ -1421,7 +1463,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                               "After a nonnull acquisition, its exact release must retire every alias on every admitted exit, including later failures; a null result creates no release demand.",
                               "Complete source-owned resource alias retirement and exit coverage are not established.") ]
                         requirements |> List.fold(fun (enrichment, errors) (role, statement, reason) ->
-                            match Ingredients.requirement enrichId node role statement reason participants with
+                            match Ingredients.requirementWithRetained retained enrichId node role statement reason participants with
                             | Ok requirement -> Enrichment.combine enrichment requirement, errors
                             | Error reason -> enrichment,(node.Id,Set.ofList participants,reason)::errors) (enrichment,errors)
                     | _ -> enrichment,errors
@@ -2183,7 +2225,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                                 else "Selected-target optional-entry conversion remains Pending."
                             match optionalSupport graph.Codata.Value.CallableAggregateDependencies imports callbackInvocations callbackAbsences call ordinal selection
                                   |> Result.bind (fun support ->
-                                      Ingredients.requirementWithIdentityRole enrichId graph.Nodes[call.Site] identityRole role
+                                      Ingredients.requirementWithIdentityRoleAndRetained retained enrichId graph.Nodes[call.Site] identityRole role
                                         "The exact source Option selection requires an admitted target boundary conversion." reason
                                         (Set.toList support)) with
                             | Error reason -> Error reason
@@ -2240,8 +2282,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                         match choice, issued with
                         | BoundaryOptionalEntryChoice.Direct _, Ok [selected, requirement] ->
                             {operand with OptionalEntry=Some (BoundaryOptionalEntryChoice.Direct selected)}::arguments,Enrichment.combine enrichment requirement,errors
-                        | BoundaryOptionalEntryChoice.Conditional(select, _, _), Ok [whenTrue, trueRequirement; whenFalse, falseRequirement] ->
-                            {operand with OptionalEntry=Some (BoundaryOptionalEntryChoice.Conditional(select, whenTrue, whenFalse))}::arguments,
+                        | BoundaryOptionalEntryChoice.Conditional(select, tagProjection, _, _), Ok [whenTrue, trueRequirement; whenFalse, falseRequirement] ->
+                            {operand with OptionalEntry=Some (BoundaryOptionalEntryChoice.Conditional(select, tagProjection, whenTrue, whenFalse))}::arguments,
                             Enrichment.combine (Enrichment.combine enrichment trueRequirement) falseRequirement,errors
                         | _, Error reason -> operand::arguments,enrichment,(call.Site,call.Participants,reason)::errors
                         | _ -> operand::arguments,enrichment,(call.Site,call.Participants,"The optional-entry choice lost an arm requirement.")::errors)
@@ -2299,7 +2341,7 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
                        |> Option.defaultValue ValueRange.Unbounded
             -1, call.Site, scalarRange abi, destination)
         argumentRanges @ resultRange |> List.fold (fun (enrichment, errors) (ordinal, operand, input, destination) ->
-            match Ingredients.coverage enrichId graph call ordinal operand input destination with
+            match Ingredients.coverageWithRetained retained enrichId graph call ordinal operand input destination with
             | Error reason -> enrichment, (call.Site, call.Participants, reason) :: errors
             | Ok (proof, _, outcome) ->
                 let errors = if outcome = BoundaryProofOutcome.Proven then errors else
@@ -2425,5 +2467,8 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
         (Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment)
     ))
 
+let elaborateWithRetained (retained: Ingredients.RetainedBoundaryNodes) graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore retained graph)
+
 let elaborate graph =
-  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore graph)
+  elaborateWithRetained Ingredients.RetainedBoundaryNodes.empty graph

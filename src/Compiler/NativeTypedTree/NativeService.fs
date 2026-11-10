@@ -1425,6 +1425,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 WitnessLiveRows = None
                 WitnessPublishedRows = None
                 ProofDispatch = None
+                SSAAssignment = None
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 SequenceFlows = sequences.Flows
@@ -1478,6 +1479,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph, aggregateAccountResiduals =
         if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.SSAAssignment.normalize finalGraph
     let storagePremiseDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.premiseGuard finalGraph
     let obligationCompleteness =
         Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.completeness finalGraph

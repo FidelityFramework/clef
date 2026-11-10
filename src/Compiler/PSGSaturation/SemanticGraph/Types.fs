@@ -1025,12 +1025,12 @@ type BoundaryOptionalEntry = {
 [<RequireQualifiedAccess>]
 type BoundaryOptionalEntryChoice =
     | Direct of BoundaryOptionalEntry
-    | Conditional of selection: NodeId * whenTrue: BoundaryOptionalEntry * whenFalse: BoundaryOptionalEntry
+    | Conditional of selection: NodeId * tagProjection: NodeId * whenTrue: BoundaryOptionalEntry * whenFalse: BoundaryOptionalEntry
 
 module BoundaryOptionalEntryChoice =
     let leaves = function
         | BoundaryOptionalEntryChoice.Direct entry -> [entry]
-        | BoundaryOptionalEntryChoice.Conditional(_, whenTrue, whenFalse) -> [whenTrue; whenFalse]
+        | BoundaryOptionalEntryChoice.Conditional(_, _, whenTrue, whenFalse) -> [whenTrue; whenFalse]
 
 type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option; OptionalEntry: BoundaryOptionalEntryChoice option }
 
@@ -4014,6 +4014,19 @@ type WitnessPublishedRows = {
     ObligationQuery: string
 }
 
+[<Struct>]
+type SSAId =
+    | SSAId of node: int * ordinal: int
+    member this.Node = let (SSAId(n, _)) = this in n
+    member this.Ordinal = let (SSAId(_, k)) = this in k
+
+type SSAAssignmentPlan =
+    { Assignments: Map<NodeId, SSAId list>
+      NodeHighWater: int
+      NodeRemap: Map<NodeId, NodeId>
+      RetainedNodes: Set<NodeId>
+      ReassignedNodes: Set<NodeId> }
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -4048,6 +4061,7 @@ type Codata = {
     WitnessPreparedRows: WitnessPreparedRows option
     WitnessLiveRows: WitnessLiveRows option
     WitnessPublishedRows: WitnessPublishedRows option
+    SSAAssignment: SSAAssignmentPlan option
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -4118,6 +4132,7 @@ module Codata =
         WitnessPreparedRows = None
         WitnessLiveRows = None
         WitnessPublishedRows = None
+        SSAAssignment = None
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         SequenceFlows = Map.empty

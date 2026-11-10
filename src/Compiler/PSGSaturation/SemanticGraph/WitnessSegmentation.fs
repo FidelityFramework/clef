@@ -229,7 +229,7 @@ let private nodeInput (node: SemanticNode) =
          node.IsReachable, node.EmissionStrategy, node.ValueRange)
 
 let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveScope: WitnessLiveScopePlan) : WitnessSegmentation =
-    let codata = { graph.Codata.Value with WitnessEmission = None; WitnessSegmentation = None; WitnessLiveScope = None; WitnessPreparedRows = None; WitnessLiveRows = None; WitnessPublishedRows = None; ProofDispatch = None }
+    let codata = { graph.Codata.Value with WitnessEmission = None; WitnessSegmentation = None; WitnessLiveScope = None; WitnessPreparedRows = None; WitnessLiveRows = None; WitnessPublishedRows = None; ProofDispatch = None; SSAAssignment = None }
     // Relation identities are not executable citizens. Admit only the two
     // authored relation tables, with exact filing and source/codata agreement;
     // every other unknown NodeId remains an error in the structural encoder.

@@ -154,6 +154,14 @@ let analyze (graph: SemanticGraph) : Reading =
                     let childrenAgree =
                         match node.Kind with
                         | SemanticKind.Binding _ | SemanticKind.Intrinsic _ -> true
+                        | SemanticKind.Application _ ->
+                            let attached = node.Children |> List.skip (min node.Children.Length children.Length)
+                            node.Children |> List.truncate children.Length = children &&
+                            attached |> List.forall (fun child ->
+                                match nodes.TryFind child with
+                                | Some { Kind = SemanticKind.DUGetTag _; Metadata = meta } ->
+                                    meta.ContainsKey "Baker.BoundaryOptionalTagProjection"
+                                | _ -> false)
                         | SemanticKind.EnvironmentCreate(_, initializers) | SemanticKind.LazyEnvironment(_, initializers) ->
                             // Kind carries every initializer reference, including
                             // direct captures whose already-available value needs no
