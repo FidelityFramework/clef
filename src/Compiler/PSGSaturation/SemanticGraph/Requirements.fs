@@ -52,9 +52,17 @@ let tryRequirement (graph: SemanticGraph) site =
         when actual = site && predicate = condition && children = [condition]
              && applySubst ty = Types.unitType && not (System.String.IsNullOrWhiteSpace diagnostic) ->
         match live graph condition, live graph frontier, live graph continuation with
-        | Some predicate, Some { Kind = SemanticKind.Sequential [required; selected]; Type = resultType; Children = frontierChildren }, Some selectedNode
-            when required = site && selected = continuation && applySubst predicate.Type = Types.boolType
-                 && frontierChildren = [site; continuation] && applySubst resultType = applySubst selectedNode.Type ->
+        | Some predicate, Some { Kind = SemanticKind.Sequential ordered; Type = resultType; Children = frontierChildren }, Some selectedNode
+            when (ordered |> List.rev |> List.truncate 2) = [continuation;site] && applySubst predicate.Type = Types.boolType
+                 && frontierChildren = ordered && applySubst resultType = applySubst selectedNode.Type ->
+            let prefix = ordered |> List.take (ordered.Length - 2)
+            let validPrefix =
+                prefix.IsEmpty || (ordinal = 1 && graph.Edges |> List.exists (fun edge ->
+                    match edge.Role,edge.Sources with
+                    | EdgeRole.MemoryAccessGuard,[buffer;index;_;_;_;_;condition;required;source] ->
+                        edge.Class = EdgeClass.Provenance && edge.Target = continuation && source = frontier
+                        && condition = predicate.Id && required = site && prefix = [buffer;index]
+                    | _ -> false))
             let patternTest =
                 match ordinal, additional, predicate.Kind, selectedNode.Kind with
                 | 1, [], _, _ -> Some None
@@ -75,10 +83,10 @@ let tryRequirement (graph: SemanticGraph) site =
                              && applySubst body.Type = applySubst selectedNode.Type -> Some(Some condition)
                     | _ -> None
                 | _ -> None
-            patternTest |> Option.map (fun patternTest ->
+            patternTest |> Option.filter (fun _ -> validPrefix) |> Option.map (fun patternTest ->
                 { Site = site; Condition = condition; Diagnostic = diagnostic; Frontier = frontier
                   Continuation = continuation; PatternTest = patternTest
-                  Participants = frontier :: actual :: predicate.Id :: continuation :: additional })
+                  Participants = frontier :: actual :: predicate.Id :: continuation :: (prefix @ additional) })
         | _ -> None
     | _ -> None
 

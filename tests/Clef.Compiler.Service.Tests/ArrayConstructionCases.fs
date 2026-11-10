@@ -15,7 +15,11 @@ module private ArrayConstructionFixture =
 
     let require (graph: SemanticGraph) (requirement: RequirementWitness) =
         Assert.Equal(SemanticKind.Require(requirement.Condition,requirement.Diagnostic),graph.Nodes[requirement.Site].Kind)
-        Assert.Equal(SemanticKind.Sequential[requirement.Site;requirement.Continuation],graph.Nodes[requirement.Frontier].Kind)
+        let prefix = graph.Edges |> List.choose (fun edge ->
+            match edge.Role,edge.Sources with
+            | EdgeRole.MemoryAccessGuard, [buffer;index;_;_;_;_;_;site;frontier] when site = requirement.Site && frontier = requirement.Frontier -> Some [buffer;index]
+            | _ -> None) |> List.tryExactlyOne |> Option.defaultValue []
+        Assert.Equal(SemanticKind.Sequential(prefix @ [requirement.Site;requirement.Continuation]),graph.Nodes[requirement.Frontier].Kind)
 
 type ArrayConstructionCases() =
     [<Theory>]

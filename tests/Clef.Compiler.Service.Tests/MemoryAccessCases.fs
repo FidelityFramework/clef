@@ -48,7 +48,7 @@ type MemoryAccessCases() =
             Assert.Contains(evaluation, access.Participants)
             Assert.Contains(value, access.Participants)
             match graph.Nodes[evaluation].Kind with
-            | SemanticKind.Sequential [required; result] ->
+            | SemanticKind.Sequential [_; _; required; result] ->
                 Assert.Equal(value, result)
                 let read = match facts.Operations[result] with
                            | MemoryWitnessOperation.ArrayAccess read -> read
@@ -63,13 +63,24 @@ type MemoryAccessCases() =
         let access = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.ArrayAccess fact -> Some fact | _ -> None) |> Assert.Single
         let guard = access.Bounds.Requirement
         Assert.Equal(access.Site, guard.Continuation)
-        Assert.Equal(SemanticKind.Sequential [guard.Site;access.Site], graph.Nodes[guard.Frontier].Kind)
+        Assert.Equal(SemanticKind.Sequential [access.Buffer;access.Index;guard.Site;access.Site], graph.Nodes[guard.Frontier].Kind)
         Assert.Equal(SemanticKind.Require(guard.Condition,guard.Diagnostic), graph.Nodes[guard.Site].Kind)
         Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.MemoryAccessGuard && edge.Target = access.Site)
         let literal = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.ArrayLiteral fact -> Some fact | _ -> None) |> Assert.Single
         Assert.Equal(2, literal.Length)
         Assert.True(literal.Initializers.IsSome)
         match literal.Residence with MemoryResidence.ImmutableProgram _ -> () | _ -> failwith "A closed readonly literal requires immutable image residence."
+
+    [<Fact>]
+    member _.``Array guard operand order is part of its source authority`` () =
+        let graph, facts = MemoryAccessFixture.admitted "    let values = [| 7; 11 |]\n    values.[1]\n"
+        let access = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.ArrayAccess fact -> Some fact | _ -> None) |> Assert.Single
+        let guard = access.Bounds.Requirement
+        let frontier = graph.Nodes[guard.Frontier]
+        let ordered = [access.Index;access.Buffer;guard.Site;access.Site]
+        let altered = {graph with Nodes = graph.Nodes.Add(frontier.Id,{frontier with Kind = SemanticKind.Sequential ordered; Children = ordered})}
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.Requirements.tryRequirement altered guard.Site |> Option.isNone)
+        Assert.True(MemoryPublication.project altered |> Result.isError)
 
     [<Fact>]
     member _.``Changing the guard rejects publication without synthesizing a replacement guard`` () =

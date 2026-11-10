@@ -132,12 +132,13 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
             | _, Some value -> SemanticKind.IndexSet(buffer, index, value), [buffer; index; value]
         let operation =
             { mkNode current kind source.Type children with
-                // The original access remains the source claim's frontier.
-                // Its generated guarded operation has only transient claims.
+                // The guarded operation has only transient claims; the
+                // original source access retains the ordered operand evaluation.
                 Metadata = source.Metadata.Remove("Source.ObligationSite").Remove("Source.DeclarationIncarnation").Add("Baker.MemoryGuarded", MetadataValue.Bool true)
                 Parent = Some source.Id; ArenaAffinity = source.ArenaAffinity }
         do! emit operation
-        do! enrich source (SemanticKind.Sequential [required; operation.Id]) source.Type [required; operation.Id] source.EmissionStrategy false
+        let ordered = [buffer; index; required; operation.Id]
+        do! enrich source (SemanticKind.Sequential ordered) source.Type ordered source.EmissionStrategy false
         evidence.Add { Class = EdgeClass.Provenance; Role = EdgeRole.MatchRequirement; Ordinal = 1
                        Sources = [required; predicate; operation.Id]; Target = source.Id }
         let guard =
