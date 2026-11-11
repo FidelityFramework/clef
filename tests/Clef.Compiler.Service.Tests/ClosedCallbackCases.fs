@@ -327,7 +327,7 @@ type ClosedCallbackTests() =
     [<InlineData(false)>]
     [<InlineData(true)>]
     member _.``Optional callback retains Boolean parameter branch selection at one receiver``(reversed: bool) =
-        let result =
+        let compileCase () =
             ClosedCallbackCases.absenceCheckPolicy (Some "standard") true true (fun source ->
                 let source =
                     ClosedCallbackCases.zeroSource "unit -> unit" "let callback (u: unit) : unit = u" source
@@ -338,6 +338,7 @@ type ClosedCallbackTests() =
                     $"let forward (present: bool) : unit =\n    let selected: option<FnPtr<unit -> unit>> =\n        if present then {trueArm} else {falseArm}\n    receive selected\n[<EntryPoint>]\nlet main _ =\n    forward true\n    forward false\n    0"
                 Assert.Contains(original, source)
                 source.Replace(original, branched))
+        let result = compileCase ()
         let graph = result.Graph
         let selection, predicate, trueArm, falseArm, formal =
             graph.Nodes.Values
@@ -419,18 +420,167 @@ type ClosedCallbackTests() =
         let boundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph |> Result.defaultWith (failwithf "%A")
         let call = boundary.Calls.Values |> Assert.Single
         let operand = call.Arguments |> Assert.Single
-        match operand.OptionalEntry with
-        | Some (BoundaryOptionalEntryChoice.Conditional(actualSelection, whenTrue, whenFalse)) ->
-            Assert.Equal(selection, actualSelection)
-            Assert.Equal(trueArm, whenTrue.Construction)
-            Assert.Equal(falseArm, whenFalse.Construction)
-            Assert.NotEqual(whenTrue.Obligation, whenFalse.Obligation)
-            for leaf in [whenTrue; whenFalse] do
-                match graph.Nodes[leaf.Obligation].Kind with
-                | SemanticKind.Obligation { Body = ObligationBody.Pending _ } -> failwith "A conditional arm conversion remains Pending."
+        let tagProjection, initialWhenTrue, initialWhenFalse =
+            match operand.OptionalEntry with
+            | Some (BoundaryOptionalEntryChoice.Conditional(actualSelection, tagProjection, whenTrue, whenFalse)) ->
+                Assert.Equal(selection, actualSelection)
+                Assert.Equal(trueArm, whenTrue.Construction)
+                Assert.Equal(falseArm, whenFalse.Construction)
+                Assert.NotEqual(whenTrue.Obligation, whenFalse.Obligation)
+                let projectionNodes =
+                    graph.Nodes.Values
+                    |> Seq.filter Clef.Compiler.Baker.Recipes.BoundaryDeclarations.isOptionalTagProjection
+                    |> Seq.toList
+                let projectionNode = Assert.Single projectionNodes
+                Assert.Equal(tagProjection, projectionNode.Id)
+                Assert.Equal<NodeId list>([operand.Actual], projectionNode.Children)
+                Assert.Equal(Some(ValueRange.Bounded(0I, 1I)), projectionNode.ValueRange)
+                Assert.Equal(
+                    Some(MetadataValue.NodeIdList [call.Site; operand.Actual]),
+                    projectionNode.Metadata.TryFind "Baker.BoundaryOptionalTagProjection")
+                Assert.Equal(
+                    Some(MetadataValue.Int 0),
+                    projectionNode.Metadata.TryFind "Baker.BoundaryOptionalTagParameter")
+                Assert.Contains(tagProjection, graph.Nodes[call.Site].Children)
+                Assert.Contains(tagProjection, call.Participants)
+                match projectionNode.Kind with
+                | SemanticKind.DUGetTag(targetActual, targetType) ->
+                    Assert.Equal(operand.Actual, targetActual)
+                    Assert.Equal(
+                        Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[operand.Actual].Type,
+                        Clef.Compiler.NativeTypedTree.TypeIdentities.ofType targetType)
+                | other -> failwithf "Expected DUGetTag option-tag projection node, got %A" other
+                for leaf in [whenTrue; whenFalse] do
+                    match graph.Nodes[leaf.Obligation].Kind with
+                    | SemanticKind.Obligation { Body = ObligationBody.Pending _ } -> failwith "A conditional arm conversion remains Pending."
+                    | SemanticKind.Obligation _ -> ()
+                    | _ -> failwith "A conditional arm lost its conversion obligation."
+                tagProjection, whenTrue, whenFalse
+            | _ -> failwith "The receiver lost its exact conditional optional-entry account."
+        // Re-normalizing across unchanged structure retains the exact option-tag projection NodeId and all boundary-owned nodes (including obligations).
+        let renormalized = Clef.Compiler.Nanopass.BoundarySettlement.normalize graph
+        Assert.Equal<Set<NodeId>>(graph.Nodes |> Map.keys |> Set.ofSeq, renormalized.Nodes |> Map.keys |> Set.ofSeq)
+        let renormalizedBoundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project renormalized |> Result.defaultWith (failwithf "%A")
+        let renormalizedOperand = renormalizedBoundary.Calls.Values |> Assert.Single |> _.Arguments |> Assert.Single
+        match renormalizedOperand.OptionalEntry with
+        | Some (BoundaryOptionalEntryChoice.Conditional(reSelection, reTagProjection, reTrue, reFalse)) ->
+            Assert.Equal(selection, reSelection)
+            Assert.Equal(tagProjection, reTagProjection)
+            Assert.Equal(trueArm, reTrue.Construction)
+            Assert.Equal(falseArm, reFalse.Construction)
+            Assert.Equal(initialWhenTrue.Obligation, reTrue.Obligation)
+            Assert.Equal(initialWhenFalse.Obligation, reFalse.Obligation)
+            for leaf in [reTrue; reFalse] do
+                match renormalized.Nodes[leaf.Obligation].Kind with
+                | SemanticKind.Obligation { Body = ObligationBody.Pending _ } -> failwith "A renormalized conditional arm conversion remains Pending."
                 | SemanticKind.Obligation _ -> ()
-                | _ -> failwith "A conditional arm lost its conversion obligation."
-        | _ -> failwith "The receiver lost its exact conditional optional-entry account."
+                | _ -> failwith "A renormalized conditional arm lost its conversion obligation."
+        | _ -> failwith "Renormalized receiver lost its conditional optional-entry account."
+        // Full recompilation and selective rebuild across unchanged structure retain stable option-tag projection NodeId and SSA assignment.
+        let recompiledResult = compileCase ()
+        ClosedCallbackCases.absenceNoErrors recompiledResult
+        let recompiled = recompiledResult.Graph
+        let recompiledBoundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project recompiled |> Result.defaultWith (failwithf "%A")
+        let recompiledOperand = recompiledBoundary.Calls.Values |> Assert.Single |> _.Arguments |> Assert.Single
+        match recompiledOperand.OptionalEntry with
+        | Some (BoundaryOptionalEntryChoice.Conditional(rcSelection, rcTagProjection, rcTrue, rcFalse)) ->
+            Assert.Equal(selection, rcSelection)
+            Assert.Equal(tagProjection, rcTagProjection)
+            Assert.Equal(trueArm, rcTrue.Construction)
+            Assert.Equal(falseArm, rcFalse.Construction)
+            Assert.Equal(initialWhenTrue.Obligation, rcTrue.Obligation)
+            Assert.Equal(initialWhenFalse.Obligation, rcFalse.Obligation)
+        | _ -> failwith "Recompiled receiver lost its conditional optional-entry account."
+        Assert.Equal<Set<NodeId>>(graph.Nodes |> Map.keys |> Set.ofSeq, recompiled.Nodes |> Map.keys |> Set.ofSeq)
+        Assert.Equal<Map<NodeId, SSAId list>>(
+            graph.Codata.Value.SSAAssignment.Value.Assignments,
+            recompiled.Codata.Value.SSAAssignment.Value.Assignments)
+        // Reconciling when an unretained candidate node has NodeId 0 (equal to parameter ordinal 0)
+        // does not remap the integer parameter ordinal or invalidate the retained option-tag projection,
+        // and the reconciled graph as a whole normalizes, projects, and publishes cleanly.
+        let retainedWithout0 = (graph.Nodes |> Map.keys |> Set.ofSeq).Remove(NodeId 0)
+        let identityAlignWithout0 = retainedWithout0 |> Seq.map (fun id -> id, id) |> Map.ofSeq
+        let shiftedGraph, shiftPlan =
+            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign
+                graph
+                identityAlignWithout0
+                retainedWithout0
+                graph
+        let temp0 = shiftPlan.NodeRemap[NodeId 0]
+        Assert.False(shiftedGraph.Nodes.ContainsKey(NodeId 0))
+        let unretainedNode0 =
+            { shiftedGraph.Nodes[tagProjection] with
+                Id = NodeId 0
+                Kind = SemanticKind.Literal NativeLiteral.Unit
+                Children = []
+                Parent = None
+                Metadata = Map.ofList [ "Baker.BoundaryOwned", MetadataValue.Bool true ]
+                IsReachable = false
+                ValueRange = None }
+        let candidateWithUnretained0 =
+            { shiftedGraph with Nodes = shiftedGraph.Nodes.Add(NodeId 0, unretainedNode0) }
+        let alignBackToBaseline = identityAlignWithout0.Add(NodeId 0, temp0)
+        let retainedCandidateIds = retainedWithout0.Add(temp0)
+        let reconciledWithNode0, reconciledPlan =
+            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign
+                graph
+                alignBackToBaseline
+                retainedCandidateIds
+                candidateWithUnretained0
+        let remappedNode0 = reconciledPlan.NodeRemap[NodeId 0]
+        Assert.NotEqual(NodeId 0, remappedNode0)
+        Assert.Equal(NodeId 0, reconciledPlan.NodeRemap[temp0])
+        Assert.Equal(
+            Some(MetadataValue.Int 0),
+            reconciledWithNode0.Nodes[tagProjection].Metadata.TryFind "Baker.BoundaryOptionalTagParameter")
+        Assert.Equal(
+            Some(MetadataValue.NodeIdList [call.Site; operand.Actual]),
+            reconciledWithNode0.Nodes[tagProjection].Metadata.TryFind "Baker.BoundaryOptionalTagProjection")
+        let afterReconciledNormalize =
+            let normalizedBoundary = Clef.Compiler.Nanopass.BoundarySettlement.normalize reconciledWithNode0
+            let fps, fpDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.FunctionPointers.settle normalizedBoundary
+            Assert.Empty fpDiagnostics
+            let withFps = { normalizedBoundary with Codata = lazy { normalizedBoundary.Codata.Value with FunctionPointers = fps } }
+            let renewed, aggResiduals = Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts withFps
+            Assert.Empty aggResiduals
+            let withSsa = Clef.Compiler.Nanopass.SSAAssignment.normalize renewed
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare withSsa
+            |> Result.defaultWith (failwithf "%A")
+        let afterReconciledOperand =
+            Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project afterReconciledNormalize
+            |> Result.defaultWith (failwithf "%A")
+            |> _.Calls.Values
+            |> Assert.Single
+            |> _.Arguments
+            |> Assert.Single
+        match afterReconciledOperand.OptionalEntry with
+        | Some (BoundaryOptionalEntryChoice.Conditional(_, afterTagProj, _, _)) ->
+            Assert.Equal(tagProjection, afterTagProj)
+        | _ -> failwith "Reconciled receiver lost its conditional optional-entry account."
+        let reconciledRevision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish afterReconciledNormalize
+            |> Result.defaultWith (failwithf "%A")
+        Assert.Empty(Fidelity.PSG.Integrity.check reconciledRevision)
+        // Baker refuses a missing or mismatched option-tag projection node.
+        let withoutProjection =
+            let projNode = graph.Nodes[tagProjection]
+            { graph with
+                Nodes =
+                    graph.Nodes.Add(
+                        tagProjection,
+                        { projNode with
+                            Metadata =
+                                projNode.Metadata.Add(
+                                    "Baker.BoundaryOptionalTagParameter",
+                                    MetadataValue.Int 99) }) }
+        let missingEnrichment = Clef.Compiler.Baker.Recipes.BoundaryRecipes.elaborate withoutProjection
+        let missingDomain =
+            missingEnrichment.NewEdges
+            |> List.pick (fun edge -> match edge.Role with EdgeRole.BoundaryDomain domain -> Some domain | _ -> None)
+        Assert.Contains(
+            missingDomain.Failures,
+            fun (site, _, reason) ->
+                site = call.Site && reason = "The conditional optional callback lacks its Baker-authored option-tag projection.")
         let revision =
             Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
             |> Result.defaultWith (failwithf "%A")
@@ -438,10 +588,11 @@ type ClosedCallbackTests() =
         let publicBoundary = revision.Emission.Boundary
         let publicCall = publicBoundary.Calls.Values |> Assert.Single
         let publicOperand = publicCall.Arguments |> Assert.Single
-        let publicSelection, publicTrue, publicFalse =
+        let publicSelection, publicTagProjection, publicTrue, publicFalse =
             match publicOperand.OptionalEntry with
-            | Some (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(selection, whenTrue, whenFalse)) -> selection, whenTrue, whenFalse
+            | Some (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(selection, tagProjection, whenTrue, whenFalse)) -> selection, tagProjection, whenTrue, whenFalse
             | _ -> failwith "Published receiver lost its conditional choice."
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId tagProjection, publicTagProjection)
         let callable = revision.Emission.Callable
         let publicRow = callable.AggregateValues[publicSelection] |> List.filter (fun row -> row.Operation = Fidelity.PSG.CallableAggregateOperation.Select) |> Assert.Single
         let presentLeaf, absentLeaf = if publicTrue.CaseOrdinal = 1 then publicTrue, publicFalse else publicFalse, publicTrue
@@ -464,9 +615,17 @@ type ClosedCallbackTests() =
         let unequalPlacement = {revision with Emission={revision.Emission with Callable={callable with AggregateValues=callable.AggregateValues.Add(absentLeaf.Construction, changedAbsent)}}}
         Assert.Contains(Fidelity.PSG.Integrity.check unequalPlacement, fun violation -> violation.Part = aggregatePart && violation.Node = Some publicSelection)
         let boundaryPart = "Emission.Boundary.Calls.OptionalEntry"
-        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(publicSelection, publicFalse, publicTrue)))
-        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(presentLeaf.Construction, publicTrue, publicFalse)))
-        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(publicSelection, {publicTrue with Transport=publicTrue.Transport.Remove publicSelection}, publicFalse)))
+        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(publicSelection, publicTagProjection, publicFalse, publicTrue)))
+        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(presentLeaf.Construction, publicTagProjection, publicTrue, publicFalse)))
+        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(publicSelection, presentLeaf.Construction, publicTrue, publicFalse)))
+        catches boundaryPart (changedChoice (Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(publicSelection, publicTagProjection, {publicTrue with Transport=publicTrue.Transport.Remove publicSelection}, publicFalse)))
+        let withoutProjectionCarrier =
+            {revision with Emission={revision.Emission with Numeric={revision.Emission.Numeric with Values=revision.Emission.Numeric.Values.Remove publicTagProjection}}}
+        catches boundaryPart withoutProjectionCarrier
+        let withoutProjectionParticipant =
+            let call = {publicCall with Participants=publicCall.Participants.Remove publicTagProjection}
+            {revision with Emission={revision.Emission with Boundary={publicBoundary with Calls=publicBoundary.Calls.Add(call.Site, call)}}}
+        catches boundaryPart withoutProjectionParticipant
         let withoutNone = {revision with CurrentClaims=revision.CurrentClaims.Remove absentLeaf.Obligation}
         catches (boundaryPart + ".Obligation") withoutNone
         let account = callable.AggregateDependencies[publicSelection]

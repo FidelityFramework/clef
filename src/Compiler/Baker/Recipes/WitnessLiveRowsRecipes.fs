@@ -170,7 +170,11 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
             add row.Import; add row.Callee
             row.Arguments |> List.iter (fun value ->
                 add value.Actual; add value.Formal
-                match value.Abi with BoundaryScalar.Entry invocation -> add invocation | _ -> ()))
+                match value.Abi with BoundaryScalar.Entry invocation -> add invocation | _ -> ()
+                match value.OptionalEntry with
+                | Some(BoundaryOptionalEntryChoice.Conditional(selection, tagProjection, _, _)) ->
+                    add selection; add tagProjection
+                | _ -> ()))
         selected before emission.Boundary.CallbackInvocations |> Map.iter (fun _ row ->
             add row.Import; add row.Formal; add row.Scope; addMany row.Participants
             match row.Extent with

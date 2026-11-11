@@ -160,6 +160,14 @@ let private branchReaders branchSelections (graph: SemanticGraph) (nodes: Map<No
             match node.Kind with
             | SemanticKind.Binding _ -> node.Children.Length = 1
             | SemanticKind.Intrinsic _ -> node.Children.IsEmpty
+            | SemanticKind.Application _ ->
+                let attached = node.Children |> List.skip (min node.Children.Length children.Length)
+                node.Children |> List.truncate children.Length = children &&
+                attached |> List.forall (fun child ->
+                    match nodes.TryFind child with
+                    | Some { Kind = SemanticKind.DUGetTag _; Metadata = meta } ->
+                        meta.ContainsKey "Baker.BoundaryOptionalTagProjection"
+                    | _ -> false)
             | _ -> node.Children = children
         let actual =
             match recorded.Value.TryGetValue node.Id with

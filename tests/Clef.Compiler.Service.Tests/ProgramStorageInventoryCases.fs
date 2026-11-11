@@ -381,15 +381,17 @@ let main _ =
             .Replace("Spaces = [| rodata |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = None }",
                      "Spaces = [| rodata; data |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = Some \"data\" }")
 
-    let checkWith authority source =
+    let checkUnchecked authority source =
         Assert.NotEqual<string>(SourcePlatformFixture.authority, authority)
         let parse text path =
             match Clef.Compiler.NativeService.parseStringWithDefaults text path with
             | Clef.Compiler.NativeService.ParseSuccess input -> input
             | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
-        let result =
-            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
-                [parse authority "write-authority.clef"; parse source "callable-cells.clef"] (Some SourcePlatformFixture.platform)
+        Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+            [parse authority "write-authority.clef"; parse source "callable-cells.clef"] (Some SourcePlatformFixture.platform)
+
+    let checkWith authority source =
+        let result = checkUnchecked authority source
         DimensionalCases.noErrors result
         result
 
@@ -496,6 +498,7 @@ let main _ =
     selected <- fun () -> true
     if saved () = false && selected () = true then 0 else 91
 """
+        Assert.Empty result.Diagnostics
         let graph = result.Graph
         let facts = graph.Codata.Value
         let local =
@@ -503,5 +506,40 @@ let main _ =
                 node.IsReachable && match node.Kind with SemanticKind.Binding("selected", true, _, _) -> true | _ -> false)
             |> Assert.Single
         Assert.True(facts.MutableCallableStorage.ContainsKey local.Id, "The local cell's protocol is published.")
-        Assert.Equal(None, facts.Escapes.TryFind local.Id)
+        Assert.Equal(Some EscapeKind.StackScoped, facts.Escapes.TryFind local.Id)
         Assert.False(facts.ProgramStorage.Entries.ContainsKey(ProgramStorageIdentity.BindingSlot local.Id))
+
+    [<Fact>]
+    member _.``A local mutable callable read in a nested activation is refused`` () =
+        let result =
+            CallableCellFixture.checkUnchecked (CallableCellFixture.writableAuthority ()) """
+module LocalCellReadEscape
+[<EntryPoint>]
+let main _ =
+    let mutable selected = fun () -> false
+    let read () = selected ()
+    if read () then 1 else 0
+"""
+        let local = CallableCellFixture.selected result.Graph
+        Assert.Contains(result.Diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8403"
+            && diagnostic.Message = "Local mutable callable cell 'selected' has a read that escapes its enclosing activation.")
+        Assert.NotEqual(Some EscapeKind.StackScoped, result.Graph.Codata.Value.Escapes.TryFind local.Id)
+
+    [<Fact>]
+    member _.``A local mutable callable write in a nested activation is refused`` () =
+        let result =
+            CallableCellFixture.checkUnchecked (CallableCellFixture.writableAuthority ()) """
+module LocalCellWriteEscape
+[<EntryPoint>]
+let main _ =
+    let mutable selected = fun () -> false
+    let write () = selected <- fun () -> true
+    write ()
+    if selected () then 0 else 1
+"""
+        let local = CallableCellFixture.selected result.Graph
+        Assert.Contains(result.Diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8403"
+            && diagnostic.Message = "Local mutable callable cell 'selected' has a write that escapes its enclosing activation.")
+        Assert.NotEqual(Some EscapeKind.StackScoped, result.Graph.Codata.Value.Escapes.TryFind local.Id)

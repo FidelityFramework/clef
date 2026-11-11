@@ -512,6 +512,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\BoundaryEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessSegmentation.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Segmentation.fs" />
+    <Compile Include="Nanopass\SSAAssignment.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Rebuild.fs" />
     <Compile Include="Baker\Recipes\ProofDispatchRecipes.fs" />
     <Compile Include="Baker\Recipes\WitnessScopeRecipes.fs" />

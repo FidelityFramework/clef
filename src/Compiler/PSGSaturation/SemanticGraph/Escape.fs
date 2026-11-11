@@ -146,16 +146,67 @@ let rec private outsideEveryLambda (graph: SemanticGraph) (nodeId: NodeId) : boo
         | SemanticKind.Lambda _ -> false
         | _ -> node.Parent |> Option.forall (outsideEveryLambda graph)
 
-/// The residence of each published mutable callable cell whose binding no lambda encloses:
-/// a module-level cell lives as long as the program (Farscape #109). A cell inside an
-/// activation receives no residence here; its stack lifetime needs its own activation
-/// proof (Farscape #107), so it stays unpublished rather than assumed.
+/// The activation containing a node starts at its parent, including when the node
+/// itself is a lambda used as the value of a write.
+let enclosingLambda (graph: SemanticGraph) (nodeId: NodeId) : NodeId option =
+    let rec find id =
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.Lambda _ } -> Some id
+        | Some node -> node.Parent |> Option.bind find
+        | None -> None
+    SemanticGraph.tryGetNode nodeId graph |> Option.bind (fun node -> node.Parent) |> Option.bind find
+
+/// Module cells live for the program; local cells need complete same-activation
+/// access and no captured or borrowed cell before their stack residence is published.
 let mutableCellResidences (graph: SemanticGraph) (storage: Map<NodeId, MutableCallableStorage>) : Map<NodeId, EscapeKind> =
     storage
     |> Map.toSeq
     |> Seq.choose (fun (_, row) ->
         match SemanticGraph.tryGetNode row.Binding graph with
-        | Some { Kind = SemanticKind.Binding(_, true, _, _) } when outsideEveryLambda graph row.Binding ->
-            Some(row.Binding, EscapeKind.StaticLifetime)
+        | Some { Kind = SemanticKind.Binding(_, true, _, _) } ->
+            match enclosingLambda graph row.Binding with
+            | None when outsideEveryLambda graph row.Binding -> Some(row.Binding, EscapeKind.StaticLifetime)
+            | Some owner ->
+                let inActivation id = enclosingLambda graph id = Some owner
+                let writeInActivation (write: MutableCallableWrite) =
+                    inActivation write.Site && inActivation write.Destination && inActivation write.Value
+                if writeInActivation row.Initializer && List.forall writeInActivation row.Writes &&
+                   Set.forall inActivation row.Reads && row.Captures.IsEmpty && row.Borrows.IsEmpty then
+                    Some(row.Binding, EscapeKind.StackScoped)
+                else None
+            | None -> None
         | _ -> None)
     |> Map.ofSeq
+
+/// Use the source census even when physical settlement rejected a cell: a
+/// rejected row must not hide an access crossing the activation boundary.
+[<RequireQualifiedAccess>]
+type MutableCellActivationFailure =
+    | Read
+    | Write
+    | Unsettled of string
+
+let mutableCellActivationFailures (graph: SemanticGraph)
+        (residuals: MutableCallableStorage.Residual list) =
+    let _, _, accesses = MutableCallableStorage.sourceCensusesWithAccesses graph
+    let failures =
+        accesses |> Map.toList |> List.choose (fun (binding, cell) ->
+            enclosingLambda graph binding |> Option.bind (fun owner ->
+                let outside id = enclosingLambda graph id <> Some owner
+                let write =
+                    (binding, binding, cell.Initial) :: cell.Writes
+                    |> List.tryPick (fun (site, destination, value) ->
+                        if outside site || outside destination || outside value then Some(site, MutableCellActivationFailure.Write) else None)
+                let read = cell.Reads |> Set.toList |> List.tryFind outside |> Option.map (fun id -> id, MutableCellActivationFailure.Read)
+                let captured =
+                    Set.union cell.Captures cell.Borrows |> Set.toList |> List.tryHead
+                    |> Option.map (fun id -> id, MutableCellActivationFailure.Read)
+                write |> Option.orElseWith (fun () -> read) |> Option.orElseWith (fun () -> captured)
+                |> Option.map (fun (site, access) -> binding, site, access)))
+    let failedBindings = failures |> List.map (fun (binding, _, _) -> binding) |> Set.ofList
+    let unresolved =
+        residuals |> List.choose (fun pending ->
+            if failedBindings.Contains pending.Binding || (enclosingLambda graph pending.Binding).IsNone then None
+            else Some(pending.Binding, pending.Binding, MutableCellActivationFailure.Unsettled pending.Reason))
+        |> List.distinct
+    failures @ unresolved

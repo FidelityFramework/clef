@@ -1339,6 +1339,25 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
           Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.sourceType
           Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.valueShape
           Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedConvention callableCarriers environments.Layouts finalGraph
+    let mutableCellResidenceDiagnostics =
+        let residuals =
+            if physicalAdmitted && finalGraph.Platform.IsSome then mutableCallables.Residuals
+            else []
+        Escape.mutableCellActivationFailures finalGraph residuals
+        |> List.map (fun (binding, site, access) ->
+            let name =
+                match finalGraph.Nodes[binding].Kind with
+                | SemanticKind.Binding(name, _, _, _) -> name
+                | _ -> "<unknown>"
+            let message =
+                match access with
+                | Escape.MutableCellActivationFailure.Read -> sprintf "Local mutable callable cell '%s' has a read that escapes its enclosing activation." name
+                | Escape.MutableCellActivationFailure.Write -> sprintf "Local mutable callable cell '%s' has a write that escapes its enclosing activation." name
+                | Escape.MutableCellActivationFailure.Unsettled reason -> sprintf "Local mutable callable cell '%s' requires further settlement: %s" name reason
+            { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
+              Message = message
+              Range = finalGraph.Nodes[site].Range; RelatedNodes = [binding; site] |> List.distinct
+              Reachability = ReachabilityContext.Reachable })
     let callableFlows, callableFlowResiduals =
         Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows.settle
             { Carriers = callableCarriers; Joins = mutableCallables.Joins; Layouts = environments.Layouts
@@ -1408,6 +1427,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 WitnessLiveRows = None
                 WitnessPublishedRows = None
                 ProofDispatch = None
+                SSAAssignment = None
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 SequenceFlows = sequences.Flows
@@ -1461,6 +1481,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph, aggregateAccountResiduals =
         if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.SSAAssignment.normalize finalGraph
     let storagePremiseDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.premiseGuard finalGraph
     let obligationCompleteness =
         Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.completeness finalGraph
@@ -1525,7 +1546,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ aggregateDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ mutableCellResidenceDiagnostics @ aggregateDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

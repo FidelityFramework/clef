@@ -10,6 +10,51 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 let ownedNode (node: SemanticNode) = node.Metadata.ContainsKey "Baker.BoundaryOwned"
 let markOwned (node: SemanticNode) = { node with Metadata = node.Metadata.Add("Baker.BoundaryOwned", MetadataValue.Bool true) }
 
+type RetainedBoundaryNodes =
+    { DomainAnchor: SemanticNode option
+      Obligations: Map<string, NodeId> }
+
+module RetainedBoundaryNodes =
+    let empty =
+        { DomainAnchor = None
+          Obligations = Map.empty }
+
+    let capture (graph: SemanticGraph) : RetainedBoundaryNodes =
+        graph.Nodes
+        |> Map.fold (fun retained _ node ->
+            if not (ownedNode node) then
+                retained
+            else
+                match node.Kind with
+                | SemanticKind.Literal NativeLiteral.Unit
+                    when node.Metadata.TryFind ElaborationMetadata.For = Some (MetadataValue.String "BoundarySettlement") ->
+                    { retained with DomainAnchor = Some node }
+                | SemanticKind.Obligation info ->
+                    { retained with Obligations = retained.Obligations.Add(info.Id, node.Id) }
+                | _ ->
+                    retained) empty
+
+let ownedObligationNode (retained: RetainedBoundaryNodes) (subject: SemanticNode) (enrichId: int) (info: ObligationInfo) : SemanticNode =
+    let nodeId =
+        match retained.Obligations.TryFind info.Id with
+        | Some existingId -> existingId
+        | None -> NodeId.fresh ()
+    { Id = nodeId
+      Kind = SemanticKind.Obligation info
+      Range = subject.Range
+      Type = Types.unitType
+      SRTPResolution = None
+      ArenaAffinity = ArenaAffinity.CurrentActor
+      LayoutHint = None
+      Children = []
+      Parent = None
+      Metadata = Map.empty
+      IsReachable = false
+      EmissionStrategy = EmissionStrategy.Inline
+      ValueRange = None }
+    |> mark ElaborationKind.Obligation info.Kind enrichId
+    |> markOwned
+
 let platformPremise (platform: PlatformContext option) =
     platform |> Option.map (fun platform ->
         { Id = platform.PlatformId; Description = platform.PlatformDescription; Loading = platform.PlatformLoading; LibraryPath = platform.PlatformLibraryPath
@@ -221,41 +266,49 @@ let coverageRows (call: BoundaryCall) (coverage: BoundaryCoverage) outcome =
       row (EdgeRole.BoundaryProof outcome) coverage.Ordinal (coverage.Obligation :: sources) call.Site
       { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = coverage.Ordinal; Sources = sources; Target = coverage.Obligation } ]
 
-let private coverageCore enrichId (graph: SemanticGraph) (call: BoundaryCall) ordinal operand input destination =
+let private coverageCore (retained: RetainedBoundaryNodes) enrichId (graph: SemanticGraph) (call: BoundaryCall) ordinal operand input destination =
     let initial = { Site = call.Site; Operand = operand; Ordinal = ordinal; Input = input; Destination = destination; Obligation = NodeId 0 }
     match coverageBody initial with
     | None -> Error "A scalar boundary coverage proof requires observable finite source and destination ranges."
     | Some body ->
-        let node = obligationNode graph.Nodes[call.Site] enrichId
+        let node = ownedObligationNode retained graph.Nodes[call.Site] enrichId
                        { Id = $"boundary_{NodeId.value call.Site}_{ordinal}"; Kind = "boundary-range-coverage"; Logic = "QF_LIA"
                          Statement = "the exact source boundary occurrence fits its declared destination range"
-                         Source = fmtRange graph.Nodes[call.Site].Range; Refs = []; Body = body } |> markOwned
+                         Source = fmtRange graph.Nodes[call.Site].Range; Refs = []; Body = body }
         let coverage = { initial with Obligation = node.Id }
         let outcome = coverageOutcome coverage
         Ok ({ NewNodes = [node]; Annotated = []; NewEdges = coverageRows call coverage outcome }, coverage, outcome)
 
+let coverageWithRetained (retained: RetainedBoundaryNodes) enrichId graph call ordinal operand input destination =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> coverageCore retained enrichId graph call ordinal operand input destination)
+
 let coverage enrichId graph call ordinal operand input destination =
-  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> coverageCore enrichId graph call ordinal operand input destination)
+  coverageWithRetained RetainedBoundaryNodes.empty enrichId graph call ordinal operand input destination
 
 /// A requirement is a current ledger citizen, not a native adapter or a proof.
 /// Pending has no solver term: its source participants still constrain renewal.
-let requirementWithIdentityRole enrichId (subject: SemanticNode) identityRole role statement reason participants =
+let requirementWithIdentityRoleAndRetained (retained: RetainedBoundaryNodes) enrichId (subject: SemanticNode) identityRole role statement reason participants =
     match sourceClaimId identityRole subject with
     | None -> Error "A boundary application requirement lacks its source-owned claim site identity."
     | Some identity ->
         let node =
-            obligationNode subject enrichId
+            ownedObligationNode retained subject enrichId
                 { Id = identity; Kind = role; Logic = ""; Statement = statement
                   Source = fmtRange subject.Range; Refs = []; Body = ObligationBody.Pending [reason] }
-            |> markOwned
         let sources = List.distinct (subject.Id :: participants)
         Ok { NewNodes = [node]; Annotated = []
              NewEdges =
                 [ constrains sources node
                   row EdgeRole.EnrichedWith 0 sources node.Id ] }
 
+let requirementWithIdentityRole enrichId (subject: SemanticNode) identityRole role statement reason participants =
+    requirementWithIdentityRoleAndRetained RetainedBoundaryNodes.empty enrichId subject identityRole role statement reason participants
+
+let requirementWithRetained (retained: RetainedBoundaryNodes) enrichId subject role statement reason participants =
+    requirementWithIdentityRoleAndRetained retained enrichId subject role role statement reason participants
+
 let requirement enrichId subject role statement reason participants =
-    requirementWithIdentityRole enrichId subject role role statement reason participants
+    requirementWithRetained RetainedBoundaryNodes.empty enrichId subject role statement reason participants
 
 
 /// The aggregate owner separates semantic source incidences from typed relation
@@ -275,14 +328,21 @@ let optionalEntrySourceSupport (accounts: Map<NodeId, CallableAggregateDependenc
     | _ -> Error "An optional-entry source claim lost its exact original operand."
 
 /// A graph citizen records this recipe firing even for an empty domain.
-let private anchorCore enrichId (graph: SemanticGraph) =
+let private anchorCore (retained: RetainedBoundaryNodes) enrichId (graph: SemanticGraph) =
     let sourceRange = graph.Nodes |> Map.toSeq |> Seq.tryHead |> Option.map (snd >> _.Range)
                       |> Option.defaultValue { File = ""; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
-    { Id = NodeId.fresh (); Kind = SemanticKind.Literal NativeLiteral.Unit; Range = sourceRange
+    let nodeId =
+        match retained.DomainAnchor with
+        | Some existing -> existing.Id
+        | None -> NodeId.fresh ()
+    { Id = nodeId; Kind = SemanticKind.Literal NativeLiteral.Unit; Range = sourceRange
       Type = Types.unitType; SRTPResolution = None; ArenaAffinity = ArenaAffinity.CurrentActor
       LayoutHint = None; Children = []; Parent = None; Metadata = Map.empty; IsReachable = false
       EmissionStrategy = EmissionStrategy.Inline; ValueRange = None }
     |> markBaker "BoundarySettlement" enrichId |> markOwned
 
+let anchorWithRetained (retained: RetainedBoundaryNodes) enrichId graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> anchorCore retained enrichId graph)
+
 let anchor enrichId graph =
-  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> anchorCore enrichId graph)
+  anchorWithRetained RetainedBoundaryNodes.empty enrichId graph

@@ -459,3 +459,209 @@ type SelectiveRebuildCases() =
             edge.Consumer = "module:Selective/binding:capturedCode" && edge.Provider = "module:Selective/binding:shared")
         Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "capturedCode" schedule)
         Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition "sibling" schedule)
+
+    [<Fact>]
+    member _.``SSAAssignment reproduces identical identifiers across unchanged recompilation and starts cold on full rebuild``() =
+        // Production full compilation (NativeService) populates Codata.SSAAssignment starting cold.
+        Assert.Equal(512, Clef.Compiler.Nanopass.SSAAssignment.Family)
+        let compiled = (DimensionalCases.check "let identity (value: int) = value\n[<EntryPoint>]\nlet main _ = identity 0\n").Graph
+        let compiledPlan = compiled.Codata.Value.SSAAssignment |> Option.defaultWith (fun () -> failwith "Missing production SSAAssignment plan.")
+        Assert.NotEmpty compiledPlan.Assignments
+        Assert.Empty compiledPlan.RetainedNodes
+        for KeyValue(id, slots) in compiledPlan.Assignments do
+            let family = Clef.Compiler.Nanopass.SSAAssignment.familyValues id
+            Assert.Equal(512, slots.Length)
+            Assert.Equal<SSAId list>(family, slots)
+            Assert.Equal(SSAId(NodeId.value id, 0), slots.Head)
+            Assert.Equal(SSAId(NodeId.value id, 511), List.last slots)
+
+        // Selective rebuild across unchanged structure (even when candidate NodeIds shifted after reset)
+        // reproduces identical graph NodeIds (Alex witnessed SSA family V(node, ordinal)) and identical SSAAssignment slots.
+        let baseline = SelectiveRebuildFixture.graph 0 |> Clef.Compiler.Nanopass.SSAAssignment.normalize
+        let baselinePlan = baseline.Codata.Value.SSAAssignment.Value
+        Assert.NotEmpty baselinePlan.Assignments
+        Assert.Empty baselinePlan.RetainedNodes
+        Assert.Equal<Set<NodeId>>(baselinePlan.Assignments |> Map.keys |> Set.ofSeq, baselinePlan.ReassignedNodes)
+
+        let shiftedCandidate = SelectiveRebuildFixture.graph 1000
+        let rebuilt, unchangedSchedule, _ =
+            Rebuild.rebuildSelective baseline shiftedCandidate
+            |> SelectiveRebuildFixture.admitted
+        let unchangedPlan = rebuilt.Codata.Value.SSAAssignment |> Option.defaultWith (fun () -> failwith "Missing selective rebuild SSAAssignment plan.")
+        Assert.Empty unchangedSchedule.Receipt.Cone.AffectedCone
+        Assert.Equal<Set<NodeId>>(baseline.Nodes |> Map.keys |> Set.ofSeq, rebuilt.Nodes |> Map.keys |> Set.ofSeq)
+        Assert.Equal<Map<NodeId, SSAId list>>(baselinePlan.Assignments, unchangedPlan.Assignments)
+        Assert.Equal(baselinePlan.NodeHighWater, unchangedPlan.NodeHighWater)
+        Assert.Equal<Set<NodeId>>(baselinePlan.Assignments |> Map.keys |> Set.ofSeq, unchangedPlan.RetainedNodes)
+        Assert.Empty unchangedPlan.ReassignedNodes
+
+    [<Fact>]
+    member _.``SSAAssignment reassigns only affected cone identifiers advancing monotonically without reuse on an edit``() =
+        let rawBaseline = SelectiveRebuildFixture.graph 0
+        let rawCodata = rawBaseline.Codata.Value
+        let sampleMeet : Meet = { Consumer = NodeId 8; Operand = NodeId 10; From = 32; To = 64; Adapt = MeetKind.ExtendSigned }
+        let sampleDepAccount : CallableAggregateDependencyAccount =
+            { Occurrence = NodeId 8
+              Slots = []
+              Values = []
+              Carriers = []
+              Contracts = []
+              Flows = []
+              Joins = []
+              Participants = [ { Node = NodeId 9; Role = ParticipantRole.Callee; Ordinal = 0; Group = NodeId 8 } ]
+              Sources = []
+              Claims = []
+              Symbols = []
+              Inactivity = []
+              MemoryPolicy = None }
+        let baselineWithCodata =
+            { rawBaseline with
+                Codata = lazy {
+                    rawCodata with
+                        Meets = Map.ofList [ NodeId 8, [ sampleMeet ] ]
+                        CallableAggregateDependencies = Map.ofList [ NodeId 8, sampleDepAccount ]
+                        DeclarationRootLambdas = Map.ofList [ NodeId 6, DeclRoot.EntryPoint ] } }
+        let baseline = Clef.Compiler.Nanopass.SSAAssignment.normalize baselineWithCodata
+        let baselinePlan = baseline.Codata.Value.SSAAssignment.Value
+        let candidate = SelectiveRebuildFixture.change 21 42 baseline
+        let rebuilt, _, _ =
+            Rebuild.rebuildSelective baseline candidate
+            |> SelectiveRebuildFixture.admitted
+        let editedPlan = rebuilt.Codata.Value.SSAAssignment |> Option.defaultWith (fun () -> failwith "Missing selective rebuild SSAAssignment plan.")
+        // Sibling, shared, factory, and capturedCode regions are outside the affected cone:
+        // their NodeIds and witnessed SSAId(node, ordinal) lists must remain identical to baseline.
+        for retainedNode in [NodeId 11; NodeId 12; NodeId 13; NodeId 14; NodeId 15; NodeId 16; NodeId 17; NodeId 18; NodeId 19; NodeId 26; NodeId 27; NodeId 28; NodeId 29; NodeId 30; NodeId 31] do
+            Assert.True(rebuilt.Nodes.ContainsKey retainedNode)
+            Assert.Contains(retainedNode, editedPlan.RetainedNodes)
+            Assert.DoesNotContain(retainedNode, editedPlan.ReassignedNodes)
+            Assert.Equal<SSAId list>(
+                baselinePlan.Assignments[retainedNode],
+                editedPlan.Assignments[retainedNode])
+        // Provider and caller regions (candidate nodes 2, 3, 21, 6, 7, 8, 9, 10) are in the affected/re-elaborated cone:
+        // their NodeIds and SSAId(node, ordinal) families in rebuilt must advance monotonically above
+        // baselinePlan.NodeHighWater without reusing old NodeIds or SSAIds.
+        for candId in [NodeId 2; NodeId 3; NodeId 21; NodeId 6; NodeId 7; NodeId 8; NodeId 9; NodeId 10] do
+            let remappedId = editedPlan.NodeRemap[candId]
+            Assert.True(NodeId.value remappedId > baselinePlan.NodeHighWater)
+            Assert.False(baseline.Nodes.ContainsKey remappedId)
+            Assert.False(rebuilt.Nodes.ContainsKey candId)
+            Assert.True(rebuilt.Nodes.ContainsKey remappedId)
+            Assert.Contains(remappedId, editedPlan.ReassignedNodes)
+            Assert.DoesNotContain(remappedId, editedPlan.RetainedNodes)
+            Assert.True(
+                editedPlan.Assignments[remappedId]
+                |> List.forall (fun ssa -> Clef.Compiler.Nanopass.SSAAssignment.nodeOf ssa = NodeId.value remappedId))
+        let reassignedNodeIds =
+            editedPlan.ReassignedNodes
+            |> Set.toList
+            |> List.map NodeId.value
+        Assert.NotEmpty reassignedNodeIds
+        Assert.True(reassignedNodeIds |> List.forall (fun id -> id > baselinePlan.NodeHighWater))
+        Assert.Equal(reassignedNodeIds.Length, reassignedNodeIds |> List.distinct |> List.length)
+        Assert.Equal<int list>(reassignedNodeIds |> List.sort, reassignedNodeIds)
+        Assert.Equal<int list>([baselinePlan.NodeHighWater + 1 .. editedPlan.NodeHighWater], reassignedNodeIds)
+        Assert.True(editedPlan.NodeHighWater > baselinePlan.NodeHighWater)
+        // Node-keyed Codata fields (Meets, CallableAggregateDependencies, DeclarationRootLambdas) are remapped in step.
+        let remapped8 = editedPlan.NodeRemap[NodeId 8]
+        let remapped9 = editedPlan.NodeRemap[NodeId 9]
+        let remapped6 = editedPlan.NodeRemap[NodeId 6]
+        Assert.False(rebuilt.Codata.Value.Meets.ContainsKey(NodeId 8))
+        Assert.Equal<Meet list>(
+            [ { Consumer = remapped8; Operand = NodeId 14; From = 32; To = 64; Adapt = MeetKind.ExtendSigned } |> fun m -> { m with Operand = editedPlan.NodeRemap[NodeId 10] } ],
+            rebuilt.Codata.Value.Meets[remapped8])
+        Assert.False(rebuilt.Codata.Value.CallableAggregateDependencies.ContainsKey(NodeId 8))
+        Assert.Equal(remapped8, rebuilt.Codata.Value.CallableAggregateDependencies[remapped8].Occurrence)
+        Assert.Equal(remapped9, rebuilt.Codata.Value.CallableAggregateDependencies[remapped8].Participants.Head.Node)
+        Assert.False(rebuilt.Codata.Value.DeclarationRootLambdas.ContainsKey(NodeId 6))
+        Assert.Equal(DeclRoot.EntryPoint, rebuilt.Codata.Value.DeclarationRootLambdas[remapped6])
+        // Reconciled graph remains structurally valid for subsequent segmentation and selective rebuilds.
+        Assert.True(Segments.segment rebuilt |> Result.isOk)
+        // A second consecutive edit advances monotonically above editedPlan.NodeHighWater without reusing
+        // either baseline or first-edit identifiers, while keeping unchanged regions pinned to baseline.
+        let candidate2 = SelectiveRebuildFixture.change 42 77 rebuilt
+        let rebuilt2, _, _ =
+            Rebuild.rebuildSelective rebuilt candidate2
+            |> SelectiveRebuildFixture.admitted
+        let editedPlan2 = rebuilt2.Codata.Value.SSAAssignment |> Option.defaultWith (fun () -> failwith "Missing second selective rebuild SSAAssignment plan.")
+        for retainedNode in [NodeId 11; NodeId 12; NodeId 13; NodeId 14; NodeId 15; NodeId 16; NodeId 17; NodeId 18; NodeId 19; NodeId 26; NodeId 27; NodeId 28; NodeId 29; NodeId 30; NodeId 31] do
+            Assert.True(rebuilt2.Nodes.ContainsKey retainedNode)
+            Assert.Contains(retainedNode, editedPlan2.RetainedNodes)
+            Assert.DoesNotContain(retainedNode, editedPlan2.ReassignedNodes)
+            Assert.Equal<SSAId list>(
+                baselinePlan.Assignments[retainedNode],
+                editedPlan2.Assignments[retainedNode])
+        let reassignedNodeIds2 =
+            editedPlan2.ReassignedNodes
+            |> Set.toList
+            |> List.map NodeId.value
+        Assert.NotEmpty reassignedNodeIds2
+        Assert.True(reassignedNodeIds2 |> List.forall (fun id -> id > editedPlan.NodeHighWater))
+        Assert.Equal<int list>([editedPlan.NodeHighWater + 1 .. editedPlan2.NodeHighWater], reassignedNodeIds2)
+        Assert.True(editedPlan2.NodeHighWater > editedPlan.NodeHighWater)
+        let baselineAllNodeIds = baseline.Nodes.Keys |> Set.ofSeq
+        let rebuiltAllNodeIds = rebuilt.Nodes.Keys |> Set.ofSeq
+        Assert.Empty(Set.intersect baselineAllNodeIds editedPlan2.ReassignedNodes)
+        Assert.Empty(Set.intersect rebuiltAllNodeIds editedPlan2.ReassignedNodes)
+        let priorAllSsaIds =
+            Seq.append baselinePlan.Assignments.Values editedPlan.Assignments.Values
+            |> Seq.concat
+            |> Set.ofSeq
+        let reassigned2SsaIds =
+            editedPlan2.ReassignedNodes
+            |> Seq.collect (fun id -> editedPlan2.Assignments[id])
+            |> Set.ofSeq
+        Assert.Empty(Set.intersect priorAllSsaIds reassigned2SsaIds)
+        // A full release rebuild through both normalize and the production NativeService entry point
+        // cold-starts from 0 instead of advancing from editedPlan2.NodeHighWater.
+        let releaseGraph = Clef.Compiler.Nanopass.SSAAssignment.normalize candidate
+        let releasePlan = releaseGraph.Codata.Value.SSAAssignment.Value
+        Assert.Equal(baselinePlan.NodeHighWater, releasePlan.NodeHighWater)
+        Assert.Empty releasePlan.RetainedNodes
+        let releaseCompiled = (DimensionalCases.check "let identity (value: int) = value\n[<EntryPoint>]\nlet main _ = identity 0\n").Graph
+        let releaseCompiledPlan = releaseCompiled.Codata.Value.SSAAssignment.Value
+        Assert.True(releaseCompiled.Nodes.ContainsKey(NodeId 0))
+        Assert.True(releaseCompiledPlan.NodeHighWater < editedPlan2.NodeHighWater)
+        Assert.Empty releaseCompiledPlan.RetainedNodes
+
+    [<Fact>]
+    member _.``BoundarySettlement normalize retains boundary-owned node identities across unchanged graph structure``() =
+        let body = """
+module BoundaryRetain
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+[<FidelityExtern("c", "toggle")>]
+let toggle (value: bool) : bool = NativeDefault.zeroed ()
+let toggleDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "toggle"; Parameters = [| { Name = "value"; Type = Bool; PassBy = Value } |]
+    ReturnType = Bool; CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+[<EntryPoint>]
+let main _ = if toggle true then 0 else 1
+"""
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "Parse failed: %A" errors
+        let authority = SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+        let result =
+            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                [parse authority "write-authority.clef"; parse body "boundary-retain.clef"]
+                (Some { SourcePlatformFixture.platform with RuntimeModel = Some RuntimeModel.Libc })
+        DimensionalCases.noErrors result
+        let boundaryGraph = result.Graph
+        let anchorFirst = Clef.Compiler.Baker.Ingredients.Boundaries.RetainedBoundaryNodes.capture boundaryGraph
+        Assert.True anchorFirst.DomainAnchor.IsSome
+        Assert.NotEmpty anchorFirst.Obligations
+        let second = Clef.Compiler.Nanopass.BoundarySettlement.normalize boundaryGraph |> Clef.Compiler.Nanopass.SSAAssignment.normalize
+        let anchorSecond = Clef.Compiler.Baker.Ingredients.Boundaries.RetainedBoundaryNodes.capture second
+        Assert.True anchorSecond.DomainAnchor.IsSome
+        Assert.Equal(anchorFirst.DomainAnchor.Value.Id, anchorSecond.DomainAnchor.Value.Id)
+        Assert.Equal<Map<string, NodeId>>(anchorFirst.Obligations, anchorSecond.Obligations)
+        Assert.Equal<Set<NodeId>>(boundaryGraph.Nodes |> Map.keys |> Set.ofSeq, second.Nodes |> Map.keys |> Set.ofSeq)
+        let firstPlan = boundaryGraph.Codata.Value.SSAAssignment.Value
+        let secondPlan = second.Codata.Value.SSAAssignment.Value
+        Assert.Equal<Map<NodeId, SSAId list>>(firstPlan.Assignments, secondPlan.Assignments)

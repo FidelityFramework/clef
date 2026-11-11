@@ -30,9 +30,10 @@ type SourceFamily = {
 /// One current logical cell census, independent of callable ingress and layout.
 /// Retained alternatives preserve formation and shared-cell identity; this
 /// evidence supplies neither activation counts nor a physical calling contract.
-let sourceCensuses (graph: SemanticGraph) =
+let sourceCensusesWithAccesses (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let mutable residuals = []
+    let mutable accesses = Map.empty
     let reject binding participants reason =
         residuals <- { Binding = binding; Participants = participants; Reason = reason } :: residuals
         None
@@ -149,18 +150,24 @@ let sourceCensuses (graph: SemanticGraph) =
                     (actual |> List.exists (fun edge -> expected |> List.exists (fun row -> key edge = key row) |> not)))
             let invalidValues = values |> List.filter (fun value ->
                 nodes.TryFind value |> Option.exists (fun value -> applySubst value.Type = applySubst node.Type) |> not)
+            let census = { Binding = binding; SourceType = node.Type; Initial = initial
+                           Writes = writes; Reads = directReads; Captures = captures; Borrows = borrows
+                           Participants = participants }
+            accesses <- Map.add binding census accesses
             if not invalidCapture.IsEmpty then reject binding invalidCapture "A mutable callable capture does not preserve the original shared cell and mutable mode."
             elif not invalidAccess.IsEmpty then reject binding invalidAccess "A mutable callable access lacks its exact captured-cell provenance."
             elif not unsupported.IsEmpty then reject binding unsupported "The mutable callable cell has an unaccounted storage or reference use."
             elif not invalidIncidence.IsEmpty then reject binding invalidIncidence "The mutable callable cell has inconsistent current source incidence."
             elif not invalidValues.IsEmpty then reject binding invalidValues "Every mutable callable write must preserve the cell's exact source type."
-            else Some(binding, { Binding = binding; SourceType = node.Type; Initial = initial
-                                 Writes = writes; Reads = directReads; Captures = captures; Borrows = borrows
-                                 Participants = participants })
+            else Some(binding, census)
         | SemanticKind.Binding(_, true, _, _), NativeType.TFun _, _ ->
             reject binding node.Children "Mutable callable storage requires one exact initializer."
         | _ -> None) |> Map.ofList
-    families, List.rev residuals
+    families, List.rev residuals, accesses
+
+let sourceCensuses graph =
+    let families, residuals, _ = sourceCensusesWithAccesses graph
+    families, residuals
 
 /// Exact alternatives refine the same complete logical cell census. Opaque
 /// writes still refuse source-family and physical admission, while a demand
