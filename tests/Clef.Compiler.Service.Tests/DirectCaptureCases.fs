@@ -563,7 +563,7 @@ let main _ =
         let literals =
             result.Graph.Nodes.Values
             |> Seq.filter (fun node ->
-                node.Range.File = "direct-capture-platform.clef" &&
+                node.IsReachable && node.Range.File = "direct-capture-platform.clef" &&
                 (match node.Kind with SemanticKind.Literal(NativeLiteral.Int(value, _)) -> value = 7L || value = 9L | _ -> false))
             |> Seq.toList
         Assert.NotEmpty literals
@@ -571,6 +571,9 @@ let main _ =
             match literal.Kind with
             | SemanticKind.Literal(NativeLiteral.Int(value, _)) -> Assert.Equal(Some(ValueRange.point (bigint value)), literal.ValueRange)
             | _ -> failwith "Expected source integer literal"
+        Assert.Contains(result.Graph.Nodes.Values, fun node ->
+            not node.IsReachable && node.ValueRange.IsNone &&
+            match node.Kind with SemanticKind.Literal(NativeLiteral.Int(9L, _)) -> true | _ -> false)
 
     [<Fact>]
     member _.``A call node shared by alternative arms retains both invocation contributions``() =

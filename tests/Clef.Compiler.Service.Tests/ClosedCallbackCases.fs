@@ -1269,7 +1269,7 @@ type ClosedCallbackTests() =
         let expectedFile=System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__,"..","..","..","BAREWire","src","Descriptors","Bindings.fs"))
         let identity=match Clef.Compiler.NativeTypedTree.UnionFind.applySubst quoted.Type with NativeType.TApp(constructor,[])->NominalTypeIdentity.ofConstructor constructor | _->failwith "Absence annotation lost its nominal constructor"
         let canonical=Clef.Compiler.PSGSaturation.SemanticGraph.RecordInstances.definitions graph |> Map.find identity
-        Assert.Equal(expectedFile,canonical.Range.File)
+        Assert.Equal(expectedFile,System.IO.Path.GetFullPath canonical.Range.File)
         Assert.Equal(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType canonical.Type,Clef.Compiler.NativeTypedTree.TypeIdentities.ofType quoted.Type)
         let revision=Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith(failwithf "%A")
         Assert.Empty(Fidelity.PSG.Integrity.check revision)

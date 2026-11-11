@@ -375,15 +375,28 @@ let main _ = 0
             NodeId.reset ()
             Assert.Equal(NodeId 0, NodeId.fresh ()))
 
-    [<Fact>]
-    member _.``Boundary enrichment preserves retained graph citizens after another real check`` () =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Boundary enrichment preserves retained graph citizens after another real check`` removeAnchor =
         Clef.Compiler.CheckExecution.synchronized (fun () ->
             let graph = NumericCaptureFixture.check NumericCaptureFixture.contextSource
             let citizens = graph.Nodes |> Map.filter (fun _ node -> not (Clef.Compiler.Baker.Ingredients.Boundaries.ownedNode node))
+            let anchor = (Clef.Compiler.Baker.Ingredients.Boundaries.RetainedBoundaryNodes.capture graph).DomainAnchor |> Option.get
+            let graph =
+                if not removeAnchor then graph
+                else
+                    { graph with
+                        Nodes = graph.Nodes.Remove anchor.Id
+                        Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> anchor.Id && not (List.contains anchor.Id edge.Sources)) }
             let maximum = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeId graph
             NumericCaptureFixture.check "module BoundaryOtherCheck\n[<EntryPoint>]\nlet main _ = 0\n" |> ignore
             let renewed = Clef.Compiler.Nanopass.BoundarySettlement.normalize graph
-            Assert.True(renewed.Nodes |> Map.exists (fun id _ -> NodeId.value id > maximum), "The other enrichment owner must mint a fresh domain anchor.")
+            let currentAnchor = (Clef.Compiler.Baker.Ingredients.Boundaries.RetainedBoundaryNodes.capture renewed).DomainAnchor |> Option.get
+            if removeAnchor then
+                Assert.True(NodeId.value currentAnchor.Id > maximum, "A missing domain anchor must be allocated above the retained graph's citizens.")
+            else
+                Assert.Equal(anchor.Id, currentAnchor.Id)
             for KeyValue(id, node) in citizens do
                 Assert.True(renewed.Nodes.ContainsKey id)
                 Assert.Equal(node.Kind, renewed.Nodes[id].Kind)

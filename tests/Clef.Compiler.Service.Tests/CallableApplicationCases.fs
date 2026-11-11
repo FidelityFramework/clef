@@ -283,7 +283,8 @@ type Holder = { Work: int -> int -> int }
 let staged (first: int) : int -> int = fun second -> first + second
 let stored = [| AGGREGATE |]
 let opaque = stored.[0]
-let chosen = if true then AGGREGATE else opaque
+let mutable chooseKnown = true
+let chosen = if chooseKnown then AGGREGATE else opaque
 let work = PROJECTION
 let observed = work 3 4
 [<EntryPoint>]

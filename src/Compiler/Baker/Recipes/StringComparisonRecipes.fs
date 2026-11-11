@@ -84,6 +84,8 @@ let stringOrigins (graph: SemanticGraph) (flow: CallableOrigins.Resolution) =
         | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> canonical seen value
         | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> canonical seen value
         | Some { Kind = SemanticKind.Sequential _ } when (force id).IsSome -> Some(id, seen)
+        | Some { Kind = SemanticKind.Sequential values; Children = children; Type = ty }
+            when Types.isStringType ty && not values.IsEmpty && values=children && lazyFacts.Value.Residuals.IsEmpty -> Some(id, seen)
         | Some { Kind = SemanticKind.IfThenElse _ } when (conditional id).IsSome -> Some(id, seen)
         | Some { Kind = SemanticKind.LazyRead _ } -> captured id |> Option.bind (canonical seen)
         // Preserve the current invocation's read identity. The initializer
@@ -118,7 +120,7 @@ let stringOrigins (graph: SemanticGraph) (flow: CallableOrigins.Resolution) =
                 | _ -> Ok None
             | None -> Ok None
         | Some { Kind = SemanticKind.Sequential _ } when not lazyFacts.Value.Residuals.IsEmpty -> Ok None
-        | Some { Kind = SemanticKind.Sequential values } ->
+        | Some { Kind = SemanticKind.Sequential values; Children = children } when values=children ->
             match force id with
             | Some protocol ->
                 let contract = lazyFacts.Value.Instances[protocol.Formation]
