@@ -137,7 +137,7 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
                 Metadata = source.Metadata.Remove("Source.ObligationSite").Remove("Source.DeclarationIncarnation").Add("Baker.MemoryGuarded", MetadataValue.Bool true)
                 Parent = Some source.Id; ArenaAffinity = source.ArenaAffinity }
         do! emit operation
-        let ordered = [buffer; index; required; operation.Id]
+        let ordered = children @ [required; operation.Id]
         do! enrich source (SemanticKind.Sequential ordered) source.Type ordered source.EmissionStrategy false
         evidence.Add { Class = EdgeClass.Provenance; Role = EdgeRole.MatchRequirement; Ordinal = 1
                        Sources = [required; predicate; operation.Id]; Target = source.Id }

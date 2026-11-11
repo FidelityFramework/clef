@@ -561,7 +561,7 @@ let resolveSolver (pathVariable: string | null) (exists: string -> bool) : strin
 
 let private solverExecutable () =
     match System.Environment.GetEnvironmentVariable "CLEF_CVC5" with
-    | null | "" -> resolveSolver (System.Environment.GetEnvironmentVariable "PATH") File.Exists, true
+    | null | "" -> Clef.Compiler.Utilities.HostTools.findSolver (System.Environment.GetEnvironmentVariable "PATH"), true
     | path -> path, false
 
 type private SolverRun =

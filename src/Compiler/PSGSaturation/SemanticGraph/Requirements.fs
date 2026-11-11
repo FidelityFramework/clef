@@ -57,12 +57,21 @@ let tryRequirement (graph: SemanticGraph) site =
                  && frontierChildren = ordered && applySubst resultType = applySubst selectedNode.Type ->
             let prefix = ordered |> List.take (ordered.Length - 2)
             let validPrefix =
-                prefix.IsEmpty || (ordinal = 1 && graph.Edges |> List.exists (fun edge ->
-                    match edge.Role,edge.Sources with
-                    | EdgeRole.MemoryAccessGuard,[buffer;index;_;_;_;_;condition;required;source] ->
-                        edge.Class = EdgeClass.Provenance && edge.Target = continuation && source = frontier
-                        && condition = predicate.Id && required = site && prefix = [buffer;index]
-                    | _ -> false))
+                match graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard && edge.Target = continuation) with
+                | [] -> prefix.IsEmpty
+                | [edge] ->
+                    match edge.Sources with
+                    | [buffer;index;_;_;_;_;condition;required;source] ->
+                        let operands =
+                            match selectedNode.Kind with
+                            | SemanticKind.IndexSet(actualBuffer,actualIndex,value) when actualBuffer=buffer && actualIndex=index -> [buffer;index;value]
+                            | SemanticKind.IndexGet(actualBuffer,actualIndex)
+                            | SemanticKind.ElementAddress(actualBuffer,actualIndex) when actualBuffer=buffer && actualIndex=index -> [buffer;index]
+                            | _ -> []
+                        ordinal = 1 && edge.Class = EdgeClass.Provenance && source = frontier
+                        && condition = predicate.Id && required = site && not operands.IsEmpty && prefix = operands
+                    | _ -> false
+                | _ -> false
             let patternTest =
                 match ordinal, additional, predicate.Kind, selectedNode.Kind with
                 | 1, [], _, _ -> Some None

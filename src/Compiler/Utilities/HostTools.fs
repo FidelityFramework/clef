@@ -28,3 +28,7 @@ let resolveSolver (pathVariable: string | null) (exists: string -> bool) =
         |> Array.map (fun directory -> Path.Combine(directory, solverName))
         |> Array.toList
     candidates @ solverToolchainPaths |> List.tryFind exists |> Option.defaultValue solverName
+
+let findSolver pathVariable =
+    resolveSolver pathVariable (fun path ->
+        File.Exists path && (not (OperatingSystem.IsLinux()) || LinuxHostTools.canExecute path))

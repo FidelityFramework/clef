@@ -1,3 +1,5 @@
+#load "SolverInstallation.fsx"
+
 open System
 open System.IO
 open System.IO.Compression
@@ -22,7 +24,7 @@ let destination = Path.Combine(root, "cvc5-1.3.0")
 let executable = if OperatingSystem.IsWindows() then "cvc5.exe" else "cvc5"
 let binary = Path.Combine(destination, "bin", executable)
 if Directory.Exists destination then
-    if not (File.Exists binary) then failwithf "Existing installation is incomplete: %s. It was not overwritten." destination
+    SolverInstallation.verifyExisting binary
     printfn "Using existing installation (not modified): %s" binary
 else
     let scratch = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "../artifacts/scratch/solver-install", Guid.NewGuid().ToString("N")))

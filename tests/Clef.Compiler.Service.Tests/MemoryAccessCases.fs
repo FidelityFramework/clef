@@ -152,16 +152,33 @@ type MemoryAccessCases() =
         Assert.True(literal.Initializers.IsSome)
         match literal.Residence with MemoryResidence.ImmutableProgram _ -> () | _ -> failwith "A closed readonly literal requires immutable image residence."
 
-    [<Fact>]
-    member _.``Array guard operand order is part of its source authority`` () =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Array guard operand order is part of its source authority`` (omit: bool) =
         let graph, facts = MemoryAccessFixture.admitted "    let values = [| 7; 11 |]\n    values.[1]\n"
         let access = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.ArrayAccess fact -> Some fact | _ -> None) |> Assert.Single
         let guard = access.Bounds.Requirement
         let frontier = graph.Nodes[guard.Frontier]
-        let ordered = [access.Index;access.Buffer;guard.Site;access.Site]
+        let ordered = if omit then [guard.Site;access.Site] else [access.Index;access.Buffer;guard.Site;access.Site]
         let altered = {graph with Nodes = graph.Nodes.Add(frontier.Id,{frontier with Kind = SemanticKind.Sequential ordered; Children = ordered})}
         Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.Requirements.tryRequirement altered guard.Site |> Option.isNone)
         Assert.True(MemoryPublication.project altered |> Result.isError)
+
+    [<Fact>]
+    member _.``Array store evaluates its complete RHS before the outer bounds guard`` () =
+        let source = MemoryAccessFixture.source "    let values = [| 7; 11 |]\n    values.[0] <- values.[1]\n    values.[0]\n"
+        let graph, facts = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source
+        let access = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.ArrayAccess fact when fact.Value.IsSome -> Some fact | _ -> None) |> Assert.Single
+        let evaluation = match graph.Nodes[access.Site].Kind with SemanticKind.IndexSet(_,_,value) -> value | _ -> failwith "Missing store"
+        let guard = access.Bounds.Requirement
+        let frontier = graph.Nodes[guard.Frontier]
+        Assert.Equal(SemanticKind.Sequential [access.Buffer;access.Index;evaluation;guard.Site;access.Site],frontier.Kind)
+        for prefix in [[access.Buffer;access.Index];[access.Buffer;evaluation;access.Index]] do
+            let ordered = prefix @ [guard.Site;access.Site]
+            let altered = {graph with Nodes = graph.Nodes.Add(frontier.Id,{frontier with Kind = SemanticKind.Sequential ordered;Children = ordered})}
+            Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.Requirements.tryRequirement altered guard.Site |> Option.isNone)
+            Assert.True(MemoryPublication.project altered |> Result.isError)
 
     [<Fact>]
     member _.``Changing the guard rejects publication without synthesizing a replacement guard`` () =

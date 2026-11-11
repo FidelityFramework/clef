@@ -24,6 +24,10 @@ x64 or Linux x64 and checks its published SHA-256 before extraction. It installs
 under `%LOCALAPPDATA%/Clef/toolchains/cvc5-1.3.0` or
 `~/.local/toolchains/cvc5-1.3.0`, preserving existing installations. Other hosts
 can provide their own solver through `CLEF_CVC5`.
+Existing installations are checked for cvc5 identification and SAT/UNSAT behavior
+before setup reports success; rejected files are left unchanged. Run host
+regressions with `dotnet fsi tests/HostTooling/Windows/Suite.fsx` on Windows or
+`dotnet fsi tests/HostTooling/Linux/Suite.fsx` on Linux.
 
 Solver selection is explicit `CLEF_CVC5`, then the exact executable found on
 PATH, then the current user's installation. Linux parity mounts and the Linux
