@@ -362,6 +362,7 @@
     <Compile Include="Baker\Ingredients\CapturedStrings.fs" />
     <Compile Include="Baker\Ingredients\StringOrigins.fs" />
     <Compile Include="Baker\Recipes\StringComparisonRecipes.fs" />
+    <Compile Include="Baker\Recipes\DeadBodyRecipes.fs" />
     <Compile Include="Baker\Ingredients\ArrayShapes.fs" />
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />
     <Compile Include="Baker\Ingredients\MemoryValues.fs" />
@@ -498,6 +499,7 @@
     <Compile Include="Baker\Recipes\ArrayMemoryRecipes.fs" />
     <Compile Include="Baker\Recipes\StringViewRecipes.fs" />
     <Compile Include="Nanopass\MemoryAccessElaboration.fs" />
+    <Compile Include="Nanopass\DeadBodies.fs" />
     <Compile Include="Nanopass\MemorySettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MemoryPublication.fs" />
     <Compile Include="Baker\Recipes\HardwareModuleRecipes.fs" />

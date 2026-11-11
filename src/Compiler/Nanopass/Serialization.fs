@@ -88,6 +88,15 @@ let emitIntrinsicRecipes (recipeSet: RecipeSet) : unit =
 let emitSaturationRecipes (recipeSet: RecipeSet) : unit =
     emitRecipeSetArtifact ArtifactId.SaturationRecipes recipeSet
 
+let emitDeadBodyRecipes (recipeSet: RecipeSet) : unit =
+    match getArtifactFilePath ArtifactId.SaturationRecipes with
+    | None -> ()
+    | Some recipePath ->
+        let directory = System.IO.Path.GetDirectoryName recipePath |> Option.ofObj |> Option.defaultValue "."
+        let path = System.IO.Path.Combine(directory, "01a_dead_body_recipes.json")
+        ensureDirectoryForFilePath path
+        System.IO.File.WriteAllText(path, serializeRecipeSet recipeSet)
+
 //=============================================================================
 // DIAGNOSTIC SERIALIZATION
 //=============================================================================

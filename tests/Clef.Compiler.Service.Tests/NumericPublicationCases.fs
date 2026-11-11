@@ -16,7 +16,7 @@ module private IndexTransportFixture =
             match Clef.Compiler.NativeService.parseStringWithDefaults text path with
             | Clef.Compiler.NativeService.ParseSuccess input -> input
             | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
-        let source = $"module IndexTransport\n[<EntryPoint>]\nlet main _ =\n    let selector = {number}\n    if selector = 0 then 7 else 11\n"
+        let source = $"module IndexTransport\n[<EntryPoint>]\nlet main _ =\n    let mutable selector = {number}\n    if selector = 0 then 7 else 11\n"
         let result = Clef.Compiler.NativeService.checkParsedInputsWithPlatform
                         [parse authority "write-authority.clef";parse source "index-transport.clef"] (Some platform)
         DimensionalCases.noErrors result

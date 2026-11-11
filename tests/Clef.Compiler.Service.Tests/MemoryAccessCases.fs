@@ -26,6 +26,61 @@ module MemoryAccessFixture =
     let fieldAddress = "module MemoryFixture\ntype Cell = { Other: int; mutable Value: int }\n[<EntryPoint>]\nlet main _ =\n    let cell = { Other = 11; Value = 7 }\n    let _ = eager (&cell.Value)\n    cell.Value\n"
 
 type MemoryAccessCases() =
+    [<Theory>]
+    [<InlineData("for index = 3 to 2 do", "        values.[index] <- 300")>]
+    [<InlineData("for index = 0 downto 1 do", "        values.[index] <- 300")>]
+    [<InlineData("while false do", "        values.[99] <- 300")>]
+    [<InlineData("if false then", "        values.[99] <- 300")>]
+    member _.``Source dead bodies are removed before numeric and memory settlement`` (control: string, body: string) =
+        let source = MemoryAccessFixture.source ("    let values = [| 37 |]\n    " + control + "\n" + body + "\n    values.[0]\n")
+        let graph,_ = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source
+        let numeric = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph
+        Assert.True(Result.isOk numeric,sprintf "%A" numeric)
+        Assert.DoesNotContain(graph.Nodes.Values,fun node -> node.IsReachable && match node.Kind with SemanticKind.WhileLoop _ | SemanticKind.IndexSet _ -> true | _ -> false)
+        let published = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check published)
+
+    [<Fact>]
+    member _.``Empty loop bounds retain their ordered writes`` () =
+        let source = MemoryAccessFixture.source "    let mutable value = 0\n    for index = (value <- 11; 3) to (value <- 37; 2) do\n        value <- 99\n    value\n"
+        let graph,facts = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source
+        Assert.DoesNotContain(graph.Nodes.Values,fun node -> node.IsReachable && match node.Kind with SemanticKind.WhileLoop _ -> true | _ -> false)
+        let cell = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.LocalScalar row when row.Writes.Length=2 -> Some row | _ -> None) |> Assert.Single
+        Assert.Equal<int64 list>([11L;37L],cell.Writes |> List.map (fun (_,value) -> match graph.Nodes[value].Kind with SemanticKind.Literal(NativeLiteral.Int(value,_)) -> value | _ -> failwith "source write") |> List.sort)
+
+    [<Theory>]
+    [<InlineData("0 to 0")>]
+    [<InlineData("2 downto 0")>]
+    [<InlineData("1 to limit")>]
+    member _.``Live and mutable-bound loops are not pruned`` (range: string) =
+        let source = MemoryAccessFixture.source ("    let mutable limit = 0\n    limit <- 2\n    let mutable value = 0\n    for index = " + range + " do\n        value <- 37\n    value\n")
+        let graph,_ = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source
+        let loop = graph.Nodes.Values |> Seq.filter(fun node -> node.IsReachable && match node.Kind with SemanticKind.WhileLoop _ -> true | _ -> false) |> Assert.Single
+        let poisoned = {graph with Nodes=graph.Nodes.Add(loop.Id,{loop with ValueRange=Some ValueRange.Empty})}
+        let rewritten = Clef.Compiler.Nanopass.DeadBodies.normalize poisoned
+        Assert.True(match rewritten.Nodes[loop.Id].Kind with SemanticKind.WhileLoop _ -> true | _ -> false)
+
+    [<Theory>]
+    [<InlineData("true",37)>]
+    [<InlineData("false",19)>]
+    member _.``Constant source branches retain the selected result`` (guard: string, expected: int) =
+        let source = MemoryAccessFixture.source ("    if " + guard + " then 37 else 19\n")
+        let graph,_ = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source
+        let selected = graph.Nodes.Values |> Seq.filter(fun node -> node.IsReachable && match node.Kind with SemanticKind.Literal(NativeLiteral.Int(value,_)) -> value=19L || value=37L | _ -> false) |> Assert.Single
+        Assert.True(match selected.Kind with SemanticKind.Literal(NativeLiteral.Int(value,_)) -> value=int64 expected | _ -> false)
+
+    [<Fact>]
+    member _.``Negation does not decide deadness before overflow settlement`` () =
+        let source = MemoryAccessFixture.source "    let minimum: int = -2147483648\n    if -minimum < 0 then 37 else 2\n"
+        let result = IntrinsicWriteFixture.checkSource MemoryAccessFixture.stackAuthority source
+        Assert.Contains(result.Graph.Nodes.Values,fun node -> node.IsReachable && match node.Kind with SemanticKind.IfThenElse _ -> true | _ -> false)
+
+    [<Fact>]
+    member _.``Dead source bodies are still type checked`` () =
+        let source = MemoryAccessFixture.source "    for index = 3 to 2 do\n        let broken: bool = 1\n        ()\n    37\n"
+        let result = IntrinsicWriteFixture.checkSource MemoryAccessFixture.stackAuthority source
+        Assert.Contains(result.Diagnostics,fun diagnostic -> diagnostic.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error)
+
     [<Fact>]
     member _.``Local scalar cells and for counters publish explicit stack accounts`` () =
         let source = MemoryAccessFixture.source "    let mutable total = 0\n    for index = 0 to 2 do\n        total <- index\n    if total = 2 then 37 else 1\n"
