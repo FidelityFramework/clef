@@ -5,8 +5,6 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation
 open System
 open System.Collections
 open System.Reflection
-open System.Security.Cryptography
-open System.Text
 open Microsoft.FSharp.Reflection
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -16,7 +14,15 @@ type DependencyKind = Call | Storage | CapturedEnvironment | ProofSupport
 
 type RegionDependency = { Consumer: string; Provider: string; Kind: DependencyKind; SupportNodes: Set<NodeId> }
 type SupportEdge = { Consumer: string; Domain: string; Identity: string; Providers: Set<string>; SupportNodes: Set<NodeId>; Fingerprint: string }
-type Region = { Identity: string; Root: NodeId; Members: Set<NodeId>; Fingerprint: string }
+
+type Region =
+    { Identity: string
+      Root: NodeId
+      Members: Set<NodeId>
+      CallableInterfaceDigest: CallableInterfaceDigest
+      SemanticRealizationDigest: SemanticRealizationDigest
+      CanonicalProofSupportDigest: CanonicalProofSupportDigest }
+
 [<RequireQualifiedAccess>]
 type SegmentationFailure =
     | InvalidGraph of NodeId option * string
@@ -36,7 +42,7 @@ type SegmentationPlan =
 let regions plan = plan.Regions |> Map.values |> Seq.toList
 let dependencies identity plan = plan.Dependencies |> List.filter (fun edge -> edge.Consumer = identity)
 let supportEdges identity plan = plan.SupportEdges |> List.filter (fun edge -> edge.Consumer = identity)
-let internal hash (text: string) = Encoding.UTF8.GetBytes text |> SHA256.HashData |> Convert.ToHexString
+let internal hash (text: string) = WitnessSegmentation.hash text
 let private flags = BindingFlags.Public ||| BindingFlags.NonPublic
 let private property (ty: Type) name =
     ty.GetProperty name |> Option.ofObj |> Option.defaultWith (fun () -> invalidOp ("Missing source row field " + name))
@@ -46,8 +52,7 @@ let rec private references (value: objnull) : Set<NodeId> =
     match value with
     | null -> Set.empty
     | :? NodeId as id -> Set.singleton id
-    | :? NativeType -> Set.empty
-    | :? string -> Set.empty
+    | :? NativeType | :? SourceRange | :? string -> Set.empty
     | :? IEnumerable as items -> items |> Seq.cast<objnull> |> Seq.map references |> Set.unionMany
     | _ ->
         let value = value |> Option.ofObj |> Option.get
@@ -60,15 +65,6 @@ let rec private references (value: objnull) : Set<NodeId> =
                 [| (property ty "Key").GetValue value; (property ty "Value").GetValue value |]
             else [||]
         values |> Seq.map references |> Set.unionMany
-
-let private label (node: SemanticNode) =
-    match node.Kind with
-    | SemanticKind.ModuleDef(name, _) -> "module:" + name
-    | SemanticKind.Binding(name, _, _, _) -> "binding:" + name
-    | SemanticKind.TypeDef(name, _, _) -> "type:" + name
-    | SemanticKind.MemberDef(name, _, _) -> "member:" + name
-    | SemanticKind.Obligation info -> "claim:" + info.Id
-    | _ -> "node"
 
 let private rowAnchor (value: objnull) =
     match value with
@@ -84,6 +80,29 @@ let private rowAnchor (value: objnull) =
                     ty.GetProperty name |> Option.ofObj |> Option.map (fun field -> field.GetValue value))
         head |> Option.bind (function :? NodeId as id -> Some id | _ -> None)
 
+/// True when `id` is an immutable, non-inline callable function declaration root
+/// whose callers depend on its CallableInterfaceDigest rather than its internal body.
+let internal isCallableBoundary (graph: SemanticGraph) (id: NodeId) : bool =
+    match graph.Nodes.TryFind id with
+    | Some ({ Kind = SemanticKind.Binding(_, false, _, declRoot); Children = [ lambdaId ] } as binding)
+        when declRoot <> Some DeclRoot.HardwareModule &&
+             declRoot <> Some DeclRoot.KernelModule &&
+             Map.tryFind "Inline" binding.Metadata <> Some (MetadataValue.Bool true) ->
+        match binding.Parent |> Option.bind graph.Nodes.TryFind, graph.Nodes.TryFind lambdaId with
+        | Some { Kind = SemanticKind.ModuleDef _ }, Some { Kind = SemanticKind.Lambda _ } -> true
+        | None, Some { Kind = SemanticKind.Lambda _ } -> true
+        | _ -> false
+    | _ -> false
+
+let private isCrossCallableProvenanceRole (role: EdgeRole) =
+    match role with
+    | EdgeRole.ProgramActivationCall
+    | EdgeRole.ProgramActivationCoverage
+    | EdgeRole.EagerDemand _
+    | EdgeRole.EagerDemandPending
+    | EdgeRole.EnrichedWith -> true
+    | _ -> false
+
 let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailure list> =
     let errors = ResizeArray<SegmentationFailure>()
     let fail id reason = errors.Add(SegmentationFailure.InvalidGraph(id, reason))
@@ -93,48 +112,27 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
             if not (graph.Nodes.ContainsKey target) then fail (Some id) "A structural or reference target is absent from the graph."
     for id, _ in graph.DeclarationRoots do
         if not (graph.Nodes.ContainsKey id) then fail (Some id) "A declaration root is absent from the graph."
-    // Module and binding addresses are independent of allocation order and source ranges.
-    let identities = Collections.Generic.Dictionary<NodeId, string>()
-    let visiting = Collections.Generic.HashSet<NodeId>()
-    let rec address id =
-        match identities.TryGetValue id with
-        | true, identity -> identity
-        | _ when not (visiting.Add id) ->
-            fail (Some id) "The lexical parent relation contains a cycle."
-            "cycle"
-        | _ ->
-            let node = graph.Nodes[id]
-            let identity =
-                match node.Parent |> Option.bind graph.Nodes.TryFind with
-                | Some parent ->
-                    let prefix = address parent.Id
-                    match node.Kind with
-                    | SemanticKind.Binding _ | SemanticKind.ModuleDef _ | SemanticKind.TypeDef _ | SemanticKind.MemberDef _ ->
-                        prefix + "/" + label node
-                    | _ ->
-                        let index = parent.Children |> List.tryFindIndex ((=) id)
-                        match index with
-                        | Some index -> prefix + "/" + string index
-                        | None -> prefix + "/" + label node
-                | None ->
-                    match node.Kind with
-                    | SemanticKind.ModuleDef _ | SemanticKind.Binding _ | SemanticKind.Obligation _ -> label node
-                    | _ -> "detached:" + label node + ":" + string node.Range
-            visiting.Remove id |> ignore
-            identities[id] <- identity
-            identity
-    if errors.Count = 0 then
-        for id in graph.Nodes.Keys do address id |> ignore
-    let names = identities |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq
-    for identity, group in names |> Map.toList |> List.groupBy snd do
+    // Module, binding, detached, and obligation addresses are independent of allocation order,
+    // Elaboration.Id counters, and SourceRange line/column trivia.
+    let allResolved =
+        if errors.Count > 0 then Map.empty
+        else
+            match WitnessSegmentation.canonicalAddresses graph with
+            | Result.Ok resolved -> resolved
+            | Result.Error cycleFailures ->
+                for nodeOpt, reason in cycleFailures do fail nodeOpt reason
+                Map.empty
+    let names = allResolved |> Map.filter (fun id _ -> graph.Nodes.ContainsKey id)
+    for identity, group in allResolved |> Map.toList |> List.groupBy snd do
         if group.Length <> 1 then errors.Add(SegmentationFailure.AmbiguousIdentity identity)
-    // Every top-level declaration owns its local storage. Module containers do
-    // not own sibling declarations and are never dependency providers.
+    // Every top-level declaration owns its local storage. Module containers and
+    // off-spine Obligation citizens do not own sibling declarations.
     let rec owner seen id =
         if Set.contains id seen then None else
         let node = graph.Nodes[id]
         match node.Kind with
-        | SemanticKind.ModuleDef _ -> None
+        | SemanticKind.ModuleDef _
+        | SemanticKind.Obligation _ -> None
         | _ ->
             match node.Parent |> Option.bind graph.Nodes.TryFind with
             | Some { Kind = SemanticKind.ModuleDef _ } -> Some id
@@ -143,6 +141,11 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
     let owners =
         if errors.Count > 0 then Map.empty else
         graph.Nodes.Keys |> Seq.choose (fun id -> owner Set.empty id |> Option.map (fun root -> id, names[root])) |> Map.ofSeq
+    let regionRootsByIdentity =
+        owners
+        |> Map.toSeq
+        |> Seq.choose (fun (id, identity) -> if names.TryFind id = Some identity then Some(identity, id) else None)
+        |> Map.ofSeq
     let codata = graph.Codata.Value
     let indexed id = graph.Nodes.ContainsKey id || codata.CallableContracts.ContainsKey id || codata.CallableAggregateSlots.ContainsKey id
     for edge in graph.Edges do
@@ -154,6 +157,9 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
         | Some consumer, Some provider when consumer <> provider ->
             deps.Add { Consumer = consumer; Provider = provider; Kind = kind; SupportNodes = support }
         | _ -> ()
+    let addRegionDependency kind consumerIdentity providerIdentity support =
+        if consumerIdentity <> providerIdentity then
+            deps.Add { Consumer = consumerIdentity; Provider = providerIdentity; Kind = kind; SupportNodes = support }
     let rec callable seen site target =
         if Set.contains target seen then
             errors.Add(SegmentationFailure.UnresolvedCallable(site, target))
@@ -203,10 +209,17 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                 | _ -> errors.Add(SegmentationFailure.BrokenEnvironment(id, "Environment access requires an indexed origin and a slot in its exact layout."))
             | _ -> ()
             // Reference dependencies include reads, stores and address-taking;
-            // structural storage operands remain in the owning callable region.
+            // references to immutable callable declarations are Call dependencies
+            // governed by CallableInterfaceDigest rather than mutable Storage.
             for edge in kindEdges id node.Kind do
                 if Hyperedge.isReference edge && edge.Role <> EdgeRole.Member then
-                    for source in edge.Sources do addDependency DependencyKind.Storage id source (Set.singleton source)
+                    for source in edge.Sources do
+                        let depKind =
+                            if edge.Role = EdgeRole.Definition && isCallableBoundary graph source then
+                                DependencyKind.Call
+                            else
+                                DependencyKind.Storage
+                        addDependency depKind id source (Set.singleton source)
         for KeyValue(key, layout) in codata.EnvironmentLayouts do
             let receivingFormal =
                 match graph.Nodes.TryFind layout.Implementation with
@@ -224,54 +237,79 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
     if errors.Count > 0 then Result.Error(List.ofSeq errors) else
     try
         // Contract identities are relation citizens rather than executable nodes.
-        let names =
-            codata.CallableContracts |> Map.fold (fun (names: Map<NodeId, string>) id contract ->
+        for KeyValue(id, contract) in codata.CallableContracts do
                 let participants = contract.Participants |> List.filter (fun p -> p.Role = ParticipantRole.CallableImplementation)
                 match participants with
                 | [implementation] when contract.Identity = id && implementation.Group = id &&
                                         implementation.Ordinal = 0 && names.ContainsKey implementation.Node && not (names.ContainsKey id) ->
-                    names.Add(id, "contract:" + names[implementation.Node])
+                    ()
                 | _ ->
                     fail (Some id) "A callable contract has no unique indexed implementation."
-                    names) names
-        let names =
-            codata.CallableAggregateSlots |> Map.fold (fun (names: Map<NodeId, string>) id row ->
-                let refs = references (box row) |> Set.remove id
-                let identity = refs |> Seq.choose names.TryFind |> Seq.sort |> String.concat "|"
-                let path = WitnessSegmentation.encoder names (box row.Path)
-                names.Add(id, "callable-slot:" + identity + ":" + path)) names
+        let names = allResolved
         let encode = WitnessSegmentation.encoder names
         let nodeFingerprints =
             graph.Nodes |> Map.map (fun _ node ->
                 let kind = match node.Kind with SemanticKind.ModuleDef(name, _) -> SemanticKind.ModuleDef(name, []) | kind -> kind
                 encode (box (kind, node.Type, node.SRTPResolution, node.ArenaAffinity, node.LayoutHint,
                              (match kind with SemanticKind.ModuleDef _ -> [] | _ -> node.Children),
-                             node.Parent, node.Metadata, node.IsReachable, node.EmissionStrategy, node.ValueRange))
+                             node.Parent, WitnessSegmentation.normalizeMetadata node.Metadata,
+                             node.IsReachable, node.EmissionStrategy, node.ValueRange))
                 |> hash)
+        let environmentLayoutOwners =
+            codata.EnvironmentLayouts.Values
+            |> Seq.choose (fun l -> owners.TryFind l.Owner)
+            |> Set.ofSeq
+        let classifyProviderDependency (providerIdentity: string) =
+            match regionRootsByIdentity.TryFind providerIdentity with
+            | Some rootId when isCallableBoundary graph rootId && not (environmentLayoutOwners.Contains providerIdentity) ->
+                DependencyKind.Call
+            | _ ->
+                DependencyKind.ProofSupport
         let supports = ResizeArray<SupportEdge>()
-        let addSupport domain key anchor value =
+        let addSupportWithProviders domain key anchor value (explicitProviders: Set<string> option) =
             let refs = references value
             let consumers =
                 match anchor |> Option.bind owners.TryFind with
                 | Some consumer -> Set.singleton consumer
                 | None ->
                     let referenced = refs |> Seq.choose owners.TryFind |> Set.ofSeq
-                    if referenced.IsEmpty then owners.Values |> Set.ofSeq else referenced
-            let providers = refs |> Seq.choose owners.TryFind |> Set.ofSeq
+                    if referenced.IsEmpty then regionRootsByIdentity.Keys |> Set.ofSeq else referenced
+            let rawProviders =
+                match explicitProviders with
+                | Some p -> p
+                | None -> refs |> Seq.choose owners.TryFind |> Set.ofSeq
             let fingerprint = encode value |> hash
             for consumer in consumers do
-                let providers = providers.Remove consumer
+                let providers = rawProviders.Remove consumer
                 supports.Add { Consumer = consumer; Domain = domain; Identity = key; Providers = providers
                                SupportNodes = refs; Fingerprint = fingerprint }
                 for provider in providers do
-                    deps.Add { Consumer = consumer; Provider = provider; Kind = DependencyKind.ProofSupport; SupportNodes = refs }
+                    addRegionDependency (classifyProviderDependency provider) consumer provider refs
+        let addSupport domain key anchor value =
+            addSupportWithProviders domain key anchor value None
         let mapRows domain (rows: Map<NodeId, 'a>) =
             for KeyValue(id, value) in rows do
                 let anchor =
                     if owners.ContainsKey id then Some id
                     else references (box value) |> Seq.tryFind owners.ContainsKey
                 addSupport domain (names.TryFind id |> Option.defaultValue domain) anchor (box value)
-        mapRows "CallableContracts" codata.CallableContracts
+        // CallableContracts: anchor at CallableImplementation without backward ProofSupport coupling from callers.
+        for KeyValue(id, contract) in codata.CallableContracts do
+            let implAnchor =
+                contract.Participants
+                |> List.tryFind (fun p -> p.Role = ParticipantRole.CallableImplementation)
+                |> Option.map _.Node
+            let nonCallerRefs =
+                contract.Participants
+                |> List.filter (fun p -> p.Role <> ParticipantRole.Source)
+                |> List.choose (fun p -> owners.TryFind p.Node)
+                |> Set.ofList
+            addSupportWithProviders
+                "CallableContracts"
+                (names.TryFind id |> Option.defaultValue "CallableContracts")
+                implAnchor
+                (box contract)
+                (Some nonCallerRefs)
         mapRows "MutableCallableStorage" codata.MutableCallableStorage
         mapRows "ClosureDomain.Layouts" codata.EnvironmentLayouts
         mapRows "ClosureDomain.Origins" codata.EnvironmentOrigins
@@ -280,52 +318,258 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
         for KeyValue(identity, entry) in codata.ProgramStorage.Entries do
             let id = match identity with ProgramStorageIdentity.Allocation id | ProgramStorageIdentity.BindingSlot id -> id
             addSupport "ProgramStorage" names[id] (Some id) (box entry)
-        // Preserve every authored edge, including complete domain inventories
-        // and absence observations. Domain fields are scoped at their existing
-        // row boundary so unrelated declarations do not share a ModuleDef owner.
-        let domainRows domain (value: objnull) =
+        // Preserve authored domain edges at row granularity so unrelated declarations
+        // do not share a monolithic whole-program receipt.
+        let rec domainRows domain (value: objnull) =
             let value = value |> Option.ofObj |> Option.get
             for field in FSharpType.GetRecordFields(value.GetType(), flags) do
-                let row = field.GetValue value
-                match row with
-                | :? IEnumerable as items when not (row :? string) ->
-                    for item in items do
-                        let refs = references item
-                        let key = domain + "." + field.Name + ":" + (refs |> Seq.choose names.TryFind |> Seq.sort |> String.concat "|")
-                        let ty = item |> Option.ofObj |> Option.map (fun value -> value.GetType())
-                        match ty with
-                        | Some ty when ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<Collections.Generic.KeyValuePair<_, _>> ->
-                            let rowKey = (property ty "Key").GetValue item
-                            let value = (property ty "Value").GetValue item
-                            let anchor = match rowKey with :? NodeId as id -> Some id | _ -> None
-                            addSupport domain key anchor (box (rowKey, value))
-                        | _ -> addSupport domain key (rowAnchor item) item
-                | _ ->
-                    // Scalar headers/negative observations are dependencies of
-                    // every declaration, but contain no sibling executable body.
-                    for KeyValue(id, _) in graph.Nodes do
-                        if owners.TryFind id = names.TryFind id then addSupport domain (domain + "." + field.Name) (Some id) row
+                let fieldDomain = domain + "." + field.Name
+                let raw = field.GetValue value
+                let isOption = field.PropertyType.IsGenericType && field.PropertyType.GetGenericTypeDefinition() = typedefof<option<_>>
+                let row =
+                    if isOption then
+                        let present = not (isNull raw)
+                        for KeyValue(_, rootId) in regionRootsByIdentity do
+                            addSupport domain (fieldDomain + ".presence") (Some rootId) (box ("present:" + (if present then "true" else "false")))
+                        if present then (FSharpValue.GetUnionFields(raw, field.PropertyType, flags) |> snd)[0] else null
+                    else raw
+                let rec route (row: objnull) =
+                    match row with
+                    | :? IEnumerable as items when not (row :? string) ->
+                        for item in items do
+                            let refs = references item
+                            let key = domain + "." + field.Name + ":" + (refs |> Seq.choose names.TryFind |> Seq.sort |> String.concat "|")
+                            let ty = item |> Option.ofObj |> Option.map (fun value -> value.GetType())
+                            match ty with
+                            | Some ty when ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<Collections.Generic.KeyValuePair<_, _>> ->
+                                let rowKey = (property ty "Key").GetValue item
+                                let itemVal = (property ty "Value").GetValue item
+                                let anchor = match rowKey with :? NodeId as id -> Some id | _ -> None
+                                addSupport domain key anchor (box (rowKey, itemVal))
+                            | _ -> addSupport domain key (rowAnchor item) item
+                    | _ when row |> Option.ofObj |> Option.exists (fun value -> value.GetType().IsGenericType && value.GetType().GetGenericTypeDefinition() = typedefof<Result<_, _>>) ->
+                        let value = row |> Option.ofObj |> Option.get
+                        let case, fields = FSharpValue.GetUnionFields(value, value.GetType(), flags)
+                        for KeyValue(_, rootId) in regionRootsByIdentity do
+                            addSupport domain (fieldDomain + ".case") (Some rootId) (box case.Name)
+                        for item in fields do route item
+                    | _ when isOption && (row |> Option.ofObj |> Option.exists (fun value -> FSharpType.IsRecord(value.GetType(), flags))) ->
+                        domainRows fieldDomain row
+                    | _ ->
+                        // Scalar headers/negative observations carry no sibling body references.
+                        for regionIdentity, rootId in Map.toSeq regionRootsByIdentity do
+                            let _ = regionIdentity
+                            addSupport domain (domain + "." + field.Name) (Some rootId) row
+                if not isOption || not (isNull row) then route row
         for edge in graph.Edges do
             match edge.Role with
             | EdgeRole.NumericDomain domain -> domainRows "NumericDomain" (box domain)
             | EdgeRole.MemoryDomain domain -> domainRows "MemoryDomain" (box domain)
             | EdgeRole.SpatialModuleDomain domain -> domainRows "SpatialModuleDomain" (box domain)
+            | EdgeRole.BoundaryDomain domain -> domainRows "BoundaryDomain" (box domain)
+            | role when isCrossCallableProvenanceRole role ->
+                ()
             | _ ->
-                for source in edge.Sources do addDependency DependencyKind.ProofSupport edge.Target source (Set.ofList (edge.Target :: edge.Sources))
-                addSupport "Relation" (encode (box (edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources))) (Some edge.Target) (box edge)
-        let regionMap =
-            owners |> Map.toList |> List.groupBy snd |> List.map (fun (identity, nodes) ->
+                let anchor =
+                    if owners.ContainsKey edge.Target then Some edge.Target
+                    else edge.Sources |> List.tryFind owners.ContainsKey
+                for source in edge.Sources do
+                    match owners.TryFind edge.Target, owners.TryFind source with
+                    | Some targetOwner, Some sourceOwner when targetOwner <> sourceOwner ->
+                        addRegionDependency (classifyProviderDependency sourceOwner) targetOwner sourceOwner (Set.ofList (edge.Target :: edge.Sources))
+                    | _ -> ()
+                let encodedKey = encode (box (edge.Class, edge.Ordinal, edge.Target, edge.Sources))
+                let payload =
+                    match graph.Nodes.TryFind edge.Target with
+                    | Some { Kind = SemanticKind.Obligation info } -> box (edge, info)
+                    | _ -> box edge
+                addSupport "Relation" encodedKey anchor payload
+        let settledDependencies = deps |> Seq.distinct |> Seq.sort |> Seq.toList
+        let settledSupports = supports |> Seq.distinct |> Seq.sort |> Seq.toList
+        let platformInterface =
+            graph.Platform |> Option.map (fun p -> p.PlatformId, p.SubstrateKind, p.RuntimeModel, p.Dimensions)
+        let platformCensuses =
+            WitnessSegmentation.platformLayoutCensus graph.Platform @
+            WitnessSegmentation.platformSpaceCensus graph
+        let numericResolutionSummary =
+            let read = PlatformResolution.read graph
+            match read.Platform with
+            | Some p when read.Findings.IsEmpty ->
+                let coreSummary =
+                    p.Core |> Option.map (fun c ->
+                        c.Widths |> List.map (fun w -> w.Name, w.Bits),
+                        c.Representations |> List.map (fun r -> r.Representation))
+                Some(p.Id, coreSummary)
+            | _ -> None
+        let groupedRegions = owners |> Map.toList |> List.groupBy snd
+        // Pass 1: compute CallableInterfaceDigest for every segmented declaration region.
+        let interfaceDigests =
+            groupedRegions
+            |> List.map (fun (identity, nodes) ->
                 let members = nodes |> List.map fst |> Set.ofList
-                let root = members |> Seq.find (fun id -> names[id] = identity)
-                let inputs = members |> Seq.map (fun id -> names[id] + ":" + nodeFingerprints[id]) |> Seq.sort |> String.concat "|"
-                let proofInputs = supports |> Seq.filter (fun edge -> edge.Consumer = identity)
-                                  |> Seq.map (fun edge -> edge.Domain + ":" + edge.Identity + ":" + edge.Fingerprint)
-                                  |> Seq.sort |> String.concat "|"
-                identity, { Identity = identity; Root = root; Members = members
-                            Fingerprint = hash (inputs + "|" + proofInputs + "|" + encode (box graph.Platform)) }) |> Map.ofList
+                let root = regionRootsByIdentity[identity]
+                let rootNode = graph.Nodes[root]
+                let ownedContracts =
+                    codata.CallableContracts.Values
+                    |> Seq.filter (fun contract ->
+                        contract.Participants |> List.exists (fun p ->
+                            p.Role = ParticipantRole.CallableImplementation && members.Contains p.Node))
+                    |> Seq.map (fun contract ->
+                        { contract with
+                            SourcePremises = Map.empty
+                            Participants = contract.Participants |> List.filter (fun p -> p.Role <> ParticipantRole.Source) })
+                    |> Seq.map (fun c -> names[c.Identity] + ":" + encode (box c))
+                    |> Seq.sort
+                    |> String.concat "|"
+                let interfacePreimage =
+                    if isCallableBoundary graph root then
+                        let lambdaId = rootNode.Children.Head
+                        let lambdaNode = graph.Nodes[lambdaId]
+                        let paramSummary, captures, context =
+                            match lambdaNode.Kind with
+                            | SemanticKind.Lambda(parameters, _, captures, _, context) ->
+                                let ps =
+                                    parameters |> List.map (fun (pName, pType, pId) ->
+                                        let pNode = graph.Nodes[pId]
+                                        pName, pType, pNode.ArenaAffinity, pNode.LayoutHint, codata.Escapes.TryFind pId)
+                                ps, captures, context
+                            | _ -> [], [], LambdaContext.RegularClosure
+                        let ownedCarriers =
+                            [ root; lambdaId ]
+                            |> List.choose (fun nid -> codata.CallableCarriers.TryFind nid |> Option.map (fun c -> names[nid] + ":" + encode (box c)))
+                            |> String.concat "|"
+                        let envLayoutHeader =
+                            codata.EnvironmentLayouts.TryFind lambdaId
+                            |> Option.map (fun l -> encode (box (l.Bytes, l.Alignment, l.Slots |> List.map (fun s -> s.Field, s.Holds, s.IsCapture))))
+                            |> Option.defaultValue ""
+                        [ "callable-interface-v1"
+                          identity
+                          encode (box (rootNode.Kind, rootNode.Type, rootNode.SRTPResolution, rootNode.ArenaAffinity, rootNode.LayoutHint, rootNode.IsReachable, rootNode.EmissionStrategy, WitnessSegmentation.normalizeMetadata rootNode.Metadata))
+                          encode (box (lambdaNode.Type, lambdaNode.SRTPResolution, lambdaNode.ArenaAffinity, lambdaNode.LayoutHint, lambdaNode.EmissionStrategy, WitnessSegmentation.normalizeMetadata lambdaNode.Metadata))
+                          encode (box (paramSummary, captures, context))
+                          encode (box (codata.Escapes.TryFind root, codata.Escapes.TryFind lambdaId))
+                          encode (box (codata.Closures.TryFind lambdaId))
+                          envLayoutHeader
+                          ownedContracts
+                          ownedCarriers
+                          encode (box platformInterface) ]
+                        |> String.concat "\n"
+                    else
+                        let memberSummary =
+                            members
+                            |> Seq.map (fun id -> names[id] + ":" + nodeFingerprints[id])
+                            |> Seq.sort
+                            |> String.concat "|"
+                        let storageEntries =
+                            codata.ProgramStorage.Entries
+                            |> Map.toSeq
+                            |> Seq.choose (fun (sid, entry) ->
+                                let nid = match sid with ProgramStorageIdentity.Allocation n | ProgramStorageIdentity.BindingSlot n -> n
+                                if members.Contains nid then Some(names[nid] + ":" + encode (box entry)) else None)
+                            |> Seq.sort
+                            |> String.concat "|"
+                        [ "callable-interface-storage-v1"
+                          identity
+                          memberSummary
+                          ownedContracts
+                          storageEntries
+                          encode (box platformInterface) ]
+                        |> String.concat "\n"
+                identity, CallableInterfaceDigest(CallableInterfaceDigest.DomainPrefix + hash interfacePreimage))
+            |> Map.ofList
+        // Pass 2: compute SemanticRealizationDigest (using referenced callees' CallableInterfaceDigest)
+        // and CanonicalProofSupportDigest for every segmented declaration region.
+        let regionMap =
+            groupedRegions
+            |> List.map (fun (identity, nodes) ->
+                let members = nodes |> List.map fst |> Set.ofList
+                let root = regionRootsByIdentity[identity]
+                let ownInterface = interfaceDigests[identity]
+                let memberInputs =
+                    members
+                    |> Seq.map (fun id -> names[id] + ":" + nodeFingerprints[id])
+                    |> Seq.sort
+                    |> String.concat "|"
+                let referencedCallInterfaces =
+                    settledDependencies
+                    |> List.choose (fun edge ->
+                        if edge.Consumer = identity && edge.Kind = DependencyKind.Call then
+                            interfaceDigests.TryFind edge.Provider
+                            |> Option.map (fun d -> edge.Provider + ":" + d.Value)
+                        else None)
+                    |> List.distinct
+                    |> List.sort
+                    |> String.concat "|"
+                let referencedStorageAndEnv =
+                    settledDependencies
+                    |> List.choose (fun edge ->
+                        if edge.Consumer = identity && (edge.Kind = DependencyKind.Storage || edge.Kind = DependencyKind.CapturedEnvironment) then
+                            interfaceDigests.TryFind edge.Provider
+                            |> Option.map (fun d -> sprintf "%A:%s:%s" edge.Kind edge.Provider d.Value)
+                        else None)
+                    |> List.distinct
+                    |> List.sort
+                    |> String.concat "|"
+                let memberTypes =
+                    members
+                    |> Set.map (fun id -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[id].Type)
+                let scopedLayouts =
+                    graph.Layouts.Value
+                    |> Map.toSeq
+                    |> Seq.choose (fun (tyId, layout) ->
+                        if memberTypes.Contains tyId then Some(encode (box (tyId, layout))) else None)
+                    |> Seq.sort
+                    |> String.concat "|"
+                let envRealization =
+                    codata.EnvironmentLayouts
+                    |> Map.toSeq
+                    |> Seq.choose (fun (lid, layout) ->
+                        if members.Contains lid then Some(names[lid] + ":" + encode (box layout)) else None)
+                    |> Seq.sort
+                    |> String.concat "|"
+                let realizationPreimage =
+                    [ "semantic-realization-v1"
+                      identity
+                      ownInterface.Value
+                      memberInputs
+                      referencedCallInterfaces
+                      referencedStorageAndEnv
+                      scopedLayouts
+                      envRealization
+                      encode (box graph.Platform) ]
+                    |> String.concat "\n"
+                let realizationDigest =
+                    SemanticRealizationDigest(SemanticRealizationDigest.DomainPrefix + hash realizationPreimage)
+                let proofInputs =
+                    settledSupports
+                    |> List.filter (fun edge -> edge.Consumer = identity)
+                    |> List.map (fun edge -> edge.Domain + ":" + edge.Identity + ":" + edge.Fingerprint)
+                    |> List.sort
+                    |> String.concat "|"
+                let proofPreimage =
+                    [ "proof-support-v1"
+                      identity
+                      proofInputs
+                      encode (box platformCensuses)
+                      encode (box numericResolutionSummary)
+                      encode (box graph.Platform) ]
+                    |> String.concat "\n"
+                let proofSupportDigest =
+                    CanonicalProofSupportDigest(CanonicalProofSupportDigest.DomainPrefix + hash proofPreimage)
+                identity,
+                { Identity = identity
+                  Root = root
+                  Members = members
+                  CallableInterfaceDigest = ownInterface
+                  SemanticRealizationDigest = realizationDigest
+                  CanonicalProofSupportDigest = proofSupportDigest })
+            |> Map.ofList
         if errors.Count > 0 then Result.Error(List.ofSeq errors) else
-        Result.Ok { Regions = regionMap; Dependencies = deps |> Seq.distinct |> Seq.sort |> Seq.toList
-                    SupportEdges = supports |> Seq.distinct |> Seq.sort |> Seq.toList
-                    NodeIdentities = names; NodeOwners = owners; NodeFingerprints = nodeFingerprints }
+        Result.Ok { Regions = regionMap
+                    Dependencies = settledDependencies
+                    SupportEdges = settledSupports
+                    NodeIdentities = allResolved |> Map.filter (fun id _ -> graph.Nodes.ContainsKey id)
+                    NodeOwners = owners
+                    NodeFingerprints = nodeFingerprints }
     with :? InvalidOperationException as error ->
         Result.Error [SegmentationFailure.UnsupportedInput error.Message]

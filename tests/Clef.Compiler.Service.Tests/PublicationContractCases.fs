@@ -350,8 +350,11 @@ let main _ =
         Assert.True(before.ContainsKey first, sprintf "Missing independent first region: %A" before.Keys)
         Assert.True(before.ContainsKey second, sprintf "Missing independent second region: %A" before.Keys)
         Assert.NotEqual(before[first].Root, after[first].Root)
-        Assert.Equal(before[first].Fingerprint, after[first].Fingerprint)
-        Assert.NotEqual(before[second].Fingerprint, after[second].Fingerprint)
+        Assert.Equal(before[first].CallableInterfaceDigest, after[first].CallableInterfaceDigest)
+        Assert.Equal(before[first].SemanticRealizationDigest, after[first].SemanticRealizationDigest)
+        Assert.Equal(before[first].CanonicalProofSupportDigest, after[first].CanonicalProofSupportDigest)
+        Assert.Equal(before[second].CallableInterfaceDigest, after[second].CallableInterfaceDigest)
+        Assert.NotEqual(before[second].SemanticRealizationDigest, after[second].SemanticRealizationDigest)
         Assert.NotEmpty after[first].Supports
         Assert.Equal(Fidelity.PSG.WitnessRegionKind.Common, after["common"].Flavor)
 
@@ -362,7 +365,7 @@ let main _ =
         let segmentation = prepared.Codata.Value.WitnessSegmentation |> Option.get
         let changedSegmentation =
             { segmentation with
-                Regions = segmentation.Regions |> List.map (fun region -> { region with Fingerprint = "stale" }) }
+                Regions = segmentation.Regions |> List.map (fun region -> { region with SemanticRealizationDigest = SemanticRealizationDigest "semantic-realization:stale" }) }
         let changed =
             { prepared with
                 Codata = lazy { prepared.Codata.Value with WitnessSegmentation = Some changedSegmentation } }
@@ -647,3 +650,51 @@ type CallableBranchPublicationCases() =
         Assert.Empty changed.Codata.Value.CallableBranches.Observations
         Assert.NotEmpty graph.Codata.Value.CallableBranches.Observations
         CallableBranchPublicationFixture.publish graph |> ignore
+
+type PublicationContractCasesPurity() =
+    [<Fact>]
+    member _.``Region digests do not depend on layout evaluation order`` () =
+        let graph = PublicationFixture.check "record" PublicationFixture.programs["record"]
+        let layouts = graph.Layouts.Value
+        let unforced = { graph with Layouts = lazy layouts }
+        let forced = { graph with Layouts = lazy layouts }
+        forced.Layouts.Value |> ignore
+        Assert.False unforced.Layouts.IsValueCreated
+        let segment graph =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        let before = segment unforced
+        let after = segment forced
+        Assert.Equal(before.Regions.Count, after.Regions.Count)
+        for KeyValue(identity, region) in before.Regions do
+            let other = after.Regions[identity]
+            Assert.Equal(region.CallableInterfaceDigest, other.CallableInterfaceDigest)
+            Assert.Equal(region.SemanticRealizationDigest, other.SemanticRealizationDigest)
+            Assert.Equal(region.CanonicalProofSupportDigest, other.CanonicalProofSupportDigest)
+
+    [<Fact>]
+    member _.``Nanopass graph values do not enter reactive wrappers`` () =
+        let flags = System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Instance ||| System.Reflection.BindingFlags.Static
+        let forbidden (name: string) =
+            name.Contains("RowCheck") || name.Contains("EnvNode") || name.Contains("shareCache")
+        let rec contains (predicate: System.Type -> bool) (ty: System.Type) =
+            predicate ty ||
+            (ty.HasElementType && (ty.GetElementType() |> Option.ofObj |> Option.exists (contains predicate))) ||
+            (ty.IsGenericType && (ty.GetGenericArguments() |> Array.exists (contains predicate)))
+        let wrapper (ty: System.Type) = forbidden ty.Name
+        let graphOrPass (ty: System.Type) =
+            ty = typeof<SemanticNode> ||
+            (["EdgeClass"; "NumericCarrier"; "RangeAnalysis"; "Escape"; "Obligation"; "Boundary"] |> List.exists ty.Name.Contains)
+        let wrapped ty = contains wrapper ty && contains graphOrPass ty
+        let violations =
+            typeof<SemanticGraph>.Assembly.GetTypes()
+            |> Array.collect (fun ty ->
+                let typeName = ty.FullName |> Option.ofObj |> Option.defaultValue ty.Name
+                let fields = ty.GetFields(flags) |> Array.choose (fun field ->
+                    if wrapped field.FieldType || ((forbidden typeName || forbidden field.Name) && contains graphOrPass field.FieldType) then Some(typeName + "." + field.Name) else None)
+                let methods = ty.GetMethods(flags) |> Array.choose (fun methodInfo ->
+                    let types = methodInfo.ReturnType :: (methodInfo.GetParameters() |> Array.map _.ParameterType |> Array.toList)
+                    if (types |> List.exists wrapped) || ((forbidden typeName || forbidden methodInfo.Name) && (types |> List.exists (contains graphOrPass))) then Some(typeName + "." + methodInfo.Name) else None)
+                let types = if wrapped ty then [|typeName|] else [||]
+                Array.concat [ types; fields; methods ])
+        Assert.Empty violations

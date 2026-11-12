@@ -860,6 +860,10 @@ and mapCallableFlowCall (value: S.CallableFlowCall) : Fidelity.PSG.CallableFlowC
         Result = nodeId value.Result
     } : Fidelity.PSG.CallableFlowCall)
 
+and mapCallableInterfaceDigest (value: S.CallableInterfaceDigest) : Fidelity.PSG.CallableInterfaceDigest =
+    match value with
+    | S.CallableInterfaceDigest(a0) -> Fidelity.PSG.CallableInterfaceDigest(a0)
+
 and mapCallableJoin (value: S.CallableJoin) : Fidelity.PSG.CallableJoin =
     ({
         Occurrence = nodeId value.Occurrence
@@ -894,6 +898,10 @@ and mapCallableValueShape (value: S.CallableValueShape) : Fidelity.PSG.CallableV
     | S.CallableValueShape.Callable(a0) -> Fidelity.PSG.CallableValueShape.Callable(nodeId a0)
     | S.CallableValueShape.Sequence(a0) -> Fidelity.PSG.CallableValueShape.Sequence(nodeId a0)
     | S.CallableValueShape.Lazy(a0) -> Fidelity.PSG.CallableValueShape.Lazy(nodeId a0)
+
+and mapCanonicalProofSupportDigest (value: S.CanonicalProofSupportDigest) : Fidelity.PSG.CanonicalProofSupportDigest =
+    match value with
+    | S.CanonicalProofSupportDigest(a0) -> Fidelity.PSG.CanonicalProofSupportDigest(a0)
 
 and mapCaptureInfo (value: N.CaptureInfo) : Fidelity.PSG.CaptureInfo =
     ({
@@ -2663,6 +2671,36 @@ and mapProgramStorageShape (value: S.ProgramStorageShape) : Fidelity.PSG.Program
     | S.ProgramStorageShape.NativeEntry(a0) -> Fidelity.PSG.ProgramStorageShape.NativeEntry(nodeId a0)
     | S.ProgramStorageShape.CallableCell(a0) -> Fidelity.PSG.ProgramStorageShape.CallableCell(a0)
 
+and mapProofSupportCensus (value: S.ProofSupportCensus) : Fidelity.PSG.ProofSupportCensus =
+    ({
+        Identity = value.Identity
+        Kind = mapProofSupportCensusKind value.Kind
+        Entries = value.Entries
+    } : Fidelity.PSG.ProofSupportCensus)
+
+and mapProofSupportCensusKind (value: S.ProofSupportCensusKind) : Fidelity.PSG.ProofSupportCensusKind =
+    match value with
+    | S.ProofSupportCensusKind.NumericInterface -> Fidelity.PSG.ProofSupportCensusKind.NumericInterface
+    | S.ProofSupportCensusKind.PlatformLayout -> Fidelity.PSG.ProofSupportCensusKind.PlatformLayout
+    | S.ProofSupportCensusKind.PlatformSpace -> Fidelity.PSG.ProofSupportCensusKind.PlatformSpace
+    | S.ProofSupportCensusKind.BoundaryAbsence -> Fidelity.PSG.ProofSupportCensusKind.BoundaryAbsence
+    | S.ProofSupportCensusKind.DomainUniqueness -> Fidelity.PSG.ProofSupportCensusKind.DomainUniqueness
+
+and mapProofSupportCoverage (value: S.ProofSupportCoverage) : Fidelity.PSG.ProofSupportCoverage =
+    match value with
+    | S.ProofSupportCoverage.Local(a0, a1) -> Fidelity.PSG.ProofSupportCoverage.Local((a0 |> List.map (fun x -> mapProofSupportParticipant x)), (a1 |> List.map (fun x -> mapProofSupportCensus x)))
+    | S.ProofSupportCoverage.Shared(a0, a1, a2) -> Fidelity.PSG.ProofSupportCoverage.Shared(a0, (a1 |> List.map (fun x -> mapProofSupportParticipant x)), (a2 |> List.map (fun x -> mapProofSupportCensus x)))
+    | S.ProofSupportCoverage.Global(a0, a1) -> Fidelity.PSG.ProofSupportCoverage.Global((a0 |> List.map (fun x -> mapProofSupportParticipant x)), (a1 |> List.map (fun x -> mapProofSupportCensus x)))
+    | S.ProofSupportCoverage.Unclassified(a0, a1) -> Fidelity.PSG.ProofSupportCoverage.Unclassified(a0, a1)
+
+and mapProofSupportParticipant (value: S.ProofSupportParticipant) : Fidelity.PSG.ProofSupportParticipant =
+    ({
+        Address = value.Address
+        Role = mapParticipantRole value.Role
+        Ordinal = value.Ordinal
+        Group = value.Group
+    } : Fidelity.PSG.ProofSupportParticipant)
+
 and mapRecurrencePowerStep (value: S.RecurrencePowerStep) : Fidelity.PSG.RecurrencePowerStep =
     ({
         Odd = value.Odd
@@ -2915,6 +2953,10 @@ and mapSemanticKind (value: S.SemanticKind) : Fidelity.PSG.SemanticKind =
     | S.SemanticKind.TupleGet(a0, a1) -> Fidelity.PSG.SemanticKind.TupleGet(nodeId a0, a1)
     | S.SemanticKind.Error(a0) -> Fidelity.PSG.SemanticKind.Error(a0)
     | S.SemanticKind.Obligation(a0) -> Fidelity.PSG.SemanticKind.Obligation(mapObligationInfo a0)
+
+and mapSemanticRealizationDigest (value: S.SemanticRealizationDigest) : Fidelity.PSG.SemanticRealizationDigest =
+    match value with
+    | S.SemanticRealizationDigest(a0) -> Fidelity.PSG.SemanticRealizationDigest(a0)
 
 and mapSequenceFamily (value: S.SequenceFamily) : Fidelity.PSG.SequenceFamily =
     ({
@@ -3290,7 +3332,10 @@ and mapWitnessRegion (value: S.WitnessRegion) : Fidelity.PSG.WitnessRegion =
         Members = (value.Members |> Set.map (fun x -> nodeId x))
         Supports = (value.Supports |> Set.map (fun x -> nodeId x))
         OwnerSupport = mapWitnessScopeSupport value.OwnerSupport
-        Fingerprint = value.Fingerprint
+        CallableInterfaceDigest = mapCallableInterfaceDigest value.CallableInterfaceDigest
+        SemanticRealizationDigest = mapSemanticRealizationDigest value.SemanticRealizationDigest
+        CanonicalProofSupportDigest = mapCanonicalProofSupportDigest value.CanonicalProofSupportDigest
+        ProofSupportCoverage = mapProofSupportCoverage value.ProofSupportCoverage
         Dependencies = value.Dependencies
     } : Fidelity.PSG.WitnessRegion)
 

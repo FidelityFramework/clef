@@ -3773,6 +3773,92 @@ type WitnessScopeSupport = { Identity: string; Policy: WitnessScopeSupportPolicy
 [<RequireQualifiedAccess>]
 type WitnessRegionKind = Common | ScalarCallable
 
+/// Settled callable-interface boundary digest: signature TypeIdentity, parameter
+/// and return ValueRepresentation, PassBy ABI, escape/arena summary, and callable
+/// contract boundary. Downstream callers depend on this digest so body-only
+/// callee edits cut off.
+type CallableInterfaceDigest =
+    | CallableInterfaceDigest of digest: string
+    member this.Value =
+        let (CallableInterfaceDigest v) = this
+        v
+
+module CallableInterfaceDigest =
+    [<Literal>]
+    let DomainPrefix = "callable-interface:"
+
+    let value (CallableInterfaceDigest digest) = digest
+
+/// Range-invariant semantic realization digest: region body, referenced
+/// CallableInterfaceDigest values, and scoped TypeIdentity representations with
+/// SourceRange line/column offsets and doc-comment trivia excluded. Governs
+/// selective Baker cone saturation and Alex witnessing.
+type SemanticRealizationDigest =
+    | SemanticRealizationDigest of digest: string
+    member this.Value =
+        let (SemanticRealizationDigest v) = this
+        v
+
+module SemanticRealizationDigest =
+    [<Literal>]
+    let DomainPrefix = "semantic-realization:"
+
+    let value (SemanticRealizationDigest digest) = digest
+
+/// Canonical proof-support digest: complete obligation premises, participant
+/// roles/ordinals, and closed-world platform uniqueness/absence censuses with
+/// volatile elaboration IDs, process-local NodeId values, and SourceRange
+/// offsets excluded. Governs gate D10 ProofReuse.
+type CanonicalProofSupportDigest =
+    | CanonicalProofSupportDigest of digest: string
+    member this.Value =
+        let (CanonicalProofSupportDigest v) = this
+        v
+
+module CanonicalProofSupportDigest =
+    [<Literal>]
+    let DomainPrefix = "proof-support:"
+
+    let value (CanonicalProofSupportDigest digest) = digest
+
+/// Canonical proof-support participant occurrence normalized away from
+/// process-local NodeId and Elaboration.Id values.
+[<RequireQualifiedAccess>]
+type ProofSupportParticipant = {
+    Address: string
+    Role: ParticipantRole
+    Ordinal: int
+    Group: string
+}
+
+/// Closed-world domain uniqueness or absence census category contributing to
+/// canonical proof support.
+[<RequireQualifiedAccess>]
+type ProofSupportCensusKind =
+    | NumericInterface
+    | PlatformLayout
+    | PlatformSpace
+    | BoundaryAbsence
+    | DomainUniqueness
+
+/// One canonical closed-world platform, uniqueness, or absence census dependency
+/// row read by proof support.
+type ProofSupportCensus = {
+    Identity: string
+    Kind: ProofSupportCensusKind
+    Entries: Set<string>
+}
+
+/// Scope and canonical participant/census account of a region's proof support.
+/// Unclassified coverage must state a nonempty reason and a nonempty canonical
+/// support set; it never serializes or validates as an empty support set.
+[<RequireQualifiedAccess>]
+type ProofSupportCoverage =
+    | Local of participants: ProofSupportParticipant list * censuses: ProofSupportCensus list
+    | Shared of sharedRegions: Set<string> * participants: ProofSupportParticipant list * censuses: ProofSupportCensus list
+    | Global of participants: ProofSupportParticipant list * censuses: ProofSupportCensus list
+    | Unclassified of reason: string * supports: Set<string>
+
 type WitnessRegion = {
     Identity: string
     Flavor: WitnessRegionKind
@@ -3784,7 +3870,10 @@ type WitnessRegion = {
     /// Complete source observations underlying the bounded reuse admission.
     Supports: Set<NodeId>
     OwnerSupport: WitnessScopeSupport
-    Fingerprint: string
+    CallableInterfaceDigest: CallableInterfaceDigest
+    SemanticRealizationDigest: SemanticRealizationDigest
+    CanonicalProofSupportDigest: CanonicalProofSupportDigest
+    ProofSupportCoverage: ProofSupportCoverage
     Dependencies: Set<string>
 }
 

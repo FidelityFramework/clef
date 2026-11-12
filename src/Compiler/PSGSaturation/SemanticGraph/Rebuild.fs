@@ -32,19 +32,57 @@ type RebuildSchedule =
 
 /// A comparison-only view for Reachability. It is never elaborated or published.
 /// Node payloads are exact stable source fingerprints; source incidence remains
-/// directed, and ModuleDef remains a lexical container rather than a sibling hub.
+/// directed, ModuleDef remains a lexical container rather than a sibling hub,
+/// and immutable callable declaration roots expose their executable signature
+/// across VarRef call edges so internal body edits cut off when the interface holds.
 let private shadowView (graph: SemanticGraph) (plan: SegmentationPlan) (canonical: Map<string, NodeId>) =
     let translate id = canonical[plan.NodeIdentities[id]]
+    let encode = WitnessSegmentation.encoder plan.NodeIdentities
+    let callableBoundaries =
+        graph.Nodes.Keys
+        |> Seq.filter (isCallableBoundary graph)
+        |> Set.ofSeq
+    let detachedCallableLambdas =
+        callableBoundaries
+        |> Seq.choose (fun bid -> graph.Nodes[bid].Children |> List.tryHead)
+        |> Set.ofSeq
     let nodes =
         graph.Nodes |> Map.toSeq |> Seq.map (fun (id, node) ->
-            let kind =
+            let kind, children, parent =
                 match node.Kind with
-                | SemanticKind.ModuleDef(name, members) -> SemanticKind.ModuleDef(name, members |> List.map translate)
-                | _ -> SemanticKind.Literal(NativeLiteral.String plan.NodeFingerprints[id])
+                | SemanticKind.ModuleDef(name, members) ->
+                    SemanticKind.ModuleDef(name, members |> List.map translate),
+                    node.Children |> List.map translate,
+                    node.Parent |> Option.map translate
+                | _ when callableBoundaries.Contains id ->
+                    let lambdaNode = graph.Nodes[node.Children.Head]
+                    let signature =
+                        match lambdaNode.Kind with
+                        | SemanticKind.Lambda(parameters, _, captures, _, context) ->
+                            let parameters = parameters |> List.map (fun (name, ty, pid) ->
+                                let parameter = graph.Nodes[pid]
+                                name, ty, parameter.ArenaAffinity, parameter.LayoutHint)
+                            box (parameters, captures, context)
+                        | _ -> box lambdaNode.Kind
+                    let payload =
+                        encode (box (plan.NodeFingerprints[id], lambdaNode.Type, lambdaNode.SRTPResolution,
+                                     lambdaNode.ArenaAffinity, lambdaNode.LayoutHint, lambdaNode.EmissionStrategy,
+                                     WitnessSegmentation.normalizeMetadata lambdaNode.Metadata, signature))
+                    SemanticKind.Literal(NativeLiteral.String payload),
+                    [],
+                    node.Parent |> Option.map translate
+                | _ when detachedCallableLambdas.Contains id ->
+                    SemanticKind.Literal(NativeLiteral.String plan.NodeFingerprints[id]),
+                    node.Children |> List.map translate,
+                    None
+                | _ ->
+                    SemanticKind.Literal(NativeLiteral.String plan.NodeFingerprints[id]),
+                    node.Children |> List.map translate,
+                    node.Parent |> Option.map translate
             translate id,
                 { node with Id = translate id; Kind = kind
-                            Children = node.Children |> List.map translate
-                            Parent = node.Parent |> Option.map translate
+                            Children = children
+                            Parent = parent
                             // Range movement and fresh checker cells do not change source meaning.
                             Range = dummyRange
                             Type = Types.unitType
@@ -56,10 +94,15 @@ let private shadowView (graph: SemanticGraph) (plan: SegmentationPlan) (canonica
                 if Hyperedge.isReference edge && edge.Role <> EdgeRole.Member then
                     yield { edge with Target = translate edge.Target; Sources = edge.Sources |> List.map translate }
           for edge in graph.Edges do
-            // The role payload is compared in support fingerprints. This edge
-            // retains its complete source/target causality without stale IDs.
-            yield { edge with Role = EdgeRole.Definition; Target = translate edge.Target
-                              Sources = edge.Sources |> List.map translate } ]
+            // Cross-region proof/domain causality is compared via SupportEdges and
+            // CanonicalProofSupportDigest so Cone.AffectedCone stays strictly executable.
+            let involvedOwners =
+                edge.Target :: edge.Sources
+                |> List.choose plan.NodeOwners.TryFind
+                |> List.distinct
+            if involvedOwners.Length <= 1 then
+                yield { edge with Role = EdgeRole.Definition; Target = translate edge.Target
+                                  Sources = edge.Sources |> List.map translate } ]
     { graph with Nodes = nodes; Edges = edges
                  DeclarationRoots = graph.DeclarationRoots |> List.map (fun (id, flavor) -> translate id, flavor) }
 
@@ -87,15 +130,32 @@ let scheduleRebuild (baseline: SemanticGraph) (candidate: SemanticGraph) : Resul
         let changed =
             newPlan.Regions |> Map.toSeq |> Seq.choose (fun (identity, region) ->
                 match oldPlan.Regions.TryFind identity with
-                | Some old when old.Fingerprint = region.Fingerprint && not (overlaps newPlan region) &&
-                                not (overlaps oldPlan old) && supports oldPlan identity = supports newPlan identity -> None
+                | Some old when old.CallableInterfaceDigest = region.CallableInterfaceDigest &&
+                                old.SemanticRealizationDigest = region.SemanticRealizationDigest &&
+                                old.CanonicalProofSupportDigest = region.CanonicalProofSupportDigest &&
+                                not (overlaps newPlan region) &&
+                                not (overlaps oldPlan old) &&
+                                supports oldPlan identity = supports newPlan identity -> None
                 | _ -> Some identity) |> Set.ofSeq
         let removed = oldPlan.Regions.Keys |> Set.ofSeq |> fun old -> Set.difference old (newPlan.Regions.Keys |> Set.ofSeq)
         let allDependencies = oldPlan.Dependencies @ newPlan.Dependencies
+        let callableInterfaceChanged providerIdentity =
+            match oldPlan.Regions.TryFind providerIdentity, newPlan.Regions.TryFind providerIdentity with
+            | Some oldProvider, Some newProvider ->
+                oldProvider.CallableInterfaceDigest <> newProvider.CallableInterfaceDigest
+            | _ -> true
+        let shouldPropagate (invalid: Set<string>) (edge: RegionDependency) =
+            if not (Set.contains edge.Provider invalid) then false
+            else
+                match edge.Kind with
+                | DependencyKind.Call -> callableInterfaceChanged edge.Provider
+                | DependencyKind.Storage
+                | DependencyKind.CapturedEnvironment
+                | DependencyKind.ProofSupport -> true
         let rec close invalid =
             let next =
                 allDependencies |> List.fold (fun state edge ->
-                    if Set.contains edge.Provider state then Set.add edge.Consumer state else state) invalid
+                    if shouldPropagate state edge then Set.add edge.Consumer state else state) invalid
             if next = invalid then invalid else close next
         let invalid = close (Set.union changed removed)
         let dispositions = newPlan.Regions |> Map.map (fun identity _ ->
@@ -118,6 +178,17 @@ let scheduleRebuild (baseline: SemanticGraph) (candidate: SemanticGraph) : Resul
 let private retainedCandidateNodes (schedule: RebuildSchedule) (graph: SemanticGraph) : Set<NodeId> =
     let affected = schedule.Receipt.Cone.AffectedCone
     let codata = graph.Codata.Value
+    let obligationIncidentOwners =
+        graph.Edges
+        |> List.groupBy _.Target
+        |> List.map (fun (target, edges) ->
+            let owners =
+                edges
+                |> List.collect _.Sources
+                |> List.choose schedule.Candidate.NodeOwners.TryFind
+                |> Set.ofList
+            target, owners)
+        |> Map.ofList
     schedule.Receipt.Alignment
     |> Map.fold (fun acc _ candId ->
         if Set.contains candId schedule.Scopes || Set.contains candId affected then
@@ -129,6 +200,12 @@ let private retainedCandidateNodes (schedule: RebuildSchedule) (graph: SemanticG
             | None ->
                 match graph.Nodes.TryFind candId with
                 | Some { Kind = SemanticKind.ModuleDef _ } -> Set.add candId acc
+                | Some { Kind = SemanticKind.Obligation _ } ->
+                    let incident = obligationIncidentOwners |> Map.tryFind candId |> Option.defaultValue Set.empty
+                    if incident |> Set.forall (fun owner -> schedule.Regions.TryFind owner = Some RegionDisposition.Retained) then
+                        Set.add candId acc
+                    else
+                        acc
                 | _ ->
                     match codata.CallableContracts.TryFind candId with
                     | Some contract ->

@@ -86,6 +86,158 @@ let readRange: Expr<ResultRangeDescriptor> = <@ {
         changed, segmentation
 
 type ComparisonRegionCases() =
+    [<Fact>]
+    member _.``Domain authority presence and node rows reach their consumers`` () =
+        let graph = ComparisonRegionFixture.prepare RealComparisonFixture.authority (ComparisonRegionFixture.source "" "<")
+        let segment graph = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let first = "module:ComparisonRegions/binding:first"
+        let second = "module:ComparisonRegions/binding:second"
+        let root = (segment graph).Regions[first].Root
+        let change numeric boundary =
+            { graph with
+                Edges =
+                    graph.Edges |> List.map (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericDomain domain -> { edge with Role = EdgeRole.NumericDomain(numeric domain) }
+                        | EdgeRole.BoundaryDomain domain -> { edge with Role = EdgeRole.BoundaryDomain(boundary domain) }
+                        | _ -> edge) }
+        let assertChanged before after =
+            let schedule = Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.scheduleRebuild before after |> Result.defaultWith (sprintf "%A" >> failwith)
+            Assert.NotEqual(schedule.Baseline.Regions[first].CanonicalProofSupportDigest, schedule.Candidate.Regions[first].CanonicalProofSupportDigest)
+            Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.RegionDisposition.Reelaborate, schedule.Regions[first])
+        let absent = change (fun d -> { d with FiniteCellRelations = None }) (fun d -> { d with StringOriginRelations = None })
+        let finite = change (fun d -> { d with FiniteCellRelations = Some [] }) (fun d -> { d with StringOriginRelations = None })
+        let boundary = change (fun d -> { d with FiniteCellRelations = None }) (fun d -> { d with StringOriginRelations = Some [] })
+        assertChanged absent finite
+        assertChanged absent boundary
+        let noCaptures = change (fun d -> { d with CaptureRelations = [] }) id
+        let captured = change (fun d -> { d with CaptureRelations = [EdgeClass.Obligation, true, 0, [root], root] }) id
+        assertChanged noCaptures captured
+        let schedule = Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.scheduleRebuild noCaptures captured |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.RegionDisposition.Retained, schedule.Regions[second])
+        let assertScoped before after =
+            assertChanged before after
+            let schedule = Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.scheduleRebuild before after |> Result.defaultWith (sprintf "%A" >> failwith)
+            Assert.True(schedule.Baseline.SupportEdges <> schedule.Candidate.SupportEdges)
+            Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.RegionDisposition.Retained, schedule.Regions[second])
+        let cell : FiniteCellSourceRelation =
+            { Class = EdgeClass.Range; Kind = FiniteCellRelationKind.Named "fixture"; Ordinal = 0; Sources = [root]; Target = root }
+        let finiteRow = change (fun d -> { d with FiniteCellRelations = Some [cell] }) (fun d -> { d with StringOriginRelations = None })
+        assertScoped finite finiteRow
+        let origin : StringOriginRelation =
+            { Recorded = true; Class = EdgeClass.Boundary; Flavor = StringOriginRelationKind.Named "fixture"; Ordinal = 0; Sources = [root]; Target = root }
+        let boundaryRow = change (fun d -> { d with FiniteCellRelations = None }) (fun d -> { d with StringOriginRelations = Some [origin] })
+        assertScoped boundary boundaryRow
+        let sequence : SequenceRangeAuthority =
+            { Participants = Set.empty; Enumerators = Set.empty; Premises = Map.empty; Relations = []; Obligations = [] }
+        let noSequence = change (fun d -> { d with SequenceRangeAuthority = None }) id
+        let emptySequence = change (fun d -> { d with SequenceRangeAuthority = Some sequence }) id
+        let sequenceRow = change (fun d -> { d with SequenceRangeAuthority = Some { sequence with Participants = Set.singleton root } }) id
+        assertChanged noSequence emptySequence
+        assertScoped emptySequence sequenceRow
+        let contexts : RangeContextFacts =
+            { ContextDepth = 0; Invocations = []; Values = Map.empty; Reads = Map.empty; Premises = Map.empty
+              SourceRelations = Ok []; CaptureRelations = []; Platform = None; Roots = [] }
+        let noContexts = change (fun d -> { d with RangeContextFacts = None }) id
+        let emptyContexts = change (fun d -> { d with RangeContextFacts = Some contexts }) id
+        let contextRow = change (fun d -> { d with RangeContextFacts = Some { contexts with Roots = [root, DeclRoot.EntryPoint] } }) id
+        assertChanged noContexts emptyContexts
+        assertScoped emptyContexts contextRow
+        let sourceRelation : SourceRangeRelation =
+            { Class = EdgeClass.Range; Kind = SourceRangeRelationKind.Named "fixture"; Ordinal = 0; Sources = [root]; Target = root }
+        let relationRow = change (fun d -> { d with RangeContextFacts = Some { contexts with SourceRelations = Ok [sourceRelation] } }) id
+        assertScoped emptyContexts relationRow
+
+    [<Fact>]
+    member _.``Scalar proof support normalizes obligation identities and source coordinates`` () =
+        let graph = ComparisonRegionFixture.prepare RealComparisonFixture.authority (ComparisonRegionFixture.source "" "<")
+        let region = ComparisonRegionFixture.get ComparisonRegionFixture.first graph
+        let originalEmission = graph.Codata.Value.WitnessEmission.Value
+        let operation = originalEmission.Numeric.Operations.Values |> Seq.find (fun row -> region.Members.Contains row.Site)
+        let info : ObligationInfo =
+            { Id = "claim_100"; Kind = "fixture"; Logic = "QF_LIA"; Statement = "fixture"
+              Source = "comparison.clef:1:2"; Refs = []; Body = ObligationBody.StorageReservation(3, 4) }
+        let obligation = Clef.Compiler.Baker.Ingredients.Obligations.obligationNode graph.Nodes[operation.Site] 0 info
+        let project info =
+            let changed = { graph with Nodes = graph.Nodes.Add(obligation.Id, { obligation with Kind = SemanticKind.Obligation info }) }
+            let operation = { operation with Obligations = [obligation.Id] }
+            let numeric = { originalEmission.Numeric with Operations = originalEmission.Numeric.Operations.Add(operation.Site, operation) }
+            let emission = { originalEmission with Numeric = numeric }
+            let scope = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes.projectWithEmission emission changed |> Result.defaultWith (sprintf "%A" >> failwith)
+            let projection = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed emission scope
+            (projection.Regions |> List.find (fun row -> row.Identity = region.Identity)).CanonicalProofSupportDigest
+        let baseline = project info
+        let shifted = project { info with Id = "claim_999"; Source = "comparison.clef:42:7" }
+        let changedBody = project { info with Body = ObligationBody.StorageReservation(3, 3) }
+        Assert.Equal(baseline, shifted)
+        Assert.NotEqual(baseline, changedBody)
+
+    [<Fact>]
+    member _.``Scalar proof support tracks the source numeric core census`` () =
+        let source = ComparisonRegionFixture.source "" "<"
+        let authority = RealComparisonFixture.authority
+        let width = authority.Replace("Name = \"Pointer\"; Bits = 64", "Name = \"Pointer\"; Bits = 32")
+        let offered = authority.Replace("Representations = [|", "Representations = [| { Name = \"extra16\"; Capability = \"native\"; Family = \"int\"; Bits = 16; MinMagnitude = \"-32768\"; MaxMagnitude = \"32767\"; Boundary = \"wrap\" }; ")
+        Assert.NotEqual(authority, width)
+        Assert.NotEqual(authority, offered)
+        let original = ComparisonRegionFixture.prepare authority source
+        let baseline = (ComparisonRegionFixture.get ComparisonRegionFixture.first original).CanonicalProofSupportDigest
+        for changedAuthority in [width; offered] do
+            let prepared = ComparisonRegionFixture.prepare changedAuthority source
+            let changed = { prepared with Platform = original.Platform }
+            Assert.Equal(original.Platform, changed.Platform)
+            let emission = changed.Codata.Value.WitnessEmission.Value
+            let scope =
+                Clef.Compiler.Baker.Recipes.WitnessScopeRecipes.projectWithEmission emission changed
+                |> Result.defaultWith (sprintf "%A" >> failwith)
+            let projected = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed emission scope
+            let region = projected.Regions |> List.find (fun row -> row.Identity = ComparisonRegionFixture.first)
+            Assert.NotEqual(baseline, region.CanonicalProofSupportDigest)
+
+    [<Fact>]
+    member _.``Platform census changes immediately alter proof support`` () =
+        let graph = ComparisonRegionFixture.prepare RealComparisonFixture.authority (ComparisonRegionFixture.source "" "<")
+        let original = ComparisonRegionFixture.get ComparisonRegionFixture.first graph
+        let platform = graph.Platform.Value
+        let representation = platform.Representations.Values |> Seq.head
+        let variants =
+            [ { platform with Dimensions = platform.Dimensions.Add("CensusTest", 37) }
+              { platform with Representations = platform.Representations.Add(representation.Name, { representation with Bits = representation.Bits + 1 }) }
+              { platform with Representations = platform.Representations.Add("additional-census-entry", { representation with Name = "additional-census-entry" }) } ]
+        let emission = graph.Codata.Value.WitnessEmission.Value
+        for platform in variants do
+            let changed = { graph with Platform = Some platform }
+            let scope = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes.projectWithEmission emission changed |> Result.defaultWith (sprintf "%A" >> failwith)
+            let projection = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed emission scope
+            let current = projection.Regions |> List.find (fun region -> region.Identity = original.Identity)
+            Assert.NotEqual(original.CanonicalProofSupportDigest, current.CanonicalProofSupportDigest)
+
+    [<Fact>]
+    member _.``Fresh checks and source trivia preserve all region digests`` () =
+        let source = (ComparisonRegionFixture.source "" "<").Replace("let first", "/// Original documentation\nlet first")
+        let before = ComparisonRegionFixture.prepare RealComparisonFixture.authority source
+        let variants =
+            [ source
+              "\n// shifted\n" + source
+              source.Replace("Original documentation", "Revised documentation") ]
+        let original = ComparisonRegionFixture.regions before
+        let baseline = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment before |> Result.defaultWith (sprintf "%A" >> failwith)
+        for text in variants do
+            let after = ComparisonRegionFixture.prepare RealComparisonFixture.authority text
+            let current = ComparisonRegionFixture.regions after
+            Assert.Equal<Set<string>>(original.Keys |> Set.ofSeq, current.Keys |> Set.ofSeq)
+            for KeyValue(name, region) in original do
+                Assert.Equal(region.CallableInterfaceDigest, current[name].CallableInterfaceDigest)
+                Assert.True(region.SemanticRealizationDigest = current[name].SemanticRealizationDigest, sprintf "Realization differs for %s, variant %d" name (List.findIndex ((=) text) variants))
+                Assert.Equal(region.CanonicalProofSupportDigest, current[name].CanonicalProofSupportDigest)
+            let plan = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment after |> Result.defaultWith (sprintf "%A" >> failwith)
+            for KeyValue(name, region) in baseline.Regions do
+                Assert.Equal(region.CallableInterfaceDigest, plan.Regions[name].CallableInterfaceDigest)
+                Assert.Equal(region.SemanticRealizationDigest, plan.Regions[name].SemanticRealizationDigest)
+                Assert.Equal(region.CanonicalProofSupportDigest, plan.Regions[name].CanonicalProofSupportDigest)
+            let schedule = Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.scheduleRebuild before after |> Result.defaultWith (sprintf "%A" >> failwith)
+            Assert.Empty schedule.Receipt.InvalidatedRegions
+
     [<Theory>]
     [<InlineData("=")>]
     [<InlineData("<>")>]
@@ -100,7 +252,14 @@ type ComparisonRegionCases() =
             let original = ComparisonRegionFixture.get name before
             let current = ComparisonRegionFixture.get name after
             Assert.NotEqual<NodeId option>(original.Root, current.Root)
-            Assert.Equal(original.Fingerprint, current.Fingerprint)
+            Assert.Equal(original.CallableInterfaceDigest, current.CallableInterfaceDigest)
+            Assert.Equal(original.SemanticRealizationDigest, current.SemanticRealizationDigest)
+            Assert.Equal(original.CanonicalProofSupportDigest, current.CanonicalProofSupportDigest)
+            match current.ProofSupportCoverage with
+            | ProofSupportCoverage.Global(participants, censuses) ->
+                Assert.NotEmpty participants
+                Assert.Contains(censuses, fun c -> c.Kind = ProofSupportCensusKind.NumericInterface)
+            | other -> failwithf "Expected Global proof-support coverage for comparison region, got %A" other
             // Current proof support is deliberately conservative. Retention of
             // witness output never reuses the previous revision's proof receipt.
             Assert.True(Set.isSubset (after.Nodes.Keys |> Set.ofSeq) current.Supports)
@@ -123,9 +282,14 @@ type ComparisonRegionCases() =
     member _.``Editing a comparison invalidates only its scalar witness region`` () =
         let prepare op = ComparisonRegionFixture.prepare RealComparisonFixture.authority (ComparisonRegionFixture.source "" op)
         let before, after = prepare "<", prepare ">"
-        let region name graph = (ComparisonRegionFixture.get name graph).Fingerprint
-        Assert.Equal(region ComparisonRegionFixture.first before, region ComparisonRegionFixture.first after)
-        Assert.NotEqual<string>(region ComparisonRegionFixture.second before, region ComparisonRegionFixture.second after)
+        let firstBefore, firstAfter = ComparisonRegionFixture.get ComparisonRegionFixture.first before, ComparisonRegionFixture.get ComparisonRegionFixture.first after
+        let secondBefore, secondAfter = ComparisonRegionFixture.get ComparisonRegionFixture.second before, ComparisonRegionFixture.get ComparisonRegionFixture.second after
+        Assert.Equal(firstBefore.CallableInterfaceDigest, firstAfter.CallableInterfaceDigest)
+        Assert.Equal(firstBefore.SemanticRealizationDigest, firstAfter.SemanticRealizationDigest)
+        Assert.Equal(firstBefore.CanonicalProofSupportDigest, firstAfter.CanonicalProofSupportDigest)
+        Assert.Equal(secondBefore.CallableInterfaceDigest, secondAfter.CallableInterfaceDigest)
+        Assert.NotEqual(secondBefore.SemanticRealizationDigest, secondAfter.SemanticRealizationDigest)
+        Assert.NotEqual(secondBefore.CanonicalProofSupportDigest, secondAfter.CanonicalProofSupportDigest)
 
     [<Fact>]
     member _.``Numeric declaration renumbering preserves the same complete interface`` () =
@@ -140,7 +304,9 @@ type ComparisonRegionCases() =
         let original, oldOperation = get before
         let current, newOperation = get after
         Assert.NotEqual<NodeId option>(oldOperation.Declaration, newOperation.Declaration)
-        Assert.Equal(original.Fingerprint, current.Fingerprint)
+        Assert.Equal(original.CallableInterfaceDigest, current.CallableInterfaceDigest)
+        Assert.Equal(original.SemanticRealizationDigest, current.SemanticRealizationDigest)
+        Assert.Equal(original.CanonicalProofSupportDigest, current.CanonicalProofSupportDigest)
 
     [<Fact>]
     member _.``Comparison region retains the complete offered source format declaration`` () =
@@ -150,8 +316,11 @@ type ComparisonRegionCases() =
         // this comparison has no arithmetic result requiring an adaptation.
         let authority = RealComparisonFixture.authority.Replace("MaxMagnitude = \"1.7976931348623157e308\"; Boundary = \"wrap\"", "MaxMagnitude = \"1.7976931348623157e308\"; Boundary = \"exact\"")
         let after = ComparisonRegionFixture.prepare authority source
-        Assert.NotEqual<string>((ComparisonRegionFixture.get ComparisonRegionFixture.first before).Fingerprint, (ComparisonRegionFixture.get ComparisonRegionFixture.first after).Fingerprint)
-        let operation = before.Codata.Value.WitnessEmission.Value.Numeric.Operations.Values |> Seq.find (fun row -> (ComparisonRegionFixture.get ComparisonRegionFixture.first before).Members.Contains row.Site)
+        let firstBefore = ComparisonRegionFixture.get ComparisonRegionFixture.first before
+        let firstAfter = ComparisonRegionFixture.get ComparisonRegionFixture.first after
+        Assert.NotEqual(firstBefore.SemanticRealizationDigest, firstAfter.SemanticRealizationDigest)
+        Assert.NotEqual(firstBefore.CanonicalProofSupportDigest, firstAfter.CanonicalProofSupportDigest)
+        let operation = before.Codata.Value.WitnessEmission.Value.Numeric.Operations.Values |> Seq.find (fun row -> firstBefore.Members.Contains row.Site)
         let declaration = before.Nodes[operation.Declaration.Value]
         let stale = { before with Nodes = before.Nodes.Add(declaration.Id, { declaration with Children = [] }) }
         Assert.True(RegionEmission.admit stale |> Result.isError)
@@ -166,7 +335,9 @@ type ComparisonRegionCases() =
         let sourceScope = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes.projectWithEmission emission changed |> Result.defaultWith (sprintf "%A" >> failwith)
         let after = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed emission sourceScope
         let current = after.Regions |> List.find (fun region -> region.Identity = before.Identity)
-        Assert.NotEqual<string>(before.Fingerprint, current.Fingerprint)
+        Assert.NotEqual(before.CallableInterfaceDigest, current.CallableInterfaceDigest)
+        Assert.NotEqual(before.SemanticRealizationDigest, current.SemanticRealizationDigest)
+        Assert.NotEqual(before.CanonicalProofSupportDigest, current.CanonicalProofSupportDigest)
         Assert.True(RegionEmission.admit changed |> Result.isError)
 
     [<Theory>]
@@ -226,7 +397,9 @@ type ComparisonRegionCases() =
         for name in [ComparisonRegionFixture.first; ComparisonRegionFixture.second] do
             let original = ComparisonRegionFixture.get name alone
             let current = ComparisonRegionFixture.get name beside
-            Assert.Equal(original.Fingerprint, current.Fingerprint)
+            Assert.Equal(original.CallableInterfaceDigest, current.CallableInterfaceDigest)
+            Assert.Equal(original.SemanticRealizationDigest, current.SemanticRealizationDigest)
+            Assert.Equal(original.CanonicalProofSupportDigest, current.CanonicalProofSupportDigest)
 
     [<Fact>]
     member _.``A foreign call stays in the common region without refusing a sibling scalar region`` () =
@@ -265,7 +438,9 @@ type ComparisonRegionCases() =
         let changed, segmentation =
             ComparisonRegionFixture.projectContracts contracts {graph with Nodes = graph.Nodes.Add(support.Id, support)}
         let current = segmentation.Regions |> Seq.filter (fun row -> row.Identity = before.Identity) |> Assert.Single
-        Assert.Equal(before.Fingerprint, current.Fingerprint)
+        Assert.Equal(before.CallableInterfaceDigest, current.CallableInterfaceDigest)
+        Assert.Equal(before.SemanticRealizationDigest, current.SemanticRealizationDigest)
+        Assert.NotEqual(before.CanonicalProofSupportDigest, current.CanonicalProofSupportDigest)
         Assert.DoesNotContain(support.Id, before.Supports)
         Assert.Contains(support.Id, current.Supports)
         Assert.NotEqual<Map<NodeId, BoundarySourcePremise>>(contract.SourcePremises, changed.Codata.Value.CallableContracts[contract.Identity].SourcePremises)
@@ -287,7 +462,9 @@ type ComparisonRegionCases() =
         Assert.Equal<Map<NodeId, BoundarySourcePremise>>(contract.SourcePremises, changedContract.SourcePremises)
         Assert.Equal<Participant list>(contract.Participants, changedContract.Participants)
         match segmentation.Regions |> List.tryFind (fun row -> row.Identity = before.Identity) with
-        | Some current -> Assert.NotEqual<string>(before.Fingerprint, current.Fingerprint)
+        | Some current ->
+            Assert.NotEqual(before.CallableInterfaceDigest, current.CallableInterfaceDigest)
+            Assert.NotEqual(before.SemanticRealizationDigest, current.SemanticRealizationDigest)
         | None -> ()
         Assert.True(RegionEmission.admit changed |> Result.isError)
 

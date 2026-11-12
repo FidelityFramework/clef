@@ -286,19 +286,45 @@ module internal SelectiveRebuildFixture =
 
 type SelectiveRebuildCases() =
     [<Fact>]
-    member _.``Calls and local storage invalidate their owning callable and dependent caller while retaining siblings``() =
+    member _.``Calls and local storage invalidate their owning callable while cutting off callers unless the callable interface changes``() =
         let baseline = SelectiveRebuildFixture.graph 0
         let plan = Segments.segment baseline |> SelectiveRebuildFixture.admitted
         Assert.Contains(plan.Dependencies, fun edge ->
             edge.Consumer = "module:Selective/binding:caller" && edge.Provider = "module:Selective/binding:provider" && edge.Kind = Segments.DependencyKind.Call)
-        let candidate = SelectiveRebuildFixture.change 21 42 baseline
-        let schedule = Rebuild.scheduleRebuild baseline candidate |> SelectiveRebuildFixture.admitted
-        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "provider" schedule)
-        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "caller" schedule)
+        // Body-only edit inside provider (local mutable initializer 1 -> 42) cuts off caller.
+        let bodyOnlyCandidate = SelectiveRebuildFixture.change 21 42 baseline
+        let bodyOnlySchedule = Rebuild.scheduleRebuild baseline bodyOnlyCandidate |> SelectiveRebuildFixture.admitted
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "provider" bodyOnlySchedule)
+        Assert.Equal(
+            bodyOnlySchedule.Baseline.Regions["module:Selective/binding:provider"].CallableInterfaceDigest,
+            bodyOnlySchedule.Candidate.Regions["module:Selective/binding:provider"].CallableInterfaceDigest)
+        Assert.NotEqual(
+            bodyOnlySchedule.Baseline.Regions["module:Selective/binding:provider"].SemanticRealizationDigest,
+            bodyOnlySchedule.Candidate.Regions["module:Selective/binding:provider"].SemanticRealizationDigest)
+        for name in ["caller"; "sibling"; "shared"; "factory"; "capturedCode"] do
+            Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition name bodyOnlySchedule)
+        Assert.Equal(
+            bodyOnlySchedule.Baseline.Regions["module:Selective/binding:caller"].CallableInterfaceDigest,
+            bodyOnlySchedule.Candidate.Regions["module:Selective/binding:caller"].CallableInterfaceDigest)
+        Assert.Equal(
+            bodyOnlySchedule.Baseline.Regions["module:Selective/binding:caller"].SemanticRealizationDigest,
+            bodyOnlySchedule.Candidate.Regions["module:Selective/binding:caller"].SemanticRealizationDigest)
+        Assert.Contains(NodeId 21, bodyOnlySchedule.Receipt.Cone.AffectedCone)
+        Assert.DoesNotContain(NodeId 8, bodyOnlySchedule.Scopes)
+        Assert.DoesNotContain(NodeId 13, bodyOnlySchedule.Scopes)
+        // Changing provider's callable interface propagates across DependencyKind.Call to caller.
+        let providerBinding = bodyOnlyCandidate.Nodes[NodeId 2]
+        let ifaceCandidate =
+            { bodyOnlyCandidate with
+                Nodes = bodyOnlyCandidate.Nodes.Add(NodeId 2, { providerBinding with LayoutHint = Some TypeLayout.PlatformWord }) }
+        let ifaceSchedule = Rebuild.scheduleRebuild baseline ifaceCandidate |> SelectiveRebuildFixture.admitted
+        Assert.NotEqual(
+            ifaceSchedule.Baseline.Regions["module:Selective/binding:provider"].CallableInterfaceDigest,
+            ifaceSchedule.Candidate.Regions["module:Selective/binding:provider"].CallableInterfaceDigest)
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "provider" ifaceSchedule)
+        Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition "caller" ifaceSchedule)
         for name in ["sibling"; "shared"; "factory"; "capturedCode"] do
-            Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition name schedule)
-        Assert.Contains(NodeId 21, schedule.Receipt.Cone.AffectedCone)
-        Assert.DoesNotContain(NodeId 13, schedule.Scopes)
+            Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition name ifaceSchedule)
 
     [<Fact>]
     member _.``Module storage closes over callers environment formation and captured code without coupling siblings``() =
@@ -334,7 +360,9 @@ type SelectiveRebuildCases() =
         let candidate = SelectiveRebuildFixture.graph 1000
         let _, schedule, recipes = Rebuild.rebuildSelective baseline candidate |> SelectiveRebuildFixture.admitted
         for KeyValue(identity, region) in schedule.Baseline.Regions do
-            Assert.Equal(region.Fingerprint, schedule.Candidate.Regions[identity].Fingerprint)
+            Assert.Equal(region.CallableInterfaceDigest, schedule.Candidate.Regions[identity].CallableInterfaceDigest)
+            Assert.Equal(region.SemanticRealizationDigest, schedule.Candidate.Regions[identity].SemanticRealizationDigest)
+            Assert.Equal(region.CanonicalProofSupportDigest, schedule.Candidate.Regions[identity].CanonicalProofSupportDigest)
             Assert.Equal(Rebuild.RegionDisposition.Retained, schedule.Regions[identity])
         Assert.Equal(NodeId 1002, schedule.Receipt.Alignment[NodeId 2])
         Assert.Empty schedule.Scopes
@@ -523,7 +551,10 @@ type SelectiveRebuildCases() =
                         DeclarationRootLambdas = Map.ofList [ NodeId 6, DeclRoot.EntryPoint ] } }
         let baseline = Clef.Compiler.Nanopass.SSAAssignment.normalize baselineWithCodata
         let baselinePlan = baseline.Codata.Value.SSAAssignment.Value
-        let candidate = SelectiveRebuildFixture.change 21 42 baseline
+        let bodyChanged = SelectiveRebuildFixture.change 21 42 baseline
+        let candidate =
+            let providerBinding = bodyChanged.Nodes[NodeId 2]
+            { bodyChanged with Nodes = bodyChanged.Nodes.Add(NodeId 2, { providerBinding with LayoutHint = Some TypeLayout.PlatformWord }) }
         let rebuilt, _, _ =
             Rebuild.rebuildSelective baseline candidate
             |> SelectiveRebuildFixture.admitted
@@ -578,7 +609,11 @@ type SelectiveRebuildCases() =
         Assert.True(Segments.segment rebuilt |> Result.isOk)
         // A second consecutive edit advances monotonically above editedPlan.NodeHighWater without reusing
         // either baseline or first-edit identifiers, while keeping unchanged regions pinned to baseline.
-        let candidate2 = SelectiveRebuildFixture.change 42 77 rebuilt
+        let candidate2Body = SelectiveRebuildFixture.change 42 77 rebuilt
+        let candidate2 =
+            let remappedProvider = editedPlan.NodeRemap[NodeId 2]
+            let providerBinding = candidate2Body.Nodes[remappedProvider]
+            { candidate2Body with Nodes = candidate2Body.Nodes.Add(remappedProvider, { providerBinding with LayoutHint = Some TypeLayout.Opaque }) }
         let rebuilt2, _, _ =
             Rebuild.rebuildSelective rebuilt candidate2
             |> SelectiveRebuildFixture.admitted
