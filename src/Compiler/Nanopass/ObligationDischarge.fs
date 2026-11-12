@@ -553,28 +553,15 @@ type DesignTimeBudget = {
 // SOLVER
 //=============================================================================
 
-/// The pinned parity toolchain locations, consulted when cvc5 is not on PATH.
-let solverToolchainPaths = [
-    "/home/hhh/.local/toolchains/cvc5-1.3.0/bin/cvc5"
-    "/mnt/apps/gpu-one/toolchains/cvc5-1.3.0/bin/cvc5"
-    "/mnt/apps/gpu-two/toolchains/cvc5-1.3.0/bin/cvc5"
-    "/mnt/apps/gpu-three/toolchains/cvc5-1.3.0/bin/cvc5"
-    "/tmp/cvc5-toolchain/bin/cvc5"
-]
+/// Host discovery is independent of proof construction and solver execution.
+let solverToolchainPaths = Clef.Compiler.Utilities.HostTools.solverToolchainPaths
 
-/// cvc5 on PATH first, then the first pinned toolchain path that exists, else
-/// bare "cvc5" so that a missing solver fails at process start with its name.
 let resolveSolver (pathVariable: string | null) (exists: string -> bool) : string =
-    let names = if System.OperatingSystem.IsWindows() then [ "cvc5.exe"; "cvc5" ] else [ "cvc5" ]
-    let onPath =
-        (match pathVariable with null -> "" | value -> value).Split(Path.PathSeparator)
-        |> Array.exists (fun dir -> dir <> "" && names |> List.exists (fun name -> exists (Path.Combine(dir, name))))
-    if onPath then "cvc5"
-    else solverToolchainPaths |> List.tryFind exists |> Option.defaultValue "cvc5"
+    Clef.Compiler.Utilities.HostTools.resolveSolver pathVariable exists
 
 let private solverExecutable () =
     match System.Environment.GetEnvironmentVariable "CLEF_CVC5" with
-    | null | "" -> resolveSolver (System.Environment.GetEnvironmentVariable "PATH") File.Exists, true
+    | null | "" -> Clef.Compiler.Utilities.HostTools.findSolver (System.Environment.GetEnvironmentVariable "PATH"), true
     | path -> path, false
 
 type private SolverRun =

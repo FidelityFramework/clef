@@ -258,6 +258,9 @@ type NumericOperationCases() =
     [<InlineData("extent")>]
     [<InlineData("construction")>]
     [<InlineData("guard")>]
+    [<InlineData("prefix-missing")>]
+    [<InlineData("prefix-reordered")>]
+    [<InlineData("prefix-extra")>]
     member _.``String comparison retracts when a byte or guarded lifetime premise disappears`` defect =
         let graph,_ = NumericOperationFixture.admitted "    if \"a\" = \"a\" then 0 else 1\n"
         let removed (edge:Hyperedge) =
@@ -265,7 +268,23 @@ type NumericOperationCases() =
             | "read-range",EdgeRole.StringByteRange _ | "view",EdgeRole.StringByteView _ | "extent",EdgeRole.StringExtent _
             | "construction",EdgeRole.StringComparisonConstruction _ | "guard",EdgeRole.MemoryAccessGuard -> true
             | _ -> false
-        let changed = { graph with Edges=graph.Edges |> List.filter (removed >> not) }
+        let changed =
+            if defect.StartsWith "prefix-" then
+                let construction = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.constructions graph |> Assert.Single
+                let frontier = graph.Nodes[construction.LeftRead]
+                let ordered =
+                    match frontier.Kind with
+                    | SemanticKind.Sequential [buffer;index;required;continuation] ->
+                        match defect with
+                        | "prefix-missing" -> [required;continuation]
+                        | "prefix-reordered" -> [index;buffer;required;continuation]
+                        | _ -> [buffer;index;buffer;required;continuation]
+                    | _ -> failwith "Expected the complete source-owned operand prefix."
+                let node = { frontier with Kind=SemanticKind.Sequential ordered; Children=ordered }
+                let edges = graph.Edges |> List.filter (fun edge -> edge.Target<>frontier.Id || edge.Class<>EdgeClass.Structural)
+                { graph with Nodes=graph.Nodes.Add(frontier.Id,node)
+                             Edges=Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node @ edges }
+            else { graph with Edges=graph.Edges |> List.filter (removed >> not) }
         if defect="read-range" || defect="view" || defect="extent" then
             match OperationPublication.project changed with Error _ -> () | Ok _ -> failwith "Numeric carrier survived removed byte evidence."
         match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare changed with
@@ -532,8 +551,8 @@ module private LogicalStringBytes =
             | EdgeClass.Provenance, 0, [actualBuffer; actualIndex; _; _; _; _; predicate; required; frontier] ->
                 Assert.Equal(buffer, actualBuffer)
                 Assert.Equal(index, actualIndex)
-                Assert.Equal<NodeId list>([required; read.Id], graph.Nodes[frontier].Children)
-                Assert.Equal(SemanticKind.Sequential [required; read.Id], graph.Nodes[frontier].Kind)
+                Assert.Equal<NodeId list>([buffer; index; required; read.Id], graph.Nodes[frontier].Children)
+                Assert.Equal(SemanticKind.Sequential [buffer; index; required; read.Id], graph.Nodes[frontier].Kind)
                 Assert.Equal(Some byteRange, graph.Nodes[frontier].ValueRange)
                 match graph.Nodes[required].Kind with
                 | SemanticKind.Require(condition, _) -> Assert.Equal(predicate, condition)

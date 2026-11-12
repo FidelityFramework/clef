@@ -132,12 +132,13 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
             | _, Some value -> SemanticKind.IndexSet(buffer, index, value), [buffer; index; value]
         let operation =
             { mkNode current kind source.Type children with
-                // The original access remains the source claim's frontier.
-                // Its generated guarded operation has only transient claims.
+                // The guarded operation has only transient claims; the
+                // original source access retains the ordered operand evaluation.
                 Metadata = source.Metadata.Remove("Source.ObligationSite").Remove("Source.DeclarationIncarnation").Add("Baker.MemoryGuarded", MetadataValue.Bool true)
                 Parent = Some source.Id; ArenaAffinity = source.ArenaAffinity }
         do! emit operation
-        do! enrich source (SemanticKind.Sequential [required; operation.Id]) source.Type [required; operation.Id] source.EmissionStrategy false
+        let ordered = children @ [required; operation.Id]
+        do! enrich source (SemanticKind.Sequential ordered) source.Type ordered source.EmissionStrategy false
         evidence.Add { Class = EdgeClass.Provenance; Role = EdgeRole.MatchRequirement; Ordinal = 1
                        Sources = [required; predicate; operation.Id]; Target = source.Id }
         let guard =
@@ -460,6 +461,34 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
             citizen.Id
         let operation =
           match node.Kind with
+          | SemanticKind.Binding(_,true,_,_) ->
+            let scope = nearestLambda graph node.Id |> needed "A scalar cell lacks a lexical activation."
+            let initial = match node.Children with [value] -> value | _ -> raise(MissingContract "A scalar cell requires one initializer.")
+            let slot = (carrier numeric node.Id).Slot
+            demand (match slot with SettledSlot.Bool -> true | SettledSlot.Integer(bits,_) -> List.contains bits [8;16;32;64] | _ -> false)
+                   "Local scalar storage requires a settled Boolean or byte-addressable integer."
+            let bytes,alignment = size graph slot
+            let nodes = graph.Nodes.Values |> Seq.filter (fun candidate -> candidate.IsReachable && not(excluded.Contains candidate.Id)) |> Seq.toList
+            let reads = nodes |> List.choose (fun candidate -> match candidate.Kind with SemanticKind.VarRef(_,Some binding) when binding=node.Id -> Some candidate.Id | _ -> None) |> Set.ofList
+            demand (reads |> Set.forall (fun site -> nearestLambda graph site=Some scope)) "A scalar cell is captured outside its activation."
+            demand (nodes |> List.forall (fun candidate -> match candidate.Kind with SemanticKind.CellAddress binding when binding=node.Id -> false | _ -> true))
+                   "An addressed scalar cell requires a separate lifetime contract."
+            let writes = nodes |> List.choose (fun candidate ->
+                match candidate.Kind with
+                | SemanticKind.Set(target,value) when reads.Contains target -> Some(candidate.Id,value)
+                | _ -> None)
+            demand (writes |> List.forall (fun (site,_) -> nearestLambda graph site=Some scope)) "A scalar write crosses its activation."
+            let declared = platform.Value
+            let space = match declared.Spaces |> List.filter (fun space -> space.Kind="stack" && space.Access.Contains("w")) with
+                        | [space] -> space | _ -> raise(MissingContract "A local scalar requires one declared writable stack space.")
+            demand (space.Alignment>=alignment && space.Alignment%alignment=0) "Declared stack alignment cannot satisfy the scalar."
+            let participants = Set.unionMany [reads; (carrier numeric node.Id).Participants; Set.ofList [node.Id;initial;scope;declared.Node;space.Node]
+                                              writes |> List.collect (fun (site,value)->[site;value]) |> Set.ofList]
+            let layout = proof (ObligationBody.ContinuationLayout([0,bytes,alignment],bytes,alignment)) participants "scalar_layout"
+            let capacity = proof (ObligationBody.CapacityFits(int64 bytes,space.Capacity)) participants "scalar_capacity"
+            MemoryWitnessOperation.LocalScalar {Site=node.Id;Initializer=initial;Element=slot;Bytes=bytes;Alignment=alignment
+                                                Residence=MemoryResidence.Stack(scope,space.Node);Reads=reads;Writes=writes
+                                                Platform=declared.Node;Layout=layout;Capacity=capacity}
           | SemanticKind.DUConstruct _ when (checkedCase node.Id).IsSome ->
             let construction=checkedCase node.Id |> Option.get
             demand (match node.Kind with
@@ -626,6 +655,13 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                 required <- Set.add node.Id required
                 try operations <- (node.Id, settleNode node) :: operations
                 with MissingContract reason -> unresolved <- Map.add node.Id reason unresolved
+            elif (match node.Kind with SemanticKind.Binding(_,true,_,_) -> true | _ -> false) && (nearestLambda graph node.Id).IsSome then
+                // This optional permission does not replace existing specialized
+                // storage families. An absent account grants no artifact admission.
+                try
+                    operations <- (node.Id, settleNode node) :: operations
+                    required <- Set.add node.Id required
+                with MissingContract _ -> ()
     enrichment, List.rev operations, unresolved, required
 
 /// Finalize the source-authored logical live budget after the existing numeric

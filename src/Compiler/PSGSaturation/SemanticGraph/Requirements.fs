@@ -52,9 +52,26 @@ let tryRequirement (graph: SemanticGraph) site =
         when actual = site && predicate = condition && children = [condition]
              && applySubst ty = Types.unitType && not (System.String.IsNullOrWhiteSpace diagnostic) ->
         match live graph condition, live graph frontier, live graph continuation with
-        | Some predicate, Some { Kind = SemanticKind.Sequential [required; selected]; Type = resultType; Children = frontierChildren }, Some selectedNode
-            when required = site && selected = continuation && applySubst predicate.Type = Types.boolType
-                 && frontierChildren = [site; continuation] && applySubst resultType = applySubst selectedNode.Type ->
+        | Some predicate, Some { Kind = SemanticKind.Sequential ordered; Type = resultType; Children = frontierChildren }, Some selectedNode
+            when (ordered |> List.rev |> List.truncate 2) = [continuation;site] && applySubst predicate.Type = Types.boolType
+                 && frontierChildren = ordered && applySubst resultType = applySubst selectedNode.Type ->
+            let prefix = ordered |> List.take (ordered.Length - 2)
+            let validPrefix =
+                match graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard && edge.Target = continuation) with
+                | [] -> prefix.IsEmpty
+                | [edge] ->
+                    match edge.Sources with
+                    | [buffer;index;_;_;_;_;condition;required;source] ->
+                        let operands =
+                            match selectedNode.Kind with
+                            | SemanticKind.IndexSet(actualBuffer,actualIndex,value) when actualBuffer=buffer && actualIndex=index -> [buffer;index;value]
+                            | SemanticKind.IndexGet(actualBuffer,actualIndex)
+                            | SemanticKind.ElementAddress(actualBuffer,actualIndex) when actualBuffer=buffer && actualIndex=index -> [buffer;index]
+                            | _ -> []
+                        ordinal = 1 && edge.Class = EdgeClass.Provenance && source = frontier
+                        && condition = predicate.Id && required = site && not operands.IsEmpty && prefix = operands
+                    | _ -> false
+                | _ -> false
             let patternTest =
                 match ordinal, additional, predicate.Kind, selectedNode.Kind with
                 | 1, [], _, _ -> Some None
@@ -75,10 +92,10 @@ let tryRequirement (graph: SemanticGraph) site =
                              && applySubst body.Type = applySubst selectedNode.Type -> Some(Some condition)
                     | _ -> None
                 | _ -> None
-            patternTest |> Option.map (fun patternTest ->
+            patternTest |> Option.filter (fun _ -> validPrefix) |> Option.map (fun patternTest ->
                 { Site = site; Condition = condition; Diagnostic = diagnostic; Frontier = frontier
                   Continuation = continuation; PatternTest = patternTest
-                  Participants = frontier :: actual :: predicate.Id :: continuation :: additional })
+                  Participants = frontier :: actual :: predicate.Id :: continuation :: (prefix @ additional) })
         | _ -> None
     | _ -> None
 

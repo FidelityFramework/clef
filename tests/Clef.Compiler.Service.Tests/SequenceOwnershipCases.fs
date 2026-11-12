@@ -25,7 +25,7 @@ module private SequenceOwners =
     let edges (graph: SemanticGraph) = graph.Edges |> List.filter isOwnership
     let owners (graph: SemanticGraph) = graph.Nodes.Values |> Seq.filter (fun node ->
         match node.Kind with SemanticKind.SeqExpr _ -> true | _ -> false) |> Seq.toList
-    let cuts (graph: SemanticGraph) = graph.Nodes.Values |> Seq.filter (fun node ->
+    let cuts (graph: SemanticGraph) = graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable) |> Seq.filter (fun node ->
         match node.Kind with SemanticKind.Yield _ | SemanticKind.YieldBang _ -> true | _ -> false) |> Seq.toList
 
     let owner name (graph: SemanticGraph) =
@@ -158,7 +158,11 @@ let outer = seq {
         let graph = SequenceOwners.check ("let mutable trace = 0\nlet gate () = trace = 0\nlet outer: seq<int> = seq {\n    trace <- 1\n" + middle + "    trace <- 2\n}")
         SequenceOwners.assertComplete graph
         let owner = SequenceOwners.owner "outer" graph
-        Assert.Equal((if guarded then 3 else 0), (SequenceOwners.owned graph owner).Length)
+        Assert.Equal((if guarded then 2 else 0), (SequenceOwners.owned graph owner).Length)
+        if guarded then
+            let deadCut = graph.Nodes.Values |> Seq.filter (fun node ->
+                not node.IsReachable && match node.Kind with SemanticKind.Yield _ -> true | _ -> false) |> Assert.Single
+            Assert.DoesNotContain(SequenceOwners.edges graph, fun edge -> edge.Target = deadCut.Id)
         Assert.Equal(2, graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Set _ -> true | _ -> false) |> Seq.length)
         let stripped = { graph with Edges = graph.Edges |> List.filter (SequenceOwners.isOwnership >> not) }
         let enrichment, diagnostics = SequenceOwnership.elaborate stripped

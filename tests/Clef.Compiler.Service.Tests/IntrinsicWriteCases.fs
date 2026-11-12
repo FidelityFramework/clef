@@ -397,8 +397,6 @@ type IntrinsicWriteCases() =
     [<Theory>]
     [<InlineData("flag", "plane", 5)>]
     [<InlineData("flag", "xy", 2)>]
-    [<InlineData("true", "plane", 5)>]
-    [<InlineData("false", "plane", 5)>]
     member _.``Conditional string origins retain both exact UTF8 branches before and after range settlement`` (guard, other, length: int) =
         let graph, projection =
             ConditionalStringOriginFixture.source guard other |> ConditionalStringOriginFixture.check
@@ -428,6 +426,31 @@ type IntrinsicWriteCases() =
         let bounds = [2I,2I,3I; bigint length,bigint length,bigint length + 1I] |> List.sort
         Assert.Contains(projection.IntrinsicWriteProofs[call.Site], fun proof ->
             match proof.Body with ObligationBody.StringBorrowBound actual -> List.sort actual = bounds | _ -> false)
+
+    [<Theory>]
+    [<InlineData("true", "é", 2)>]
+    [<InlineData("false", "plane", 5)>]
+    member _.``Source-pruned string branches retain exact selected origins and reject changed order`` (guard, selected, length: int) =
+        let graph, projection =
+            ConditionalStringOriginFixture.source guard "plane" |> ConditionalStringOriginFixture.check
+            |> IntrinsicWriteFixture.graphAndProjection
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let expected = Map.ofList [IntrinsicWriteFixture.literal graph selected, bigint length]
+        Assert.Equal<Map<NodeId,bigint>>(expected, view.StaticOrigins)
+        Assert.Equal<Map<NodeId,bigint>>(expected, projection.StringExtents[call.Count].StaticOrigins)
+        Assert.Equal(Some(ValueRange.bounded (bigint length) (bigint length)), graph.Nodes[call.Count].ValueRange)
+        let source = graph.Nodes[view.ExtentSource]
+        match source.Kind with
+        | SemanticKind.Sequential [condition; result] ->
+            Assert.Equal<NodeId list>([condition; result], source.Children)
+            Assert.Equal(SemanticKind.Literal(NativeLiteral.Bool(guard="true")), graph.Nodes[condition].Kind)
+            Assert.Equal(SemanticKind.Literal(NativeLiteral.String selected), graph.Nodes[result].Kind)
+            let changed = {graph with Nodes=graph.Nodes.Add(source.Id,{source with Children=[result;condition]})}
+            let flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve changed
+            Assert.Equal(Ok None, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin changed flow source.Id source.Id)
+            Assert.True(IntrinsicBoundary.project changed |> Result.isError)
+        | other -> failwithf "Missing source-pruned string frontier: %A" other
 
     [<Fact>]
     member _.``Conditional string origins preserve both branches through a complete formal input`` () =

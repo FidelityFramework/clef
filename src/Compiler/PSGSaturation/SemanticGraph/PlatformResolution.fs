@@ -122,6 +122,7 @@ type DeclaredCore = {
 let runtimeModel (core: DeclaredCore) : RuntimeModel option =
     match core.Runtime with
     | "libc" -> Some RuntimeModel.Libc
+    | "win32" -> Some RuntimeModel.Win32
     | "freestanding" -> Some RuntimeModel.Freestanding
     | "bare" -> Some RuntimeModel.Bare
     | "rocm" -> Some RuntimeModel.ROCm
@@ -590,7 +591,7 @@ let private declaredByBinding (graph: SemanticGraph) : SemanticNode -> bool =
                 | null -> full
                 | parent -> parent
         let root = directory.TrimEnd('/') + "/"
-        fun node -> node.Range.File <> "" && (normalise node.Range.File).StartsWith root
+        fun node -> node.Range.File <> "" && (normalise node.Range.File).StartsWith(root, if System.OperatingSystem.IsWindows() then System.StringComparison.OrdinalIgnoreCase else System.StringComparison.Ordinal)
 
 /// Find the platform description compiled into this graph and read it, with
 /// every finding about it. No description at all (a program compiled without a
@@ -689,8 +690,7 @@ let private explicitDescription graph binding = explicitRecord graph isDescripti
 let private inSelectedSources (graph: SemanticGraph) (node: SemanticNode) =
     node.Range.File <> "" &&
     (graph.Platform |> Option.exists (fun ctx ->
-        let path = (System.IO.Path.GetFullPath node.Range.File).Replace('\\', '/')
-        Set.contains path ctx.PlatformSourcePaths))
+        ctx.PlatformSourcePaths |> Set.exists (Clef.Compiler.Utilities.HostTools.samePath node.Range.File)))
 
 /// A root inside the closure must not obtain its core, spaces or aliased value
 /// from an unrelated dependency that happened to be loaded first. Preserve
@@ -733,6 +733,7 @@ let private explicitCoreFindings (ctx: PlatformContext) (graph: SemanticGraph) (
     | Some core ->
         let runtime = function
             | RuntimeModel.Libc -> "libc"
+            | RuntimeModel.Win32 -> "win32"
             | RuntimeModel.Freestanding | RuntimeModel.Bare -> "freestanding"
             | RuntimeModel.ROCm -> "rocm"
             | RuntimeModel.XDNA -> "xdna"
@@ -781,7 +782,15 @@ let private explicitCoreFindings (ctx: PlatformContext) (graph: SemanticGraph) (
                         (sprintf "target triple OS '%s' disagrees with core Os '%s'; current targets support explicit Linux/none OS components and declared Cortex-M embedded triples" os core.Os)]
                 | _ -> []
             architectureFindings @ osFindings
-        metadataFindings @ tripleFindings
+        let windowsFindings =
+            if core.Os = "windows" || core.Runtime = "win32" then
+                if core.Os = "windows" && core.Runtime = "win32" && core.Arch = "x86_64"
+                   && core.Triple = "x86_64-pc-windows-msvc"
+                   && (core.Widths |> List.exists (fun width -> width.Name = "Pointer" && width.Bits = 64)) then []
+                else [findingOn graph core.Node DeclarationDefect.Invalid
+                        "Windows source support requires Os windows, Runtime win32, Arch x86_64, Pointer 64 and triple x86_64-pc-windows-msvc"]
+            else []
+        metadataFindings @ tripleFindings @ windowsFindings
 
 /// An explicit export is authoritative even when its declaration belongs to
 /// a sibling dependency. Unselected catalogue records are ordinary data.
@@ -957,9 +966,9 @@ let readLoading (graph: SemanticGraph) : Result<DeclaredProcessLink option, Decl
                         let platform = read graph
 
                         let expected =
-                            contract.Runtime = "libc"
-                            && contract.Os = "linux"
-                            && contract.Arch = "x86_64"
+                            contract.Arch = "x86_64"
+                            && ((contract.Runtime = "libc" && contract.Os = "linux")
+                                || (contract.Runtime = "win32" && contract.Os = "windows" && contract.Library = "kernel32"))
 
                         let policy =
                             contract.LoadAt = "ProcessStartup"
@@ -983,7 +992,7 @@ let readLoading (graph: SemanticGraph) : Result<DeclaredProcessLink option, Decl
                                     findingAt
                                         node
                                         DeclarationDefect.Invalid
-                                        "the loading contract must declare its library under Linux AMD64 libc at process startup until process termination, with unloading and exported-library authority forbidden"
+                                        "the loading contract must declare its library under Linux AMD64 libc or Windows AMD64 Win32 kernel32 at process startup until process termination, with unloading and exported-library authority forbidden"
                                 ]
                         elif not target then
                             Error

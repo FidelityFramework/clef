@@ -1212,13 +1212,16 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                 |> List.map (fun (view,frontier) -> checked' {
                     let! access =
                         match graph.Nodes.TryFind frontier with
-                        | Some { Kind=SemanticKind.Sequential [_;continuation] } ->
-                            memory.Operations.TryFind continuation |> Option.bind (function MemoryWitnessOperation.ArrayAccess fact -> Some fact | _ -> None)
+                        | Some { Kind=SemanticKind.Sequential [buffer;index;required;continuation]; Children=children }
+                            when buffer=view && index=construction.Current && children=[buffer;index;required;continuation] ->
+                            memory.Operations.TryFind continuation |> Option.bind (function
+                                | MemoryWitnessOperation.ArrayAccess fact when fact.Bounds.Requirement.Site=required -> Some fact
+                                | _ -> None)
                         | _ -> None
                         |> needed "The string comparison read lacks its exact guarded access continuation."
                     do! require (access.Buffer=view && access.Index=construction.Current && access.Value.IsNone && access.Bounds.Requirement.Frontier=frontier)
                             "The string comparison borrow is not read by its exact source guard and index occurrence."
-                    let allowed = Set.ofList [access.Site;access.Bounds.Length]
+                    let allowed = Set.ofList [frontier;access.Site;access.Bounds.Length]
                     let uses =
                         let source = graph.Nodes.Values |> Seq.collect Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence |> Seq.toList
                         source @ (graph.Edges |> List.filter (fun edge -> edge.Class=EdgeClass.Structural || edge.Class=EdgeClass.Reference))
@@ -2425,7 +2428,9 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
           // Native entries and callback accounts require their selected source loading
           // even when every import is libc; ordinary direct libc calls keep no account.
-          Loading = if entries.IsEmpty && closedEntries.IsEmpty && callbackInvocations.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c")) then None else loading |> Result.toOption
+          Loading = if entries.IsEmpty && closedEntries.IsEmpty && callbackInvocations.IsEmpty && (imports.Values |> Seq.forall (fun import -> import.Library = "c"))
+                       && not (loading |> Result.toOption |> Option.exists (fun account -> account.Contract.Runtime = "win32" && account.Contract.Os = "windows"))
+                    then None else loading |> Result.toOption
           Entries = Map.keys entries |> Seq.toList
           CallbackInvocations = Map.keys callbackInvocations |> Seq.toList
           CallbackAbsences = Map.keys callbackAbsences |> Seq.toList

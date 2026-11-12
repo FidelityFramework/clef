@@ -159,15 +159,13 @@ type DesignTimeReceiptCases() =
         Assert.Equal(None, decided.Reason)
 
     [<Fact>]
-    member _.``The solver resolves from PATH first and then from the pinned parity toolchains``() =
-        let separator = string IO.Path.PathSeparator
-        let onPath = String.Join(separator, [ "/opt/none"; "/usr/local/solver/bin" ])
-        let exists (found: string list) (path: string) = List.contains path found
-        Assert.Equal("cvc5", Receipts.resolveSolver onPath (exists [ IO.Path.Combine("/usr/local/solver/bin", "cvc5"); "/mnt/apps/gpu-two/toolchains/cvc5-1.3.0/bin/cvc5" ]))
-        Assert.Equal("/mnt/apps/gpu-two/toolchains/cvc5-1.3.0/bin/cvc5", Receipts.resolveSolver onPath (exists [ "/mnt/apps/gpu-two/toolchains/cvc5-1.3.0/bin/cvc5"; "/tmp/cvc5-toolchain/bin/cvc5" ]))
-        Assert.Equal("/home/hhh/.local/toolchains/cvc5-1.3.0/bin/cvc5", Receipts.resolveSolver "" (exists Receipts.solverToolchainPaths))
-        Assert.Equal("/tmp/cvc5-toolchain/bin/cvc5", Receipts.resolveSolver null (exists [ "/tmp/cvc5-toolchain/bin/cvc5" ]))
-        Assert.Equal("cvc5", Receipts.resolveSolver onPath (exists []))
+    member _.``The solver resolves the exact PATH executable before host installations``() =
+        let name = if OperatingSystem.IsWindows() then "cvc5.exe" else "cvc5"
+        let directory = IO.Path.Combine(IO.Path.GetTempPath(), "solver tools")
+        let selected = IO.Path.Combine(directory, name)
+        Assert.Equal(selected, Receipts.resolveSolver directory (fun path -> path = selected || List.contains path Receipts.solverToolchainPaths))
+        Assert.Equal(Receipts.solverToolchainPaths.Head, Receipts.resolveSolver "" (fun path -> List.contains path Receipts.solverToolchainPaths))
+        Assert.Equal(name, Receipts.resolveSolver null (fun _ -> false))
 
 [<CollectionDefinition("Solver environment", DisableParallelization = true)>]
 type SolverEnvironmentCollection() = class end
@@ -199,7 +197,7 @@ type SolverEnvironmentCases() =
         let previousTempDir = Environment.GetEnvironmentVariable "CLEF_PROOF_TEMP_DIR"
         let solver = Receipts.resolveSolver (Environment.GetEnvironmentVariable "PATH") IO.File.Exists
         let scratchRoot = IO.Path.GetFullPath(IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "artifacts", "scratch", "design-time-receipt-cases"))
-        let spacedDir = IO.Path.Combine(scratchRoot, "clef \"proof\" space " + Guid.NewGuid().ToString("N"))
+        let spacedDir = IO.Path.Combine(scratchRoot, "clef proof space " + Guid.NewGuid().ToString("N"))
         try
             IO.Directory.CreateDirectory spacedDir |> ignore
             let sampleTempPath = IO.Path.Combine(spacedDir, "clef-proof-sample.smt2")

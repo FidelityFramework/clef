@@ -8,6 +8,7 @@
     <Compile Include="ArtifactJson.fs" />
     <Compile Include="DimensionalCases.fs" />
     <Compile Include="SourcePlatformFixture.fs" />
+    <Compile Include="Platform/Windows/SourcePlatformTests.fs" />
     <Compile Include="NominalIdentityCases.fs" />
     <Compile Include="MixedRecursiveSchemeCases.fs" />
     <Compile Include="MixedSchemeSpecializationCases.fs" />

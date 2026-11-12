@@ -1046,6 +1046,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // representation rewrite can retire the source occurrence or its type.
     let boundaryValueDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryValues.diagnostics reachableGraph
 
+    let reachableGraph = Clef.Compiler.Nanopass.DeadBodies.normalizeWith RecipeSerialization.emitDeadBodyRecipes reachableGraph
+
     //=========================================================================
     // Four-Pass Elaboration Pipeline (January 2026)
     // See: docs/PSG_Elaboration_Fold_Architecture.md

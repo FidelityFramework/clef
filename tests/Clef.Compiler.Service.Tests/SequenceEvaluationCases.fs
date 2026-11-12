@@ -164,7 +164,7 @@ type SequenceEvaluationCases() =
     [<InlineData("true")>]
     [<InlineData("false")>]
     [<InlineData("gate")>]
-    member _.``Conditional flow retains guard effects and both local joins without claiming feasibility``(guard: string) =
+    member _.``Conditional flow retains guard effects and only prunes source-proven branches``(guard: string) =
         let graph = Evaluation.check ("let mutable trace = 0\nlet produce (gate: bool) = seq {\n    if (trace <- 1; " + guard + ") then\n        trace <- 2\n        yield 3\n        trace <- 4\n    else\n        trace <- 5\n    trace <- 6\n}\nlet outer = produce false")
         let owner = Evaluation.owners graph |> Assert.Single
         let body = Evaluation.root graph owner
@@ -173,7 +173,22 @@ type SequenceEvaluationCases() =
         Evaluation.assignment graph owner.Id ordered[1]
         let conditional = ordered[0]
         match graph.Nodes[conditional].Kind with
+        | SemanticKind.Sequential [condition; selected] when guard = "true" || guard = "false" ->
+            Assert.Equal<NodeId list>([condition; selected], Evaluation.sequential graph owner.Id conditional)
+            let guardInputs = Evaluation.sequential graph owner.Id condition
+            Evaluation.assignment graph owner.Id guardInputs[0]
+            if guard = "true" then
+                let yesInputs = Evaluation.sequential graph owner.Id selected
+                Evaluation.assignment graph owner.Id yesInputs[0]
+                let following = Evaluation.sequential graph owner.Id yesInputs[1]
+                Evaluation.suspend graph owner.Id following[0] |> ignore
+                Evaluation.assignment graph owner.Id following[1]
+            else
+                Evaluation.assignment graph owner.Id selected
+                Assert.DoesNotContain(Evaluation.ownedNodes graph owner.Id, fun node ->
+                    match node.Kind with SemanticKind.Yield _ -> true | _ -> false)
         | SemanticKind.IfThenElse (condition, yes, Some no) ->
+            Assert.Equal("gate", guard)
             Evaluation.operands graph owner.Id conditional [0, EvaluationAccess.Value, condition; 1, EvaluationAccess.Value, yes; 2, EvaluationAccess.Value, no]
             Evaluation.flow graph owner.Id conditional EvaluationPort.Entry (EvaluationPort.OperandEntry 0) EvaluationTransfer.Continue
             Evaluation.flow graph owner.Id conditional (EvaluationPort.OperandExit 0) (EvaluationPort.OperandEntry 1) EvaluationTransfer.WhenTrue

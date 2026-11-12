@@ -1352,14 +1352,16 @@ type ForeignReferenceTests() =
         Assert.Equal((if second="mallocFirst" then 1 else 2),supportedQuotes.Count)
 
     [<Fact>]
-    member _.``Resource application requirements renew claim roles without retaining old obligation nodes``() =
+    member _.``Resource application requirements preserve unchanged claim identities and exact support``() =
         let graph = (ForeignCases.resourceApplication "    match Foreign.mallocFirst 8 with\n    | Some handle -> Foreign.freeFirst handle; 0\n    | None -> 0\n").CheckResult.Graph
         let original = ForeignCases.resourceRequirements graph
         let renewed = Clef.Compiler.Nanopass.BoundarySettlement.normalize graph
         let current = ForeignCases.resourceRequirements renewed
         Assert.Equal<string list>(original |> List.map(fun (_,info) -> info.Id) |> List.sort,current |> List.map(fun (_,info) -> info.Id) |> List.sort)
         Assert.Equal(2,current.Length)
-        for id,_ in original do Assert.False(renewed.Nodes.ContainsKey id)
+        Assert.Equal<NodeId list>(original |> List.map fst |> List.sort, current |> List.map fst |> List.sort)
+        for id,_ in original do
+            Assert.Equal<NodeId list>(ForeignCases.resourceRequirementSupport graph id, ForeignCases.resourceRequirementSupport renewed id)
 
     [<Fact>]
     member _.``Resource application requirements invalidate changed quote target and repeated actual incidence``() =

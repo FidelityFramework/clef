@@ -152,9 +152,15 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image;stack|]; 
 
     let guardedAccess (graph: SemanticGraph) (facts: MemoryWitnessProjection) (source: SemanticNode) =
         match source.Kind with
-        | SemanticKind.Sequential [required; operation] ->
+        | SemanticKind.Sequential ordered when ordered.Length >= 2 ->
+            let required, operation = ordered[ordered.Length - 2], List.last ordered
             match facts.Operations.TryFind operation with
             | Some(MemoryWitnessOperation.ArrayAccess access) ->
+                let evaluation =
+                    match graph.Nodes[operation].Kind with SemanticKind.IndexSet(_,_,value) -> [value] | _ -> []
+                let expected = [access.Buffer; access.Index] @ evaluation @ [required; operation]
+                Assert.Equal<NodeId list>(expected, ordered)
+                Assert.Equal<NodeId list>(expected, source.Children)
                 let guard = access.Bounds.Requirement
                 Assert.Equal(operation, access.Site)
                 Assert.Equal(operation, guard.Continuation)

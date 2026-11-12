@@ -141,6 +141,41 @@ type ProjectWorkspaceCollection() = class end
 [<Collection("ProjectWorkspace"); Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProjectWorkspace")>]
 type ProjectWorkspaceTests() =
     [<Theory>]
+    [<InlineData("windows", "win32", "x86_64-pc-windows-msvc", true)>]
+    [<InlineData("windows", "win32", "x86_64-unknown-linux-gnu", false)>]
+    [<InlineData("windows", "win32", "x86_64-w64-windows-gnu", false)>]
+    [<InlineData("linux", "win32", "x86_64-unknown-linux-gnu", false)>]
+    [<InlineData("windows", "libc", "x86_64-pc-windows-msvc", false)>]
+    member _.``Windows source core requires the declared Win32 AMD64 ABI``(os: string, runtime: string, triple: string, admitted: bool) =
+        use files = new WorkspaceFiles()
+        let authority =
+            SourcePlatformFixture.authority
+                .Replace("Os = \"linux\"", "Os = \"" + os + "\"")
+                .Replace("Runtime = \"freestanding\"", "Runtime = \"" + runtime + "\"")
+                .Replace("x86_64-unknown-linux-gnu", triple)
+                .Replace("Surfaces = [| { Endpoints = [| write |] } |]", "Surfaces = [||]")
+        let parse source path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults source path with
+            | Clef.Compiler.NativeService.ParseSuccess value -> value
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
+        let result = Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                        [parse authority "write-authority.clef"; parse "module App\n[<EntryPoint>]\nlet main _ = 37\n" files.Source]
+                        (Some SourcePlatformFixture.platform)
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read result.Graph
+        if admitted then
+            Assert.Empty reading.Findings
+            Assert.Equal(Some RuntimeModel.Win32, reading.Platform |> Option.bind _.Core |> Option.bind Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.runtimeModel)
+        else
+            Assert.Contains(reading.Findings, fun finding -> finding.Message.Contains("Windows") || finding.Message.Contains("triple"))
+
+    [<Fact>]
+    member _.``Win32 runtime is an explicit platform capability distinct from libc``() =
+        use files = new WorkspaceFiles()
+        File.WriteAllText(files.Project, "[package]\nname=\"WindowsPlatform\"\n[compilation]\ntarget=\"cpu\"\n[build]\noutput_kind=\"library\"\nsources=[\"App.clef\"]\n[platform]\nruntime_model=\"win32\"\nos=\"windows\"\narch=\"x86_64\"\n")
+        let platform = FidprojLoader.loadBindingPlatformSection files.Project |> WorkspaceCases.need
+        Assert.Equal(RuntimeModel.Win32, platform.RuntimeModel)
+
+    [<Theory>]
     [<InlineData("EK_RA6M5_HelloBlinky", "arm_cortex_m33", "mcu-renesas-ra6m5-ek-ra6m5", "CortexM33")>]
     [<InlineData("STM32H747I_DISCO_HelloDISCO", "arm_cortex_m7", "stm32h747i-disco-hellodisco-internal", "CortexM7")>]
     member _.``Tracked profile aliases retain readable source WordSize declarations``(profile: string, architecture: string, identity: string, cpu: string) =
@@ -154,7 +189,7 @@ type ProjectWorkspaceTests() =
             "[package]"; "name=\"ProfileWordSize\""; "version=\"0.1.0\""
             "[compilation]"; "target=\"mcu\""
             "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; sprintf "arch=%A" architecture
-            "[dependencies]"; sprintf "platform={path=%A}" platform
+            "[dependencies]"; sprintf "platform={path=%s}" (System.Text.Json.JsonSerializer.Serialize platform)
             "[build]"; "sources=[\"App.clef\"]"; "output=\"profile.elf\""; "output_kind=\"embedded\"" ])
         let result = ProjectChecker.checkProject files.Project |> WorkspaceCases.need
         for diagnostic in result.CheckResult.Diagnostics do
@@ -162,7 +197,7 @@ type ProjectWorkspaceTests() =
         let graph = result.CheckResult.Graph
         let context = graph.Platform |> Option.defaultWith (fun () -> failwith "The checked profile lost its platform context.")
         Assert.Equal(Some selected, context.PlatformDescription)
-        Assert.Contains(Path.GetFullPath description, context.PlatformSourcePaths)
+        Assert.Contains((Path.GetFullPath description).Replace('\\', '/'), context.PlatformSourcePaths)
         let reading = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read graph
         let declared = reading.Platform |> Option.defaultWith (fun () -> failwithf "Selected profile was not read: %A" reading.Findings)
         Assert.Equal(identity, declared.Id)
@@ -527,9 +562,9 @@ type ProjectWorkspaceTests() =
             | Error ProjectWorkspaceError.ConflictingInputs -> ()
             | other -> failwithf "Conflicting capture was admitted: %A" other
             let inputs, sources, libraries = WorkspaceCases.run (demand.ObserveAsync()) |> WorkspaceCases.need
-            Assert.Equal<string>(source, Map.ofList inputs |> Map.find files.Source)
-            Assert.Equal<string>(File.ReadAllText dependency, Map.ofList inputs |> Map.find dependency)
-            Assert.Equal<string list>([dependencySource; files.Source], List.map fst sources)
+            Assert.Equal<string>(source, Map.ofList inputs |> Map.find (files.Source.Replace('\\', '/')))
+            Assert.Equal<string>(File.ReadAllText dependency, Map.ofList inputs |> Map.find (dependency.Replace('\\', '/')))
+            Assert.Equal<string list>([dependencySource; files.Source] |> List.map (fun path -> path.Replace('\\', '/')), List.map fst sources)
             Assert.Equal<string list>(["first"], libraries)
             WorkspaceCases.run (demand.ReleaseAsync()) |> WorkspaceCases.need
             let next = WorkspaceCases.reserve workspace
@@ -567,7 +602,7 @@ type ProjectWorkspaceTests() =
         File.WriteAllText(binding, metadata.Replace("\"cpu\"", "\"gpu\""))
         let checkedProject = ProjectChecker.checkPrepared prepared
         Assert.Equal<TargetPlatform option>(Some TargetPlatform.CPU, checkedProject.PlatformTarget)
-        Assert.Equal<string>(metadata, Map.ofList checkedProject.InputFiles |> Map.find binding)
+        Assert.Equal<string>(metadata, Map.ofList checkedProject.InputFiles |> Map.find (binding.Replace('\\', '/')))
         let updated = ProjectChecker.checkProject files.Project |> WorkspaceCases.need
         Assert.Equal<TargetPlatform option>(Some TargetPlatform.GPU, updated.PlatformTarget)
 
