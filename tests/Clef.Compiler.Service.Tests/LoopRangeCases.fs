@@ -571,3 +571,67 @@ let observed = distances, durations
         Assert.Equal<int option>(None, LoopRanges.selectedWidth rerun power.Id)
         Assert.DoesNotContain(rerun.Nodes.Values, fun node ->
             match node.Kind with SemanticKind.Obligation { Body = ObligationBody.FiniteLinearRecurrence _ } -> true | _ -> false)
+
+    [<Fact>]
+    member _.``Conjunctive MMIO polling while guards preserve finite induction and recurrence bounds``() =
+        let pollingSource =
+            "module MmioPolling\n[<EntryPoint>]\nlet main _ =\n    let r8 = Mmio.reg8 0x40080D03\n    let mutable attempts = 0\n    while attempts < 4 && Mmio.read8 r8 = 0 do\n        attempts <- attempts + 1\n    0\n"
+        let pollingGraph = SourcePlatformFixture.check 32 "mmio-polling.clef" pollingSource
+        let attempts = LoopRangeFixture.cell "attempts" pollingGraph
+        Assert.Equal(Some(ValueRange.Bounded(0I, 4I)), attempts.ValueRange)
+        let store =
+            pollingGraph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Set(target, update) ->
+                    match pollingGraph.Nodes[target].Kind with
+                    | SemanticKind.VarRef(_, Some origin) when origin = attempts.Id -> Some update
+                    | _ -> None
+                | _ -> None)
+            |> Assert.Single
+        Assert.Equal(Some(ValueRange.Bounded(1I, 4I)), pollingGraph.Nodes[store].ValueRange)
+
+        let rightConjunctSource =
+            "module MmioRightConjunct\n[<EntryPoint>]\nlet main _ =\n    let r8 = Mmio.reg8 0x40080D03\n    let mutable attempts = 0\n    while Mmio.read8 r8 = 0 && attempts < 4 do\n        let _ = Mmio.read8 r8\n        attempts <- attempts + 1\n    0\n"
+        let rightGraph = SourcePlatformFixture.check 32 "mmio-right-conjunct.clef" rightConjunctSource
+        let rightAttempts = LoopRangeFixture.cell "attempts" rightGraph
+        Assert.Equal(Some(ValueRange.Bounded(0I, 4I)), rightAttempts.ValueRange)
+        let rightStore =
+            rightGraph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Set(target, update) ->
+                    match rightGraph.Nodes[target].Kind with
+                    | SemanticKind.VarRef(_, Some origin) when origin = rightAttempts.Id -> Some update
+                    | _ -> None
+                | _ -> None)
+            |> Assert.Single
+        Assert.Equal(Some(ValueRange.Bounded(1I, 4I)), rightGraph.Nodes[rightStore].ValueRange)
+
+    [<Fact>]
+    member _.``Disjunctive MMIO polling while guards remain refused with CCS8011``() =
+        let disjunctiveSource =
+            "module MmioDisjunctive\n[<EntryPoint>]\nlet main _ =\n    let r8 = Mmio.reg8 0x40080D03\n    let mutable attempts = 0\n    while attempts < 4 || Mmio.read8 r8 = 0 do\n        attempts <- attempts + 1\n    0\n"
+        let disjunctiveResult = SourcePlatformFixture.checkResult 32 "mmio-disjunctive.clef" disjunctiveSource
+        let errors = LoopCheckResult.errors disjunctiveResult
+        let rangeErrors = errors |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8011")
+        Assert.Equal(2, rangeErrors.Length)
+        for diagnostic in rangeErrors do
+            Assert.Contains("cannot be observed", diagnostic.Message)
+        for diagnostic in errors do
+            Assert.True(diagnostic.Code = "CCS8011" || diagnostic.Code = "CCS8403")
+        let attempts = LoopRangeFixture.cell "attempts" disjunctiveResult.Graph
+        Assert.True(attempts.ValueRange |> Option.exists (ValueRange.isObservable >> not))
+
+        let rightDisjunctiveSource =
+            "module MmioRightDisjunctive\n[<EntryPoint>]\nlet main _ =\n    let r8 = Mmio.reg8 0x40080D03\n    let mutable attempts = 0\n    while Mmio.read8 r8 = 0 || attempts < 4 do\n        attempts <- attempts + 1\n    0\n"
+        let rightDisjunctiveResult = SourcePlatformFixture.checkResult 32 "mmio-right-disjunctive.clef" rightDisjunctiveSource
+        let rightErrors = LoopCheckResult.errors rightDisjunctiveResult
+        let rightRangeErrors = rightErrors |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8011")
+        Assert.Equal(2, rightRangeErrors.Length)
+        for diagnostic in rightRangeErrors do
+            Assert.Contains("cannot be observed", diagnostic.Message)
+        for diagnostic in rightErrors do
+            Assert.True(diagnostic.Code = "CCS8011" || diagnostic.Code = "CCS8403")
+        let rightAttempts = LoopRangeFixture.cell "attempts" rightDisjunctiveResult.Graph
+        Assert.True(rightAttempts.ValueRange |> Option.exists (ValueRange.isObservable >> not))

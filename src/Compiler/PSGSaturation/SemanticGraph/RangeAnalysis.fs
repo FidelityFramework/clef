@@ -577,6 +577,7 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                         match applySubst n.Type with NativeType.TFun _ -> true | _ -> false)))
             let initial =
                 match info.Category with
+                | _ when info.Module = IntrinsicModule.Mmio -> noWrites
                 | IntrinsicCategory.Platform | IntrinsicCategory.Reactive -> unknownWrites
                 | IntrinsicCategory.Memory when List.isEmpty callbacks -> unknownWrites
                 | _ when delayed || unmodelledCallback -> unknownWrites
