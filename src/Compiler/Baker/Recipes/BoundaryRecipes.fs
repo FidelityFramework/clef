@@ -453,6 +453,16 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
             | [] -> typeRef graph returnId
             | _ -> Error "The acquisition declaration has ambiguous resource ownership."
 
+        // A release import publishes its declared result unchanged: None for Void,
+        // Integer(32, true) for the signed 32-bit C status. The status is an ordinary
+        // scalar result and states no resource fact; the cleanup account is attached
+        // to the ResourceHandle parameter only.
+        do! require (not (resources.Values |> Seq.exists (fun row -> row.Release = binding.Id && row.ReleaseDescriptor = descriptor.Node)) ||
+                     (match result with
+                      | None | Some(BoundaryScalar.Integer(32, true)) -> true
+                      | _ -> false))
+                "A resource release result must be declared Void or a signed 32-bit integer status."
+
         do! require (writable.IsNone ||
                      (match (parameters |> List.map snd),result with
                      | [BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)],(None | Some(BoundaryScalar.Integer(64,true))) -> true

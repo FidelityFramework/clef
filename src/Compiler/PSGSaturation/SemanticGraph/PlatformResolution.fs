@@ -2097,9 +2097,13 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                         | NativeType.TApp(_,[_]) when Types.tryGetNTUKind inner = Some NTUKind.NTUptr -> Some inner
                                         | _ -> None
                                     | _ -> None)
+                            // A release declares a Void result or the signed 32-bit C status result
+                            // (`int fclose(FILE *)`); every other ReturnType is a declaration error.
+                            // The status is an ordinary scalar result. The resource contract is
+                            // stated on the handle parameter only.
                             let releaseSignature = recordOf graph releaseAbi.Node |> Option.bind (fun (_,fields) ->
                                 match field "ReturnType" fields |> Option.map (readTypeRef graph), field "Parameters" fields |> Option.bind (elementsOf graph) with
-                                | Some (Ok DeclaredTypeRef.Void), Some [parameter] ->
+                                | Some (Ok (DeclaredTypeRef.Void | DeclaredTypeRef.Scalar (BoundaryScalar.Integer(32, true)))), Some [parameter] ->
                                     recordOf graph parameter |> Option.bind (fun (_,fields) ->
                                         match field "PassBy" fields |> Option.bind (caseOf graph), field "Type" fields |> Option.bind pointerType with
                                         | Some(_,"Value",None), Some bits -> Some bits
@@ -2124,7 +2128,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                      ResultType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType resultTy; HandleType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType handle
                                      Contract = contract; Participants = binding.Id :: path @ paths @ [releaseNode.Id;hypothesisNode.Id;acquireAbi.Node;releaseAbi.Node]
                                                                         @ acquired.Path @ acquired.Formals @ [acquired.Body] @ released.Path @ [formal;released.Body] }
-                            | _ -> invalid "requires matching nullable CHandle return and unary nonnullable same-handle raw-Void release with identical declared pointer widths."
+                            | _ -> invalid "requires matching nullable CHandle return and unary nonnullable same-handle release declaring a Void or signed 32-bit integer result, with identical declared pointer widths."
                         | _ -> invalid "requires exact acquisition/release declaration bodies and one release formal."
                     | _ -> invalid "Release.Binding must name one exact fully qualified external declaration."
                 | _ -> invalid "OwnedNullableReturn requires release native Parameter zero."

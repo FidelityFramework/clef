@@ -418,12 +418,22 @@ let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (g
             let node = SemanticGraph.getNode instances.Head.Lambda graph
             finding node DeclarationDefect.Ambiguous "One native callback entry is assigned incompatible declared signatures."
     let callbacks = List.rev callbacks |> List.distinctBy (fun c -> c.Address, c.Function.Node)
+    let resultNodes body =
+        let rec loop visited acc id =
+            if Set.contains id visited then List.rev acc
+            else
+                let acc = id :: acc
+                match SemanticGraph.tryGetNode id graph with
+                | Some { Kind = SemanticKind.TypeAnnotation (source, _) } ->
+                    loop (Set.add id visited) acc source
+                | _ -> List.rev acc
+        loop Set.empty [] body
     let numeric =
         callbacks
         |> List.collect (fun c ->
             let parameters = c.Function.Parameters |> List.choose (fun (id, d) -> d |> Option.map (fun d -> id, d))
             match c.Function.Body, c.Function.Return with
-            | Some body, Some result -> (body, result) :: parameters
+            | Some body, Some result -> (resultNodes body |> List.map (fun id -> id, result)) @ parameters
             | _ -> parameters)
         |> Map.ofList
     let numeric =
@@ -431,7 +441,7 @@ let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (g
             let formals = entry.Signature.Parameters |> List.choose (fun (id, declared) -> declared |> Option.map (fun declared -> id, declared))
             let result =
                 match entry.Signature.Body, entry.Signature.Return with
-                | Some body, Some declared -> [body, declared]
+                | Some body, Some declared -> resultNodes body |> List.map (fun id -> id, declared)
                 | _ -> []
             (formals @ result) |> List.fold (fun numeric (id, declared) -> Map.add id declared numeric) numeric) numeric
     { Callbacks = callbacks

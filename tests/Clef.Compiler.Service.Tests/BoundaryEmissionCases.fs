@@ -124,6 +124,120 @@ type PlatformDescription = { Id: string; Core: TargetCore option }
             match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = name | _ -> false)
         |> Assert.Single
 
+    // Two owned-nullable resource pairs with an fclose-shaped unary release. Each
+    // pair has its own C symbols. releaseResult is the release binding's source
+    // result type; releaseReturn is the ReturnType its FunctionDescriptor declares.
+    let resourceSource (releaseResult: string) (releaseReturn: string) =
+        let pair (suffix: string) =
+            """
+[<FidelityExtern("c", "stream_open_@SYMBOL@")>]
+let openStream@SUFFIX@ (mode: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let openStream@SUFFIX@Descriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stream_open_@SYMBOL@"; Parameters = [| { Name = "mode"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let openStream@SUFFIX@ResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.closeStream@SUFFIX@"; Parameter = 0 })
+    Hypothesis = { Identity = "fixture-stream-@SUFFIX@"; Version = "1"; Source = "explicit status release test premise" } } @>
+[<FidelityExtern("c", "stream_close_@SYMBOL@")>]
+let closeStream@SUFFIX@ (handle: CHandle<unit>) : @RESULT@ = NativeDefault.zeroed ()
+let closeStream@SUFFIX@Descriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stream_close_@SYMBOL@"; Parameters = [| { Name = "handle"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = @RETURN@; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+"""
+                .Replace("@SYMBOL@", suffix.ToLowerInvariant()).Replace("@SUFFIX@", suffix)
+                .Replace("@RESULT@", releaseResult).Replace("@RETURN@", releaseReturn)
+        vocabulary + """
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ResourceRelease = { Binding: string; Parameter: int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }
+"""
+        + pair "First" + pair "Second"
+
+    /// One complete project check of the resource declarations and a main module.
+    /// The scratch project directory is deleted after the check returns.
+    let resourceApplication (source: string) (main: string) =
+        let root =
+            System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/scratch/boundary-emission-resource-tests", System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory root |> ignore
+        let write (name: string) (text: string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root, name), text)
+        write "authority.clef" (SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\""))
+        write "resource.clef" source
+        write "main.clef" ("module StatusReleaseMain\n" + main)
+        write "resource.fidproj" """
+[package]
+name="StatusReleaseBoundary"
+version="0.1.0"
+[compilation]
+target="cpu"
+memory_model="stack_only"
+[build]
+output_kind="console"
+sources=["authority.clef","resource.clef","main.clef"]
+[platform]
+description="WriteAuthority.description"
+runtime_model="libc"
+os="linux"
+arch="x86_64"
+[link]
+libraries=["c"]
+"""
+        try
+            Clef.Compiler.Project.ProjectChecker.checkProject (System.IO.Path.Combine(root, "resource.fidproj"))
+            |> Result.defaultWith (fun error -> failwithf "%A" error)
+        finally
+            System.IO.Directory.Delete(root, true)
+
+    /// An entry point whose body is one acquisition match with the given Some arm.
+    let statusMain (someArm: string) =
+        "[<EntryPoint>]\nlet main _ =\n    match BoundaryFixture.openStreamFirst 8 with\n" + someArm + "    | None -> 1\n"
+
+    /// The Void release, and four uses of a signed 32-bit status release: the status
+    /// as the activation result, discarded, bound to a name, and compared by a caller.
+    let releaseApplication (shape: string) =
+        let status = shape <> "void"
+        let source =
+            if status then resourceSource "int" "Integer (Signed, 32)"
+            else resourceSource "unit" "Void"
+        let main =
+            match shape with
+            | "void" -> statusMain "    | Some handle -> BoundaryFixture.closeStreamFirst handle; 0\n"
+            | "status-result" -> statusMain "    | Some handle -> BoundaryFixture.closeStreamFirst handle\n"
+            | "status-discarded" -> statusMain "    | Some handle -> BoundaryFixture.closeStreamFirst handle; 0\n"
+            | "status-bound" ->
+                statusMain "    | Some handle ->\n        let status = BoundaryFixture.closeStreamFirst handle\n        status\n"
+            | "status-caller" ->
+                // The status is the resource activation's result. The caller's
+                // comparison is outside the cleanup evaluation census.
+                "let closeStatus () : int =\n    match BoundaryFixture.openStreamFirst 8 with\n"
+                + "    | Some handle -> BoundaryFixture.closeStreamFirst handle\n    | None -> 1\n"
+                + "[<EntryPoint>]\nlet main _ = if closeStatus () = 0 then 0 else 2\n"
+            | _ -> failwithf "Unknown release shape: %s" shape
+        status, resourceApplication source main
+
+    let cleanupClaims (graph: SemanticGraph) =
+        graph.Nodes.Values
+        |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.ResourceCleanup model -> Some(node.Id, info, model)
+                | _ -> None
+            | _ -> None)
+        |> Seq.toList
+
+    /// Each release event of a cleanup model: the released actual and the release binding.
+    let releaseEvents (cleanup: ResourceCleanupModel) =
+        cleanup.Points
+        |> List.choose (fun point ->
+            match point.Port, point.Event with
+            | EvaluationPort.Exit, Some(ResourceFlowEvent.Release(actual, binding)) -> Some(actual, binding)
+            | _ -> None)
+        |> List.distinct
+
+    let diagnosticText (diagnostics: Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.Diagnostic list) =
+        diagnostics |> List.map (fun diagnostic -> diagnostic.Code + ": " + diagnostic.Message) |> String.concat "\n"
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BoundaryEmission")>]
 type BoundaryEmissionCases() =
     [<Fact>]
@@ -954,3 +1068,238 @@ let main _ =
         Assert.Equal(Some 8, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth changed site.Id)
         BoundaryEmissionFixture.rejected changed |> ignore
         Assert.True(BoundaryWitness.admit changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("void")>]
+    [<InlineData("status-result")>]
+    [<InlineData("status-discarded")>]
+    [<InlineData("status-bound")>]
+    [<InlineData("status-caller")>]
+    member _.``Owned nullable release publishes its declared Void or signed32 status result`` (shape: string) =
+        let status, result = BoundaryEmissionFixture.releaseApplication shape
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,
+                     String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        let graph = result.CheckResult.Graph
+        let projection = BoundaryEmissionFixture.project graph
+        let resource =
+            (BoundaryDeclarations.readDescriptors graph).Resources
+            |> List.filter (fun row -> row.Contract.Hypothesis.Identity = "fixture-stream-First")
+            |> Assert.Single
+        let expected = if status then Some(BoundaryScalar.Integer(32, true)) else None
+        let handleAbi = BoundaryScalar.ResourceHandle(resource.Quote, false)
+        let released = projection.Imports.Values |> Seq.filter (fun import -> import.Binding = resource.Release.Binding) |> Assert.Single
+        Assert.Equal(expected, released.Result)
+        Assert.Equal<(NodeId * BoundaryScalar) list>([resource.ReleaseFormal, handleAbi], released.Parameters)
+        let release = projection.Calls.Values |> Seq.filter (fun call -> call.Import = released.Identity) |> Assert.Single
+        Assert.Equal(expected, release.Result)
+        Assert.True release.ResultAdaptation.IsNone
+        let operand = Assert.Single release.Arguments
+        Assert.Equal(handleAbi, operand.Abi)
+        Assert.Equal(resource.ReleaseFormal, operand.Formal)
+        // The cleanup account is attached to the handle operand for both results.
+        let cleanupId, cleanupInfo, cleanup = BoundaryEmissionFixture.cleanupClaims graph |> Assert.Single
+        Assert.Equal(resource.Quote, cleanup.Declaration)
+        Assert.Equal(resource.Release.Binding, cleanup.Release)
+        match release.Resource with
+        | Some(BoundaryResourceUse.ReleaseOwned account) ->
+            Assert.Equal(resource.Quote, account.Declaration)
+            Assert.Equal(cleanup.Acquisition, account.Acquisition)
+            Assert.Equal(cleanupId, account.Cleanup)
+        | other -> failwithf "The release call has no cleanup account: %A" other
+        Assert.Equal<(NodeId * NodeId) list>([operand.Actual, resource.Release.Binding], BoundaryEmissionFixture.releaseEvents cleanup)
+        Assert.Contains(cleanup.Points, fun point ->
+            point.Site = release.Site && point.Port = EvaluationPort.Exit &&
+            point.Event = Some(ResourceFlowEvent.Release(operand.Actual, resource.Release.Binding)))
+        let site = graph.Nodes[release.Site]
+        if status then
+            // The status is an ordinary declared integer result: the full signed
+            // 32-bit range, a source-selected 32-bit representation and the numeric
+            // owner's ABI account.
+            Assert.Equal(Some(ValueRange.twosComplement 32), site.ValueRange)
+            let selected = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedRepresentation graph release.Site |> Option.get
+            Assert.Equal("int", selected.Family)
+            Assert.Equal(32, selected.Bits)
+            let numeric =
+                Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph
+                |> Result.defaultWith (fun failures -> failwithf "Missing numeric projection: %A" failures)
+            let account = numeric.ForeignResultUses |> List.filter (fun account -> account.Application.Call = release.Site) |> Assert.Single
+            Assert.Equal(resource.Release.Binding, account.Application.Declaration)
+            Assert.Equal<ForeignResultProofRole list>([ForeignResultProofRole.AbiNarrowing], account.Claims |> List.map fst)
+        else
+            Assert.Equal(Some NTUKind.NTUunit, Types.tryGetNTUKind site.Type)
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [cleanupInfo] with
+        | Ok receipt -> Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+        | Error reason -> failwithf "The single-release cleanup obligation was not discharged: %s" reason
+        let revision =
+            Clef.Compiler.Project.ProjectChecker.publish result
+            |> Result.defaultWith (fun reason -> failwithf "The release application could not publish: %s" reason)
+        let publicId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapBoundaryImport released,
+                     revision.Emission.Boundary.Imports[publicId released.Identity])
+        let published = revision.Emission.Boundary.Calls[publicId release.Site]
+        Assert.Equal((if status then Some(Fidelity.PSG.BoundaryScalar.Integer(32, true)) else None), published.Result)
+        Assert.Equal(Fidelity.PSG.BoundaryScalar.ResourceHandle(publicId resource.Quote, false), (Assert.Single published.Arguments).Abi)
+
+    // Fidelity.PSG owns the published-contract check. Its
+    // Emission.Boundary.ResourceDeclarations.Signature rule reads the release
+    // descriptor's ReturnType from the published declaration facts.
+    [<Theory>]
+    [<InlineData("void")>]
+    [<InlineData("status-result")>]
+    member _.``Published owned nullable release revision passes the Fidelity.PSG integrity check`` (shape: string) =
+        let _, result = BoundaryEmissionFixture.releaseApplication shape
+        let revision =
+            Clef.Compiler.Project.ProjectChecker.publish result
+            |> Result.defaultWith (fun reason -> failwithf "The release application could not publish: %s" reason)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Theory>]
+    [<InlineData("int", "Integer (Signed, 64)")>]
+    [<InlineData("int", "Integer (Signed, 16)")>]
+    [<InlineData("int", "Integer (Unsigned, 32)")>]
+    [<InlineData("bool", "Bool")>]
+    [<InlineData("int", "Pointer 64")>]
+    member _.``A release result other than Void or signed32 is a ResourceDescriptor error`` (releaseResult: string, releaseReturn: string) =
+        let result =
+            BoundaryEmissionFixture.resourceApplication
+                (BoundaryEmissionFixture.resourceSource releaseResult releaseReturn)
+                (BoundaryEmissionFixture.statusMain "    | Some handle -> BoundaryFixture.closeStreamFirst handle; 0\n")
+        let graph = result.CheckResult.Graph
+        let reason = "A ResourceDescriptor requires matching nullable CHandle return and unary nonnullable same-handle release declaring a Void or signed 32-bit integer result, with identical declared pointer widths."
+        let declared = BoundaryDeclarations.readDescriptors graph
+        Assert.Empty declared.Resources
+        Assert.Equal(2, declared.Findings |> List.filter (fun finding -> finding.Message = reason) |> List.length)
+        Assert.True(Clef.Compiler.Project.ProjectChecker.hasErrors result)
+        Assert.True(
+            result.CheckResult.Diagnostics |> List.exists (fun diagnostic ->
+                diagnostic.Code = "CCS8403" && diagnostic.Message = "Source settlement is required before witnessing: BoundaryEmission: " + reason),
+            BoundaryEmissionFixture.diagnosticText result.CheckResult.Diagnostics)
+        Assert.True(BoundaryWitness.admit graph |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("reference")>]
+    [<InlineData("width")>]
+    [<InlineData("handle")>]
+    member _.``A signed32 status release still requires a by-value same-width same-handle parameter`` (defect: string) =
+        let replace (before: string) (after: string) (source: string) =
+            let changed = source.Replace(before, after)
+            if changed = source then failwithf "Missing status release fixture token: %s" before
+            changed
+        let edit =
+            match defect with
+            | "reference" -> replace "Name = \"handle\"; Type = Pointer 64; PassBy = Value" "Name = \"handle\"; Type = Pointer 64; PassBy = Reference"
+            | "width" -> replace "Name = \"handle\"; Type = Pointer 64" "Name = \"handle\"; Type = Pointer 32"
+            | "handle" ->
+                replace "type ResourceDescriptor = {" "type OtherStream = private | OpaqueOtherStream\ntype ResourceDescriptor = {"
+                >> replace "(handle: CHandle<unit>) : int" "(handle: CHandle<OtherStream>) : int"
+            | _ -> failwithf "Unknown release parameter defect: %s" defect
+        let result =
+            BoundaryEmissionFixture.resourceApplication
+                (edit (BoundaryEmissionFixture.resourceSource "int" "Integer (Signed, 32)"))
+                (BoundaryEmissionFixture.statusMain "    | Some handle -> 0\n")
+        let graph = result.CheckResult.Graph
+        let reason = "A ResourceDescriptor requires matching nullable CHandle return and unary nonnullable same-handle release declaring a Void or signed 32-bit integer result, with identical declared pointer widths."
+        let declared = BoundaryDeclarations.readDescriptors graph
+        Assert.Empty declared.Resources
+        Assert.Equal(2, declared.Findings |> List.filter (fun finding -> finding.Message = reason) |> List.length)
+        Assert.True(Clef.Compiler.Project.ProjectChecker.hasErrors result)
+        Assert.True(
+            result.CheckResult.Diagnostics |> List.exists (fun diagnostic ->
+                diagnostic.Code = "CCS8403" && diagnostic.Message = "Source settlement is required before witnessing: BoundaryEmission: " + reason),
+            BoundaryEmissionFixture.diagnosticText result.CheckResult.Diagnostics)
+        Assert.True(BoundaryWitness.admit graph |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("void", "missing")>]
+    [<InlineData("status", "missing")>]
+    [<InlineData("void", "repeated")>]
+    [<InlineData("status", "repeated")>]
+    [<InlineData("void", "wrong")>]
+    [<InlineData("status", "wrong")>]
+    member _.``Missing repeated and wrong releases fail for Void and signed32 status releases alike`` (release: string, defect: string) =
+        let status = release = "status"
+        let source =
+            if status then BoundaryEmissionFixture.resourceSource "int" "Integer (Signed, 32)"
+            else BoundaryEmissionFixture.resourceSource "unit" "Void"
+        let arm =
+            match defect, status with
+            | "missing", _ -> "    | Some handle -> 0\n"
+            | "repeated", true ->
+                "    | Some handle -> BoundaryFixture.closeStreamFirst handle; BoundaryFixture.closeStreamFirst handle\n"
+            | "repeated", false -> "    | Some handle -> BoundaryFixture.closeStreamFirst handle; BoundaryFixture.closeStreamFirst handle; 0\n"
+            | "wrong", true -> "    | Some handle -> BoundaryFixture.closeStreamSecond handle\n"
+            | "wrong", false -> "    | Some handle -> BoundaryFixture.closeStreamSecond handle; 0\n"
+            | _ -> failwithf "Unknown release defect: %s" defect
+        let result = BoundaryEmissionFixture.resourceApplication source (BoundaryEmissionFixture.statusMain arm)
+        let graph = result.CheckResult.Graph
+        let hasErrors = Clef.Compiler.Project.ProjectChecker.hasErrors result
+        let diagnostics = BoundaryEmissionFixture.diagnosticText result.CheckResult.Diagnostics
+        let claims = BoundaryEmissionFixture.cleanupClaims graph
+        let resources = (BoundaryDeclarations.readDescriptors graph).Resources
+        let first = resources |> List.filter (fun row -> row.Contract.Hypothesis.Identity = "fixture-stream-First") |> Assert.Single
+        let second = resources |> List.filter (fun row -> row.Contract.Hypothesis.Identity = "fixture-stream-Second") |> Assert.Single
+        let incomplete = "The finite resource cleanup profile is incomplete: the cleanup graph structure or event census is inconsistent."
+        match defect with
+        | "missing" ->
+            // The source check has no error; the cleanup obligation has no
+            // release event and the solver finds a counterexample.
+            Assert.False(hasErrors, diagnostics)
+            let _, info, cleanup = Assert.Single claims
+            Assert.Empty(BoundaryEmissionFixture.releaseEvents cleanup)
+            match Clef.Compiler.Nanopass.ObligationDischarge.discharge [info] with
+            | Ok _ -> failwith "A cleanup obligation without a release was discharged."
+            | Error reason -> Assert.Equal(sprintf "Obligation '%s' (%s) was not discharged: solver returned 'sat'" info.Id info.Source, reason)
+        | "wrong" ->
+            // The other resource's release is recorded as the event; the
+            // cleanup profile is inconsistent and the check fails with CCS8403.
+            let _, info, cleanup = Assert.Single claims
+            Assert.Equal(first.Release.Binding, cleanup.Release)
+            Assert.Equal<NodeId list>([second.Release.Binding], BoundaryEmissionFixture.releaseEvents cleanup |> List.map snd)
+            Assert.True(hasErrors, diagnostics)
+            Assert.True(
+                result.CheckResult.Diagnostics |> List.exists (fun diagnostic ->
+                    diagnostic.Code = "CCS8403" && diagnostic.Message.EndsWith(incomplete, System.StringComparison.Ordinal)),
+                diagnostics)
+            match Clef.Compiler.Nanopass.ObligationDischarge.discharge [info] with
+            | Ok _ -> failwith "A cleanup obligation with another resource's release was discharged."
+            | Error reason -> Assert.Equal(sprintf "Required obligations have unavailable premises: '%s' (%s): %s" info.Id info.Source incomplete, reason)
+        | "repeated" ->
+            // The source check has no error; both release events are recorded
+            // and the solver finds a counterexample.
+            Assert.False(hasErrors, diagnostics)
+            let _, info, cleanup = Assert.Single claims
+            let events = BoundaryEmissionFixture.releaseEvents cleanup
+            Assert.Equal(2, events.Length)
+            Assert.All(events, fun (_, binding) -> Assert.Equal(first.Release.Binding, binding))
+            match Clef.Compiler.Nanopass.ObligationDischarge.discharge [info] with
+            | Ok _ -> failwith "A cleanup obligation with two releases of one handle was discharged."
+            | Error reason -> Assert.Equal(sprintf "Obligation '%s' (%s) was not discharged: solver returned 'sat'" info.Id info.Source, reason)
+        | _ -> failwithf "Unknown release defect: %s" defect
+
+    [<Theory>]
+    [<InlineData("int", "consume 7")>]
+    [<InlineData("CHandle<unit>", "let pointer = FnPtr.ofFunction forward in 0")>]
+    [<InlineData("int array", "consume (Array.zeroCreate 4)")>]
+    member _.``A by-value pointer parameter without a declared adapter fails with CCS8403`` (formal: string, entry: string) =
+        let body =
+            """
+[<FidelityExtern("c", "consume")>]
+let consume (value: @FORMAL@) : int = NativeDefault.zeroed ()
+let consumeDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "consume"; Parameters = [| { Name = "value"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let forward (value: @FORMAL@) : int = consume value
+[<EntryPoint>]
+let main _ = @ENTRY@
+"""
+                .Replace("@FORMAL@", formal).Replace("@ENTRY@", entry)
+        let result = BoundaryEmissionFixture.check (Some BoundaryEmissionFixture.platform) body
+        let reason = "A boundary parameter has no admitted integer or boolean declaration; pointer and aggregate values require a source-settled adapter."
+        let failures = BoundaryEmissionFixture.rejected result.Graph
+        let binding = BoundaryEmissionFixture.binding "consume" result.Graph
+        Assert.Contains(failures, fun failure -> failure.Reason = "BoundaryEmission: " + reason && failure.Participants.Contains binding.Id)
+        Assert.True(
+            result.Diagnostics |> List.exists (fun diagnostic ->
+                diagnostic.Code = "CCS8403" && diagnostic.Message = "Source settlement is required before witnessing: BoundaryEmission: " + reason),
+            BoundaryEmissionFixture.diagnosticText result.Diagnostics)
+        Assert.True(BoundaryWitness.admit result.Graph |> Result.isError)

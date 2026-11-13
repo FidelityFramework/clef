@@ -3262,3 +3262,41 @@ let main _ =
                 if shape="nested" then "Returned optional backing requires one exact receiving use and its original construction."
                 else "Returned optional backing requires one caller instance, one exact receiver and no other uses."
             Assert.Equal(Some(Result.Error reason),row.ResultRetirement)
+
+    [<Theory>]
+    [<InlineData("direct")>]
+    [<InlineData("sequential")>]
+    member _.``Explicit : int return annotation on 32-bit C callback settles inner result to 32-bit without return meet``(shape) =
+        let replacement =
+            match shape with
+            | "direct" -> "let callback (_unused: int) : int =\n    if _unused = 0 then -7 else 9"
+            | "sequential" -> "let callback (_unused: int) : int =\n    let marker = _unused\n    if marker = 0 then -7 else 9"
+            | _ -> failwithf "Unknown shape %s" shape
+        let result =
+            ClosedCallbackCases.receivingCheckWith false (fun source ->
+                source
+                    .Replace("Type = Integer (Signed, 64)", "Type = Integer (Signed, 32)")
+                    .Replace("ReturnType = Integer (Signed, 64)", "ReturnType = Integer (Signed, 32)")
+                    .Replace("let callback (_unused: int) = 7", replacement))
+
+        DimensionalCases.noErrors result
+        let receiving = (read result.Graph).Receiving |> Assert.Single
+        let body = receiving.Signature.Body.Value
+        let inner =
+            match result.Graph.Nodes[body].Kind with
+            | Clef.Compiler.PSGSaturation.SemanticGraph.Types.SemanticKind.TypeAnnotation (source, _) -> source
+            | kind -> failwithf "Expected TypeAnnotation on explicit : int callback body, got %A" kind
+        let numeric =
+            Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project result.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Equal(SettledSlot.Integer(32, Some "signed32"), numeric.Values[body].Slot)
+        Assert.Equal(SettledSlot.Integer(32, Some "signed32"), numeric.Values[inner].Slot)
+        Assert.False(result.Graph.Codata.Value.ReturnMeets.ContainsKey receiving.Lambda)
+
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let native = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
+        Assert.True(native.ResultAdaptation.IsNone)

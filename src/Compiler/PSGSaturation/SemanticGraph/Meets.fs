@@ -554,7 +554,14 @@ let returns (context: PlatformContext option) (graph: SemanticGraph) : Map<NodeI
                 if not bodyReachable then
                     None
                 else
-                    match SemanticGraph.tryGetNode bodyId graph with
+                    let rec unannotated id =
+                        match SemanticGraph.tryGetNode id graph with
+                        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> unannotated inner
+                        | _ -> id
+
+                    let effectiveBodyId = unannotated bodyId
+
+                    match SemanticGraph.tryGetNode effectiveBodyId graph with
                     | Some { Kind = SemanticKind.Sequential _ } ->
                         // The block already transcribes its immediate-child
                         // meet. A return reads that held result, not its leaf.
@@ -563,8 +570,8 @@ let returns (context: PlatformContext option) (graph: SemanticGraph) : Map<NodeI
                             |> Option.map _.Bits
                             |> Option.orElseWith (fun () -> nodeWidth graph bodyId)
 
-                        match nodeWidth graph bodyId, target with
-                        | Some from, Some target -> meet graph bodyId bodyId from target |> Option.map (fun m -> node.Id, m)
+                        match nodeWidth graph effectiveBodyId, target with
+                        | Some from, Some target -> meet graph bodyId effectiveBodyId from target |> Option.map (fun m -> node.Id, m)
                         | _ -> None
                     | _ ->
                         let lastValue = lastValueOf graph bodyId
