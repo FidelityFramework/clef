@@ -124,67 +124,62 @@ let private prepareWithAccountsCore (graph: SemanticGraph) (curry: CurryInfo) =
             if source.Metadata.ContainsKey ClosureMetadata.SourceSignature then source.Metadata
             else source.Metadata.Add(ClosureMetadata.SourceSignature, MetadataValue.Type source.Type)
         { source with Type = ty; Kind = kind; Children = children; Metadata = metadata }
-    let recipes = plans |> List.map (fun (binding, lambda, owner, constructor, calls) ->
-        let generated = ResizeArray<SemanticNode>()
-        let add node = generated.Add node; node
-        let ty = Environments.environmentType
-        let formal = fresh lambda (SemanticKind.PatternBinding "__environment_result") ty [] |> add
-        let parameters, body, captures, enclosing, context =
-            match lambda.Kind with SemanticKind.Lambda(a,b,c,d,e) -> a,b,c,d,e | _ -> failwith "Expected settled factory"
-        // Closure invocation keeps the environment first (closure spec §6.1).
-        // The internal result destination follows it, before source arguments.
-        let hasEnvironment =
-            match parameters with
-            | (_, formalType, first) :: _ when formalType = Environments.environmentType ->
-                graph.Edges |> List.exists (fun edge ->
-                    edge.Role = EdgeRole.EnvironmentFormal && edge.Target = first && List.tryLast edge.Sources = Some lambda.Id)
-            | _ -> false
-        let ordinal = if hasEnvironment then 1 else 0
-        let parameters = List.take ordinal parameters @ [("__environment_result", ty, formal.Id)] @ List.skip ordinal parameters
-        let rec insert index = function
-            | NativeType.TForall(parameters, body) -> NativeType.TForall(parameters, insert index body)
-            | body when index = 0 -> NativeType.TFun(ty, body)
-            | NativeType.TFun(domain, result) -> NativeType.TFun(domain, insert (index - 1) result)
-            | _ -> invalidOp "A factory destination must occur at a settled parameter boundary"
-        let insertDestination = insert ordinal
-        let factoryType = insertDestination binding.Type
-        signature lambda (insertDestination lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))
-            ((parameters |> List.map (fun (_, _, id) -> id)) @ [body]) |> add |> ignore
-        signature binding factoryType binding.Kind binding.Children |> add |> ignore
-        edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResultDestination
-                   Sources = [lambda.Id; owner; formal.Id]; Target = constructor; Ordinal = 0 } :: edges
-        for call, callee, arguments, path in calls do
-            let allocation = fresh call (SemanticKind.EnvironmentAllocate owner) ty [] |> add
-            let name = sprintf "__environment_destination_%d" (NodeId.value call.Id)
-            let stored = fresh call (SemanticKind.Binding(name, false, false, None)) ty [allocation.Id] |> add
-            let destination = fresh call (SemanticKind.VarRef(name, Some stored.Id)) ty [] |> add
-            for id in path do
-                let source = nodes[id]
-                let kind =
-                    match source.Kind with
-                    | SemanticKind.TypeAnnotation(inner, _) -> SemanticKind.TypeAnnotation(inner, factoryType)
-                    | _ -> source.Kind
-                signature source factoryType kind source.Children |> add |> ignore
-            // This representation boundary only provides result storage.
-            // Ordinary actuals retain their existing demand/effect frontiers;
-            // copying them into a prefix would force previously deferred work.
-            let arguments = List.take ordinal arguments @ [destination.Id] @ List.skip ordinal arguments
-            let invocation = { fresh call (SemanticKind.Application(callee, arguments)) call.Type (callee :: arguments) with ValueRange = call.ValueRange } |> add
-            let ordered = [stored.Id; invocation.Id]
-            { call with Kind = SemanticKind.Sequential ordered; Children = ordered } |> add |> ignore
-            edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResultCall
-                       Sources = [lambda.Id; constructor; formal.Id; allocation.Id; destination.Id]
-                       Target = invocation.Id; Ordinal = 0 } :: edges
-            let account : EnvironmentFactoryResultAccount =
-                { Call = invocation.Id; Ordinal = 0; Factory = lambda.Id; Constructor = constructor
-                  Formal = formal.Id; Allocation = allocation.Id; Destination = destination.Id }
-            if resultAccounts.ContainsKey account.Call then invalidOp "Environment factory recipe repeated a current invocation identity."
-            resultAccounts <- resultAccounts.Add(account.Call, account)
-            updatedCurry <- { updatedCurry with SaturatedCalls = updatedCurry.SaturatedCalls.Remove(call.Id).Add(invocation.Id, { TargetBindingId = binding.Id; AllArgNodes = arguments }) }
-        let emitted = generated |> Seq.map (fun node -> node.Id, node) |> Map.ofSeq |> Map.values |> Seq.toList
-        changed <- Set.union changed (emitted |> List.map _.Id |> Set.ofList)
-        { OriginalNodeId = binding.Id; NewNodes = emitted; ReplacementRootId = binding.Id
-          ElaborationKind = "Baker"; ElaborationSource = "Closure.factoryResult"; NewEdges = [] })
+    let recipes = plans |> List.choose (fun (binding, lambda, owner, constructor, calls) ->
+        match lambda.Kind with
+        | SemanticKind.Lambda(parameters, body, captures, enclosing, context) ->
+            let generated = ResizeArray<SemanticNode>()
+            let add node = generated.Add node; node
+            let ty = Environments.environmentType
+            let formal = fresh lambda (SemanticKind.PatternBinding "__environment_result") ty [] |> add
+            let hasEnvironment =
+                match parameters with
+                | (_, formalType, first) :: _ when formalType = Environments.environmentType ->
+                    graph.Edges |> List.exists (fun edge ->
+                        edge.Role = EdgeRole.EnvironmentFormal && edge.Target = first && List.tryLast edge.Sources = Some lambda.Id)
+                | _ -> false
+            let ordinal = if hasEnvironment then 1 else 0
+            let parameters = List.take ordinal parameters @ [("__environment_result", ty, formal.Id)] @ List.skip ordinal parameters
+            let rec insert index = function
+                | NativeType.TForall(parameters, body) -> NativeType.TForall(parameters, insert index body)
+                | body when index = 0 -> NativeType.TFun(ty, body)
+                | NativeType.TFun(domain, result) -> NativeType.TFun(domain, insert (index - 1) result)
+                | body -> NativeType.TFun(ty, body)
+            let insertDestination = insert ordinal
+            let factoryType = insertDestination binding.Type
+            signature lambda (insertDestination lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))
+                ((parameters |> List.map (fun (_, _, id) -> id)) @ [body]) |> add |> ignore
+            signature binding factoryType binding.Kind binding.Children |> add |> ignore
+            edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResultDestination
+                       Sources = [lambda.Id; owner; formal.Id]; Target = constructor; Ordinal = 0 } :: edges
+            for call, callee, arguments, path in calls do
+                let allocation = fresh call (SemanticKind.EnvironmentAllocate owner) ty [] |> add
+                let name = sprintf "__environment_destination_%d" (NodeId.value call.Id)
+                let stored = fresh call (SemanticKind.Binding(name, false, false, None)) ty [allocation.Id] |> add
+                let destination = fresh call (SemanticKind.VarRef(name, Some stored.Id)) ty [] |> add
+                for id in path do
+                    let source = nodes[id]
+                    let kind =
+                        match source.Kind with
+                        | SemanticKind.TypeAnnotation(inner, _) -> SemanticKind.TypeAnnotation(inner, factoryType)
+                        | _ -> source.Kind
+                    signature source factoryType kind source.Children |> add |> ignore
+                let arguments = List.take ordinal arguments @ [destination.Id] @ List.skip ordinal arguments
+                let invocation = { fresh call (SemanticKind.Application(callee, arguments)) call.Type (callee :: arguments) with ValueRange = call.ValueRange } |> add
+                let ordered = [stored.Id; invocation.Id]
+                { call with Kind = SemanticKind.Sequential ordered; Children = ordered } |> add |> ignore
+                edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResultCall
+                           Sources = [lambda.Id; constructor; formal.Id; allocation.Id; destination.Id]
+                           Target = invocation.Id; Ordinal = 0 } :: edges
+                let account : EnvironmentFactoryResultAccount =
+                    { Call = invocation.Id; Ordinal = 0; Factory = lambda.Id; Constructor = constructor
+                      Formal = formal.Id; Allocation = allocation.Id; Destination = destination.Id }
+                resultAccounts <- resultAccounts.Add(account.Call, account)
+                updatedCurry <- { updatedCurry with SaturatedCalls = updatedCurry.SaturatedCalls.Remove(call.Id).Add(invocation.Id, { TargetBindingId = binding.Id; AllArgNodes = arguments }) }
+            let emitted = generated |> Seq.map (fun node -> node.Id, node) |> Map.ofSeq |> Map.values |> Seq.toList
+            changed <- Set.union changed (emitted |> List.map _.Id |> Set.ofList)
+            Some { OriginalNodeId = binding.Id; NewNodes = emitted; ReplacementRootId = binding.Id
+                   ElaborationKind = "Baker"; ElaborationSource = "Closure.factoryResult"; NewEdges = [] }
+        | _ -> None)
     if recipes.IsEmpty then graph, curry, resultAccounts else
     let byId = recipes |> List.map (fun recipe -> recipe.OriginalNodeId, recipe) |> Map.ofList
     let folded = FanOut.fanOut "EnvironmentFactoryResults" (fun node -> byId.ContainsKey node.Id)

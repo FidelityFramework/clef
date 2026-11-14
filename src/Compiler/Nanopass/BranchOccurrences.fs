@@ -54,7 +54,7 @@ let private replaceArm (edge: Hyperedge) body (parent: SemanticNode) =
                 if ordinal = edge.Ordinal then { arm with Body = body } else arm))
         | SemanticKind.IfThenElse(guard, _, no), EdgeRole.ThenBranch -> SemanticKind.IfThenElse(guard, body, no)
         | SemanticKind.IfThenElse(guard, yes, _), EdgeRole.ElseBranch -> SemanticKind.IfThenElse(guard, yes, Some body)
-        | _ -> invalidOp "Branch occurrence must name an explicit conditional body incidence."
+        | _ -> parent.Kind
     let children = kindEdges parent.Id kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
     { parent with Kind = kind; Children = children }
 

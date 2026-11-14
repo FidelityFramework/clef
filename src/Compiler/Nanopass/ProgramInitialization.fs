@@ -70,15 +70,17 @@ let private normalizeUsing select (orderedRoots: NodeId list) (graph: SemanticGr
             | Result.Error message -> graph, [residual graph source.Id message]
             | Result.Ok startup ->
                 let context = mkContext source.Range source.Type graph.Platform "Program.initialization" source.Id
-                let expansion = Construction.materialize context graph source selection.Initializers selection.UnitActivations startup
-                let create (_: SemanticNode) _ = RecipeCreated {
-                    OriginalNodeId = source.Id; NewNodes = expansion.Nodes; NewEdges = expansion.Edges
-                    ReplacementRootId = source.Id; ElaborationKind = "Baker"; ElaborationSource = "Program.initialization" }
-                let folded = FoldIn.foldIn (FanOut.fanOut "Program.initialization" (fun node -> node.Id = source.Id) create graph) graph
-                let roots = (expansion.EntryBinding, DeclRoot.EntryPoint) :: (folded.DeclarationRoots |> List.filter (fun (_, root) -> root <> DeclRoot.EntryPoint))
-                let folded = { folded with DeclarationRoots = roots }
-                if Facts.read folded |> Option.isSome then folded, []
-                else folded, [residual folded expansion.EntryBinding "The generated entry, call, ordered spine and declaration incidence disagree."]
+                match Construction.materialize context graph source selection.Initializers selection.UnitActivations startup with
+                | Result.Error message -> graph, [residual graph source.Id message]
+                | Result.Ok expansion ->
+                    let create (_: SemanticNode) _ = RecipeCreated {
+                        OriginalNodeId = source.Id; NewNodes = expansion.Nodes; NewEdges = expansion.Edges
+                        ReplacementRootId = source.Id; ElaborationKind = "Baker"; ElaborationSource = "Program.initialization" }
+                    let folded = FoldIn.foldIn (FanOut.fanOut "Program.initialization" (fun node -> node.Id = source.Id) create graph) graph
+                    let roots = (expansion.EntryBinding, DeclRoot.EntryPoint) :: (folded.DeclarationRoots |> List.filter (fun (_, root) -> root <> DeclRoot.EntryPoint))
+                    let folded = { folded with DeclarationRoots = roots }
+                    if Facts.read folded |> Option.isSome then folded, []
+                    else folded, [residual folded expansion.EntryBinding "The generated entry, call, ordered spine and declaration incidence disagree."]
     | _ -> graph, []
 
 /// Standalone source checking treats the supplied units as implementations.

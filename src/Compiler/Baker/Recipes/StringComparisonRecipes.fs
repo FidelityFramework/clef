@@ -370,7 +370,8 @@ let materializeWith (empty: Set<NodeId> option) (graph: SemanticGraph) (source: 
             return [callee;left;right;lb;rb;ls;rs;ll;rl;test;decision] @ Set.toList evidence
           }
     match run state parser with
-    | NoMatch reason, _ -> invalidOp ("String comparison construction failed: " + reason)
+    | NoMatch reason, _ ->
+        mkFailedResult source.Id ("String comparison construction failed: " + reason), graph.Edges
     | Matched roles, nodes ->
         let nodes = nodes |> List.map (fun node ->
             let metadata = node.Metadata.Add("Baker.StringComparisonOwned",MetadataValue.Bool true)

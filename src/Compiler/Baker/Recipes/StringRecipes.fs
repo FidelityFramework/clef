@@ -28,5 +28,5 @@ let tryReifyValue (ctx: Context) operation functionType enclosing : Result optio
               InspiringNode = ctx.InspiringNode; Platform = ctx.Platform }
         match run state (closure [("__text", domain)] [] enclosing body resultType) with
         | Matched result, nodes -> Some(mkResultNoShadow nodes result [])
-        | NoMatch reason, _ -> failwithf "String.length function construction failed: %s" reason
+        | NoMatch reason, _ -> Some(mkFailedResult ctx.InspiringNode ("String.length function construction failed: " + reason))
     | _ -> None

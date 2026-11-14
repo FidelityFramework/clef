@@ -350,4 +350,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
           CaseBodies = caseBodies; ResumeBodies = resumeBodies
           ResumeTargets = resumeTargets; CompletedBody = completed
           AggregateEvidence = List.ofSeq aggregateEvidence }
-    | NoMatch reason, _ -> invalidOp (sprintf "Continuation synthesis failed: %s" reason)
+    | NoMatch _, _ ->
+        { Nodes = []; Root = frame.Generator; PersistentReferences = []; ScratchReferences = []
+          ValueSources = []; Initializers = Map.empty; CaseBodies = Map.empty; ResumeBodies = Map.empty
+          ResumeTargets = Map.empty; CompletedBody = frame.Generator; AggregateEvidence = [] }

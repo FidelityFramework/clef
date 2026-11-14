@@ -632,11 +632,10 @@ let private finiteTrip range (induction: Induction) =
 /// and retained certificate integer is charged before allocation. The bounded
 /// owner API below also permits callers/tests to supply a different work budget.
 let defaultCertificateBits = 1048576I
-exception private RecurrenceBudgetExceeded
 
-/// Check a finite nonnegative numeric enclosure. The caller separately proves
-/// the source transition and activation bound; no loop or storage fact follows
-/// merely from this literal certificate.
+// Check a finite nonnegative numeric enclosure. The caller separately proves
+// the source transition and activation bound; no loop or storage fact follows
+// merely from this literal certificate.
 let certifyLinearWithBudget maximumBits maximumIterations
                             (lower: bigint list) (upper: bigint list)
                             (matrixLower: bigint list list) (matrixUpper: bigint list list)
@@ -648,19 +647,19 @@ let certifyLinearWithBudget maximumBits maximumIterations
        not (List.forall2 (List.forall2 (fun lo hi -> 0I <= lo && lo <= hi)) matrixLower matrixUpper) then
         Error LoopRangeResidual.MissingBound
     else
-      try
         let mutable used = 0I
+        let mutable exceeded = false
         let charge bits =
-            if bits < 0I || used + bits > maximumBits then raise RecurrenceBudgetExceeded
-            used <- used + bits
+            if bits < 0I || used + bits > maximumBits then exceeded <- true
+            else used <- used + bits
         let bits (value: bigint) = max 1I (bigint(value.GetBitLength()))
         let retain value = charge (bits value)
         let product (left: bigint) (right: bigint) =
             charge (if left.IsZero || right.IsZero then 1I else bits left + bits right)
-            left * right
+            if exceeded then 0I else left * right
         let add left right =
             charge (1I + max (bits left) (bits right))
-            left + right
+            if exceeded then 0I else left + right
         let dot left right = List.map2 product left right |> List.fold add 0I
         let multiply left right =
             let columns = List.transpose right
@@ -668,26 +667,30 @@ let certifyLinearWithBudget maximumBits maximumIterations
         [maximumIterations] @
             lower @ upper @ List.concat matrixLower @ List.concat matrixUpper |> List.iter retain
         let project matrix = matrix |> List.map (fun row -> dot row upper)
-        if not (List.forall2 (<=) upper (project matrixUpper)) then Error LoopRangeResidual.NonAdditive else
-        let identity = List.init size (fun row -> List.init size (fun column -> if row = column then 1I else 0I))
-        let rec exponentBits value acc =
-            if value = 0I then acc else
-            charge (bits value + 1I)
-            exponentBits (value / 2I) ((value % 2I = 1I) :: acc)
-        let _, power, steps =
-            exponentBits maximumIterations [] |> List.fold (fun (exponent, power, steps) odd ->
-                let squared = multiply power power
-                let next = if odd then multiply squared matrixUpper else squared
-                let exponent = add (product 2I exponent) (if odd then 1I else 0I)
-                exponent :: List.concat next |> List.iter retain
-                exponent, next, { Odd = odd; Exponent = exponent; Matrix = next } :: steps) (0I, identity, [])
-        let model = {
-            MaximumIterations = maximumIterations; InitialLower = lower; InitialUpper = upper
-            CoefficientLower = matrixLower; CoefficientUpper = matrixUpper; Powers = List.rev steps
-            Lower = List.replicate size 0I; Upper = project power }
-        model.Lower @ model.Upper |> List.iter retain
-        Ok(model, used)
-      with RecurrenceBudgetExceeded -> Error LoopRangeResidual.ProofResources
+        let projectedUpper = project matrixUpper
+        if exceeded then Error LoopRangeResidual.ProofResources
+        elif not (List.forall2 (<=) upper projectedUpper) then Error LoopRangeResidual.NonAdditive
+        else
+            let identity = List.init size (fun row -> List.init size (fun column -> if row = column then 1I else 0I))
+            let rec exponentBits value acc =
+                if exceeded || value = 0I then acc else
+                charge (bits value + 1I)
+                exponentBits (value / 2I) ((value % 2I = 1I) :: acc)
+            let _, power, steps =
+                exponentBits maximumIterations [] |> List.fold (fun (exponent, power, steps) odd ->
+                    if exceeded then exponent, power, steps else
+                    let squared = multiply power power
+                    let next = if odd then multiply squared matrixUpper else squared
+                    let exponent = add (product 2I exponent) (if odd then 1I else 0I)
+                    exponent :: List.concat next |> List.iter retain
+                    exponent, next, { Odd = odd; Exponent = exponent; Matrix = next } :: steps) (0I, identity, [])
+            let model = {
+                MaximumIterations = maximumIterations; InitialLower = lower; InitialUpper = upper
+                CoefficientLower = matrixLower; CoefficientUpper = matrixUpper; Powers = List.rev steps
+                Lower = List.replicate size 0I; Upper = project power }
+            model.Lower @ model.Upper |> List.iter retain
+            if exceeded then Error LoopRangeResidual.ProofResources
+            else Ok(model, used)
 
 /// Only current numeric premises feed the certificate. In particular no prior
 /// cell/update conclusion may supply its own seed or transition coefficient.

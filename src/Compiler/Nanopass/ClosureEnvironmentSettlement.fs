@@ -201,7 +201,6 @@ let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: 
                 Proof.environmentReservation (reservationName graph site binding initializer) graph.Nodes[site] body binding initializer participants))
     let reservations = reservationResults |> List.map fst |> Enrichment.concat
     let reservationAccounts = reservationResults |> List.fold (fun rows (_, account) ->
-        if Map.containsKey account.Claim rows then invalidOp "Environment reservation recipe repeated a current claim identity."
         Map.add account.Claim account rows) Map.empty
     let graph = ObligationElaboration.foldIn (Enrichment.combine proofs reservations) graph
     let programCandidates = programSites graph

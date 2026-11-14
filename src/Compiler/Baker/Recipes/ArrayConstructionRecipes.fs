@@ -15,8 +15,6 @@ module C = Clef.Compiler.Baker.Ingredients.Continuations
 module Memory = Clef.Compiler.Baker.Ingredients.MemoryValues
 module Shapes = Clef.Compiler.Baker.Ingredients.ArrayShapes
 
-exception MissingConstruction of string
-
 let private selected (graph: SemanticGraph) (node: SemanticNode) =
     match node.Kind with
     | SemanticKind.Application _ ->
@@ -35,15 +33,15 @@ let candidates (graph: SemanticGraph) =
 
 let private arrayElement ty =
     match applySubst ty with
-    | NativeType.TApp(tc,[element]) when tc.NTUKind = Some NTUKind.NTUarray -> element
-    | _ -> raise(MissingConstruction "The array constructor lacks its checked element type.")
+    | NativeType.TApp(tc,[element]) when tc.NTUKind = Some NTUKind.NTUarray -> preturn element
+    | _ -> fail (XParsec.ErrorType.Message "The array constructor lacks its checked element type.")
 
 let private defaultValue element =
     match Types.tryGetNTUKind element with
     | Some(NTUKind.NTUint _ | NTUKind.NTUuint _) -> numLit 0L element
     | _ when applySubst element = Types.boolType -> boolLit false
     | _ when applySubst element = Types.charType -> createAndEmit (SemanticKind.Literal(NativeLiteral.Char '\000')) element
-    | _ -> raise(MissingConstruction "Array.zeroCreate has no admitted source default-value construction for this element type; CLR/null defaults are not source authority.")
+    | _ -> fail (XParsec.ErrorType.Message "Array.zeroCreate has no admitted source default-value construction for this element type; CLR/null defaults are not source authority.")
 
 let private bound (graph: SemanticGraph) name actual = saturation {
     let ty = graph.Nodes[actual].Type
@@ -91,8 +89,10 @@ let private knownEmpty (graph: SemanticGraph) count =
 
 type Expansion = { Nodes:SemanticNode list; Edges:Hyperedge list }
 
-let materialize (graph: SemanticGraph) (source: SemanticNode) : Expansion =
-    let operation,actuals = selected graph source |> Option.defaultWith (fun () -> raise(MissingConstruction "No array construction occurrence."))
+let materialize (graph: SemanticGraph) (source: SemanticNode) : Result<Expansion, string> =
+    match selected graph source with
+    | None -> Result.Error "No array construction occurrence."
+    | Some(operation, actuals) ->
     let state = SaturationState.create source.Range ("Array."+operation) (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) source.Id graph.Platform
     let allocations = ResizeArray<ArrayAllocationConstruction>()
     let copies = ResizeArray<ArrayCopyConstruction>()
@@ -120,7 +120,7 @@ let materialize (graph: SemanticGraph) (source: SemanticNode) : Expansion =
                      Index=None;IndexInitial=None;Loop=None;Guard=None;Current=None;SourceIndex=None;DestinationIndex=None
                      Read=None;Write=None;Step=None;Advance=None;Requirements=[];Participants=Set.empty },[]
         else
-        let element = arrayElement arrayType
+        let! element = arrayElement arrayType
         let! zero = intLit 0
         let! index = C.mutableBinding "__array_index" zero Types.intType
         let! atGuard = varRef "__array_index" (Some index) Types.intType
@@ -143,7 +143,7 @@ let materialize (graph: SemanticGraph) (source: SemanticNode) : Expansion =
     let parser = saturation {
         match operation,actuals with
         | "zeroCreate",[actualCount] ->
-            let element = arrayElement source.Type
+            let! element = arrayElement source.Type
             let! count = bound graph "__array_count" actualCount
             let! zero = defaultValue element
             let! allocation = createWithChildren (SemanticKind.ArrayAllocate count.Reference) source.Type [count.Reference]
@@ -207,7 +207,7 @@ let materialize (graph: SemanticGraph) (source: SemanticNode) : Expansion =
     }
     let result,created = run state parser
     match result with
-    | NoMatch reason -> raise(MissingConstruction reason)
+    | NoMatch reason -> Result.Error reason
     | Matched () ->
         let participants = Set.ofList(source.Id::actuals @ (created |> List.map _.Id))
         let allocationRows = allocations |> Seq.map (fun construction ->
@@ -222,6 +222,6 @@ let materialize (graph: SemanticGraph) (source: SemanticNode) : Expansion =
                 allocations |> Seq.map (fun construction -> {edge with Target=construction.Site;Sources=source.Id::construction.Site::edge.Sources}) |> Seq.toList
             | _ -> [])
         let oldIncidence = structuralIncidence source |> List.map (fun edge -> edge.Class,edge.Role,edge.Ordinal,edge.Sources,edge.Target) |> Set.ofList
-        { Nodes=created
-          Edges=(graph.Edges |> List.filter(fun edge -> not(oldIncidence.Contains(edge.Class,edge.Role,edge.Ordinal,edge.Sources,edge.Target))))
-                @ (created |> List.collect structuralIncidence) @ (guards |> Seq.map requirementRow |> Seq.toList) @ allocationRows @ copyRows @ storage }
+        Result.Ok { Nodes=created
+                    Edges=(graph.Edges |> List.filter(fun edge -> not(oldIncidence.Contains(edge.Class,edge.Role,edge.Ordinal,edge.Sources,edge.Target))))
+                          @ (created |> List.collect structuralIncidence) @ (guards |> Seq.map requirementRow |> Seq.toList) @ allocationRows @ copyRows @ storage }

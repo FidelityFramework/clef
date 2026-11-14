@@ -92,7 +92,8 @@ let formation (ctx: Context) (graph: SemanticGraph) (plan: Lazy.Plan) : Expansio
             { Class = EdgeClass.Provenance; Role = EdgeRole.LazyCapture capture.IsMutable; Ordinal = ordinal
               Sources = [owner.Id; source; source]; Target = environment })
         finish graph owner.Id nodes (instance :: captures @ List.ofSeq references)
-    | NoMatch reason -> invalidOp ("Lazy formation saturation failed: " + reason)
+    | NoMatch reason ->
+        { Structure = mkFailedResult owner.Id ("Lazy formation saturation failed: " + reason); Edges = graph.Edges }
 
 /// One demanded force snapshots its actual environment once. The cold branch
 /// computes once, stores that result, publishes computed=true, then yields the
@@ -128,4 +129,5 @@ let force (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) (contract
               Sources = [contract.Formation; operand; forced.EnvironmentBinding; forced.Condition; forced.CachedRead
                          forced.Invocation; forced.ResultBinding; forced.Store; forced.Publication; forced.UncachedBranch; forced.Conditional] }
         finish graph source.Id nodes [evidence]
-    | NoMatch reason -> invalidOp ("Lazy force saturation failed: " + reason)
+    | NoMatch reason ->
+        { Structure = mkFailedResult source.Id ("Lazy force saturation failed: " + reason); Edges = graph.Edges }

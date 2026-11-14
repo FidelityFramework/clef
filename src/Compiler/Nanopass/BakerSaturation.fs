@@ -371,6 +371,15 @@ let private toRecipe (originalNodeId: NodeId) (source: string) (result: Result) 
         NewEdges = []; ElaborationSource = source
     }
 
+let private toRecipeResult (originalNodeId: NodeId) (source: string) (edges: Hyperedge list) (result: Result) : RecipeCreationResult =
+    match result.Failure with
+    | Some reason ->
+        CreationFailed (
+            reason,
+            Map.ofList [ "operation", source; "nodeId", string (NodeId.value originalNodeId) ])
+    | None ->
+        RecipeCreated { toRecipe originalNodeId source result with NewEdges = edges }
+
 /// Create a saturation recipe for a node.
 /// RecipeCreator signature: SemanticNode -> SemanticGraph -> RecipeCreationResult
 let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) : RecipeCreationResult =
@@ -404,7 +413,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 | IntrinsicModule.String -> StringRecipes.tryReifyValue
                 | _ -> SeqRecipes.tryReifyValue
             match reify ctx info.Operation node.Type (enclosingFunctionName graph node.Id) with
-            | Some result -> RecipeCreated (toRecipe node.Id name result)
+            | Some result -> toRecipeResult node.Id name [] result
             | None ->
                 CreationFailed (
                     sprintf "CCS source checking did not settle a callable instance for library value %s at node %d: its type %s has no reifiable function shape" name (NodeId.value node.Id) (formatType node.Type),
@@ -437,7 +446,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
 
                 match applyIntrinsicRecipe graph ctx info argNodeIds node.Type with
                 | Some result ->
-                    RecipeCreated (toRecipe node.Id hofName result)
+                    toRecipeResult node.Id hofName [] result
                 | None ->
                     let argTypes =
                         argNodeIds
@@ -469,7 +478,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         // Every pattern uses the selected-scope source protocol. Alex never
         // chooses guard ordering or extracts payloads ahead of selection.
         let result, evidence = MatchRecipes.enrichMatchWithEvidence graph ctx scrutineeId cases node.Type
-        RecipeCreated { toRecipe node.Id "Match" result with NewEdges = evidence }
+        toRecipeResult node.Id "Match" evidence result
 
     | SemanticKind.UnionCase (caseName, caseIndex, payload) ->
         // Transform UnionCase to DUConstruct (lowered form for Alex)

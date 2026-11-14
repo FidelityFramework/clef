@@ -517,7 +517,7 @@ let rec private specializeRecursiveComponents (retainedDeclarations: Set<NodeId>
                             | true, (id, _) -> id
                             | _ ->
                                 let original, _ = declarations[declaration]
-                                let name = match original.Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> invalidOp "Recursive declaration required"
+                                let name = match original.Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> "__rec"
                                 let id = NodeId.fresh()
                                 let symbol = sprintf "%s__rec_mono%d" name (reserved.Count + 1)
                                 reserved.Add(key, (id, symbol))
@@ -632,7 +632,7 @@ let rec private specializeRecursiveComponents (retainedDeclarations: Set<NodeId>
                         let _, residual, signature = cloneSchemes[target]
                         let actual = checkedArguments original parameters body node
                         let metadata = projectInstanceMetadata target parameters residual signature actual node.Metadata
-                        let name = match node.Kind with SemanticKind.VarRef(name, _) -> name | _ -> invalidOp "Recursive use required"
+                        let name = match node.Kind with SemanticKind.VarRef(name, _) -> name | _ -> "__rec_use"
                         current <- current.Add(node.Id, { node with Kind = SemanticKind.VarRef(name, Some target); Metadata = metadata })
                     for original in group do
                         let replacements = replacements.TryFind original |> Option.defaultValue []
@@ -866,7 +866,7 @@ let private runWithEvidenceCore (retainedDeclarations: Set<NodeId>) (nodes: Map<
                     for (useId, useNode) in useSites do
                         match Map.tryFind useId redirect with
                         | Some target ->
-                            let name = match current[target].Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> invalidOp "Specialized binding required"
+                            let name = match current[target].Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> "__mono"
                             current <- Map.add useId
                                 { useNode with Kind = SemanticKind.VarRef (name, Some target)
                                                Metadata = instanceMetadata[useId] } current

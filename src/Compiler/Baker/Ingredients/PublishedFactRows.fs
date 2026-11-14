@@ -2526,7 +2526,7 @@ and mapBufferAbsenceArgumentConversionModel (value: S.BufferAbsenceArgumentConve
 
 and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     match value with
-    | S.ObligationBody.Pending reasons -> invalidOp ("A pending obligation cannot be published: " + String.concat "; " reasons)
+    | S.ObligationBody.Pending reasons -> Fidelity.PSG.ObligationBody.Pending reasons
     | S.ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion(mapOptionalEntryAbsenceArgumentConversionModel model)
     | S.ObligationBody.OptionalEntryArgumentConversion model -> Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion(mapOptionalEntryArgumentConversionModel model)
     | S.ObligationBody.ZeroCopyBufferExtent model -> Fidelity.PSG.ObligationBody.ZeroCopyBufferExtent(mapZeroCopyBufferExtentModel model)
@@ -2570,6 +2570,11 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
 
 and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
     mapObligationInfoUsing mapObligationBody value
+
+and tryMapObligationInfo (value: S.ObligationInfo) : Result<Fidelity.PSG.ObligationInfo, string> =
+    match value.Body with
+    | S.ObligationBody.Pending reasons -> Error ("A pending obligation cannot be published: " + String.concat "; " reasons)
+    | _ -> Ok (mapObligationInfo value)
 
 and mapObligationInfoUsing (body: S.ObligationBody -> Fidelity.PSG.ObligationBody) (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
     ({

@@ -55,7 +55,7 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
     | Matched resultNodeId ->
         mkResultNoShadow nodes resultNodeId []
     | NoMatch reason ->
-        failwithf "Saturation failed: %s" reason
+        mkFailedResult ctx.InspiringNode ("Saturation failed: " + reason)
 
 //=============================================================================
 // MAP.TOLIST: toList m → in-order traversal to list of (key, value) pairs

@@ -20,9 +20,12 @@ let rec normalize (graph: SemanticGraph) =
         let ctx = mkContext plan.Lambda.Range plan.Lambda.Type graph.Platform name plan.Lambda.Id
         let result = direct ctx graph plan
         let create (node: SemanticNode) _ =
-            RecipeCreated { OriginalNodeId = node.Id; NewNodes = result.Structure.NewNodes
-                            ReplacementRootId = result.Structure.ResultNodeId
-                            ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = name }
+            match result.Structure.Failure with
+            | Some reason -> CreationFailed (reason, Map.empty)
+            | None ->
+                RecipeCreated { OriginalNodeId = node.Id; NewNodes = result.Structure.NewNodes
+                                ReplacementRootId = result.Structure.ResultNodeId
+                                ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = name }
         let recipes = FanOut.fanOut name (fun node -> node.Id = plan.Lambda.Id) create graph
         let folded = FoldIn.foldIn recipes graph
         normalize { folded with Edges = result.Edges }

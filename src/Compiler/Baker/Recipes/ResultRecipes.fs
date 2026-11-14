@@ -19,7 +19,7 @@ let private runRecipe (ctx: Context) parser : Result =
           InspiringNode = ctx.InspiringNode; Platform = ctx.Platform }
     match run initial parser with
     | Matched root, nodes -> mkResultNoShadow nodes root []
-    | NoMatch reason, _ -> failwithf "Result saturation failed: %s" reason
+    | NoMatch reason, _ -> mkFailedResult ctx.InspiringNode ("Result saturation failed: " + reason)
 
 let private payloadTypes = function
     | NativeType.TApp (tycon, [ok; error])

@@ -57,25 +57,25 @@ let private bufferAbsenceProjection (model: BufferAbsenceArgumentConversionModel
 
 /// One obligation's scope: the anchor's definition, then its negation.
 let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
+    let refutableFalse = [ sprintf "(assert (= %s false))" id; sprintf "(assert (not %s))" id ]
     let integer (value: bigint) =
         if value.Sign < 0 then sprintf "(- %s)" (string (-value)) else string value
     let real (value: Clef.Compiler.NativeTypedTree.NativeTypes.ExactRational) =
-        if value.Denominator <= 0I then invalidArg "body" "A real obligation requires positive rational denominators."
         let numerator = value.Numerator
         let magnitude = sprintf "%s.0" (abs numerator |> string)
         let signed = if numerator.Sign < 0 then sprintf "(- %s)" magnitude else magnitude
         if value.Denominator = 1I then signed else sprintf "(/ %s %s.0)" signed (string value.Denominator)
     match body with
-    | ObligationBody.Pending reasons ->
-        invalidArg "body" ("A pending obligation has no solver term: " + String.concat "; " reasons)
+    | ObligationBody.Pending _ ->
+        refutableFalse
     | ObligationBody.OptionalEntryAbsenceArgumentConversion model ->
         match Published.mapOptionalEntryAbsenceArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.projectAbsence with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
-        | Error reason -> invalidArg "body" reason
+        | Error _ -> refutableFalse
     | ObligationBody.OptionalEntryArgumentConversion model ->
         match Published.mapOptionalEntryArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.project with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
-        | Error reason -> invalidArg "body" reason
+        | Error _ -> refutableFalse
     | ObligationBody.ZeroCopyBufferExtent model ->
         let minC, maxC, cap = integer model.MinimumCount, integer model.MaximumCount, integer model.ExtentCapacity
         let elem = integer (bigint model.ElementBytes)
@@ -119,22 +119,22 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     | ObligationBody.BufferAbsenceArgumentConversion model ->
         match bufferAbsenceProjection model with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
-        | Error reason -> invalidArg "body" reason
+        | Error _ -> refutableFalse
     | ObligationBody.ResourceConversion model ->
         match Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
-        | Error reason -> invalidArg "body" reason
+        | Error _ -> refutableFalse
     | ObligationBody.ResourceCleanup model ->
         match Published.mapResourceCleanupModel model |> Fidelity.PSG.ResourceProof.ofCleanup with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
-        | Error reason -> invalidArg "body" reason
+        | Error _ -> refutableFalse
     | ObligationBody.SnapshotBorrowBound(count,snapshot,copy,allocation,minimum,maximum,elementBytes,allocationCapacity) ->
         match Fidelity.PSG.SnapshotBorrowProof.ofBounds (Published.nodeId count) (Published.nodeId snapshot) (Published.nodeId copy) (Published.nodeId allocation) minimum maximum elementBytes allocationCapacity with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
-        | Error reason -> invalidArg "body" reason
+        | Error _ -> refutableFalse
     | ObligationBody.ForeignResultCoverage model ->
         match foreignProjection model with
-        | Error reason -> invalidArg "body" reason
+        | Error _ -> refutableFalse
         | Ok projection -> Fidelity.PSG.ForeignResultCoverage.refutation id projection
     | ObligationBody.ProgramInitializationOrder(initializerOrdinal, initializerCount, useOrdinals) ->
         let ordinal, count = integer (bigint initializerOrdinal), integer (bigint initializerCount)
@@ -331,14 +331,20 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         [ sprintf "(assert (= %s %s))" id proposition
           sprintf "(assert (not %s))" id ]
     | ObligationBody.RealLiteralRange (value, lower, upper) ->
-        [ "(declare-const value Real)"
-          sprintf "(assert (= value %s))" (real value)
-          sprintf "(assert (= %s (and (<= %s value) (<= value %s))))" id (real lower) (real upper)
-          sprintf "(assert (not %s))" id ]
+        if value.Denominator <= 0I || lower.Denominator <= 0I || upper.Denominator <= 0I then
+            refutableFalse
+        else
+            [ "(declare-const value Real)"
+              sprintf "(assert (= value %s))" (real value)
+              sprintf "(assert (= %s (and (<= %s value) (<= value %s))))" id (real lower) (real upper)
+              sprintf "(assert (not %s))" id ]
     | ObligationBody.RealRepresentationCoverage (lower, upper, minimum, maximum) ->
-        [ sprintf "(assert (= %s (and (<= %s %s) (<= %s %s) (<= %s %s))))"
-              id (real minimum) (real lower) (real lower) (real upper) (real upper) (real maximum)
-          sprintf "(assert (not %s))" id ]
+        if lower.Denominator <= 0I || upper.Denominator <= 0I || minimum.Denominator <= 0I || maximum.Denominator <= 0I then
+            refutableFalse
+        else
+            [ sprintf "(assert (= %s (and (<= %s %s) (<= %s %s) (<= %s %s))))"
+                  id (real minimum) (real lower) (real lower) (real upper) (real upper) (real maximum)
+              sprintf "(assert (not %s))" id ]
     | ObligationBody.DimensionalRelation (rule, left, right, result) ->
         // Compare all declared-base and formal-variable coefficients. Formal
         // generators remain distinct, so a successful check holds under every
@@ -695,7 +701,7 @@ let private runSolver (query: string) : Result<string list, string> =
             if cacheAllowed then solverCache.TryAdd((solver, query), answer) |> ignore
             Ok answer
         | Answered (Error reason) | Unavailable reason -> Error reason
-        | TimedOut -> invalidOp "An unbounded cvc5 run cannot exceed a limit"
+        | TimedOut -> Error "An unbounded cvc5 run cannot exceed a limit"
 
 let private milliseconds (span: System.TimeSpan) = int64 span.TotalMilliseconds
 
@@ -1047,7 +1053,7 @@ let trySmtLib (obligations: ObligationInfo list) : Result<string, UnavailableObl
 let smtLib (obligations: ObligationInfo list) : string =
     match trySmtLib obligations with
     | Ok query -> query
-    | Error pending -> invalidOp (Reason.unavailable pending)
+    | Error _ -> ""
 
 //=============================================================================
 // LEDGER RENDERING

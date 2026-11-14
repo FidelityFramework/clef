@@ -26,17 +26,21 @@ let private describeMetadataValue (value: MetadataValue) =
     | MetadataValue.NodeIdList _ -> "MetadataValue.NodeIdList"
     | MetadataValue.Specialization _ -> "MetadataValue.Specialization"
 
-let private freezeNode claim (node: SemanticNode) =
-    try
-        let anchors =
-            match node.Metadata.TryFind ObligationMetadata.Anchors with
-            | None -> []
-            | Some(MetadataValue.StringList names) -> names
-            | Some other -> invalidOp (sprintf "Obligation anchors are recorded as %s, not as a list of names." (describeMetadataValue other))
+let private freezeNode (admittedClaim: NodeId * ObligationInfo -> Result<Fidelity.PSG.ObligationInfo, string>) (node: SemanticNode) =
+    let anchorsResult =
+        match node.Metadata.TryFind ObligationMetadata.Anchors with
+        | None -> Ok []
+        | Some(MetadataValue.StringList names) -> Ok names
+        | Some other -> Error (sprintf "Obligation anchors are recorded as %s, not as a list of names." (describeMetadataValue other))
+    let kindResult =
+        match node.Kind with
+        | SemanticKind.Obligation info -> admittedClaim (node.Id, info) |> Result.map Fidelity.PSG.SemanticKind.Obligation
+        | kind -> Ok (mapSemanticKind kind)
+    match anchorsResult, kindResult with
+    | Error reason, _ | _, Error reason -> Error(failure (Some node.Id) ("The node cannot be frozen: " + reason))
+    | Ok anchors, Ok kind ->
         Ok ({ Id = nodeId node.Id
-              Kind = match node.Kind with
-                     | SemanticKind.Obligation info -> Fidelity.PSG.SemanticKind.Obligation(claim (node.Id, info))
-                     | kind -> mapSemanticKind kind
+              Kind = kind
               Range = { File = node.Range.File
                         Start = { Line = node.Range.Start.Line; Column = node.Range.Start.Column }
                         End = { Line = node.Range.End.Line; Column = node.Range.End.Column } }
@@ -47,7 +51,6 @@ let private freezeNode claim (node: SemanticNode) =
               EmissionStrategy = mapEmissionStrategy node.EmissionStrategy
               ValueRange = Option.map mapValueRange node.ValueRange
               ObligationAnchors = anchors } : Fidelity.PSG.SemanticNode)
-    with error -> Error(failure (Some node.Id) ("The node cannot be frozen: " + error.Message))
 
 let private freezeCodata claim (facts: WitnessLiveCodata) : Fidelity.PSG.Codata =
     let ids = Map.toSeq >> Seq.map (fun (key, value) -> nodeId key, nodeId value) >> Map.ofSeq
@@ -110,16 +113,23 @@ let project (graph: SemanticGraph) (scope: WitnessLiveScopePlan) (selected: Witn
             Error (unadmitted |> List.map (fun (id, _) -> failure (Some id) "Source proof dispatch is unavailable: The Pending claim lacks its exact current optional-entry conversion account."))
         elif not current || not boundaryCurrent then Error [failure None "The source proof dispatch inventory, optional-entry accounts or exact query changed before publication."]
         else
-            let claim (id, info) =
+            let admittedClaim (id, info) =
                 if ProofDispatchRecipes.optionalEntryPending graph selected.Emission.Boundary (id, info) then
-                    mapObligationInfoUsing (function
-                        | ObligationBody.Pending reasons -> Fidelity.PSG.ObligationBody.Pending reasons
-                        | body -> mapObligationBody body) info
-                else mapObligationInfo info
-            let bodies = scope.Occurrences.Values |> Seq.map (fun occurrence -> freezeNode claim occurrence.Body) |> Seq.toList
+                    Ok (mapObligationInfo info)
+                else tryMapObligationInfo info
+            let claim (_, info) = mapObligationInfo info
+            let bodies = scope.Occurrences.Values |> Seq.map (fun occurrence -> freezeNode admittedClaim occurrence.Body) |> Seq.toList
             let errors = bodies |> List.choose (function Error error -> Some error | Ok _ -> None)
             if not errors.IsEmpty then Error errors else
-            try
+            let codataClaims =
+                (selected.Codata.CallableAggregateDependencies.Values |> Seq.collect _.Claims)
+                |> Seq.append (selected.Emission.Callable.AggregateDependencies.Values |> Seq.collect _.Claims)
+                |> Seq.append dispatch.Required
+                |> Seq.toList
+            let claimError = codataClaims |> List.tryPick (fun pair -> match admittedClaim pair with Ok _ -> None | Error reason -> Some reason)
+            match claimError with
+            | Some reason -> Error [failure None ("The selected source facts cannot be frozen: " + reason)]
+            | None ->
                 let nodes = bodies |> List.choose (function Ok node -> Some(node.Id, node) | Error _ -> None) |> Map.ofList
                 let width dimension = PlatformContext.tryWidth platform (WidthDimension.name dimension)
                 Ok { SourcePlatform = platform
@@ -136,7 +146,6 @@ let project (graph: SemanticGraph) (scope: WitnessLiveScopePlan) (selected: Witn
                      CurrentClaims = dispatch.Required |> List.map (fun (id, info) -> nodeId id, claim (id, info)) |> Map.ofList
                      ObligationSources = dispatch.SourceGroups |> Map.toSeq |> Seq.map (fun (id, groups) -> nodeId id, groups |> List.map (List.map nodeId)) |> Map.ofSeq
                      ObligationQuery = query }
-            with error -> Error [failure None ("The selected source facts cannot be frozen: " + error.Message)]
 
 /// Source re-observation compares the complete frozen leaf tables. The native
 /// platform is the exact source input object; it is never reconstructed here.

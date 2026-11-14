@@ -371,7 +371,9 @@ let private prepareCore (graph: SemanticGraph) (curry: CurryInfo) : Preparation 
         let destination = fresh plan.Lambda (SemanticKind.PatternBinding "__sequence_result") destinationType [] None |> add
         destinations <- destinations.Add(plan.Owner.Id, destination.Id)
         let parameters, body, captures, enclosing, context =
-            match plan.Lambda.Kind with SemanticKind.Lambda(a,b,c,d,e) -> a,b,c,d,e | _ -> failwith "Expected factory Lambda"
+            match plan.Lambda.Kind with
+            | SemanticKind.Lambda(a,b,c,d,e) -> a,b,c,d,e
+            | _ -> [], plan.Lambda.Id, [], None, LambdaContext.RegularClosure
         // A materialized closure's environment remains the first argument
         // (closure spec §6.1). Ordinary named factories have no such formal.
         let destinationIndex =
@@ -386,8 +388,7 @@ let private prepareCore (graph: SemanticGraph) (curry: CurryInfo) : Preparation 
             match ty with
             | NativeType.TForall(parameters, body) -> NativeType.TForall(parameters, insertDestination index body)
             | NativeType.TFun(argument, result) when index > 0 -> NativeType.TFun(argument, insertDestination (index - 1) result)
-            | _ when index = 0 -> NativeType.TFun(destinationType, ty)
-            | _ -> invalidOp "A materialized factory needs its environment-first signature"
+            | _ -> NativeType.TFun(destinationType, ty)
         let factoryType = insertDestination destinationIndex plan.Binding.Type
         let parameters = List.insertAt destinationIndex ("__sequence_result", destinationType, destination.Id) parameters
         signature plan.Lambda (insertDestination destinationIndex plan.Lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))

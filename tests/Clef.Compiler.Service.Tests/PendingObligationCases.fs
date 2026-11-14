@@ -191,7 +191,8 @@ type PendingObligationCases() =
             Assert.Equal(pending.Id, item.Anchor)
             Assert.Equal(pending.Source, item.Source)
             Assert.True(item.MissingPremises = reasons)
-        Assert.Throws<InvalidOperationException>(fun () -> PendingDischarge.smtLib [pending] |> ignore) |> ignore
+        Assert.True((PendingDischarge.trySmtLib [pending]).IsError)
+        Assert.Equal("", PendingDischarge.smtLib [pending])
         let id, retained = graph pending.Body
         Assert.Contains(PendingDischarge.ofGraph retained, fun item -> item.Id = pending.Id && item.Body = pending.Body)
         let allPending = pendingClaims retained
@@ -231,8 +232,7 @@ type PendingObligationCases() =
             let failure = Assert.Single failures
             Assert.Contains("Source emission admission", failure.Reason)
             Assert.False(blocked.Codata.IsValueCreated)
-        Assert.Throws<InvalidOperationException>(fun () ->
-            Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo pending |> ignore) |> ignore
+        Assert.True((Clef.Compiler.Baker.Ingredients.PublishedFactRows.tryMapObligationInfo pending).IsError)
 
     [<Fact>]
     member _.``Pending emission removes stale solver text and settling removes unavailable evidence`` () =
@@ -413,7 +413,8 @@ type PendingObligationCases() =
             Assert.Contains(info.Id, ledger)
             Assert.Contains("\"pending\"", ledger)
             Assert.DoesNotContain("\"ready\"", ledger)
-            Assert.Throws<InvalidOperationException>(fun () -> PendingDischarge.smtLib [info] |> ignore) |> ignore
+            Assert.True((PendingDischarge.trySmtLib [info]).IsError)
+            Assert.Equal("", PendingDischarge.smtLib [info])
         | result -> failwithf "Wrong foreign projection availability: %A" result
 
     [<Fact>]

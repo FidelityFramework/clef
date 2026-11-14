@@ -19,12 +19,15 @@ let normalize (graph: SemanticGraph) =
             let name = "CallableApplication"
             let ctx = mkContext node.Range node.Type graph.Platform name node.Id
             let result = stage ctx node callee stages
-            RecipeCreated {
-                OriginalNodeId = node.Id
-                NewNodes = result.NewNodes @ result.AuxFunctions
-                ReplacementRootId = result.ResultNodeId
-                ElaborationKind = "Baker"
-                NewEdges = []; ElaborationSource = name }
+            match result.Failure with
+            | Some reason -> CreationFailed (reason, Map.empty)
+            | None ->
+                RecipeCreated {
+                    OriginalNodeId = node.Id
+                    NewNodes = result.NewNodes @ result.AuxFunctions
+                    ReplacementRootId = result.ResultNodeId
+                    ElaborationKind = "Baker"
+                    NewEdges = []; ElaborationSource = name }
         | _ -> NotApplicable "Application does not cross a settled callable boundary"
     let recipes = FanOut.fanOut "CallableApplications" (fun node -> plans.ContainsKey node.Id) create graph
     FoldIn.foldIn recipes graph

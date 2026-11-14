@@ -41,7 +41,7 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
     | Matched resultNodeId ->
         mkResultNoShadow nodes resultNodeId []
     | NoMatch reason ->
-        failwithf "Saturation failed: %s" reason
+        mkFailedResult ctx.InspiringNode ("Saturation failed: " + reason)
 
 /// Count bindings in a pattern (recursive for nested patterns)
 let rec private countPatternBindings (pattern: Pattern) : int =

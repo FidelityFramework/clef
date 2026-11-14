@@ -29,4 +29,4 @@ let stage (ctx: Context) (source: SemanticNode) (callee: NodeId) (stages: Stage 
     })
     match result with
     | Matched root -> mkResultNoShadow nodes root []
-    | NoMatch reason -> failwithf "Callable application saturation failed: %s" reason
+    | NoMatch reason -> mkFailedResult ctx.InspiringNode ("Callable application saturation failed: " + reason)

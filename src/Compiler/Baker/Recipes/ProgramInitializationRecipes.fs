@@ -17,10 +17,6 @@ type ExistingStartup = { Nodes: SemanticNode list; Binding: NodeId; Call: NodeId
 type Expansion = { Nodes: SemanticNode list; Edges: Hyperedge list; EntryBinding: NodeId }
 
 let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) selected unitActivations (existing: ExistingStartup option) =
-    let parameters, sourceBody =
-        match graph.Nodes[source.Children.Head].Kind with
-        | SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure) -> parameters, body
-        | _ -> invalidOp "Startup requires an ordinary captureless source entry."
     let sourceLambda = source.Children.Head
     let modules = graph.Nodes.Values |> Seq.choose (fun node ->
         match node.Kind with SemanticKind.ModuleDef(name, members) -> Some(node, name, members) | _ -> None) |> Seq.toList
@@ -31,6 +27,10 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
             fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle one lexical module declaration for startup initializer %d: found %d" (NodeId.value id) found.Length))
     let state = SaturationState.create { source.Range with End = source.Range.Start } ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let outcome, emitted = run state (saturation {
+        let! parameters, sourceBody =
+            match graph.Nodes[source.Children.Head].Kind with
+            | SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure) -> preturn (parameters, body)
+            | _ -> fail (XParsec.ErrorType.Message "Startup requires an ordinary captureless source entry.")
         let! initializers = selected |> C.collect (fun id -> saturation {
             let node = graph.Nodes[id]
             match node.Kind, node.Children with
@@ -81,11 +81,11 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
                 initializers |> List.tryFind (fun (original, _, _, _, _) -> original = memberId)
                 |> Option.map (fun (_, binding, _, _, _) -> binding) |> Option.defaultValue memberId)
             do! emit { moduleNode with Kind = SemanticKind.ModuleDef(name, replaced); Children = [] }
-        return entryBinding, entryLambda, spine, call, initializers
+        return entryBinding, entryLambda, spine, call, initializers, sourceBody
     })
     match outcome with
-    | NoMatch reason -> invalidOp ("Program initialization recipe failed: " + reason)
-    | Matched(entry, activation, spine, call, initializers) ->
+    | NoMatch reason -> Result.Error ("Program initialization recipe failed: " + reason)
+    | Matched(entry, activation, spine, call, initializers, sourceBody) ->
         let edge role ordinal sources target = { Sources = sources; Target = target; Class = EdgeClass.Provenance; Role = role; Ordinal = ordinal }
         let rows = initializers |> List.mapi (fun ordinal (_, binding, value, moduleId, isValue) ->
             edge EdgeRole.ProgramInitializer ordinal [moduleId; binding; value; activation] spine
@@ -94,9 +94,9 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
             if original = binding then None else Some(edge EdgeRole.EnrichedWith 0 [moduleId; original] binding))
         let units = unitActivations |> List.mapi (fun ordinal (moduleId, premises) ->
             edge EdgeRole.ProgramUnitActivation ordinal (List.distinct (activation :: source.Id :: premises)) moduleId)
-        { Nodes = emitted; EntryBinding = entry
-          Edges = edge EdgeRole.ProgramInitialization 0 [entry; source.Id; sourceLambda; sourceBody; activation] spine
-                  :: edge EdgeRole.ProgramEntryCall 0 [entry; source.Id; sourceLambda; activation] call :: rows @ origins @ units }
+        Result.Ok { Nodes = emitted; EntryBinding = entry
+                    Edges = edge EdgeRole.ProgramInitialization 0 [entry; source.Id; sourceLambda; sourceBody; activation] spine
+                            :: edge EdgeRole.ProgramEntryCall 0 [entry; source.Id; sourceLambda; activation] call :: rows @ origins @ units }
 
 let materialize ctx graph source selected unitActivations existing =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> materializeCore ctx graph source selected unitActivations existing)

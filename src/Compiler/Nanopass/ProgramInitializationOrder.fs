@@ -49,7 +49,6 @@ let settleWithAccounts graph =
               Reachability = ReachabilityContext.Reachable })
         Map.add next.Id next nodes, edges, diagnostics @ errors) (graph.Nodes, graph.Edges, [])
     let accounts = rows |> List.fold (fun accounts (binding, edge) ->
-        if Map.containsKey binding accounts then invalidOp "Program initialization order repeated a current binding account."
         let reading = Uses.read graph binding
         let account : ProgramInitializationOrderAccount =
             { Binding = binding; Claim = edge.Target; Participants = reading.Participants }

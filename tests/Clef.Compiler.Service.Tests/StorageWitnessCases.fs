@@ -51,10 +51,11 @@ type StorageWitnessCases() =
                 { NewNodes = [claim]; Annotated = []; NewEdges = [{ edge with Target = claim.Id; Sources = [absent] }] }
             else
                 { NewNodes = []; Annotated = []; NewEdges = [{ edge with Target = absent; Sources = [id] }] }
-        let error = Assert.Throws<System.InvalidOperationException>(fun () ->
-            Clef.Compiler.Nanopass.ObligationElaboration.foldIn enrichment graph |> ignore)
-        Assert.Contains(string (NodeId.value absent), error.Message)
-        Assert.Contains((if missing = "source" then "current source participant" else "target"), error.Message)
+        match Clef.Compiler.Nanopass.ObligationElaboration.tryFoldIn enrichment graph with
+        | Ok _ -> failwith "Expected tryFoldIn to refuse absent source or target"
+        | Error message ->
+            Assert.Contains(string (NodeId.value absent), message)
+            Assert.Contains((if missing = "source" then "current source participant" else "target"), message)
 
     [<Theory>]
     [<InlineData(false)>]

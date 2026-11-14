@@ -51,7 +51,7 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
     | Matched resultNodeId ->
         mkResultNoShadow nodes resultNodeId []
     | NoMatch reason ->
-        failwithf "Saturation failed: %s" reason
+        mkFailedResult ctx.InspiringNode ("Saturation failed: " + reason)
 
 //=============================================================================
 // SET.ADD: add v s → AVL insertion

@@ -40,15 +40,25 @@ let mkContext
 type Result = {
     NewNodes: SemanticNode list
     ResultNodeId: NodeId
-    /// Synthesized declarations retained by the decomposition.
+    // Synthesized declarations retained by the decomposition.
     AuxFunctions: SemanticNode list
+    Failure: string option
 }
 
-/// Create the graph-only expansion consumed by recipe fold-in.
+// Create the graph-only expansion consumed by recipe fold-in.
 let mkResultNoShadow
     (nodes: SemanticNode list)
     (rootId: NodeId)
     (auxFns: SemanticNode list) : Result =
     { NewNodes = nodes
       ResultNodeId = rootId
-      AuxFunctions = auxFns }
+      AuxFunctions = auxFns
+      Failure = None }
+
+let mkFailedResult
+    (inspiringNode: NodeId)
+    (reason: string) : Result =
+    { NewNodes = []
+      ResultNodeId = inspiringNode
+      AuxFunctions = []
+      Failure = Some reason }

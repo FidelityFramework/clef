@@ -174,20 +174,16 @@ let rec private formatParserError (err: ErrorType<char, SaturationState>) : stri
         let childText = children |> List.map (fun c -> formatParserError c.Errors) |> String.concat "; "
         sprintf "Nested(%s, [%s])" (formatParserError parent) childText
 
-let private failOnParserError (state: SaturationState) (rawError: ErrorType<char, SaturationState>) (emittedCount: int) : 'a =
-    failwithf
-        "[Baker] Saturation parser returned Error in '%s' at %s (inspiring node %d).\n\
-         \  XParsec error: %s\n\
-         \  Nodes emitted before failure: %d\n\
-         \  Hint: search for a bare failwith/failwithf with no message, or an unimplemented pattern arm."
+let private formatParserErrorMessage (state: SaturationState) (rawError: ErrorType<char, SaturationState>) (emittedCount: int) : string =
+    sprintf
+        "[Baker] Saturation parser returned Error in '%s' at %s (inspiring node %d).\n  XParsec error: %s\n  Nodes emitted before failure: %d"
         state.OriginalHOF
         (formatRange state.SourceRange)
         (NodeId.value state.InspiringNode)
         (formatParserError rawError)
         emittedCount
 
-/// Run a saturation parser with initial state, return result and emitted nodes.
-/// Throws on XParsec Error — Baker parsers must always succeed.
+// Run a saturation parser with initial state, return result and emitted nodes.
 let run (state: SaturationState) (p: SaturationParser<'a>) : SaturationResult<'a> * SemanticNode list =
     // Create dummy reader with Baker's state (empty input, saturation doesn't consume)
     let reader = Reader.ofString "" state
@@ -202,12 +198,11 @@ let run (state: SaturationState) (p: SaturationParser<'a>) : SaturationResult<'a
     let bakerResult =
         match result with
         | Ok success -> Matched success.Parsed
-        | Error err -> failOnParserError state err.Errors (List.length nodes)
+        | Error err -> NoMatch (formatParserErrorMessage state err.Errors (List.length nodes))
 
     bakerResult, nodes
 
-/// Run a saturation parser, returning only the result.
-/// Throws on XParsec Error — Baker parsers must always succeed.
+// Run a saturation parser, returning only the result.
 let runValue (state: SaturationState) (p: SaturationParser<'a>) : SaturationResult<'a> =
     let reader = Reader.ofString "" state
     let result = p reader
@@ -216,10 +211,9 @@ let runValue (state: SaturationState) (p: SaturationParser<'a>) : SaturationResu
     | Ok success -> Matched success.Parsed
     | Error err ->
         let nodes = SaturationState.getNodes finalState
-        failOnParserError state err.Errors (List.length nodes)
+        NoMatch (formatParserErrorMessage state err.Errors (List.length nodes))
 
-/// Run a saturation parser, returning result and full final state.
-/// Throws on XParsec Error — Baker parsers must always succeed.
+// Run a saturation parser, returning result and full final state.
 let runWithState (state: SaturationState) (p: SaturationParser<'a>) : SaturationResult<'a> * SaturationState =
     let reader = Reader.ofString "" state
     let result = p reader
@@ -229,5 +223,5 @@ let runWithState (state: SaturationState) (p: SaturationParser<'a>) : Saturation
         | Ok success -> Matched success.Parsed
         | Error err ->
             let nodes = SaturationState.getNodes finalState
-            failOnParserError state err.Errors (List.length nodes)
+            NoMatch (formatParserErrorMessage state err.Errors (List.length nodes))
     bakerResult, finalState

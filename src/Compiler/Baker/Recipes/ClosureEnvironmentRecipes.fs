@@ -105,7 +105,8 @@ let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion
                       not (replaced.Contains (key edge)) &&
                       not (edge.Role = EdgeRole.CallableReferenceOrigin && references.Contains edge.Target)))
                   @ (nodes |> List.collect structuralIncidence) @ List.ofSeq referenceOrigins }
-    | NoMatch reason -> invalidOp ("Plain callable saturation failed: " + reason)
+    | NoMatch reason ->
+        { Structure = mkFailedResult source.Id ("Plain callable saturation failed: " + reason); Edges = graph.Edges }
 
 let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
     if plan.Captures.IsEmpty then plain ctx graph plan else
@@ -257,7 +258,8 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
                     not (forwarded.ContainsKey edge.Target && (match edge.Role with EdgeRole.EnvironmentCapture _ -> true | _ -> false))))
                   @ (nodes |> List.collect structuralIncidence) @ captures @ [signature] @ List.ofSeq formations
                   @ (forwarded |> Map.toList |> List.collect snd) }
-    | NoMatch reason -> invalidOp ("Closure environment saturation failed: " + reason)
+    | NoMatch reason ->
+        { Structure = mkFailedResult source.Id ("Closure environment saturation failed: " + reason); Edges = graph.Edges }
 
 let materialize ctx graph plan =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> materializeCore ctx graph plan)

@@ -243,42 +243,25 @@ module private BakerNanopassCruftAnalyzer =
                 else
                     None)
 
-    let throwFreeRecipeFiles =
-        let sep = string Path.DirectorySeparatorChar
-        Set.ofList [
-            "Baker" + sep + "Recipes" + sep + "HardwareModuleRecipes.fs"
-            "Baker" + sep + "Recipes" + sep + "ArrayMemoryRecipes.fs"
-            "Baker" + sep + "Recipes" + sep + "MemoryAccessRecipes.fs"
-            "Baker" + sep + "Recipes" + sep + "KernelModuleRecipes.fs"
-            "Baker" + sep + "Recipes" + sep + "KernelDeclarations.fs"
-            "Baker" + sep + "Recipes" + sep + "StringViewRecipes.fs"
-        ]
-
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BakerNanopassCruftContract")>]
 type BakerNanopassCruftContractCases() =
     [<Fact>]
-    member _.``All Baker and Nanopass compile items satisfy AXC006 AXC007 and migrated AXC008``() =
+    member _.``All Baker and Nanopass compile items satisfy AXC006 AXC007 and AXC008``() =
         let files = BakerNanopassCruftAnalyzer.bakerAndNanopassFiles ()
         Assert.True(files.Length >= 103, sprintf "Expected at least 103 Baker and Nanopass compile items, found %d" files.Length)
-
-        let matchedThrowFree =
-            files
-            |> List.filter (fun (relativePath, _) -> BakerNanopassCruftAnalyzer.throwFreeRecipeFiles.Contains relativePath)
-        Assert.Equal(6, matchedThrowFree.Length)
 
         let violations =
             files
             |> List.collect (fun (relativePath, fullPath) ->
                 let source = File.ReadAllText(fullPath)
-                let checkThrows = BakerNanopassCruftAnalyzer.throwFreeRecipeFiles.Contains relativePath
-                BakerNanopassCruftAnalyzer.analyzeSource checkThrows relativePath source)
+                BakerNanopassCruftAnalyzer.analyzeSource true relativePath source)
 
         if not violations.IsEmpty then
             let summary =
                 violations
                 |> List.map (fun v -> sprintf "%s:%d:%d [%s] %s" v.File v.Line v.Column v.Code v.Message)
                 |> String.concat "\n"
-            Assert.Fail(sprintf "Found %d AXC006/AXC007/AXC008 violations in Baker/Nanopass:\n%s" violations.Length summary)
+            Assert.Fail(sprintf "Found %d AXC006-AXC008 violations in Baker and Nanopass:\n%s" violations.Length summary)
 
     [<Fact>]
     member _.``AXC006 AXC007 and AXC008 analyzer detects ReferenceEquals PhysicalEquality percent-A and CLR throws``() =

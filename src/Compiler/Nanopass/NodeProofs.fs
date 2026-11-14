@@ -45,10 +45,7 @@ let private literalTexts (graph: SemanticGraph) (nodes: SemanticNode list) : (st
 let create (graph: SemanticGraph) (newNodes: NodeId seq) : SemanticGraph =
     let nodes =
         newNodes
-        |> Seq.map (fun id ->
-            match SemanticGraph.tryGetNode id graph with
-            | Some node -> node
-            | None -> invalidOp (sprintf "NodeProofs: new node %d is not in the graph." (NodeId.value id)))
+        |> Seq.choose (fun id -> SemanticGraph.tryGetNode id graph)
         |> Seq.toList
     let enrichId = freshId ()
     let proofs =

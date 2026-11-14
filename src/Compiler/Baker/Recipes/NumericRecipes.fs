@@ -48,7 +48,7 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
     let result, nodes = run (toSaturationState ctx) parser
     match result with
     | Matched resultNodeId -> mkResultNoShadow nodes resultNodeId []
-    | NoMatch reason -> failwithf "Saturation failed: %s" reason
+    | NoMatch reason -> mkFailedResult ctx.InspiringNode ("Saturation failed: " + reason)
 
 //=============================================================================
 // RECIPES

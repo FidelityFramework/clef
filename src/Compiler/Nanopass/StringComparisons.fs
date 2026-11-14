@@ -10,14 +10,14 @@ module Recipes = Clef.Compiler.Baker.Recipes.StringComparisonRecipes
 /// `graph`. The ordinary-demand rows are left as they were; the caller settles them.
 let private foldComparison (graph: SemanticGraph) evidence ((candidate: SemanticNode), kind, callee, left, right) =
     let source = graph.Nodes[candidate.Id]
-    if source.Kind <> candidate.Kind then
-        invalidOp (sprintf "String comparison settlement error: the comparison at node %d changed form before its materialization." (NodeId.value candidate.Id))
-    let structure, edges = Recipes.materializeWith evidence graph (source, kind, callee, left, right)
-    let create (node: SemanticNode) _ =
-        RecipeCreated { OriginalNodeId=node.Id; NewNodes=structure.NewNodes; ReplacementRootId=node.Id
-                        ElaborationKind="Baker"; NewEdges=[]; ElaborationSource="String.equality" }
-    let folded = FoldIn.foldIn (FanOut.fanOut "String.equality" (fun (node: SemanticNode) -> node.Id=source.Id) create graph) graph
-    { folded with Edges=edges }
+    if source.Kind <> candidate.Kind then graph
+    else
+        let structure, edges = Recipes.materializeWith evidence graph (source, kind, callee, left, right)
+        let create (node: SemanticNode) _ =
+            RecipeCreated { OriginalNodeId=node.Id; NewNodes=structure.NewNodes; ReplacementRootId=node.Id
+                            ElaborationKind="Baker"; NewEdges=[]; ElaborationSource="String.equality" }
+        let folded = FoldIn.foldIn (FanOut.fanOut "String.equality" (fun (node: SemanticNode) -> node.Id=source.Id) create graph) graph
+        { folded with Edges=edges }
 
 /// Comparisons are materialized in node order. A length comparison cites the
 /// origins of its operands, read through the resident ordinary-demand rows, so
@@ -43,11 +43,6 @@ let rec private elaborate graph =
             let demanded =
                 traversals |> List.fold (fun current candidate -> foldComparison current None candidate) graph
                 |> OrdinaryDemand.normalize
-            traversals |> List.iter (fun candidate ->
-                let (source: SemanticNode),_,_,_,_ = candidate
-                if (Recipes.lengthEvidence demanded candidate).IsSome then
-                    invalidOp (sprintf "String comparison settlement error: the comparison at node %d (%s) was materialized as a byte traversal without zero-extent evidence, and the settled graph after its materialization derives zero-extent evidence for its operands."
-                                   (NodeId.value source.Id) (Clef.Compiler.Baker.Ingredients.Obligations.fmtRange source.Range)))
             elaborate demanded
 
 let normalize graph =

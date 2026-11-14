@@ -11,13 +11,13 @@ let normalize (graph: SemanticGraph) =
     let candidates=Recipes.candidates graph |> List.map _.Id
     (graph,candidates) ||> List.fold(fun graph id ->
         let source=graph.Nodes[id]
-        try
-            let expansion = Recipes.materialize graph source
+        match Recipes.materialize graph source with
+        | Ok expansion ->
             let recipe = RecipeCreated {
                 OriginalNodeId=source.Id;NewNodes=expansion.Nodes;ReplacementRootId=source.Id
                 NewEdges=[];ElaborationKind="Baker";ElaborationSource="Array.construction" }
             let folded = FoldIn.foldIn (FanOut.fanOut "Array.construction" (fun node -> node.Id=source.Id) (fun _ _ -> recipe) graph) graph
             {folded with Edges=expansion.Edges} |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable
-        with Recipes.MissingConstruction reason ->
+        | Error reason ->
             let marked={source with Metadata=source.Metadata.Add("Baker.ArrayConstructionError",MetadataValue.String reason)}
             {graph with Nodes=graph.Nodes.Add(source.Id,marked)})

@@ -1871,7 +1871,7 @@ type ClosedCallbackTests() =
                 Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo info, claim)
                 Assert.Contains(claim, published.Obligations)
             | other -> failwithf "Optional Pending disappeared from the published ledger: %A" other
-        if not present then Assert.Throws<System.InvalidOperationException>(fun () -> Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo info |> ignore) |> ignore
+        if not present then Assert.True((Clef.Compiler.Baker.Ingredients.PublishedFactRows.tryMapObligationInfo info).IsError)
         let withoutAccounts = {boundary with Calls=boundary.Calls |> Map.map (fun _ call -> {call with Arguments=call.Arguments |> List.map (fun operand -> {operand with OptionalEntry=None})})}
         Assert.False(Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.optionalEntryPending graph withoutAccounts (id, info))
         let omitted = {selected with Emission={selected.Emission with Boundary=withoutAccounts}}

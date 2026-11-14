@@ -59,7 +59,7 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
     | Matched resultNodeId ->
         mkResultNoShadow nodes resultNodeId []
     | NoMatch reason ->
-        failwithf "Saturation failed: %s" reason
+        mkFailedResult ctx.InspiringNode ("Saturation failed: " + reason)
 
 /// A consumer that reads its first element requires its first pull to succeed:
 /// `current` after an unsuccessful pull has no value. That pull's result is the

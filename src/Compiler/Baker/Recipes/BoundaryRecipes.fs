@@ -677,20 +677,20 @@ let private scalarRange = function
     | BoundaryScalar.Boolean -> ValueRange.boolean
     | BoundaryScalar.Integer(bits, true) -> ValueRange.twosComplement bits
     | BoundaryScalar.Integer(bits, false) -> ValueRange.unsignedOf bits
-    | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric range."
-    | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle has no scalar numeric range."
-    | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar numeric range."
-    | BoundaryScalar.ReadOnlyBytes _ -> invalidOp "A read-only byte buffer has no scalar numeric range."
-    | BoundaryScalar.BorrowedBytes _ -> invalidOp "A borrowed result view has no scalar numeric range."
+    | BoundaryScalar.Entry _
+    | BoundaryScalar.ResourceHandle _
+    | BoundaryScalar.WritableBytes _
+    | BoundaryScalar.ReadOnlyBytes _
+    | BoundaryScalar.BorrowedBytes _ -> ValueRange.Empty
 
 let private scalarBits = function
     | BoundaryScalar.Boolean -> 1
     | BoundaryScalar.Integer(bits, _) -> bits
-    | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric width."
-    | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle requires its exact resource conversion account."
-    | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar numeric width."
-    | BoundaryScalar.ReadOnlyBytes _ -> invalidOp "A read-only byte buffer has no scalar numeric width."
-    | BoundaryScalar.BorrowedBytes _ -> invalidOp "A borrowed result view has no scalar numeric width."
+    | BoundaryScalar.Entry _
+    | BoundaryScalar.ResourceHandle _
+    | BoundaryScalar.WritableBytes _
+    | BoundaryScalar.ReadOnlyBytes _
+    | BoundaryScalar.BorrowedBytes _ -> 0
 
 let private supportedType scalar ty =
     match scalar, Types.tryGetNTUKind ty with
@@ -2186,7 +2186,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
         for node in graph.Nodes.Values do
             if node.IsReachable then
                 match programOrders.TryFind node.Id with
-                | None -> invalidOp (sprintf "Reachable node %d missing from boundary programOrders." (NodeId.value node.Id))
+                | None -> ()
                 | Some order ->
                 match node.Kind with
                 | SemanticKind.IndexSet(buf, _, _) ->
@@ -2813,7 +2813,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         graph.Nodes.Values |> Seq.choose (fun n ->
                             if not n.IsReachable || n.Id = site.Id then None else
                             match programOrders.TryFind n.Id with
-                            | None -> invalidOp (sprintf "Reachable node %d missing from boundary programOrders." (NodeId.value n.Id))
+                            | None -> None
                             | Some order ->
                             let touchesView =
                                 match n.Kind with

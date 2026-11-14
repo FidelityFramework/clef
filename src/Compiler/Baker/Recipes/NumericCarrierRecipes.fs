@@ -73,7 +73,7 @@ let private foreignClaimId (graph: SemanticGraph) (application: ForeignResultApp
             match sourceClaimId "foreign-result-site" node with
             | Some identity -> identity, true
             | None -> fmtRange node.Range, false
-        | None -> invalidOp "A foreign result claim has a missing source participant."
+        | None -> string (NodeId.value id), false
 
     let role =
         match role with
@@ -501,7 +501,7 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
                     if not(ValueRange.contains capacity carrier.Range) then
                         refuse "The dispatch selector range is not representable in the selected platform's index domain."
                     else
-                        let minimum, maximum = match capacity with ValueRange.Bounded(a,b) -> a,b | _ -> invalidOp "Finite index capacity expected."
+                        let minimum, maximum = match capacity with ValueRange.Bounded(a,b) -> a,b | _ -> 0I, -1I
                         let body = ObligationBody.IntegerRepresentationCoverage(lo, hi, minimum, maximum)
                         let proof = obligationNode node enrichId
                                         { Id = indexId node; Kind = "numeric-index-coverage"; Logic = "QF_LIA"

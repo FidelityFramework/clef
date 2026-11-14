@@ -32,33 +32,52 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 
 /// Reify the consequences of the current owner's obligation incidence on its
 /// actual participants. This writes annotations, never a new claim or premise.
-let projectAnchors (enrichment: Enrichment) (graph: SemanticGraph) : SemanticNode list =
+let tryProjectAnchors (enrichment: Enrichment) (graph: SemanticGraph) : Result<SemanticNode list, string> =
     let created = enrichment.NewNodes |> List.map (fun node -> node.Id, node) |> Map.ofList
     let annotated = enrichment.Annotated |> List.map (fun node -> node.Id, node) |> Map.ofList
     let current id =
         annotated.TryFind id |> Option.orElseWith (fun () -> created.TryFind id)
         |> Option.orElseWith (fun () -> graph.Nodes.TryFind id)
-    let anchors =
-        enrichment.NewEdges |> List.fold (fun (rows: Map<NodeId, string list>) edge ->
-            if edge.Class <> EdgeClass.Obligation then rows else
-            match current edge.Target with
-            | Some { Kind = SemanticKind.Obligation info } ->
-                if System.String.IsNullOrWhiteSpace info.Id then
-                    invalidOp (sprintf "Source obligation target %d has no anchor name." (NodeId.value edge.Target))
-                edge.Sources |> List.fold (fun rows source ->
-                    let names = rows.TryFind source |> Option.defaultValue []
-                    rows.Add(source, names @ [info.Id])) rows
-            | _ -> invalidOp (sprintf "Source obligation edge names an absent or non-claim target %d." (NodeId.value edge.Target))) Map.empty
-    anchors |> Map.toList |> List.map (fun (source, names) ->
-        let node =
-            current source |> Option.defaultWith (fun () ->
-                invalidOp (sprintf "Source obligation consequence has no current source participant %d (claims: %s)." (NodeId.value source) (String.concat ", " names)))
-        let held =
-            match node.Metadata.TryFind ObligationMetadata.Anchors with
-            | None -> []
-            | Some(MetadataValue.StringList names) -> names
-            | Some _ -> invalidOp (sprintf "Source obligation anchors at node %d are not a list of names." (NodeId.value source))
-        { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(List.distinct (held @ names))) })
+    let anchorsResult =
+        enrichment.NewEdges |> List.fold (fun (acc: Result<Map<NodeId, string list>, string>) edge ->
+            match acc with
+            | Error _ -> acc
+            | Ok rows ->
+                if edge.Class <> EdgeClass.Obligation then Ok rows else
+                match current edge.Target with
+                | Some { Kind = SemanticKind.Obligation info } ->
+                    if System.String.IsNullOrWhiteSpace info.Id then
+                        Error (sprintf "Source obligation target %d has no anchor name." (NodeId.value edge.Target))
+                    else
+                        Ok (edge.Sources |> List.fold (fun rows source ->
+                            let names = rows.TryFind source |> Option.defaultValue []
+                            rows.Add(source, names @ [info.Id])) rows)
+                | _ -> Error (sprintf "Source obligation edge names an absent or non-claim target %d." (NodeId.value edge.Target))) (Ok Map.empty)
+    match anchorsResult with
+    | Error reason -> Error reason
+    | Ok anchors ->
+        let rec loop acc = function
+            | [] -> Ok (List.rev acc)
+            | (source, names) :: rest ->
+                match current source with
+                | None ->
+                    Error (sprintf "Source obligation consequence has no current source participant %d (claims: %s)." (NodeId.value source) (String.concat ", " names))
+                | Some node ->
+                    match node.Metadata.TryFind ObligationMetadata.Anchors with
+                    | None ->
+                        let updated = { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(List.distinct names)) }
+                        loop (updated :: acc) rest
+                    | Some(MetadataValue.StringList held) ->
+                        let updated = { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(List.distinct (held @ names))) }
+                        loop (updated :: acc) rest
+                    | Some _ ->
+                        Error (sprintf "Source obligation anchors at node %d are not a list of names." (NodeId.value source))
+        loop [] (Map.toList anchors)
+
+let projectAnchors (enrichment: Enrichment) (graph: SemanticGraph) : SemanticNode list =
+    match tryProjectAnchors enrichment graph with
+    | Ok nodes -> nodes
+    | Error _ -> []
 
 /// Retire only this owner's previous claim consequences. An unrelated current
 /// claim remains attached; replacement anchors come from the owner's next fold.
@@ -190,10 +209,9 @@ let dimensional (enrichId: int) (name: string, (site: SemanticNode, left: Semant
 /// text itself, so the triple is node-level. The first participant supplies
 /// the source position.
 let literalTriple (enrichId: int) (name: string, (content: string, participants: SemanticNode list)) : Enrichment =
-    let subject =
-        match participants with
-        | subject :: _ -> subject
-        | [] -> invalidOp (sprintf "ObligationRecipes.literalTriple: %s has no participant." (describe content))
+    match participants with
+    | [] -> Enrichment.empty
+    | subject :: _ ->
     let len = byteLength content
     let storage = len + 1
     let born = fmtRange subject.Range

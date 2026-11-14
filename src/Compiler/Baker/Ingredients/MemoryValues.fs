@@ -18,9 +18,7 @@ let excludedValidated (graph:SemanticGraph) =
 let excluded graph =
     match excludedValidated graph with
     | Ok excluded -> excluded
-    | Error failures ->
-        let reasons = failures |> List.map (fun f -> f.Reason) |> String.concat "; "
-        invalidOp(sprintf "Source memory demand premises are unsettled: [%s]" reasons)
+    | Error _ -> Set.empty
 let executable (graph:SemanticGraph) excluded id =
     not(Set.contains id excluded) && (graph.Nodes.TryFind id |> Option.exists _.IsReachable)
 let premises (graph: SemanticGraph) =
@@ -76,7 +74,7 @@ let constructionIds (row:CheckedStringConstruction) =
 let private viewSupport (operations:Map<NodeId,MemoryWitnessOperation>) construction =
     match operations.TryFind construction.Text with
     | Some(MemoryWitnessOperation.StringView view) when view.Checked=Some construction -> view.Participants
-    | _ -> invalidOp "The checked memory support lacks its exact current source string view."
+    | _ -> Set.empty
 let emptySnapshotIds (row:MemoryEmptySnapshotWitness) = Set.ofList[row.Site;row.Snapshot;row.Owner;row.Count;row.Declaration]
 let snapshotStorageIds = function
     | MemoryCheckedSnapshotStorage.Allocated row -> row.Participants

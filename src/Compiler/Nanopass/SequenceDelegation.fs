@@ -41,10 +41,13 @@ let normalize (graph: SemanticGraph) =
     else
         let create (node: SemanticNode) _ =
             let plan = plans[node.Id]
-            RecipeCreated {
-                OriginalNodeId = node.Id; NewNodes = plan.Structure.NewNodes
-                ReplacementRootId = plan.Structure.ResultNodeId
-                ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.delegate" }
+            match plan.Structure.Failure with
+            | Some reason -> CreationFailed (reason, Map.ofList [ "nodeId", string (NodeId.value node.Id) ])
+            | None ->
+                RecipeCreated {
+                    OriginalNodeId = node.Id; NewNodes = plan.Structure.NewNodes
+                    ReplacementRootId = plan.Structure.ResultNodeId
+                    ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.delegate" }
         let recipes = FanOut.fanOut "SequenceDelegation" (fun node -> plans.ContainsKey node.Id) create graph
         let folded = FoldIn.foldIn recipes graph
         let provenance = plans.Values |> Seq.collect _.Edges |> Seq.toList

@@ -102,56 +102,53 @@ let private prepareCore (graph: SemanticGraph) (curry: CurryInfo) =
             if source.Metadata.ContainsKey ClosureMetadata.SourceSignature then source.Metadata
             else source.Metadata.Add(ClosureMetadata.SourceSignature, MetadataValue.Type source.Type)
         { source with Type = ty; Kind = kind; Children = children; Metadata = metadata }
-    let recipes = plans |> List.map (fun (binding, lambda, owner, constructor, calls) ->
-        let generated = ResizeArray<SemanticNode>()
-        let add node = generated.Add node; node
-        let ty = Lazy.environmentType
-        let formal = fresh lambda (SemanticKind.PatternBinding "__lazy_result") ty [] |> add
-        let parameters, body, captures, enclosing, context =
-            match lambda.Kind with SemanticKind.Lambda(a,b,c,d,e) -> a,b,c,d,e | _ -> failwith "Expected settled factory"
-        // A callable factory keeps its environment first (closure spec §6.1).
-        // The internal result destination follows it, before source arguments.
-        let hasEnvironment =
-            match parameters with
-            | (_, formalType, first) :: _ when formalType = Lazy.environmentType ->
-                graph.Edges |> List.exists (fun edge ->
-                    edge.Role = EdgeRole.EnvironmentFormal && edge.Target = first && List.tryLast edge.Sources = Some lambda.Id)
-            | _ -> false
-        let ordinal = if hasEnvironment then 1 else 0
-        let parameters = List.take ordinal parameters @ [("__lazy_result", ty, formal.Id)] @ List.skip ordinal parameters
-        let rec insert index = function
-            | NativeType.TForall(parameters, body) -> NativeType.TForall(parameters, insert index body)
-            | body when index = 0 -> NativeType.TFun(ty, body)
-            | NativeType.TFun(domain, result) -> NativeType.TFun(domain, insert (index - 1) result)
-            | _ -> invalidOp "A factory destination must occur at a settled parameter boundary"
-        let insertDestination = insert ordinal
-        let factoryType = insertDestination binding.Type
-        signature lambda (insertDestination lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))
-            ((parameters |> List.map (fun (_, _, id) -> id)) @ [body]) |> add |> ignore
-        signature binding factoryType binding.Kind binding.Children |> add |> ignore
-        edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.LazyResultDestination
-                   Sources = [lambda.Id; owner; formal.Id]; Target = constructor; Ordinal = 0 } :: edges
-        for call, callee, arguments in calls do
-            let allocation = fresh call (SemanticKind.LazyAllocate owner) ty [] |> add
-            let name = sprintf "__lazy_destination_%d" (NodeId.value call.Id)
-            let stored = fresh call (SemanticKind.Binding(name, false, false, None)) ty [allocation.Id] |> add
-            let destination = fresh call (SemanticKind.VarRef(name, Some stored.Id)) ty [] |> add
-            signature nodes[callee] factoryType nodes[callee].Kind nodes[callee].Children |> add |> ignore
-            // Destination insertion does not evaluate or copy ordinary actuals.
-            // Their existing identities preserve deferred/shared demand.
-            let actuals = arguments
-            let arguments = List.take ordinal actuals @ [destination.Id] @ List.skip ordinal actuals
-            let invocation = { fresh call (SemanticKind.Application(callee, arguments)) call.Type (callee :: arguments) with ValueRange = call.ValueRange } |> add
-            let ordered = [stored.Id; invocation.Id]
-            { call with Kind = SemanticKind.Sequential ordered; Children = ordered } |> add |> ignore
-            edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.LazyResultCall
-                       Sources = [lambda.Id; constructor; formal.Id; allocation.Id; destination.Id]
-                       Target = invocation.Id; Ordinal = 0 } :: edges
-            updatedCurry <- { updatedCurry with SaturatedCalls = updatedCurry.SaturatedCalls.Remove(call.Id).Add(invocation.Id, { TargetBindingId = binding.Id; AllArgNodes = arguments }) }
-        let emitted = generated |> Seq.map (fun node -> node.Id, node) |> Map.ofSeq |> Map.values |> Seq.toList
-        changed <- Set.union changed (emitted |> List.map _.Id |> Set.ofList)
-        { OriginalNodeId = binding.Id; NewNodes = emitted; ReplacementRootId = binding.Id
-          ElaborationKind = "Baker"; ElaborationSource = "Lazy.factoryResult"; NewEdges = [] })
+    let recipes = plans |> List.choose (fun (binding, lambda, owner, constructor, calls) ->
+        match lambda.Kind with
+        | SemanticKind.Lambda(parameters, body, captures, enclosing, context) ->
+            let generated = ResizeArray<SemanticNode>()
+            let add node = generated.Add node; node
+            let ty = Lazy.environmentType
+            let formal = fresh lambda (SemanticKind.PatternBinding "__lazy_result") ty [] |> add
+            let hasEnvironment =
+                match parameters with
+                | (_, formalType, first) :: _ when formalType = Lazy.environmentType ->
+                    graph.Edges |> List.exists (fun edge ->
+                        edge.Role = EdgeRole.EnvironmentFormal && edge.Target = first && List.tryLast edge.Sources = Some lambda.Id)
+                | _ -> false
+            let ordinal = if hasEnvironment then 1 else 0
+            let parameters = List.take ordinal parameters @ [("__lazy_result", ty, formal.Id)] @ List.skip ordinal parameters
+            let rec insert index = function
+                | NativeType.TForall(parameters, body) -> NativeType.TForall(parameters, insert index body)
+                | body when index = 0 -> NativeType.TFun(ty, body)
+                | NativeType.TFun(domain, result) -> NativeType.TFun(domain, insert (index - 1) result)
+                | body -> NativeType.TFun(ty, body)
+            let insertDestination = insert ordinal
+            let factoryType = insertDestination binding.Type
+            signature lambda (insertDestination lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))
+                ((parameters |> List.map (fun (_, _, id) -> id)) @ [body]) |> add |> ignore
+            signature binding factoryType binding.Kind binding.Children |> add |> ignore
+            edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.LazyResultDestination
+                       Sources = [lambda.Id; owner; formal.Id]; Target = constructor; Ordinal = 0 } :: edges
+            for call, callee, arguments in calls do
+                let allocation = fresh call (SemanticKind.LazyAllocate owner) ty [] |> add
+                let name = sprintf "__lazy_destination_%d" (NodeId.value call.Id)
+                let stored = fresh call (SemanticKind.Binding(name, false, false, None)) ty [allocation.Id] |> add
+                let destination = fresh call (SemanticKind.VarRef(name, Some stored.Id)) ty [] |> add
+                signature nodes[callee] factoryType nodes[callee].Kind nodes[callee].Children |> add |> ignore
+                let actuals = arguments
+                let arguments = List.take ordinal actuals @ [destination.Id] @ List.skip ordinal actuals
+                let invocation = { fresh call (SemanticKind.Application(callee, arguments)) call.Type (callee :: arguments) with ValueRange = call.ValueRange } |> add
+                let ordered = [stored.Id; invocation.Id]
+                { call with Kind = SemanticKind.Sequential ordered; Children = ordered } |> add |> ignore
+                edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.LazyResultCall
+                           Sources = [lambda.Id; constructor; formal.Id; allocation.Id; destination.Id]
+                           Target = invocation.Id; Ordinal = 0 } :: edges
+                updatedCurry <- { updatedCurry with SaturatedCalls = updatedCurry.SaturatedCalls.Remove(call.Id).Add(invocation.Id, { TargetBindingId = binding.Id; AllArgNodes = arguments }) }
+            let emitted = generated |> Seq.map (fun node -> node.Id, node) |> Map.ofSeq |> Map.values |> Seq.toList
+            changed <- Set.union changed (emitted |> List.map _.Id |> Set.ofList)
+            Some { OriginalNodeId = binding.Id; NewNodes = emitted; ReplacementRootId = binding.Id
+                   ElaborationKind = "Baker"; ElaborationSource = "Lazy.factoryResult"; NewEdges = [] }
+        | _ -> None)
     if recipes.IsEmpty then graph, curry else
     let byId = recipes |> List.map (fun recipe -> recipe.OriginalNodeId, recipe) |> Map.ofList
     let folded = FanOut.fanOut "LazyFactoryResults" (fun node -> byId.ContainsKey node.Id)

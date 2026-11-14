@@ -160,7 +160,7 @@ let prepare (graph: SemanticGraph) admitted (certificates: Hyperedge list) =
                 return raw.Id, storage, relation
             })
             match result with
-            | NoMatch reason -> invalidOp (sprintf "Current snapshot synthesis failed: %s" reason)
+            | NoMatch _ -> unresolved <- (id, id) :: unresolved
             | Matched(raw, storage, relation) ->
                 let evidence = certificates |> List.find (fun edge -> edge.Target = id)
                 let evidence = { evidence with Target = raw; Sources = List.distinct (id :: evidence.Sources) }

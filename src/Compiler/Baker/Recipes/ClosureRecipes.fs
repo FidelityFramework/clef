@@ -82,4 +82,5 @@ let direct (ctx: Context) (graph: SemanticGraph) (plan: Plan) : DirectResult =
             graph.Edges |> List.filter (fun edge -> not (previousIncidence.Contains (edgeKey edge)))
         let provenance = List.map2 (fun capture formal -> captureProvenance plan.Lambda.Id capture.SourceNodeId.Value formal) plan.Captures formals
         { Structure = mkResultNoShadow nodes plan.Lambda.Id []; Edges = edges @ (nodes |> List.collect structuralIncidence) @ provenance }
-    | NoMatch reason -> failwithf "Direct capture saturation failed: %s" reason
+    | NoMatch reason ->
+        { Structure = mkFailedResult plan.Lambda.Id ("Direct capture saturation failed: " + reason); Edges = graph.Edges }

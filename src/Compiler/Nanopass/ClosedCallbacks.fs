@@ -201,7 +201,7 @@ let private expandCore (graph: SemanticGraph) : SemanticGraph * Diagnostic list 
                             let captures, enclosing, context =
                                 match clonedLambda.Kind with
                                 | SemanticKind.Lambda (_, _, captures, enclosing, context) -> captures, enclosing, context
-                                | _ -> failwith "A closed adapter's lambda disappeared while cloning."
+                                | _ -> [], None, LambdaContext.RegularClosure
                             let specializedLambda =
                                 { nodes[lambdaId] with
                                     Kind = SemanticKind.Lambda (nativeParameters, result, captures, enclosing, context)

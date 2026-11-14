@@ -27,4 +27,4 @@ let expand (ctx: Context) (source: SemanticNode) input elementType : Delegation 
             | SemanticKind.Yield _ -> Some (delegationOrigin source.Id input node.Id)
             | _ -> None)
         { Structure = mkResultNoShadow nodes root []; Edges = edges }
-    | NoMatch reason -> failwithf "Sequence delegation saturation failed: %s" reason
+    | NoMatch reason -> { Structure = mkFailedResult ctx.InspiringNode ("Sequence delegation saturation failed: " + reason); Edges = [] }

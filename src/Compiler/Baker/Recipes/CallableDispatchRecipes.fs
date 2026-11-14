@@ -90,4 +90,5 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) =
                        |> List.collect structuralIncidence |> List.map key |> Set.ofList
         { Structure = mkResultNoShadow nodes root []
           Edges = (graph.Edges |> List.filter (fun edge -> not (replaced.Contains(key edge)))) @ (nodes |> List.collect structuralIncidence) }
-    | NoMatch reason -> invalidOp ("Callable dispatch saturation failed: " + reason)
+    | NoMatch reason ->
+        { Structure = mkFailedResult source.Id ("Callable dispatch saturation failed: " + reason); Edges = graph.Edges }

@@ -31,4 +31,4 @@ let expand (ctx: Context) (source: SemanticNode) (formal: SemanticNode) collecti
     })
     match result with
     | Matched root -> mkResultNoShadow nodes root []
-    | NoMatch reason -> failwithf "Sequence consumption saturation failed: %s" reason
+    | NoMatch reason -> mkFailedResult ctx.InspiringNode ("Sequence consumption saturation failed: " + reason)

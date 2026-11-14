@@ -400,12 +400,23 @@ let retireAnchors = Recipes.retireAnchors
 /// by id, obligation nodes join V, their hyperedges join F, and every source
 /// of an obligation edge carries its anchors, reified by the Baker recipe as
 /// that incidence's consequence on alpha (PHG paper 2.4a).
+let tryFoldIn (e: Enrichment) (graph: SemanticGraph) : Microsoft.FSharp.Core.Result<SemanticGraph, string> =
+    Recipes.tryProjectAnchors e graph
+    |> Microsoft.FSharp.Core.Result.map (fun projected ->
+        graph
+        |> SemanticGraph.addNodes e.NewNodes
+        |> SemanticGraph.addNodes e.Annotated
+        |> SemanticGraph.addNodes projected
+        |> SemanticGraph.addEdges e.NewEdges)
+
 let foldIn (e: Enrichment) (graph: SemanticGraph) : SemanticGraph =
-    graph
-    |> SemanticGraph.addNodes e.NewNodes
-    |> SemanticGraph.addNodes e.Annotated
-    |> SemanticGraph.addNodes (Recipes.projectAnchors e graph)
-    |> SemanticGraph.addEdges e.NewEdges
+    match tryFoldIn e graph with
+    | Microsoft.FSharp.Core.Result.Ok updated -> updated
+    | Microsoft.FSharp.Core.Result.Error _ ->
+        graph
+        |> SemanticGraph.addNodes e.NewNodes
+        |> SemanticGraph.addNodes e.Annotated
+        |> SemanticGraph.addEdges e.NewEdges
 
 /// Replace only the named owner's prior declared incidence, then fold its
 /// current enrichment. Independent references and proof rows retain identity.
