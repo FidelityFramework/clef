@@ -96,8 +96,8 @@ let retireAnchors (retired: Set<NodeId>) (graph: SemanticGraph) : SemanticGraph 
 let mappedElementSpan enrichId (site: SemanticNode) (sources: NodeId list) (model: MappedSpanModel) : Enrichment =
     let node = obligationNode site enrichId
                    { Id = (let (NodeId value) = site.Id in sprintf "mapped_element_span_%d" value); Kind = "mapped-element-span"; Logic = "QF_LIA"
-                     Statement = sprintf "After native mapping guards establish a positive byte extent <= %A, divisible by %d, and an aligned nonwrapping base, every checked element index denotes a complete %d-byte span inside that extent with %d-byte element alignment. Native extent provenance, stride*rows checks, scoped retirement and worker disjointness are separate contracts; this theorem proves only the additive/index span step."
-                                         model.MaximumExtent model.ElementBytes model.ElementBytes model.ElementAlignment
+                     Statement = sprintf "After native mapping guards establish a positive byte extent <= %s, divisible by %d, and an aligned nonwrapping base, every checked element index denotes a complete %d-byte span inside that extent with %d-byte element alignment. Native extent provenance, stride*rows checks, scoped retirement and worker disjointness are separate contracts; this theorem proves only the additive/index span step."
+                                         (string model.MaximumExtent) model.ElementBytes model.ElementBytes model.ElementAlignment
                      Source = fmtRange site.Range; Refs = ["CWE-125"; "CWE-787"; "CWE-190"]
                      Body = ObligationBody.MappedElementSpan model }
     { NewNodes = [node]; NewEdges = [constrains (site.Id :: sources |> List.distinct) node]; Annotated = [] }
@@ -107,7 +107,7 @@ let mappedElementSpan enrichId (site: SemanticNode) (sources: NodeId list) (mode
 let integerLiteral (enrichId: int) (name: string) (site: SemanticNode) (value: bigint) (lower: bigint) (upper: bigint) : Enrichment =
     let node = obligationNode site enrichId
                    { Id = name; Kind = "integer-literal-range"; Logic = "QF_LIA"
-                     Statement = sprintf "integer literal %A lies within its analysed range [%A, %A]" value lower upper
+                     Statement = sprintf "integer literal %s lies within its analysed range [%s, %s]" (string value) (string lower) (string upper)
                      Source = fmtRange site.Range; Refs = []
                      Body = ObligationBody.IntegerLiteralRange(value, lower, upper) }
     { NewNodes = [node]; NewEdges = [constrains [site.Id] node]; Annotated = [] }
@@ -118,7 +118,7 @@ let integerCoverage (enrichId: int) (name: string) (site: SemanticNode) (lower: 
     let representation = declared.Representation
     let node = obligationNode site enrichId
                    { Id = name; Kind = "integer-representation-coverage"; Logic = "QF_LIA"
-                     Statement = sprintf "analysed integer range [%A, %A] fits the declared bounds of selected representation %s (%d bits)" lower upper representation.Name representation.Bits
+                     Statement = sprintf "analysed integer range [%s, %s] fits the declared bounds of selected representation %s (%d bits)" (string lower) (string upper) representation.Name representation.Bits
                      Source = fmtRange site.Range; Refs = []
                      Body = ObligationBody.IntegerRepresentationCoverage(lower, upper, minimum, maximum) }
     { NewNodes = [node]; NewEdges = [constrains [site.Id; declared.Node] node]; Annotated = [] }

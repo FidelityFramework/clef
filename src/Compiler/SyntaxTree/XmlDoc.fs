@@ -5,8 +5,7 @@ namespace Clef.Compiler.Xml
 open System
 open System.Collections.Generic
 open System.IO
-open System.Xml
-open System.Xml.Linq
+open Fidelity.Data.XML
 open Internal.Utilities.Library
 open Internal.Utilities.Collections
 open Clef.Compiler.DiagnosticsLogger
@@ -30,7 +29,14 @@ type XmlDoc(unprocessedLines: string[], range: range) =
             else
                 [ "<summary>" ]
                 @ (lines |> List.map Internal.Utilities.XmlAdapters.escape)
-                @ [ "</summary>" ]
+                @ [ "<\u002fsummary>" ]
+
+    let rec descendantsNamed (targetName: string) (node: XmlNode) : XmlNode list =
+        match node with
+        | XmlNode.Element (elName, _, children) ->
+            let childMatches = children |> List.collect (descendantsNamed targetName)
+            if elName = targetName then node :: childMatches else childMatches
+        | _ -> []
 
     /// Get the lines before insertion of implicit summary tags and encoding
     member _.UnprocessedLines = unprocessedLines
@@ -66,33 +72,32 @@ type XmlDoc(unprocessedLines: string[], range: range) =
             doc.GetElaboratedXmlLines() |> String.concat Environment.NewLine
 
     member doc.Check(paramNamesOpt: string list option) =
-        try
-            // We must wrap with <doc> in order to have only one root element
-            let xml =
-                XDocument.Parse("<doc>\n" + doc.GetXmlText() + "\n</doc>", LoadOptions.SetLineInfo ||| LoadOptions.PreserveWhitespace)
-
+        // We must wrap with <doc> in order to have only one root element
+        match Xml.parse ("<doc>\n" + doc.GetXmlText() + "\n<\u002fdoc>") with
+        | Result.Error msg ->
+            warning (Error(FSComp.SR.xmlDocBadlyFormed msg, doc.Range))
+        | Result.Ok xml ->
             // The parameter names are checked for consistency, so parameter references and
             // parameter documentation must match an actual parameter.  In addition, if any parameters
             // have documentation then all parameters must have documentation
             match paramNamesOpt with
             | None -> ()
             | Some paramNames ->
+                let paramNodes = descendantsNamed "param" xml.Root
 
-                for p in xml.Descendants(XName.op_Implicit "param") do
-                    match p.Attribute(!!(XName.op_Implicit "name")) with
-                    | null -> warning (Error(FSComp.SR.xmlDocMissingParameterName (), doc.Range))
-                    | attr ->
-                        let nm = attr.Value
-
+                for p in paramNodes do
+                    match XmlNode.attr "name" p with
+                    | None -> warning (Error(FSComp.SR.xmlDocMissingParameterName (), doc.Range))
+                    | Some nm ->
                         if not (paramNames |> List.contains nm) then
                             warning (Error(FSComp.SR.xmlDocInvalidParameterName nm, doc.Range))
 
                 let paramsWithDocs =
                     [
-                        for p in xml.Descendants(XName.op_Implicit "param") do
-                            match p.Attribute(!!(XName.op_Implicit "name")) with
-                            | Null -> ()
-                            | NonNull attr -> attr.Value
+                        for p in paramNodes do
+                            match XmlNode.attr "name" p with
+                            | None -> ()
+                            | Some nm -> nm
                     ]
 
                 if paramsWithDocs.Length > 0 then
@@ -106,17 +111,12 @@ type XmlDoc(unprocessedLines: string[], range: range) =
                 for d in duplicates do
                     warning (Error(FSComp.SR.xmlDocDuplicateParameter d, doc.Range))
 
-                for pref in xml.Descendants(XName.op_Implicit "paramref") do
-                    match pref.Attribute(!!(XName.op_Implicit "name")) with
-                    | null -> warning (Error(FSComp.SR.xmlDocMissingParameterName (), doc.Range))
-                    | attr ->
-                        let nm = attr.Value
-
+                for pref in descendantsNamed "paramref" xml.Root do
+                    match XmlNode.attr "name" pref with
+                    | None -> warning (Error(FSComp.SR.xmlDocMissingParameterName (), doc.Range))
+                    | Some nm ->
                         if not (paramNames |> List.contains nm) then
                             warning (Error(FSComp.SR.xmlDocInvalidParameterName nm, doc.Range))
-
-        with e ->
-            warning (Error(FSComp.SR.xmlDocBadlyFormed e.Message, doc.Range))
 
 // Discriminated unions can't contain statics, so we use a separate type
 and XmlDocStatics() =
@@ -285,31 +285,28 @@ type XmlDocumentationInfo private (tryGetXmlDocument: unit -> XmlDocument option
 
     let tryGetSummaryNode (xmlDocSig: string) =
         if xmlDocSig.Contains "'" && xmlDocSig.Contains "\"" then
-            // No easy way to find this signature with XPath
             None
         else
             tryGetXmlDocument ()
             |> Option.bind (fun doc ->
-                let name =
-                    if xmlDocSig.Contains "'" then
-                        $"\"{xmlDocSig}\""
-                    else
-                        $"'{xmlDocSig}'"
-
-                match doc.SelectSingleNode $"doc/members/member[@name={name}]" with
-                | null -> None
-                | node when node.HasChildNodes -> Some node
+                match XmlNode.name doc.Root with
+                | Some "doc" ->
+                    XmlNode.elementsNamed "members" doc.Root
+                    |> List.collect (XmlNode.elementsNamed "member")
+                    |> List.tryFind (fun m -> XmlNode.attr "name" m = Some xmlDocSig && not (XmlNode.children m).IsEmpty)
                 | _ -> None)
 
     member _.TryGetXmlDocBySig(xmlDocSig: string) =
         tryGetSummaryNode xmlDocSig
         |> Option.map (fun node ->
-            let childNodes = node.ChildNodes
-            let lines = Array.zeroCreate childNodes.Count
+            let childNodes = XmlNode.children node
+            let lines = Array.zeroCreate childNodes.Length
 
-            for i = 0 to childNodes.Count - 1 do
-                let childNode = !!childNodes[i]
-                lines[i] <- childNode.OuterXml
+            childNodes
+            |> List.iteri (fun i childNode ->
+                let sb = System.Text.StringBuilder()
+                XmlSerializer.serializeNode sb childNode
+                lines[i] <- sb.ToString())
 
             XmlDoc(lines, range0))
 
@@ -328,11 +325,14 @@ type XmlDocumentationInfo private (tryGetXmlDocument: unit -> XmlDocument option
                     match cache.TryGet((), cacheKey) with
                     | Some doc -> Some doc
                     | _ ->
-                        let doc = XmlDocument()
                         use xmlStream = FileSystem.OpenFileForReadShim(xmlFileName)
-                        doc.Load(xmlStream)
-                        cache.Put((), cacheKey, doc)
-                        Some doc
+                        use reader = new StreamReader(xmlStream)
+                        let xmlText = reader.ReadToEnd()
+                        match Xml.parse xmlText with
+                        | Result.Ok doc ->
+                            cache.Put((), cacheKey, doc)
+                            Some doc
+                        | Result.Error _ -> None
                 with _ ->
                     None
 

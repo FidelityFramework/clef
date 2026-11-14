@@ -11,13 +11,28 @@ let private failure occurrence reason : WitnessProjectionFailure =
     { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = occurrence; Participants = Set.ofList (Option.toList occurrence)
       Reason = "Frozen publication rows: " + reason }
 
+let private describeMetadataValue (value: MetadataValue) =
+    match value with
+    | MetadataValue.String _ -> "MetadataValue.String"
+    | MetadataValue.Int _ -> "MetadataValue.Int"
+    | MetadataValue.Int64 _ -> "MetadataValue.Int64"
+    | MetadataValue.Bool _ -> "MetadataValue.Bool"
+    | MetadataValue.Float _ -> "MetadataValue.Float"
+    | MetadataValue.RealLiteral _ -> "MetadataValue.RealLiteral"
+    | MetadataValue.Type _ -> "MetadataValue.Type"
+    | MetadataValue.NodeId _ -> "MetadataValue.NodeId"
+    | MetadataValue.SourceRange _ -> "MetadataValue.SourceRange"
+    | MetadataValue.StringList _ -> "MetadataValue.StringList"
+    | MetadataValue.NodeIdList _ -> "MetadataValue.NodeIdList"
+    | MetadataValue.Specialization _ -> "MetadataValue.Specialization"
+
 let private freezeNode claim (node: SemanticNode) =
     try
         let anchors =
             match node.Metadata.TryFind ObligationMetadata.Anchors with
             | None -> []
             | Some(MetadataValue.StringList names) -> names
-            | Some other -> invalidOp (sprintf "Obligation anchors are recorded as %A, not as a list of names." other)
+            | Some other -> invalidOp (sprintf "Obligation anchors are recorded as %s, not as a list of names." (describeMetadataValue other))
         Ok ({ Id = nodeId node.Id
               Kind = match node.Kind with
                      | SemanticKind.Obligation info -> Fidelity.PSG.SemanticKind.Obligation(claim (node.Id, info))
@@ -125,8 +140,39 @@ let project (graph: SemanticGraph) (scope: WitnessLiveScopePlan) (selected: Witn
 
 /// Source re-observation compares the complete frozen leaf tables. The native
 /// platform is the exact source input object; it is never reconstructed here.
+let private sameFreestandingStartup (left: FreestandingStartup option) (right: FreestandingStartup option) =
+    match left, right with
+    | None, None -> true
+    | Some a, Some b ->
+        a.EntrySymbol = b.EntrySymbol && a.MainFunction = b.MainFunction &&
+        a.ArgcOffset = b.ArgcOffset && a.ArgvOffset = b.ArgvOffset &&
+        a.ExitSyscall = b.ExitSyscall && a.SyscallRegister = b.SyscallRegister &&
+        a.Arg0Register = b.Arg0Register
+    | _ -> false
+
+let private samePlatformContext (left: PlatformContext) (right: PlatformContext) =
+    left.PlatformId = right.PlatformId &&
+    left.Dimensions = right.Dimensions &&
+    left.Representations = right.Representations &&
+    left.EndpointReturns = right.EndpointReturns &&
+    left.PlatformLibraryPath = right.PlatformLibraryPath &&
+    left.PlatformDescription = right.PlatformDescription &&
+    left.PlatformLoading = right.PlatformLoading &&
+    left.PlatformSourcePaths = right.PlatformSourcePaths &&
+    left.PlatformArchitecture = right.PlatformArchitecture &&
+    left.PlatformOS = right.PlatformOS &&
+    left.Predicates = right.Predicates &&
+    sameFreestandingStartup left.FreestandingStartup right.FreestandingStartup &&
+    left.SubstrateKind = right.SubstrateKind &&
+    left.RuntimeModel = right.RuntimeModel &&
+    left.ProjectMemoryPolicy = right.ProjectMemoryPolicy &&
+    left.AvailableMemorySpaces = right.AvailableMemorySpaces &&
+    left.DefaultMemorySpace = right.DefaultMemorySpace &&
+    left.ClockFrequencyMhz = right.ClockFrequencyMhz &&
+    left.NsPerWeightUnit = right.NsPerWeightUnit
+
 let matches (held: WitnessPublishedRows) (current: WitnessPublishedRows) =
-    obj.ReferenceEquals(held.SourcePlatform, current.SourcePlatform) &&
+    samePlatformContext held.SourcePlatform current.SourcePlatform &&
     held.Nodes = current.Nodes && held.SourceReadings = current.SourceReadings &&
     held.Edges = current.Edges && held.DeclarationRoots = current.DeclarationRoots &&
     held.ModuleClassifications = current.ModuleClassifications && held.Platform = current.Platform &&
@@ -157,17 +203,18 @@ let occurrenceRows (rows: WitnessPublishedRows) =
             match child.Traversal with
             | Fidelity.PSG.ChildTraversal.SourceOmitted(_, id) -> Some id
             | _ -> None) |> Set.ofList
+    let nodeIdValue (Fidelity.PSG.NodeId n) = n
     let unknownBodies =
         bodies |> Map.toSeq |> Seq.collect (fun (id, occurrence) ->
             let permitted = Set.union known (omitted occurrence)
             Fidelity.PSG.IntegrityNamed.nodeReferences occurrence.Body
             |> Seq.filter (permitted.Contains >> not)
-            |> Seq.map (fun missing -> sprintf "Occurrence %A requires unavailable identity %A." id missing))
+            |> Seq.map (fun missing -> sprintf "Occurrence %d requires unavailable identity %d." (nodeIdValue id) (nodeIdValue missing)))
     let unknownHeaders =
         readings.ContextHeaders.Values |> Seq.collect (fun header ->
             Fidelity.PSG.IntegrityNamed.contextHeaderReferences header
             |> Seq.filter (known.Contains >> not)
-            |> Seq.map (fun missing -> sprintf "Context %A requires unavailable identity %A." header.Identity missing))
+            |> Seq.map (fun missing -> sprintf "Context %d requires unavailable identity %d." (nodeIdValue header.Identity) (nodeIdValue missing)))
     let failures = Seq.append unknownBodies unknownHeaders |> Seq.truncate 33 |> Seq.toList
     if not failures.IsEmpty then
         let messages = failures |> List.truncate 32
@@ -205,10 +252,11 @@ let occurrences (revision: Fidelity.PSG.CheckedRevisionId) (demand: string) (row
               Withdrawals = []; ArtifactTransitions = [] }
           Sections = [{ Descriptor = descriptor; Occurrences = bodies }] }
     match Fidelity.PSG.ScopedPublication.start demand revision with
-    | Error errors -> Error(sprintf "Occurrence diagnostic identity refused: %A" errors)
+    | Error errors -> Error(sprintf "Occurrence diagnostic identity refused: %d errors" errors.Length)
     | Ok catalog ->
         match Fidelity.PSG.ScopedPublication.apply delivery.Transaction catalog,
               Fidelity.PSG.OccurrenceDelivery.check delivery with
         | Ok _, [] -> Ok(delivery, rows.ContextHeaders, rows.ContextRoots)
         | transaction, sections ->
-            Error(sprintf "Occurrence diagnostic structure refused: %A; %A" (transaction |> Result.map ignore) sections)
+            let txStatus = match transaction with Ok _ -> "Ok" | Error errs -> sprintf "Error(%d)" errs.Length
+            Error(sprintf "Occurrence diagnostic structure refused: %s; %d section violations" txStatus sections.Length)

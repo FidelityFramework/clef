@@ -247,9 +247,16 @@ let elaborateOptionalTagProjections (graph: SemanticGraph) : SemanticGraph =
             let edgeKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
             let existingManaged = graph.Edges |> List.filter (keepEdge >> not) |> List.map edgeKey
             let desiredManaged = (projectionEdges @ attachedEdges) |> List.map edgeKey
+            let sameNode (left: SemanticNode) (right: SemanticNode) =
+                left.Id = right.Id && left.Kind = right.Kind && left.Range = right.Range &&
+                left.Type = right.Type && left.SRTPResolution = right.SRTPResolution &&
+                left.ArenaAffinity = right.ArenaAffinity && left.LayoutHint = right.LayoutHint &&
+                left.Children = right.Children && left.Parent = right.Parent &&
+                left.Metadata = right.Metadata && left.IsReachable = right.IsReachable &&
+                left.EmissionStrategy = right.EmissionStrategy && left.ValueRange = right.ValueRange
             let unchangedNodes =
                 nodes.Count = graph.Nodes.Count
-                && (nodes |> Map.forall (fun id node -> graph.Nodes.TryFind id |> Option.exists (fun original -> obj.ReferenceEquals(node, original))))
+                && (nodes |> Map.forall (fun id node -> graph.Nodes.TryFind id |> Option.exists (fun original -> sameNode node original)))
             if unchangedNodes && existingManaged = desiredManaged then
                 graph
             else

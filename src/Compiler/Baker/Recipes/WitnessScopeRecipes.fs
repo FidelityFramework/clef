@@ -372,6 +372,14 @@ let project graph = projectWithBudget hostedContextBudget graph
 
 /// Re-observation under the source owner. Bodies are the exact source records;
 /// passive publication never compares/reconstructs source semantic values.
+let private sameSemanticNode (left: SemanticNode) (right: SemanticNode) =
+    left.Id = right.Id && left.Kind = right.Kind && left.Range = right.Range &&
+    left.Type = right.Type && left.SRTPResolution = right.SRTPResolution &&
+    left.ArenaAffinity = right.ArenaAffinity && left.LayoutHint = right.LayoutHint &&
+    left.Children = right.Children && left.Parent = right.Parent &&
+    left.Metadata = right.Metadata && left.IsReachable = right.IsReachable &&
+    left.EmissionStrategy = right.EmissionStrategy && left.ValueRange = right.ValueRange
+
 let matches (held: WitnessLiveScopePlan) (current: WitnessLiveScopePlan) =
     held.Support = current.Support && held.ContextIdentities = current.ContextIdentities &&
     held.Entries = current.Entries && held.ContextHeaders = current.ContextHeaders && held.Ports = current.Ports && held.Contexts = current.Contexts && held.BindingUses = current.BindingUses &&
@@ -379,4 +387,4 @@ let matches (held: WitnessLiveScopePlan) (current: WitnessLiveScopePlan) =
     (held.Occurrences.Keys |> Set.ofSeq) = (current.Occurrences.Keys |> Set.ofSeq) &&
     (held.Occurrences |> Map.forall (fun id row ->
         let actual = current.Occurrences[id]
-        obj.ReferenceEquals(row.Body, actual.Body) && row.Children = actual.Children && row.Contexts = actual.Contexts))
+        sameSemanticNode row.Body actual.Body && row.Children = actual.Children && row.Contexts = actual.Contexts))

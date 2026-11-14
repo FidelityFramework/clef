@@ -59,10 +59,25 @@ let rec private countPatternBindings (pattern: Pattern) : int =
     | Pattern.Exception (_, bindName) -> if Option.isSome bindName then 1 else 0
     | Pattern.Wildcard | Pattern.Null | Pattern.Const _ | Pattern.IsType _ -> 0
 
-/// Read actual union payload fields, including wildcard positions. A wildcard
-/// contains no type; substituting unit would corrupt the physical tuple shape.
+let rec private describePattern (pattern: Pattern) : string =
+    match pattern with
+    | Pattern.Var(name, _) -> sprintf "Pattern.Var(%s)" name
+    | Pattern.Union(name, tag, Some payload, _) -> sprintf "Pattern.Union(%s, %d, %s)" name tag (describePattern payload)
+    | Pattern.Union(name, tag, None, _) -> sprintf "Pattern.Union(%s, %d)" name tag
+    | Pattern.Tuple elements -> sprintf "Pattern.Tuple(%d)" elements.Length
+    | Pattern.Record(fields, _) -> sprintf "Pattern.Record(%d)" fields.Length
+    | Pattern.Array elements -> sprintf "Pattern.Array(%d)" elements.Length
+    | Pattern.And(left, right) -> sprintf "Pattern.And(%s, %s)" (describePattern left) (describePattern right)
+    | Pattern.Or(left, right) -> sprintf "Pattern.Or(%s, %s)" (describePattern left) (describePattern right)
+    | Pattern.As(inner, name) -> sprintf "Pattern.As(%s, %s)" (describePattern inner) name
+    | Pattern.Exception(_, bindName) -> sprintf "Pattern.Exception(%s)" (Option.defaultValue "_" bindName)
+    | Pattern.Wildcard -> "Pattern.Wildcard"
+    | Pattern.Null -> "Pattern.Null"
+    | Pattern.Const _ -> "Pattern.Const"
+    | Pattern.IsType ty -> sprintf "Pattern.IsType(%s)" (formatType ty)
+
 let private payloadType (graph: SemanticGraph) unionType tag : Result<NativeType, string> =
-    let missing detail = Error (sprintf "%s (%A tag %d)" detail unionType tag)
+    let missing detail = Error (sprintf "%s (%s tag %d)" detail (formatType unionType) tag)
     let packed fields =
         match fields with
         | [] -> missing "the union case declares no payload field"
@@ -206,7 +221,7 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
         | Some later -> ifThenElse condition selected later resultType
         | None -> requireThen evidence diagnostic condition selected resultType
     let rec compile (input: NodeId) (inputType: NativeType) (pattern: Pattern) (bindings: NodeId list) (success: NodeId) (fallback: NodeId option) (resultType: NativeType) : SaturationParser<NodeId> =
-        if bindings.Length <> countPatternBindings pattern then refuse (sprintf "CCS source checking did not settle the source bindings for match pattern %A at scrutinee %d: the pattern requires %d exact source bindings, got %d" pattern (NodeId.value scrutinee) (countPatternBindings pattern) bindings.Length) else
+        if bindings.Length <> countPatternBindings pattern then refuse (sprintf "CCS source checking did not settle the source bindings for match pattern %s at scrutinee %d: the pattern requires %d exact source bindings, got %d" (describePattern pattern) (NodeId.value scrutinee) (countPatternBindings pattern) bindings.Length) else
         match pattern with
         | Pattern.Wildcard -> saturation { return success }
         | Pattern.Var(name, ty) ->
@@ -261,7 +276,7 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
                     let! nonEmpty = not' empty
                     return! requireThen evidence diagnostic nonEmpty selected resultType
               }
-            | _ -> refuse (sprintf "CCS source checking did not settle a list case for list pattern at scrutinee %d: %A over %A is neither the nil case nor the cons case with a head and a tail" (NodeId.value scrutinee) pattern inputType)
+            | _ -> refuse (sprintf "CCS source checking did not settle a list case for list pattern at scrutinee %d: %s over %s is neither the nil case nor the cons case with a head and a tail" (NodeId.value scrutinee) (describePattern pattern) (formatType inputType))
         | Pattern.Union(name, tag, payload, unionType) -> saturation {
             let! selected =
                 match payload |> Option.map singlePayload with
@@ -291,7 +306,7 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
                 let components = List.zip elements types |> List.mapi (fun index (pattern, ty) ->
                     pattern, ty, fun () -> createWithChildren (SemanticKind.TupleGet(input, index)) ty [input])
                 compileComponents components bindings success fallback resultType
-            | _ -> refuse (sprintf "CCS source checking did not settle a tuple input type for tuple pattern at scrutinee %d: the pattern has %d elements, the input type is %A" (NodeId.value scrutinee) elements.Length inputType)
+            | _ -> refuse (sprintf "CCS source checking did not settle a tuple input type for tuple pattern at scrutinee %d: the pattern has %d elements, the input type is %s" (NodeId.value scrutinee) elements.Length (formatType inputType))
         | Pattern.Array elements ->
             match applySubst inputType with
             | NativeType.TApp(constructor, [element]) when constructor.NTUKind = Some NTUKind.NTUarray -> saturation {
@@ -310,7 +325,7 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
                 let! equal = compareEq length expected Types.intType
                 return! select equal selected fallback resultType
               }
-            | _ -> refuse (sprintf "CCS source checking did not settle an array input type for array pattern at scrutinee %d: the pattern has %d elements, the input type is %A" (NodeId.value scrutinee) elements.Length inputType)
+            | _ -> refuse (sprintf "CCS source checking did not settle an array input type for array pattern at scrutinee %d: the pattern has %d elements, the input type is %s" (NodeId.value scrutinee) elements.Length (formatType inputType))
         | Pattern.Record(fields, recordType) ->
             let declared =
                 match applySubst recordType with
@@ -318,18 +333,18 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
                 | _ -> Clef.Compiler.PSGSaturation.SemanticGraph.RecordInstances.tryFields recordType graph
             match declared with
             | None ->
-                refuse (sprintf "CCS source checking did not settle the instantiated fields for record pattern at scrutinee %d: %A" (NodeId.value scrutinee) recordType)
+                refuse (sprintf "CCS source checking did not settle the instantiated fields for record pattern at scrutinee %d: %s" (NodeId.value scrutinee) (formatType recordType))
             | Some declared ->
                 match fields |> List.tryFind (fun (name, _) -> declared |> List.exists (fst >> (=) name) |> not) with
                 | Some (name, _) ->
-                    refuse (sprintf "CCS source checking did not settle record pattern field '%s' at scrutinee %d: %A declares no such field" name (NodeId.value scrutinee) recordType)
+                    refuse (sprintf "CCS source checking did not settle record pattern field '%s' at scrutinee %d: %s declares no such field" name (NodeId.value scrutinee) (formatType recordType))
                 | None ->
                     let components = fields |> List.map (fun (name, pattern) ->
                         let ty = declared |> List.find (fst >> (=) name) |> snd
                         pattern, ty, fun () -> createWithChildren (SemanticKind.FieldGet(input, name)) ty [input])
                     compileComponents components bindings success fallback resultType
         | unsupported ->
-            refuse (sprintf "Baker Match recipe did not settle a decision for pattern at scrutinee %d: %A requires further source pattern elaboration" (NodeId.value scrutinee) unsupported)
+            refuse (sprintf "Baker Match recipe did not settle a decision for pattern at scrutinee %d: %s requires further source pattern elaboration" (NodeId.value scrutinee) (describePattern unsupported))
     and compileComponents components bindings success fallback resultType : SaturationParser<NodeId> =
         match components with
         | [] -> preturn success

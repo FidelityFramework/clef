@@ -189,7 +189,7 @@ type ProjectWorkspaceTests() =
             "[package]"; "name=\"ProfileWordSize\""; "version=\"0.1.0\""
             "[compilation]"; "target=\"mcu\""
             "[platform]"; "runtime_model=\"bare\""; "os=\"none\""; sprintf "arch=%A" architecture
-            "[dependencies]"; sprintf "platform={path=%s}" (System.Text.Json.JsonSerializer.Serialize platform)
+            "[dependencies]"; sprintf "platform={path=%s}" (Fidelity.Data.JSON.Json.serialize (Fidelity.Data.JSON.JsonValue.String platform))
             "[build]"; "sources=[\"App.clef\"]"; "output=\"profile.elf\""; "output_kind=\"embedded\"" ])
         let result = ProjectChecker.checkProject files.Project |> WorkspaceCases.need
         for diagnostic in result.CheckResult.Diagnostics do
