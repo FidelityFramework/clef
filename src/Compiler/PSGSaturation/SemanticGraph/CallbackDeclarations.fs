@@ -347,7 +347,7 @@ let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (g
                                                     match Clef.Compiler.NativeTypedTree.UnionFind.applySubst n.Type with
                                                     | NativeType.TApp(tc, [inner]) when tc.Name = "option" || tc.Name = "Option" ->
                                                         Types.tryGetNTUKind inner = Some NTUKind.NTUptr
-                                                    | NativeType.TApp(tc, [_]) when tc.Name = "ReadOnlyView" -> true
+                                                    | NativeType.TApp(tc, [_]) when Types.isReadOnlyViewTypeCon tc -> true
                                                     | ty ->
                                                         match Types.tryGetNTUKind ty with
                                                         | Some NTUKind.NTUptr -> true

@@ -25,15 +25,42 @@ let private isArray (graph: SemanticGraph) id =
     | Some(NativeType.TApp(tc, [_])) -> tc.NTUKind = Some NTUKind.NTUarray
     | _ -> false
 
+let private isReadOnlyView (graph: SemanticGraph) id =
+    match graph.Nodes.TryFind id |> Option.map (fun node -> applySubst node.Type) with
+    | Some(NativeType.TApp(tc, [_])) -> Types.isReadOnlyViewTypeCon tc
+    | _ -> false
+
+let private isReadableBuffer (graph: SemanticGraph) id =
+    isArray graph id || isReadOnlyView graph id
+
 let rec private sourceIntrinsic (graph: SemanticGraph) id arguments =
     match graph.Nodes.TryFind id with
     | Some { Kind = SemanticKind.Intrinsic info } -> Some(info, arguments)
     | Some { Kind = SemanticKind.Application(callee, actuals) } -> sourceIntrinsic graph callee (actuals @ arguments)
     | _ -> None
 
+[<RequireQualifiedAccess>]
+type private ReadOnlyViewConversion =
+    | OfArray of source: NodeId
+    | OfString of source: NodeId
+    | Slice of source: NodeId * offset: NodeId * count: NodeId
+
+let private readOnlyViewConversion (graph: SemanticGraph) (node: SemanticNode) =
+    match node.Kind with
+    | SemanticKind.Application _ ->
+        match sourceIntrinsic graph node.Id [] with
+        | Some((info: IntrinsicInfo), [source]) when info.Module = IntrinsicModule.Array && info.FullName = "ReadOnlyView.ofArray" ->
+            Some(ReadOnlyViewConversion.OfArray source)
+        | Some((info: IntrinsicInfo), [source]) when info.Module = IntrinsicModule.Array && info.FullName = "ReadOnlyView.ofString" ->
+            Some(ReadOnlyViewConversion.OfString source)
+        | Some((info: IntrinsicInfo), [source; offset; count]) when info.Module = IntrinsicModule.Array && info.FullName = "ReadOnlyView.slice" ->
+            Some(ReadOnlyViewConversion.Slice(source, offset, count))
+        | _ -> None
+    | _ -> None
+
 let private access (graph: SemanticGraph) (node: SemanticNode) =
     match node.Kind with
-    | SemanticKind.IndexGet(buffer, index) when isArray graph buffer -> Some(buffer, index, None)
+    | SemanticKind.IndexGet(buffer, index) when isReadableBuffer graph buffer -> Some(buffer, index, None)
     | SemanticKind.IndexSet(buffer, index, value) when isArray graph buffer -> Some(buffer, index, Some value)
     | SemanticKind.ElementAddress(buffer, index) when isArray graph buffer -> Some(buffer, index, None)
     | SemanticKind.AddressOf(expression, _) ->
@@ -43,7 +70,7 @@ let private access (graph: SemanticGraph) (node: SemanticNode) =
     | SemanticKind.Application _ ->
         match sourceIntrinsic graph node.Id [] with
         | Some(info, [buffer; index])
-            when info.Module = IntrinsicModule.Array && info.Operation = "get" && isArray graph buffer -> Some(buffer, index, None)
+            when info.Module = IntrinsicModule.Array && info.Operation = "get" && isReadableBuffer graph buffer -> Some(buffer, index, None)
         | Some(info, [buffer; index; value])
             when info.Module = IntrinsicModule.Array && info.Operation = "set" && isArray graph buffer -> Some(buffer, index, Some value)
         | _ -> None
@@ -178,10 +205,10 @@ let private intrinsic = sourceIntrinsic
 
 let private arrayLength (graph: SemanticGraph) (node: SemanticNode) =
     match node.Kind with
-    | SemanticKind.FieldGet(buffer, "Length") when isArray graph buffer -> Some buffer
+    | SemanticKind.FieldGet(buffer, "Length") when isReadableBuffer graph buffer -> Some buffer
     | SemanticKind.Application _ ->
         match intrinsic graph node.Id [] with
-        | Some(info, [buffer]) when info.Module = IntrinsicModule.Array && info.Operation = "length" && isArray graph buffer -> Some buffer
+        | Some(info, [buffer]) when info.Module = IntrinsicModule.Array && info.Operation = "length" && isReadableBuffer graph buffer -> Some buffer
         | _ -> None
     | _ -> None
 
@@ -201,6 +228,35 @@ let private carrier (numeric: NumericWitnessProjection) id =
 
 let private element (numeric: NumericWitnessProjection) id =
     numeric.Elements.TryFind id |> needed "The source numeric owner did not settle the complete-write element slot."
+
+let private viewElementSlot (graph: SemanticGraph) (numeric: NumericWitnessProjection) (node: SemanticNode) =
+    match numeric.OccurrenceRepresentations.TryFind node.Id with
+    | Some(Error reason) -> raise (MissingContract reason)
+    | _ ->
+    match numeric.Elements.TryFind node.Id with
+    | Some slot -> slot
+    | None ->
+        match applySubst node.Type with
+        | NativeType.TApp(tc, [element]) when Types.isReadOnlyViewTypeCon tc || tc.NTUKind = Some NTUKind.NTUarray ->
+            match numeric.Layouts.TryFind (TypeIdentity.ofType element) with
+            | Some(SettledLayout.Record(_, Some bytes, Some align))
+            | Some(SettledLayout.Union(_, _, Some bytes, Some align)) when bytes > 0 && align > 0 ->
+                SettledSlot.InlineBytes(bytes, align)
+            | _ ->
+                match Types.tryGetNTUKind element with
+                | Some(NTUKind.NTUfloat(NTUWidth.Fixed bits)) when bits > 0 -> SettledSlot.Real bits
+                | Some(NTUKind.NTUfloat(NTUWidth.Resolved dimension)) ->
+                    let bits =
+                        Platform.resolve graph
+                        |> Option.bind _.Core
+                        |> Option.bind (fun core ->
+                            match core.Widths |> List.filter (fun w -> w.Name = WidthDimension.name dimension) with
+                            | [w] when w.Bits > 0 -> Some w.Bits
+                            | _ -> None)
+                        |> needed "ReadOnlyView real element lacks a unique declared platform width."
+                    SettledSlot.Real bits
+                | _ -> raise (MissingContract "ReadOnlyView lacks a settled element slot.")
+        | _ -> raise (MissingContract "The source numeric owner did not settle the complete-write element slot.")
 
 let private size (graph: SemanticGraph) slot =
     Placement.extentOfSlot graph slot |> needed "The declared target has no admitted physical extent for this element slot."
@@ -340,7 +396,24 @@ let arrayUses graph site =
             graph.Edges |> List.exists(fun edge ->
                 edge.Role=EdgeRole.StringToBytesSnapshot &&
                 (match edge.Sources with [_;view;_] -> view=node.Id | _ -> false)) -> Some input
+        | Some(info, input :: _) when info.Module = IntrinsicModule.Array && (info.FullName = "ReadOnlyView.ofArray" || info.FullName = "ReadOnlyView.slice") -> Some input
         | _ -> None
+    let isBoundaryBinding id =
+        graph.Edges |> List.exists (fun e ->
+            match e.Role with
+            | EdgeRole.BoundaryDeclaration d -> d.Binding = id
+            | _ -> false)
+    let lambdaParams callee =
+        let rec resolve seen id =
+            if Set.contains id seen then None else
+            let node = live graph id
+            match node.Kind, node.Children with
+            | SemanticKind.VarRef(_, Some defId), _ -> resolve (Set.add id seen) defId
+            | SemanticKind.Binding(_, false, _, _), [bodyId] when not (isBoundaryBinding id) ->
+                resolve (Set.add id seen) bodyId
+            | SemanticKind.Lambda(parameters, _, _, _, _), _ -> Some parameters
+            | _ -> None
+        resolve Set.empty callee
     let rec close aliases =
         let more =
             nodes |> List.choose (fun node ->
@@ -358,10 +431,22 @@ let arrayUses graph site =
                     | SemanticKind.IfThenElse(guard,success,Some failure), _ ->
                         let contained id = aliases.Contains id ||
                                            (match (live graph id).Kind with SemanticKind.Sequential items -> List.tryLast items |> Option.exists aliases.Contains | _ -> false)
-                        (contained success || contained failure) && checkedStrings |> List.exists(fun construction -> construction.Decision=node.Id && construction.Validation=guard && construction.Success=success)
+                        (contained success || contained failure) &&
+                        ((Types.tryGetReadOnlyViewElement node.Type |> Option.isSome) ||
+                         checkedStrings |> List.exists(fun construction -> construction.Decision=node.Id && construction.Validation=guard && construction.Success=success))
                     | SemanticKind.DUEliminate(value,1,"ValueSome",_), _ -> aliases.Contains value
                     | SemanticKind.CaseElimination(value,arms), _ when aliases.Contains value && checkedOption value ->
                         arms |> List.exists(fun arm -> aliases.Contains arm.Body)
+                    | SemanticKind.PatternBinding _, _ when Types.tryGetReadOnlyViewElement node.Type |> Option.isSome ->
+                        nodes |> List.exists (fun callNode ->
+                            match callNode.Kind with
+                            | SemanticKind.Application(callee, actuals) ->
+                                match lambdaParams callee with
+                                | Some parameters when parameters.Length = actuals.Length ->
+                                    List.zip actuals parameters
+                                    |> List.exists (fun (actual, (_, _, paramId)) -> paramId = node.Id && Set.contains actual aliases)
+                                | _ -> false
+                            | _ -> false)
                     | _ -> internalView node |> Option.exists(fun value -> Set.contains value aliases)
                 if aliasesInput then Some node.Id else None) |> Set.ofList |> Set.union aliases
         if more = aliases then aliases else close more
@@ -391,6 +476,7 @@ let arrayUses graph site =
             | SemanticKind.CaseElimination(value,arms) when aliases.Contains value && checkedOption value &&
                                                           arms |> List.forall(fun arm -> arm.Guard.IsNone) -> ()
             | SemanticKind.Sequential items when items |> List.tryLast |> Option.exists (fun last -> not (aliases.Contains last)) -> ()
+            | SemanticKind.Lambda(parameters, body, _, _, _) when not (aliases.Contains body) && parameters |> List.exists (fun (_, _, pid) -> aliases.Contains pid) -> ()
             | SemanticKind.Application(callee,actuals) ->
                 match intrinsic graph target.Id [] with
                 | Some(info, [buffer]) when (info.Module = IntrinsicModule.Array || info.Module = IntrinsicModule.String) && info.Operation = "length" && aliases.Contains buffer -> ()
@@ -417,8 +503,16 @@ let arrayUses graph site =
                             let scope = nearestLambda graph site
                             closed <- closed && scope.IsSome && nearestLambda graph target.Id = scope
                         | _ ->
-                            readonly <- false
-                            closed <- false
+                            let passesToReadOnlyViewParam =
+                                match lambdaParams callee with
+                                | Some parameters when parameters.Length = actuals.Length ->
+                                    List.zip actuals parameters
+                                    |> List.forall (fun (actual, (_, _, paramId)) ->
+                                        not (aliases.Contains actual) || aliases.Contains paramId)
+                                | _ -> false
+                            if not passesToReadOnlyViewParam then
+                                readonly <- false
+                                closed <- false
             | _ -> readonly <- false; closed <- false
     readonly && closed, closed, participants
 
@@ -436,6 +530,8 @@ let private proofHolds = function
                 aligned > 0 && offset >= endOfPrevious && offset % aligned = 0 && bytes > 0 &&
                 alignment >= aligned && alignment % aligned = 0 && ordered (offset + bytes) rest
         extent >= 0 && alignment > 0 && ordered 0 slots
+    | ObligationBody.IntegerRepresentationCoverage(lower, upper, minimum, maximum) ->
+        minimum <= lower && lower <= upper && upper <= maximum
     | _ -> false
 
 /// Final source settlement follows ranges, complete-write element selection,
@@ -454,19 +550,22 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
             match edge.Role with
             | EdgeRole.StringCheckedConstruction row when edge.Target=row.Owner && (row.Success=site || row.Failure=site) -> Some row
             | _ -> None) |> function [row] -> Some row | _ -> None
+    let emitProof (siteNode: SemanticNode) enrichmentId body participants label =
+        let proven = proofHolds body
+        demand proven ("The source memory " + label + " proof is refuted.")
+        let info = { Id = sprintf "memory_%d_%s" (NodeId.value siteNode.Id) label; Kind = "memory-" + label; Logic = "QF_LIA"
+                     Statement = "Source memory " + label + " for the exact published residence and element layout."
+                     Source = fmtRange siteNode.Range; Refs = []; Body = body }
+        let citizen = obligationNode siteNode enrichmentId info |> Memory.markOwned
+        let evidence: MemoryProof = { Site = siteNode.Id; Obligation = citizen.Id; Body = body; Participants = participants; Proven = proven }
+        citizen.Id, { NewNodes = [citizen]; NewEdges = Memory.proofRows evidence; Annotated = [] }
     let settleNode (node: SemanticNode) =
         let mutable proofs = Enrichment.empty
         let enrichmentId = Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId ()
         let proof body participants label =
-            let proven = proofHolds body
-            demand proven ("The source memory " + label + " proof is refuted.")
-            let info = { Id = sprintf "memory_%d_%s" (NodeId.value node.Id) label; Kind = "memory-" + label; Logic = "QF_LIA"
-                         Statement = "Source memory " + label + " for the exact published residence and element layout."
-                         Source = fmtRange node.Range; Refs = []; Body = body }
-            let citizen = obligationNode node enrichmentId info |> Memory.markOwned
-            let evidence: MemoryProof = { Site = node.Id; Obligation = citizen.Id; Body = body; Participants = participants; Proven = proven }
-            proofs <- Enrichment.combine proofs { NewNodes = [citizen]; NewEdges = Memory.proofRows evidence; Annotated = [] }
-            citizen.Id
+            let citizenId, added = emitProof node enrichmentId body participants label
+            proofs <- Enrichment.combine proofs added
+            citizenId
         let operation =
           match node.Kind with
           | SemanticKind.Binding(_,true,_,_) ->
@@ -539,13 +638,19 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                 {Site=node.Id;Owner=construction.Owner;SourceType=sourceType;Residence=residence
                  Uses=uses;Construction=construction;Platform=platform.Value.Node;Layout=layoutProof;Capacity=capacityProof}
           | SemanticKind.ArrayExpr elements ->
-            let slot = element numeric node.Id
+            let slot = viewElementSlot graph numeric node
             let bytes, alignment = size graph slot
             demand (bytes > 0 && alignment > 0) "Array storage needs positive settled element extent and alignment."
-            let initializers = elements |> List.map (literal graph)
-            demand (initializers |> List.forall Option.isSome) "Ordinary array elements require source demand and memoization placement; effectful or nonliteral initializers are not admitted as eager stores."
-            let values = initializers |> List.map Option.get
-            let adapted = elements |> List.map (fun id -> id, adaptation graph node.Id id (carrier numeric (valueSite graph id)).Slot slot)
+            let initializersOpt, adapted =
+                match slot with
+                | SettledSlot.InlineBytes _ ->
+                    (if elements.IsEmpty then Some [] else None),
+                    elements |> List.map (fun id -> id, None)
+                | _ ->
+                    let initializers = elements |> List.map (literal graph)
+                    demand (initializers |> List.forall Option.isSome) "Ordinary array elements require source demand and memoization placement; effectful or nonliteral initializers are not admitted as eager stores."
+                    Some(initializers |> List.map Option.get),
+                    elements |> List.map (fun id -> id, adaptation graph node.Id id (carrier numeric (valueSite graph id)).Slot slot)
             let readonly, closed, uses = arrayUses graph node.Id
             let participants = Set.union uses (Set.ofList elements) |> Set.add node.Id
             let extent = bigint elements.Length * bigint bytes
@@ -570,25 +675,31 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
             let capacityProof = proof (ObligationBody.CapacityFits(int64 extent, space.Capacity)) participants "array_capacity"
             MemoryWitnessOperation.ArrayLiteral
                 { Site = node.Id; Elements = adapted; Element = slot; Length = elements.Length; Residence = residence
-                  Initializers = Some values; Alignment = alignment; ElementBytes = bytes
+                  Initializers = initializersOpt; Alignment = alignment; ElementBytes = bytes
                   Participants = participants |> Set.add layoutProof |> Set.add capacityProof }
           | SemanticKind.IndexGet(buffer,index) | SemanticKind.IndexSet(buffer,index,_) ->
             let evaluation = match node.Kind with SemanticKind.IndexSet(_,_,value) -> Some value | _ -> None
+            if evaluation.IsSome then
+                demand (isArray graph buffer) "ReadOnlyView elements are read-only and cannot be mutated."
+            else
+                demand (isReadableBuffer graph buffer) "The array read target lacks a readable buffer contract."
             // The source operation retains the whole evaluation (including its
             // guards). The memory operand and its numeric meet both name the
             // resulting value; a transparent block is not a second value.
             let stored = evaluation |> Option.map (valueSite graph)
             let bounds = bounds graph numeric node.Id buffer index
-            let slot = element numeric buffer
-            let adapted = match stored with
-                          | Some value -> adaptation graph node.Id value (carrier numeric value).Slot slot
-                          | None -> adaptation graph node.Id node.Id slot (carrier numeric node.Id).Slot
+            let slot = viewElementSlot graph numeric (live graph buffer)
+            let adapted = match stored, slot with
+                          | _, SettledSlot.InlineBytes _ -> None
+                          | Some value, _ -> adaptation graph node.Id value (carrier numeric value).Slot slot
+                          | None, _ -> adaptation graph node.Id node.Id slot (carrier numeric node.Id).Slot
             MemoryWitnessOperation.ArrayAccess
                 { Site = node.Id; Buffer = buffer; Index = index; Value = stored; Element = slot; Adaptation = adapted
                   Bounds = bounds; Participants = Set.union bounds.Participants (Set.ofList (Option.toList evaluation @ Option.toList stored)) }
           | SemanticKind.ElementAddress(buffer,index) ->
+            demand (isArray graph buffer) "ReadOnlyView elements are read-only and cannot have their mutable element address taken."
             let bounds = bounds graph numeric node.Id buffer index
-            let slot = element numeric buffer
+            let slot = viewElementSlot graph numeric (live graph buffer)
             let bytes, _ = size graph slot
             MemoryWitnessOperation.Address
                 { Site = node.Id; Place = MemoryPlace.ArrayElement(buffer,index,bounds); Element = Some slot; ElementBytes = Some bytes
@@ -645,10 +756,176 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
             let buffer = arrayLength graph node |> needed "The memory operation has no source settlement recipe."
             let result = carrier numeric node.Id
             MemoryWitnessOperation.ArrayExtent
-                { Site = node.Id; Source = buffer; Element = element numeric buffer; Result = result
+                { Site = node.Id; Source = buffer; Element = viewElementSlot graph numeric (live graph buffer); Result = result
                   Participants = result.Participants |> Set.add node.Id |> Set.add buffer }
         enrichment <- Enrichment.combine enrichment proofs
         operation
+    let isImmutableBinding id =
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.Binding(_, false, _, _) }
+        | Some { Kind = SemanticKind.PatternBinding _ } -> true
+        | _ -> false
+    let rec canonicalRoot seen id =
+        if Set.contains id seen then id else
+        let seen = Set.add id seen
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.VarRef(_, Some inner) } when isImmutableBinding inner -> canonicalRoot seen inner
+        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+        | Some { Kind = SemanticKind.EagerExpr inner } -> canonicalRoot seen inner
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> canonicalRoot seen value
+        | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> canonicalRoot seen (List.last items)
+        | _ -> id
+    let dominatingLengthLowerBound (siteNode: SemanticNode) (sourceId: NodeId) : (bigint * NodeId list) option =
+        let sourceRoot = canonicalRoot Set.empty sourceId
+        let isSourceLength id =
+            let targetId = canonicalRoot Set.empty id
+            let checkNode candidate =
+                match graph.Nodes.TryFind candidate with
+                | Some { Kind = SemanticKind.FieldGet(buf, "Length") } -> canonicalRoot Set.empty buf = sourceRoot
+                | Some { Kind = SemanticKind.Application _ } ->
+                    match intrinsic graph candidate [] with
+                    | Some(info, [buf]) when info.Module = IntrinsicModule.Array && info.Operation = "length" ->
+                        canonicalRoot Set.empty buf = sourceRoot
+                    | _ -> false
+                | _ -> false
+            checkNode id || checkNode targetId
+        let lowerBoundOf id =
+            match numeric.Values.TryFind (valueSite graph id) with
+            | Some c ->
+                match c.Range with
+                | ValueRange.Bounded(lo, hi) when lo <= hi -> Some lo
+                | _ -> None
+            | None -> None
+        let rec extractFromCond condId =
+            match graph.Nodes.TryFind condId with
+            | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+            | Some { Kind = SemanticKind.EagerExpr inner } -> extractFromCond inner
+            | Some { Kind = SemanticKind.VarRef(_, Some inner) } when isImmutableBinding inner -> extractFromCond inner
+            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [inner] } -> extractFromCond inner
+            | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> extractFromCond (List.last items)
+            | Some { Kind = SemanticKind.IfThenElse(a, b, Some falseId) } ->
+                match graph.Nodes.TryFind falseId with
+                | Some { Kind = SemanticKind.Literal(NativeLiteral.Bool false) } -> extractFromCond a @ extractFromCond b
+                | _ -> []
+            | Some { Kind = SemanticKind.Application _ } ->
+                match intrinsic graph condId [] with
+                | Some(info, [lhs; rhs]) when info.Module = IntrinsicModule.Operators ->
+                    let emitLower kOpt =
+                        match kOpt with
+                        | Some k -> [k, [condId; lhs; rhs]]
+                        | None -> []
+                    match info.Operation with
+                    | "op_GreaterThan" when isSourceLength lhs ->
+                        emitLower (lowerBoundOf rhs |> Option.map (fun k -> k + 1I))
+                    | "op_GreaterThanOrEqual" when isSourceLength lhs ->
+                        emitLower (lowerBoundOf rhs)
+                    | "op_LessThan" when isSourceLength rhs ->
+                        emitLower (lowerBoundOf lhs |> Option.map (fun k -> k + 1I))
+                    | "op_LessThanOrEqual" when isSourceLength rhs ->
+                        emitLower (lowerBoundOf lhs)
+                    | _ -> []
+                | _ -> []
+            | _ -> []
+        let rec climb seen childId acc =
+            match graph.Nodes.TryFind childId |> Option.bind _.Parent with
+            | Some parentId when not (Set.contains parentId seen) ->
+                let seen = Set.add parentId seen
+                let acc =
+                    match graph.Nodes.TryFind parentId with
+                    | Some { Kind = SemanticKind.IfThenElse(cond, yes, _) } when yes = childId ->
+                        extractFromCond cond @ acc
+                    | Some { Kind = SemanticKind.Sequential items } ->
+                        let preceding =
+                            items
+                            |> List.takeWhile (fun item -> item <> childId)
+                            |> List.collect (fun item ->
+                                match graph.Nodes.TryFind item with
+                                | Some { Kind = SemanticKind.Require(cond, _) } -> extractFromCond cond
+                                | _ -> [])
+                        preceding @ acc
+                    | _ -> acc
+                climb seen parentId acc
+            | _ -> acc
+        match climb Set.empty siteNode.Id [] with
+        | [] -> None
+        | bounds ->
+            let bestLo = bounds |> List.map fst |> List.max
+            let nodes = bounds |> List.collect snd
+            Some(bestLo, nodes)
+    let shapeReader = lazy (Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph)
+    let validateReadOnlyViewConversion (node: SemanticNode) = function
+        | ReadOnlyViewConversion.OfArray source ->
+            let _ = live graph source
+            let _ = viewElementSlot graph numeric node
+            Enrichment.empty
+        | ReadOnlyViewConversion.Slice(source, offset, count) ->
+            let _ = live graph source
+            let offsetCarrier = carrier numeric (valueSite graph offset)
+            let countCarrier = carrier numeric (valueSite graph count)
+            let offLo, offHi =
+                match offsetCarrier.Range with
+                | ValueRange.Bounded(lo, hi) when lo >= 0I && lo <= hi -> lo, hi
+                | _ -> raise (MissingContract "ReadOnlyView.slice requires a finite non-negative settled offset range.")
+            let cntLo, cntHi =
+                match countCarrier.Range with
+                | ValueRange.Bounded(lo, hi) when lo >= 0I && lo <= hi -> lo, hi
+                | _ -> raise (MissingContract "ReadOnlyView.slice requires a finite non-negative settled count range.")
+            let shapeExtentOpt =
+                match shapeReader.Value source with
+                | Some extent when not extent.Sources.IsEmpty ->
+                    let resolved =
+                        extent.Sources
+                        |> List.map (function
+                            | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Constant n ->
+                                demand (n >= 0I) "ReadOnlyView.slice requires a non-negative source extent."
+                                n, Set.empty
+                            | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Count cid ->
+                                let c = carrier numeric (valueSite graph cid)
+                                match c.Range with
+                                | ValueRange.Bounded(lo, hi) when lo >= 0I && lo <= hi -> lo, c.Participants
+                                | _ -> raise (MissingContract "ReadOnlyView.slice requires a finite non-negative settled source extent."))
+                    let minExtent = resolved |> List.map fst |> List.min
+                    let ps = resolved |> List.map snd |> Set.unionMany |> Set.union extent.Participants
+                    Some(minExtent, ps)
+                | _ -> None
+            let guardExtentOpt =
+                match dominatingLengthLowerBound node source with
+                | Some(minExtent, guardNodes) when minExtent >= 0I ->
+                    Some(minExtent, Set.ofList guardNodes)
+                | _ -> None
+            let srcExtentLo, extentParticipants =
+                match shapeExtentOpt, guardExtentOpt with
+                | Some(shapeLo, shapePs), Some(guardLo, guardPs) ->
+                    if guardLo > shapeLo then guardLo, Set.union shapePs guardPs
+                    else shapeLo, shapePs
+                | Some(shapeLo, shapePs), None -> shapeLo, shapePs
+                | None, Some(guardLo, guardPs) -> guardLo, guardPs
+                | None, None ->
+                    raise (MissingContract "ReadOnlyView.slice requires a settled source extent or dominating length guard proving slice bounds.")
+            demand (offLo >= 0I && cntLo >= 0I && offHi + cntHi <= srcExtentLo)
+                (sprintf "ReadOnlyView.slice bounds [%s..%s) exceed settled source extent %s." (string offHi) (string (offHi + cntHi)) (string srcExtentLo))
+            let participants =
+                Set.unionMany [ offsetCarrier.Participants; countCarrier.Participants; extentParticipants; Set.ofList [node.Id; source; offset; count] ]
+            let _, sliceProofEnrich =
+                emitProof node (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId ())
+                    (ObligationBody.IntegerRepresentationCoverage(0I, offHi + cntHi, 0I, srcExtentLo))
+                    participants "slice_bounds"
+            let _ = viewElementSlot graph numeric node
+            sliceProofEnrich
+        | ReadOnlyViewConversion.OfString source ->
+            let _ =
+                numeric.OccurrenceRepresentations.TryFind source
+                |> Option.bind (function Ok rep -> Some rep | Error _ -> None)
+                |> needed "ReadOnlyView source lacks a settled physical representation."
+            let _ =
+                numeric.OccurrenceRepresentations.TryFind node.Id
+                |> Option.bind (function Ok rep -> Some rep | Error _ -> None)
+                |> needed "ReadOnlyView lacks a settled physical representation."
+            let _ = element numeric node.Id
+            let _ =
+                Clef.Compiler.Baker.Ingredients.StringBytes.byteRepresentation graph
+                |> needed "ReadOnlyView requires a declared unsigned byte representation."
+            Enrichment.empty
     for node in graph.Nodes.Values do
         if node.IsReachable && not (excluded.Contains node.Id) then
             let needs =
@@ -656,8 +933,8 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                 | SemanticKind.ArrayExpr _ | SemanticKind.AddressOf _ | SemanticKind.CellAddress _
                 | SemanticKind.ElementAddress _ | SemanticKind.FieldAddress _ | SemanticKind.Reborrow _ -> true
                 | SemanticKind.DUConstruct _ when (checkedCase node.Id).IsSome -> true
-                | SemanticKind.IndexGet(buffer,_) | SemanticKind.IndexSet(buffer,_,_) -> isArray graph buffer
-                | SemanticKind.FieldGet(buffer,"Pointer") -> isArray graph buffer
+                | SemanticKind.IndexGet(buffer,_) | SemanticKind.IndexSet(buffer,_,_) -> isReadableBuffer graph buffer
+                | SemanticKind.FieldGet(buffer,"Pointer") -> isReadableBuffer graph buffer
                 | _ -> (arrayLength graph node).IsSome || (pendingArrayConstruction graph node).IsSome
             if needs then
                 required <- Set.add node.Id required
@@ -670,6 +947,12 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                     operations <- (node.Id, settleNode node) :: operations
                     required <- Set.add node.Id required
                 with MissingContract _ -> ()
+            else
+                match readOnlyViewConversion graph node with
+                | Some conversion ->
+                    try enrichment <- Enrichment.combine enrichment (validateReadOnlyViewConversion node conversion)
+                    with MissingContract reason -> unresolved <- Map.add node.Id reason unresolved
+                | None -> ()
     enrichment, List.rev operations, unresolved, required
 
 /// Finalize the source-authored logical live budget after the existing numeric

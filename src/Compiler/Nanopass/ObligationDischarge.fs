@@ -51,6 +51,10 @@ let private foreignProjection (model: ForeignResultCoverageModel) =
             (model.Application.Arguments |> List.map (fun actual -> actual.Index, range actual.Enclosure))
             (range model.ResultRange) (range model.Destination) (range model.AbiRange)
 
+let private bufferAbsenceProjection (model: BufferAbsenceArgumentConversionModel) : Result<Fidelity.PSG.ResourceProof.Projection, string> =
+    Published.mapBufferAbsenceArgumentConversionModel model
+    |> Fidelity.PSG.BufferAbsenceArgumentProof.project
+
 /// One obligation's scope: the anchor's definition, then its negation.
 let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     let integer (value: bigint) =
@@ -75,7 +79,7 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     | ObligationBody.ZeroCopyBufferExtent model ->
         let minC, maxC, cap = integer model.MinimumCount, integer model.MaximumCount, integer model.ExtentCapacity
         let elem = integer (bigint model.ElementBytes)
-        [ sprintf "(assert (= %s (and (<= 0 %s) (<= %s %s) (<= %s %s) (> %s 0))))" id minC minC maxC maxC cap elem
+        [ sprintf "(assert (= %s (and (<= 0 %s) (<= %s %s) (<= (* %s %s) %s) (> %s 0))))" id minC minC maxC maxC elem cap elem
           sprintf "(assert (not %s))" id ]
     | ObligationBody.BufferRetentionDomination model ->
         let acq = integer (bigint model.AcquireOrder)
@@ -113,15 +117,9 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         [ sprintf "(assert (= %s (and (>= %s 0) %s (> %s 0) %s)))" id callOrd (boolLit model.NullToNoneBoundary) invCount (String.concat " " (invClauses @ readClauses))
           sprintf "(assert (not %s))" id ]
     | ObligationBody.BufferAbsenceArgumentConversion model ->
-        let paramOrd = integer (bigint model.Parameter)
-        let srcCase = integer (bigint model.SourceCase)
-        let armCount = integer (bigint model.Arms.Length)
-        let validArms =
-            model.Arms = [ { CaseOrdinal = 0; Choice = BufferAbsencePlanChoice.AbsentNull }
-                           { CaseOrdinal = 1; Choice = BufferAbsencePlanChoice.RequiresNonNullBuffer } ]
-        let boolLit value = if value then "true" else "false"
-        [ sprintf "(assert (= %s (and (>= %s 0) (or (= %s 0) (= %s 1)) (= %s 2) %s)))" id paramOrd srcCase srcCase armCount (boolLit validArms)
-          sprintf "(assert (not %s))" id ]
+        match bufferAbsenceProjection model with
+        | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
+        | Error reason -> invalidArg "body" reason
     | ObligationBody.ResourceConversion model ->
         match Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
@@ -761,6 +759,8 @@ let private resourceProjectionWithOverride (overrideProjection: ObligationInfo -
             Some (Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion)
         | ObligationBody.OptionalEntryAbsenceArgumentConversion model ->
             Some (Published.mapOptionalEntryAbsenceArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.projectAbsence)
+        | ObligationBody.BufferAbsenceArgumentConversion model ->
+            Some (bufferAbsenceProjection model)
         | ObligationBody.OptionalEntryArgumentConversion model ->
             Some (Published.mapOptionalEntryArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.project)
         | ObligationBody.ResourceCleanup model ->
@@ -1117,7 +1117,7 @@ let ledgerJson (obligations: ObligationInfo list) : string =
         |> List.exists (fun obligation ->
             match obligation.Body with
             | ObligationBody.ForeignResultCoverage _ | ObligationBody.ResourceConversion _ | ObligationBody.ResourceCleanup _
-            | ObligationBody.SnapshotBorrowBound _ | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ -> true
+            | ObligationBody.SnapshotBorrowBound _ | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ | ObligationBody.BufferAbsenceArgumentConversion _ -> true
             | _ -> false)
 
     let rows =
@@ -1145,7 +1145,7 @@ let ledgerJson (obligations: ObligationInfo list) : string =
                     let state, reasons =
                         match ob.Body with
                         | ObligationBody.Pending reasons -> "pending", reasons
-                        | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ -> "target-pending", ["The finite source plan requires its exact per-call target artifact observation."]
+                        | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ | ObligationBody.BufferAbsenceArgumentConversion _ -> "target-pending", ["The finite source plan requires its exact per-call target artifact observation."]
                         | ObligationBody.ForeignResultCoverage model ->
                             match foreignProjection model with
                             | Ok _ -> "ready", []

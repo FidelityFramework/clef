@@ -1238,6 +1238,7 @@ let private tryResolveBuiltinTypeConstructor env range (name: string) (args: Nat
     | "Mmio16", [] -> Some (NativeType.TApp(Types.mmio16TyCon, []))
     | "Mmio32", [] -> Some (NativeType.TApp(Types.mmio32TyCon, []))
     | "BorrowedView", [schema] -> Some (NativeType.TApp(Types.borrowedViewTyCon, [schema]))
+    | "ReadOnlyView", [elem] -> Some (NativeType.TApp(Types.readOnlyViewTyCon, [elem]))
     // Built-in discriminated union type constructors
     | "option",  [elem]      -> Some (NativeType.TApp(optionTycon,  [elem]))
     | "voption", [elem]      -> Some (NativeType.TApp(voptionTycon, [elem]))
@@ -1804,8 +1805,11 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             | Some (NativeType.TApp(tyCon, _) as head) when hasMeasureParameter tyCon -> apply head typeArgs r
             | resolved ->
                 let argTys = typeArgs |> List.map (resolveSynType env)
-                // Try built-in type constructor first (nativeptr, byref, list, etc.)
-                match tryResolveBuiltinTypeConstructor env r name argTys with
+                // Do not shadow a user-defined ReadOnlyView<'T> declaration in scope.
+                let builtin =
+                    if resolved.IsSome && name = "ReadOnlyView" then None
+                    else tryResolveBuiltinTypeConstructor env r name argTys
+                match builtin with
                 | Some ty -> ty
                 | None ->
                     // Fall back to regular type resolution (user-defined generics)

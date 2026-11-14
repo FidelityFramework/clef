@@ -371,15 +371,55 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                         | Some(BoundaryResourceUse.AcquireNullable account)->[account.Conversion;account.Cleanup]
                         | _->[]) |> Set.ofList
                 let writableClaims=writableUses |> List.collect(fun row->[row.CountCoverage;row.StorageCoverage]) |> Set.ofList
+                let readOnlyDescriptorsByQuote =
+                    (PlatformResolution.readDescriptors graph).ReadOnlyBuffers
+                    |> List.map (fun descriptor -> descriptor.Quote, descriptor)
+                    |> Map.ofList
+                let readOnlyElementCoverageErrors, readOnlyElementCoverageClaims =
+                    readOnlyUses |> List.fold (fun (errors, claims) row ->
+                        match readOnlyDescriptorsByQuote.TryFind row.Declaration with
+                        | Some ro ->
+                            match ro.ElementRange with
+                            | None ->
+                                if ro.Contract.Content = BAREWire.Descriptors.BorrowedContent.RawBytes then errors, claims
+                                else
+                                    failure (Some row.Call) (Set.ofList [row.Call; row.Declaration; row.Buffer]) "Non-RawBytes read-only buffer descriptor requires an element coverage obligation." :: errors, claims
+                            | Some(ValueRange.Bounded(minDecl, maxDecl)) ->
+                                let candidates =
+                                    graph.Edges |> List.choose (fun edge ->
+                                        if edge.Role = EdgeRole.Constrains && List.contains row.Call edge.Sources && List.contains row.Declaration edge.Sources && List.contains row.Buffer edge.Sources then
+                                            match graph.Nodes.TryFind edge.Target with
+                                            | Some node when Ingredients.ownedNode node ->
+                                                match node.Kind with
+                                                | SemanticKind.Obligation info when info.Kind = "foreign-readonly-buffer-element-coverage" -> Some(node.Id, info)
+                                                | _ -> None
+                                            | _ -> None
+                                        else None)
+                                    |> List.distinctBy fst
+                                match candidates with
+                                | [claimId, info] ->
+                                    match info.Body with
+                                    | ObligationBody.IntegerRepresentationCoverage(_, _, declLo, declHi)
+                                        when declLo = minDecl && declHi = maxDecl && Bytes.proofOutcome info.Body = BoundaryProofOutcome.Proven ->
+                                        errors, claimId :: claims
+                                    | _ ->
+                                        failure (Some row.Call) (Set.ofList [row.Call; row.Declaration; row.Buffer]) "The foreign read-only buffer element-coverage obligation is invalid or unproven." :: errors, claimId :: claims
+                                | _ ->
+                                    failure (Some row.Call) (Set.ofList [row.Call; row.Declaration; row.Buffer]) "The foreign read-only buffer lacks a unique owned element-coverage obligation." :: errors, claims
+                            | Some _ ->
+                                failure (Some row.Call) (Set.ofList [row.Call; row.Declaration; row.Buffer]) "The foreign read-only buffer descriptor element range is not finite." :: errors, claims
+                        | None ->
+                            failure (Some row.Call) (Set.ofList [row.Call; row.Declaration; row.Buffer]) "The foreign read-only buffer use lacks its descriptor declaration." :: errors, claims) ([], [])
                 let readOnlyClaims =
-                    readOnlyUses |> List.collect (fun row ->
+                    (readOnlyUses |> List.collect (fun row ->
                         let crossingNodes =
                             match row.Crossing with
                             | BoundaryReadOnlyBufferCrossing.ExplicitZeroCopy (_, _, _, extentCoverage) -> [extentCoverage]
                             | BoundaryReadOnlyBufferCrossing.StaticImageNulBorrowed (_, _, _, terminationProof) -> [terminationProof]
                             | BoundaryReadOnlyBufferCrossing.CallScopedNulStaged (stagingBuffer, _, _, terminationProof) ->
                                 if stagingBuffer <> row.Buffer then [stagingBuffer; terminationProof] else [terminationProof]
-                        row.RetentionProof :: crossingNodes) |> Set.ofList
+                        row.RetentionProof :: crossingNodes)) @ readOnlyElementCoverageClaims
+                    |> Set.ofList
                 let borrowedViewClaims = borrowedViewUses |> List.map _.ScopeProof |> Set.ofList
                 let bufferAbsenceClaims =
                     calls |> List.collect (fun call -> call.Arguments |> List.choose _.BufferAbsence |> List.collect BoundaryBufferAbsenceChoice.leaves |> List.map _.Obligation) |> Set.ofList
@@ -411,7 +451,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                             | edge :: tail when key edge = key expected -> Some (List.rev prefix @ tail)
                             | edge :: tail -> remove (edge :: prefix) tail
                         match remove [] remaining with Some remaining -> subtract remaining rest | None -> false
-                let proofErrors = resourceAccessErrors @ resourceErrors @ projectedCallbackErrors @ foreignResultErrors @ intrinsicProofErrors @ proofErrors
+                let proofErrors = readOnlyElementCoverageErrors @ resourceAccessErrors @ resourceErrors @ projectedCallbackErrors @ foreignResultErrors @ intrinsicProofErrors @ proofErrors
                 let expectedIntrinsicProofs = domain.IntrinsicCalls |> List.collect (fun call -> [-1;0;1;2] |> List.map (fun ordinal -> call.Site, ordinal)) |> List.sort
                 let actualIntrinsicProofs = domain.IntrinsicProofs |> List.map (fun proof -> proof.Site, proof.Ordinal) |> List.sort
                 let callbackMembership =

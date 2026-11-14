@@ -1225,6 +1225,7 @@ type DeclaredReadOnlyBuffer = {
     BufferFormal: NodeId
     CountFormal: NodeId option
     Contract: BAREWire.Descriptors.ReadOnlyBufferDescriptor
+    ElementRange: ValueRange option
     Participants: NodeId list
 }
 
@@ -1663,7 +1664,7 @@ let private readSignatureForBinding
 
                             let element =
                                 match ty with
-                                | NativeType.TApp(tc, [ elem ]) when tc.Name = "array" || tc.Name = "Array" -> Some elem
+                                | NativeType.TApp(tc, [ elem ]) when tc.Name = "array" || tc.Name = "Array" || (readOnly && Types.isReadOnlyViewTypeCon tc) -> Some elem
                                 | _ -> None
 
                             let nullableHandle ty =
@@ -1686,13 +1687,9 @@ let private readSignatureForBinding
                                         declaredName
                                         cname
                                 )
-                            | _, true, _, Some name, _ ->
+                            | _, true, _, Some name, Some (NativeType.TApp(tc, _)) ->
                                 let declaredTypes = recordTypesNamed graph name
-
-                                let actual =
-                                    match ty with
-                                    | NativeType.TApp(tc, _) -> Some(NominalTypeIdentity.ofConstructor tc)
-                                    | _ -> None
+                                let actual = Some(NominalTypeIdentity.ofConstructor tc)
 
                                 if actual |> Option.exists (fun actual -> declaredTypes = [ actual ]) then
                                     (paramId, None), None, None, Some(paramId, readOnly), None
@@ -1700,6 +1697,10 @@ let private readSignatureForBinding
                                     invalid (
                                         sprintf "the reference '%s' of '%s' requires the declared record '%s'" declaredName cname name
                                     )
+                            | _, true, _, Some name, _ ->
+                                invalid (
+                                    sprintf "the reference '%s' of '%s' requires the declared record '%s'" declaredName cname name
+                                )
                             | Some d, false, _, _, _ when not (ranged ty) ->
                                 invalid (
                                     sprintf
@@ -2431,23 +2432,28 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                 Error "RetainedUntil requires a valid distinct owner ordinal."
                             | _ -> Ok ()
                         let parameters = field "Parameters" abiFields |> Option.bind (elementsOf graph)
-                        let ptrOrReadOnly =
+                        let elementContract =
                             parameters |> Option.bind (List.tryItem parameter) |> Option.bind (recordOf graph) |> Option.map snd
-                            |> Option.exists (fun pfields ->
+                            |> Option.bind (fun pfields ->
                                 let pass = field "PassBy" pfields |> Option.bind (caseOf graph) |> Option.map (fun (_, n, p) -> n, p)
                                 let ty = field "Type" pfields |> Option.map (readTypeRef graph)
                                 match pass, ty with
-                                | Some("Value", None), Some(Ok(DeclaredTypeRef.Pointer _)) -> true
-                                | Some("ReadOnlyReference", None), Some(Ok(DeclaredTypeRef.Scalar(BoundaryScalar.Integer(8, false)))) -> true
-                                | _ -> false)
+                                | Some("Value", None), Some(Ok(DeclaredTypeRef.Pointer _)) ->
+                                    match content with
+                                    | BAREWire.Descriptors.BorrowedContent.Utf8Text ->
+                                        Some(Some(snd (scalarRange (BoundaryScalar.Integer(8, false)))))
+                                    | BAREWire.Descriptors.BorrowedContent.RawBytes -> Some None
+                                | Some("ReadOnlyReference", None), Some(Ok(DeclaredTypeRef.Scalar(BoundaryScalar.Integer(8, false)))) ->
+                                    Some(Some(snd (scalarRange (BoundaryScalar.Integer(8, false)))))
+                                | _ -> None)
                         if graph.Nodes.TryFind target |> Option.bind (fun n -> match n.Metadata.TryFind "FidelityExtern.Symbol" with Some(MetadataValue.String s) -> Some s | _ -> None) <> Some abi.CName then
                             invalid "FunctionDescriptor.CName differs from the exact external declaration symbol."
-                        elif not ptrOrReadOnly then
+                        elif elementContract.IsNone then
                             invalid "requires a Pointer Value or unsigned-8 ReadOnlyReference parameter contract."
                         else
-                            match countValid, retentionValid with
-                            | Error msg, _ | _, Error msg -> invalid msg
-                            | Ok countFormal, Ok () ->
+                            match countValid, retentionValid, elementContract with
+                            | Error msg, _, _ | _, Error msg, _ -> invalid msg
+                            | Ok countFormal, Ok (), Some elementRange ->
                                 let paths = (fields @ hypothesisFields) |> List.collect (fun (_, id) -> match valuePath graph id with Some (_, p) -> p | None -> [id])
                                 if not (immutable paths) then invalid "requires immutable descriptor and hypothesis inputs." else
                                 Ok { Node = node.Id; Quote = quote; DescriptorBinding = binding.Id; SourcePath = path; Declaration = declaration
@@ -2455,7 +2461,10 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                      BufferFormal = bufferFormal; CountFormal = countFormal
                                      Contract = { Binding = name; Parameter = parameter; Extent = extent; Content = content; Retention = retention
                                                   Hypothesis = { Identity = identity; Version = version; Source = source } }
+                                     ElementRange = elementRange
                                      Participants = binding.Id :: path @ paths @ edge.Sources @ [abi.Node; abiBinding; hypothesis.Id] @ releaseExtra }
+                            | Ok _, Ok (), None ->
+                                invalid "requires a Pointer Value or unsigned-8 ReadOnlyReference parameter contract."
                     | _ -> invalid "requires valid Extent, Content, Retention, and complete unchanged FunctionDescriptor."
                 | _ -> invalid "requires the exact current source extern declaration and FunctionDescriptor."
             | _ -> invalid "Binding must select one exact qualified extern with a nonempty versioned hypothesis."

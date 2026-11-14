@@ -250,6 +250,7 @@ type private Program = {
     RecordIncidenceCache: System.Collections.Generic.Dictionary<NodeId, bool>
     ImmutableRecordFieldCache: System.Collections.Generic.Dictionary<NodeId * string, (TypeIdentity * TypeIdentity) option>
     AggregateElementCache: System.Collections.Generic.Dictionary<NodeId * AggregateProjection list, bool * Set<NodeId>>
+    ClassifyReadOnlyView: NodeId -> Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance
 }
 
 /// The parent of every node, read from the children lists (as NativeService.parentIndex).
@@ -276,6 +277,10 @@ let private arrayElementType (ty: NativeType) : NativeType option =
     match applySubst ty with
     | NativeType.TApp (tycon, [ elem ]) when tycon.Name = Types.arrayTyCon.Name -> Some (applySubst elem)
     | _ -> None
+
+/// The element type of a ReadOnlyView<'T>, if the type is one, with its variables resolved.
+let private readOnlyViewElementType (ty: NativeType) : NativeType option =
+    Types.tryGetReadOnlyViewElement (applySubst ty) |> Option.map applySubst
 
 /// The key of `ElementRanges`: the element type's rendered form.
 let private elementKey (elem: NativeType) : TypeIdentity = ofType elem
@@ -1533,6 +1538,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         RecordIncidenceCache = System.Collections.Generic.Dictionary<NodeId, bool>()
         ImmutableRecordFieldCache = System.Collections.Generic.Dictionary<NodeId * string, (TypeIdentity * TypeIdentity) option>()
         AggregateElementCache = System.Collections.Generic.Dictionary<NodeId * AggregateProjection list, bool * Set<NodeId>>()
+        ClassifyReadOnlyView = Clef.Compiler.Baker.Ingredients.ArrayShapes.readOnlyViewClassifier graph
     }
     let parameters =
         ordered
@@ -1929,6 +1935,10 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         | Some { Kind = SemanticKind.Intrinsic _ } -> None
         | _ -> Some []
     let referenceParameters = descriptors.Functions |> List.collect (fun f -> f.References) |> Map.ofList
+    let readOnlyBufferFormals =
+        descriptors.ReadOnlyBuffers
+        |> List.map (fun ro -> ro.BufferFormal)
+        |> Set.ofList
     let arrayAllocationDefaults =
         graph.Edges
         |> List.choose (fun edge ->
@@ -1979,21 +1989,30 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                             Map.tryFind defId reachableNodes |> Option.exists (fun d -> Map.containsKey "FidelityExtern.Library" d.Metadata)
                         | _ -> false
                 let seeds =
-                    if isBoundaryCall then
-                        let supplied =
-                            match Map.tryFind node.Id callees with
-                            | Some (Callee.Direct (parameters, _), args) when parameters.Length = args.Length ->
-                                List.zip parameters args |> List.map (fun ((_, _, paramId), arg) -> arg, Map.tryFind paramId referenceParameters)
-                            | _ -> node.Children |> List.map (fun arg -> arg, None)
-                        supplied
-                        |> List.fold (fun (s: Map<TypeIdentity, ValueRange>) (argId, declared) ->
-                            match typeOf argId |> Option.bind arrayElementType with
-                            | Some elem ->
-                                let key = elementKey elem
-                                let incoming = declared |> Option.map (fun d -> d.Range) |> Option.defaultValue ValueRange.Unbounded
-                                Map.add key (ValueRange.join (Map.tryFind key s |> Option.defaultValue ValueRange.Empty) incoming) s
-                            | None -> s) seeds
-                    else seeds
+                    let supplied =
+                        match Map.tryFind node.Id callees with
+                        | Some (Callee.Direct (parameters, _), args) when parameters.Length = args.Length ->
+                            List.zip parameters args
+                            |> List.map (fun ((_, _, paramId), arg) ->
+                                arg, Map.tryFind paramId referenceParameters, Set.contains paramId readOnlyBufferFormals)
+                        | _ -> node.Children |> List.map (fun arg -> arg, None, false)
+                    supplied
+                    |> List.fold (fun (s: Map<TypeIdentity, ValueRange>) (argId, declared, isReadOnlyParam) ->
+                        let joinSeed (acc: Map<TypeIdentity, ValueRange>) (elem: NativeType) (incoming: ValueRange) =
+                            let key = elementKey elem
+                            let existing =
+                                match Map.tryFind key acc with
+                                | Some r -> r
+                                | None -> ValueRange.Empty
+                            Map.add key (ValueRange.join existing incoming) acc
+                        match typeOf argId |> Option.bind arrayElementType with
+                        | Some elem when isBoundaryCall && not isReadOnlyParam ->
+                            let incoming =
+                                match declared with
+                                | Some d -> d.Range
+                                | None -> ValueRange.Unbounded
+                            joinSeed s elem incoming
+                        | _ -> s) seeds
                 match Map.tryFind node.Id callees with
                 | Some (Callee.Intrinsic { Module = IntrinsicModule.Array; Operation = "set" }, [ arrId; _; valueId ]) ->
                     match typeOf arrId |> Option.bind arrayElementType with
@@ -2526,9 +2545,22 @@ let private applicationRange (program: Program) (shared: Reading) (value: Readin
         match RangeSources.intrinsic program.Context info arguments with
         | RangeSources.Result.Fact r -> r
         | RangeSources.Result.ElementOf i ->
-            match List.tryItem i arguments |> Option.bind (fun a -> arrayElementType a.Type) with
-            | Some elem -> elementRange program shared elem
-            | None -> fallback
+            match List.tryItem i args, List.tryItem i arguments with
+            | Some argId, Some arg ->
+                match arrayElementType arg.Type with
+                | Some elem -> elementRange program shared elem
+                | None ->
+                    match readOnlyViewElementType arg.Type with
+                    | Some elem ->
+                        match program.ClassifyReadOnlyView argId with
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked ->
+                            ValueRange.bounded bigint.Zero (bigint 255)
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict -> fallback
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ArrayBacked
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.Unknown ->
+                            elementRange program shared elem
+                    | None -> fallback
+            | _ -> fallback
         | RangeSources.Result.Untabled -> fallback
     | _ when program.Applications.ContainsKey node.Id ->
         application node.Id |> Option.defaultValue fallback
@@ -2669,8 +2701,21 @@ let private transfer (program: Program) (shared: Reading) (value: Reading) (appl
         | SemanticKind.DUEliminate (value, tag, name, _) when isRanged node ->
             Some (aggregateElement program shared Set.empty value [UnionPayload(tag, name)])
         | SemanticKind.IndexGet (exprId, _) ->
-            match Map.tryFind exprId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
-            | Some elem -> Some (elementRange program shared elem)
+            match Map.tryFind exprId program.Reachable |> Option.map (fun n -> n.Type) with
+            | Some exprType ->
+                match arrayElementType exprType with
+                | Some elem -> Some (elementRange program shared elem)
+                | None ->
+                    match readOnlyViewElementType exprType with
+                    | Some elem ->
+                        match program.ClassifyReadOnlyView exprId with
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked ->
+                            Some (ValueRange.bounded bigint.Zero (bigint 255))
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict -> Some fallback
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ArrayBacked
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.Unknown ->
+                            Some (elementRange program shared elem)
+                    | None -> Some fallback
             | None -> Some fallback
         | _ -> Some fallback
     let computed =
@@ -3631,11 +3676,28 @@ let private fixpoint (program: Program) (contexts: ContextProgram) : State * Ran
                         System.Array.Sort(leafKeys)
                         NodeTransferPlan.SharedLeaves (init, leafKeys, carrier)
                 | SemanticKind.IndexGet (exprId, _) ->
-                    match Map.tryFind exprId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
-                    | Some elem ->
-                        match buildElementReadPlan elem with
-                        | ElemConst r -> NodeTransferPlan.Constant (applyCarrier carrier r)
-                        | ElemStores (init, uKeys, rPairs) -> NodeTransferPlan.SharedStores (init, uKeys, rPairs, carrier)
+                    match Map.tryFind exprId program.Reachable |> Option.map (fun n -> n.Type) with
+                    | Some exprType ->
+                        match arrayElementType exprType with
+                        | Some elem ->
+                            match buildElementReadPlan elem with
+                            | ElemConst r -> NodeTransferPlan.Constant (applyCarrier carrier r)
+                            | ElemStores (init, uKeys, rPairs) -> NodeTransferPlan.SharedStores (init, uKeys, rPairs, carrier)
+                        | None ->
+                            match readOnlyViewElementType exprType with
+                            | Some elem ->
+                                match program.ClassifyReadOnlyView exprId with
+                                | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked ->
+                                    NodeTransferPlan.Constant (applyCarrier carrier (ValueRange.bounded bigint.Zero (bigint 255)))
+                                | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict ->
+                                    NodeTransferPlan.Constant (applyCarrier carrier fallback)
+                                | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ArrayBacked
+                                | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.Unknown ->
+                                    match buildElementReadPlan elem with
+                                    | ElemConst r -> NodeTransferPlan.Constant (applyCarrier carrier r)
+                                    | ElemStores (init, uKeys, rPairs) -> NodeTransferPlan.SharedStores (init, uKeys, rPairs, carrier)
+                            | None ->
+                                NodeTransferPlan.Constant (applyCarrier carrier fallback)
                     | None ->
                         NodeTransferPlan.Constant (applyCarrier carrier fallback)
                 | SemanticKind.Application _ ->
@@ -3659,7 +3721,17 @@ let private fixpoint (program: Program) (contexts: ContextProgram) : State * Ran
                                         let elemPlan =
                                             match arrayElementType an.Type with
                                             | Some elem -> ValueSome (buildElementReadPlan elem)
-                                            | None -> ValueNone
+                                            | None ->
+                                                match readOnlyViewElementType an.Type with
+                                                | Some elem ->
+                                                    match program.ClassifyReadOnlyView a with
+                                                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked ->
+                                                        ValueSome (ElemConst (ValueRange.bounded bigint.Zero (bigint 255)))
+                                                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict -> ValueNone
+                                                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ArrayBacked
+                                                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.Unknown ->
+                                                        ValueSome (buildElementReadPlan elem)
+                                                | None -> ValueNone
                                         IntrinsicArgPlan(a, isRanged an, an.Type, lit, elemPlan)
                                     | None ->
                                         IntrinsicArgPlan(a, false, NativeType.TError "unreachable", None, ValueNone))
@@ -4845,7 +4917,16 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
         // the element type behind each key, from any store of it or from an array node of the type
         let typeOfKey (key: TypeIdentity) : NativeType option =
             program.Ordered
-            |> List.tryPick (fun n -> arrayElementType n.Type |> Option.filter (fun e -> elementKey e = key))
+            |> List.tryPick (fun n ->
+                let elemOpt =
+                    match arrayElementType n.Type with
+                    | Some e -> Some e
+                    | None ->
+                        match readOnlyViewElementType n.Type with
+                        | Some e when program.ClassifyReadOnlyView n.Id <> Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked
+                                      && program.ClassifyReadOnlyView n.Id <> Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict -> Some e
+                        | _ -> None
+                Option.filter (fun e -> elementKey e = key) elemOpt)
         keys
         |> Set.toList
         |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program (current state) elem))

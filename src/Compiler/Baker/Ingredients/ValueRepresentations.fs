@@ -128,6 +128,18 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
                         | Error reason, _ -> Error reason
                         | _ -> Error "Borrowed view has no declared pointer extent."
                     | _ ->
+                        if Types.isReadOnlyViewTypeCon tc then
+                            match args with
+                            | [element] ->
+                                match elementTypes.TryFind (Identity.ofType element) with
+                                | Some slot -> Ok(ValueRepresentation.Buffer(None, ValueRepresentation.Scalar slot))
+                                | None ->
+                                    recurse element |> Result.bind (function
+                                        | ValueRepresentation.Record(_, Some(_, size, _)) -> Ok(ValueRepresentation.Buffer(None, ValueRepresentation.Buffer(Some size, byte)))
+                                        | (ValueRepresentation.Scalar _ | ValueRepresentation.Buffer _) as element -> Ok(ValueRepresentation.Buffer(None, element))
+                                        | _ -> Error "ReadOnlyView element has no settled physical storage representation.")
+                            | _ -> Error "ReadOnlyView requires one element type argument."
+                        else
                         match tc.Name, args with
                         | ("byref" | "inref" | "outref" | "list"), _ -> scalar(SettledSlot.Pointer 1)
                         | ("array" | "Array"), [element] ->
@@ -179,6 +191,7 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
     let scalarValues = carriers |> List.map (fun carrier -> carrier.Site, carrier) |> Map.ofList
     let codata = graph.Codata.Value
     let premises = Clef.Compiler.Baker.Ingredients.NumericValues.premises graph
+    let classifyView = Clef.Compiler.Baker.Ingredients.ArrayShapes.readOnlyViewClassifier graph
     let occurrences = graph.Nodes |> Map.filter (fun id _ -> premises.ContainsKey id) |> Map.map (fun id node ->
         // Close every encountered native type under the source owner even when
         // its particular value has a more precise occurrence representation.
@@ -204,7 +217,20 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
                     | Some frame when frame.Bytes > 0 -> bytes frame.Bytes
                     | _ -> Error "Sequence environment has no complete source layout."
                 | _ ->
-                    match elements.TryFind id with
-                    | Some slot -> Ok(ValueRepresentation.Buffer(None, ValueRepresentation.Scalar slot))
-                    | None -> general)
+                    let fromElements () =
+                        match elements.TryFind id with
+                        | Some slot -> Ok(ValueRepresentation.Buffer(None, ValueRepresentation.Scalar slot))
+                        | None -> general
+                    match applySubst node.Type with
+                    | NativeType.TApp(tc, [_]) when Types.isReadOnlyViewTypeCon tc ->
+                        match classifyView id with
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked ->
+                            match Clef.Compiler.Baker.Ingredients.StringBytes.byteRepresentation graph with
+                            | Some(rep, _) -> Ok(ValueRepresentation.Buffer(None, ValueRepresentation.Scalar(SettledSlot.Integer(8, Some rep.Name))))
+                            | None -> Error "Byte-backed ReadOnlyView requires a declared byte representation."
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict ->
+                            Error "ReadOnlyView cannot mix byte-backed and array-backed sources."
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ArrayBacked
+                        | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.Unknown -> fromElements ()
+                    | _ -> fromElements ())
     occurrences, types

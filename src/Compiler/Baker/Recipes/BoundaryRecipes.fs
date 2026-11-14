@@ -135,6 +135,13 @@ let rec private canonicalExprOrigin (graph: SemanticGraph) (seen: Set<NodeId>) (
     | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> canonicalExprOrigin graph seen value
     | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> canonicalExprOrigin graph seen (List.last items)
     | Some { Kind = SemanticKind.StringByteBorrow source } -> canonicalExprOrigin graph seen source
+    | Some { Kind = SemanticKind.Application(callee, args) } when not args.IsEmpty ->
+        match graph.Nodes.TryFind callee with
+        | Some { Kind = SemanticKind.Intrinsic info }
+            when info.Module = IntrinsicModule.Array &&
+                 (info.FullName = "ReadOnlyView.ofArray" || info.FullName = "ReadOnlyView.ofString" || info.FullName = "ReadOnlyView.slice") ->
+            canonicalExprOrigin graph seen args.Head
+        | _ -> id
     | _ -> id
 
 let rec private immutableExprOrigin (graph: SemanticGraph) (seen: Set<NodeId>) (id: NodeId) =
@@ -159,6 +166,13 @@ let rec private immutableExprOrigin (graph: SemanticGraph) (seen: Set<NodeId>) (
         | _ -> id
     | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> immutableExprOrigin graph seen (List.last items)
     | Some { Kind = SemanticKind.StringByteBorrow source } -> immutableExprOrigin graph seen source
+    | Some { Kind = SemanticKind.Application(callee, args) } when not args.IsEmpty ->
+        match graph.Nodes.TryFind callee with
+        | Some { Kind = SemanticKind.Intrinsic info }
+            when info.Module = IntrinsicModule.Array &&
+                 (info.FullName = "ReadOnlyView.ofArray" || info.FullName = "ReadOnlyView.ofString" || info.FullName = "ReadOnlyView.slice") ->
+            immutableExprOrigin graph seen args.Head
+        | _ -> id
     | _ -> id
 
 let private buildAliasEnv (graph: SemanticGraph) =
@@ -272,8 +286,15 @@ let private possibleOrigins
             | SemanticKind.RecordExpr(fields, copyFrom) ->
                 for _, v in fields do enqueue v
                 copyFrom |> Option.iter enqueue
-            | SemanticKind.Application(callee, [arg]) when isTupleAccessorIntrinsic graph callee ->
-                enqueue arg
+            | SemanticKind.Application(callee, args) when not args.IsEmpty ->
+                match graph.Nodes.TryFind callee with
+                | Some { Kind = SemanticKind.Intrinsic info }
+                    when info.Module = IntrinsicModule.Array &&
+                         (info.FullName = "ReadOnlyView.ofArray" || info.FullName = "ReadOnlyView.ofString" || info.FullName = "ReadOnlyView.slice") ->
+                    enqueue args.Head
+                | _ when isTupleAccessorIntrinsic graph callee && args.Length = 1 ->
+                    enqueue args.Head
+                | _ -> ()
             | SemanticKind.Sequential items ->
                 if not items.IsEmpty then enqueue (List.last items)
             | SemanticKind.IfThenElse(_, t, e) ->
@@ -2295,6 +2316,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
             let addr = sprintf "%s:%d:%s:%s" ro.Contract.Binding ro.Parameter (fmtRange node.Range) role
             "foreign_readonly_" + System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes addr)
         let roByBinding = descriptors.ReadOnlyBuffers |> List.groupBy (fun r -> r.Declaration.Binding) |> Map.ofList
+        let classifyView = lazy (Clef.Compiler.Baker.Ingredients.ArrayShapes.readOnlyViewClassifier graph)
         allExternalCalls |> List.fold (fun (enrichment, errors, uses) (site, calleeBinding, args, acquireOrder) ->
             match roByBinding.TryFind calleeBinding with
             | None -> enrichment, errors, uses
@@ -2324,14 +2346,14 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                             | Some { Kind = SemanticKind.Literal(NativeLiteral.String content) }, staticNode :: _ when entry.Content = content ->
                                                 Some(pool, idx, entry, staticNode)
                                             | _ -> None))
-                                let! residence, residenceNode, extentCapacity, staticPoolInfo, runtimeByteLenOpt, literalZeroCheck, extraSupport =
+                                let! residence, residenceNode, extentCapacity, elemBytes, staticPoolInfo, runtimeByteLenOpt, literalZeroCheck, extraSupport =
                                     match poolOpt with
                                     | Some(pool, idx, entry, staticOrigin) ->
                                         let hasInteriorZero =
                                             seq { for i in entry.Offset .. entry.Offset + entry.Length - 1 -> pool.Bytes[i] }
                                             |> Seq.exists ((=) 0uy)
                                         let validTrailing = entry.Offset + entry.StorageLength <= pool.Bytes.Length && pool.Bytes[entry.Offset + entry.Length] = 0uy
-                                        Ok(MemoryResidence.ImmutableProgram pool.DeclarationNode, pool.DeclarationNode, bigint entry.Length, Some(pool, idx, entry, staticOrigin), Some(bigint entry.Length), hasInteriorZero || not validTrailing, Set.singleton pool.DeclarationNode)
+                                        Ok(MemoryResidence.ImmutableProgram pool.DeclarationNode, pool.DeclarationNode, bigint entry.Length, 1I, Some(pool, idx, entry, staticOrigin), Some(bigint entry.Length), hasInteriorZero || not validTrailing, Set.singleton pool.DeclarationNode)
                                     | None ->
                                         match memoryLazy.Value with
                                         | Error _ -> Error "CCS8424: Foreign read-only buffer requires an established storage residence and finite extent."
@@ -2361,16 +2383,67 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                             match allocOpt, litOpt with
                                             | Some alloc, _ ->
                                                 let cap = alloc.MinimumCount * bigint alloc.ElementBytes
-                                                Ok(alloc.Residence, alloc.Site, cap, None, viewLenOpt, false, alloc.Participants)
+                                                Ok(alloc.Residence, alloc.Site, cap, bigint alloc.ElementBytes, None, viewLenOpt, false, alloc.Participants)
                                             | None, Some lit ->
                                                 let hasZero =
                                                     lit.Initializers |> Option.exists (List.exists (function
                                                         | NativeLiteral.Int(0L, _) | NativeLiteral.UInt(0UL, _) | NativeLiteral.Char '\000' -> true
                                                         | _ -> false))
                                                 let cap = bigint lit.Length * bigint lit.ElementBytes
-                                                Ok(lit.Residence, lit.Site, cap, None, Some cap, hasZero, lit.Participants)
+                                                Ok(lit.Residence, lit.Site, cap, bigint lit.ElementBytes, None, Some cap, hasZero, lit.Participants)
                                             | None, None ->
                                                 Error "CCS8424: Foreign read-only buffer lacks static or memory-settled backing storage."
+                                do! require (elemBytes > 0I) "CCS8424: Foreign read-only buffer requires positive element byte width."
+                                let rec collectSliceChain seen id =
+                                    if Set.contains id seen then [] else
+                                    let seen = Set.add id seen
+                                    match graph.Nodes.TryFind id with
+                                    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+                                    | Some { Kind = SemanticKind.EagerExpr inner }
+                                    | Some { Kind = SemanticKind.VarRef(_, Some inner) } -> collectSliceChain seen inner
+                                    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> collectSliceChain seen value
+                                    | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> collectSliceChain seen (List.last items)
+                                    | Some { Kind = SemanticKind.Application(callee, args) } ->
+                                        match graph.Nodes.TryFind callee with
+                                        | Some { Kind = SemanticKind.Intrinsic info }
+                                            when info.Module = IntrinsicModule.Array && info.FullName = "ReadOnlyView.slice" && args.Length = 3 ->
+                                            collectSliceChain seen args[0] @ [id, args[1], args[2]]
+                                        | _ -> []
+                                    | _ -> []
+                                let sliceSteps = collectSliceChain Set.empty inspectTarget
+                                do!
+                                    if not sliceSteps.IsEmpty && ro.Contract.Extent = BAREWire.Descriptors.ReadOnlyBufferExtent.UncountedNulTerminated then
+                                        let fullLiteralSlice =
+                                            match sliceSteps with
+                                            | [_, offArg, cntArg] ->
+                                                match graph.Nodes.TryFind offArg |> Option.bind _.ValueRange,
+                                                      graph.Nodes.TryFind cntArg |> Option.bind _.ValueRange with
+                                                | Some(ValueRange.Bounded(oLo, oHi)), Some(ValueRange.Bounded(cLo, cHi)) ->
+                                                    oLo = 0I && oHi = 0I && cLo * elemBytes = extentCapacity && cHi * elemBytes = extentCapacity
+                                                | _ -> false
+                                            | _ -> false
+                                        require fullLiteralSlice "CCS8424: Uncounted NUL-terminated buffer cannot accept a partial ReadOnlyView.slice."
+                                    else Ok ()
+                                let! slicedCapacity, slicedRuntimeByteLen, sliceParticipants =
+                                    sliceSteps |> List.fold (fun acc (sliceSite, offArg, cntArg) -> checked' {
+                                        let! curCapBytes, curRuntimeLen, sup = acc
+                                        let! offHi =
+                                            match graph.Nodes.TryFind offArg |> Option.bind _.ValueRange with
+                                            | Some(ValueRange.Bounded(lo, hi)) when lo >= 0I && lo <= hi -> Ok hi
+                                            | _ -> Error "CCS8424: ReadOnlyView.slice offset requires a finite nonnegative domain."
+                                        let! cntLo, cntHi =
+                                            match graph.Nodes.TryFind cntArg |> Option.bind _.ValueRange with
+                                            | Some(ValueRange.Bounded(lo, hi)) when lo >= 0I && lo <= hi -> Ok(lo, hi)
+                                            | _ -> Error "CCS8424: ReadOnlyView.slice count requires a finite nonnegative domain."
+                                        do! require ((offHi + cntHi) * elemBytes <= curCapBytes)
+                                                (sprintf "CCS8424: ReadOnlyView.slice bounds [%s..%s) exceed parent buffer capacity %s." (string offHi) (string (offHi + cntHi)) (string (curCapBytes / elemBytes)))
+                                        let narrowedBytes = cntLo * elemBytes
+                                        let nextRuntimeLen =
+                                            match curRuntimeLen with
+                                            | Some _ when cntLo = cntHi -> Some narrowedBytes
+                                            | _ -> None
+                                        return narrowedBytes, nextRuntimeLen, Set.union sup (Set.ofList [sliceSite; offArg; cntArg])
+                                    }) (Ok(extentCapacity, runtimeByteLenOpt, extraSupport))
                                 // Determine retirements & retention mode
                                 let callScope = MemoryAccessRecipes.nearestLambda graph site.Id
                                 let! retirements, retirementOrders, retentionMode =
@@ -2465,18 +2538,69 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                           not (Set.isEmpty (Set.intersect siteLoops (enclosingLoops graph wSite))))))
                                 do! require (not sameCallWritableOverlap && not mutatedWhileBorrowed)
                                         "CCS8426: Foreign read-only buffer aliases mutable storage or is mutated while borrowed."
-                                // Check extent and emit obligations
+                                // Check extent and element range, and emit obligations
+                                let! elemCoverageEnrich =
+                                    match ro.ElementRange with
+                                    | None -> checked' {
+                                        do! require (ro.Contract.Content = BAREWire.Descriptors.BorrowedContent.RawBytes)
+                                                "CCS8424: Non-RawBytes read-only buffer requires an element integer range."
+                                        return Enrichment.empty }
+                                    | Some(ValueRange.Bounded(minDecl, maxDecl)) -> checked' {
+                                        do! require (elemBytes = 1I)
+                                                "CCS8424: Byte-ranged read-only buffer requires single-byte element representation."
+                                        let viewProv = classifyView.Value inspectTarget
+                                        do! require (viewProv <> Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict)
+                                                "CCS8424: ReadOnlyView mixes byte-backed and array-backed sources."
+                                        let! srcLo, srcHi =
+                                            match staticPoolInfo with
+                                            | Some(pool, _, entry, _) ->
+                                                if entry.Length = 0 then Ok(0I, 0I)
+                                                else
+                                                    let mutable minB = bigint pool.Bytes[entry.Offset]
+                                                    let mutable maxB = minB
+                                                    for i in entry.Offset + 1 .. entry.Offset + entry.Length - 1 do
+                                                        let b = bigint pool.Bytes[i]
+                                                        if b < minB then minB <- b
+                                                        if b > maxB then maxB <- b
+                                                    Ok(minB, maxB)
+                                            | None ->
+                                                if viewProv = Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked ||
+                                                   (match graph.Nodes.TryFind inspectTarget with
+                                                    | Some n -> Types.isStringType (Clef.Compiler.NativeTypedTree.UnionFind.applySubst n.Type)
+                                                    | None -> false) then
+                                                    Ok(0I, 255I)
+                                                else
+                                                    match graph.Nodes.TryFind inspectTarget |> Option.map (fun n -> Clef.Compiler.NativeTypedTree.UnionFind.applySubst n.Type) with
+                                                    | Some(NativeType.TApp(tc, [elem])) when Types.isReadOnlyViewTypeCon tc || tc.NTUKind = Some NTUKind.NTUarray ->
+                                                        if Types.isIntegerType elem then
+                                                            match graph.ElementRanges.Value.TryFind (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType elem) with
+                                                            | Some(ValueRange.Bounded(lo, hi)) when lo <= hi -> Ok(lo, hi)
+                                                            | _ -> Error "CCS8424: Read-only buffer requires a bounded element integer range matching the boundary descriptor."
+                                                        else
+                                                            Error "CCS8424: Integer boundary descriptor cannot accept a non-integer read-only buffer element type."
+                                                    | _ -> Error "CCS8424: Read-only buffer requires a settled element type matching the boundary descriptor."
+                                        do! require (minDecl <= srcLo && srcLo <= srcHi && srcHi <= maxDecl)
+                                                (sprintf "CCS8424: Read-only buffer element range [%s..%s] exceeds boundary descriptor integer range [%s..%s]." (string srcLo) (string srcHi) (string minDecl) (string maxDecl))
+                                        let elemInfo =
+                                            { Id = anchorFor ro site "element-coverage"; Kind = "foreign-readonly-buffer-element-coverage"; Logic = "QF_LIA"
+                                              Statement = "The read-only buffer element range is covered by the declared boundary descriptor integer range."
+                                              Source = fmtRange site.Range; Refs = refs
+                                              Body = ObligationBody.IntegerRepresentationCoverage(srcLo, srcHi, minDecl, maxDecl) }
+                                        let elemCitizen = Ingredients.ownedObligationNode retained site enrichId elemInfo
+                                        let eCovSupport = Set.union sliceParticipants (Set.ofList [site.Id; ro.Quote; actual])
+                                        return { NewNodes = [elemCitizen]; Annotated = []; NewEdges = [constrains (Set.toList eCovSupport) elemCitizen] } }
+                                    | Some _ -> Error "CCS8424: Boundary descriptor integer range must be finite."
                                 let retentionInfo =
                                     let model: BufferRetentionDominationModel =
                                         { Call = site.Id; Declaration = ro.Quote; Buffer = actual; Residence = residenceNode
                                           Mode = retentionMode; AcquireOrder = acquireOrder; RetirementOrders = retirementOrders }
-                                    let rSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList (site.Id :: actual :: residenceNode :: retirements)]
+                                    let rSupport = Set.unionMany [sliceParticipants; absenceParticipants; Set.ofList (site.Id :: actual :: residenceNode :: retirements)]
                                     let info =
                                         { Id = anchorFor ro site "retention"; Kind = "foreign-buffer-retention-domination"; Logic = "QF_LIA"
                                           Statement = "The read-only buffer residence dominates the foreign call and all declared retentions until retirement."
                                           Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.BufferRetentionDomination model }
                                     let citizen = Ingredients.ownedObligationNode retained site enrichId info
-                                    citizen, Enrichment.combine Enrichment.empty { NewNodes = [citizen]; Annotated = []; NewEdges = [constrains (Set.toList rSupport) citizen] }
+                                    citizen, Enrichment.combine elemCoverageEnrich { NewNodes = [citizen]; Annotated = []; NewEdges = [constrains (Set.toList rSupport) citizen] }
                                 let retCitizen, retEnrich = retentionInfo
                                 match ro.Contract.Extent with
                                 | BAREWire.Descriptors.ReadOnlyBufferExtent.ExplicitCount countParam ->
@@ -2485,8 +2609,8 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                         match graph.Nodes.TryFind countArg |> Option.bind _.ValueRange with
                                         | Some(ValueRange.Bounded(lo, hi)) when lo >= 0I && lo <= hi -> Ok(lo, hi)
                                         | _ -> Error "CCS8424: ExplicitCount argument requires a finite nonnegative count domain."
-                                    do! require (hi <= extentCapacity)
-                                            (sprintf "CCS8424: ExplicitCount upper bound %A exceeds buffer capacity %A." hi extentCapacity)
+                                    do! require (hi * elemBytes <= slicedCapacity)
+                                            (sprintf "CCS8424: ExplicitCount upper bound %s (%s bytes) exceeds buffer capacity %s." (string hi) (string (hi * elemBytes)) (string slicedCapacity))
                                     let extentClaimId =
                                         match retained.Obligations.TryFind (anchorFor ro site "extent") with
                                         | Some existing -> existing
@@ -2494,13 +2618,13 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                     let extentModel: ZeroCopyBufferExtentModel =
                                         { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; CountParameter = countParam
                                           Buffer = actual; Count = countArg; MinimumCount = lo; MaximumCount = hi
-                                          ExtentCapacity = extentCapacity; ElementBytes = 1; CountCoverage = extentClaimId }
+                                          ExtentCapacity = slicedCapacity; ElementBytes = int elemBytes; CountCoverage = extentClaimId }
                                     let extentInfo =
                                         { Id = anchorFor ro site "extent"; Kind = "foreign-readonly-buffer-extent"; Logic = "QF_LIA"
                                           Statement = "The foreign explicit-count read stays within the established read-only buffer byte extent with zero copies."
                                           Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.ZeroCopyBufferExtent extentModel }
                                     let extentCitizen = { (Ingredients.ownedObligationNode retained site enrichId extentInfo) with Id = extentClaimId }
-                                    let eSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList [site.Id; actual; countArg]]
+                                    let eSupport = Set.unionMany [sliceParticipants; absenceParticipants; Set.ofList [site.Id; actual; countArg]]
                                     let combined = Enrichment.combine retEnrich { NewNodes = [extentCitizen]; Annotated = []; NewEdges = [constrains (Set.toList eSupport) extentCitizen] }
                                     let participants =
                                         [ { Role = ParticipantRole.ReadOnlyBufferCall; Node = site.Id; Ordinal = 0; Group = site.Id }
@@ -2510,11 +2634,12 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                         (retirements |> List.mapi (fun i r -> { Role = ParticipantRole.ReadOnlyBufferRetirement; Node = r; Ordinal = i; Group = site.Id }))
                                     let row: BoundaryReadOnlyBufferUse =
                                         { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; Buffer = actual
-                                          Residence = residenceNode; Crossing = BoundaryReadOnlyBufferCrossing.ExplicitZeroCopy(countParam, countArg, extentCapacity, extentCitizen.Id)
+                                          Residence = residenceNode; Crossing = BoundaryReadOnlyBufferCrossing.ExplicitZeroCopy(countParam, countArg, slicedCapacity, extentCitizen.Id)
                                           Copies = 0; RetentionProof = retCitizen.Id; AccessExclusivityProof = None; Retirements = retirements
                                           Participants = ParticipantEvidence.Established participants }
                                     return row, combined
                                 | BAREWire.Descriptors.ReadOnlyBufferExtent.UncountedNulTerminated ->
+                                    do! require (elemBytes = 1I) "CCS8424: NUL-terminated foreign buffer requires single-byte element representation."
                                     do! require (not literalZeroCheck) "CCS8424: NUL-terminated foreign buffer contains an interior NUL byte or lacks trailing NUL."
                                     match staticPoolInfo with
                                     | Some(_, poolIdx, entry, staticOrigin) ->
@@ -2527,7 +2652,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                               Statement = "The uncounted NUL-terminated path borrows an immutable static string entry with verified zero interior NULs."
                                               Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.UncountedPathTermination termModel }
                                         let termCitizen = Ingredients.ownedObligationNode retained site enrichId termInfo
-                                        let tSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList [site.Id; actual; staticOrigin]]
+                                        let tSupport = Set.unionMany [sliceParticipants; absenceParticipants; Set.ofList [site.Id; actual; staticOrigin]]
                                         let combined = Enrichment.combine retEnrich { NewNodes = [termCitizen]; Annotated = []; NewEdges = [constrains (Set.toList tSupport) termCitizen] }
                                         let participants =
                                             [ { Role = ParticipantRole.ReadOnlyBufferCall; Node = site.Id; Ordinal = 0; Group = site.Id }
@@ -2543,7 +2668,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                               Participants = ParticipantEvidence.Established participants }
                                         return row, combined
                                     | None ->
-                                        let! byteLen = runtimeByteLenOpt |> needed "CCS8424: Runtime NUL-terminated buffer requires a known finite byte length without interior NULs."
+                                        let! byteLen = slicedRuntimeByteLen |> needed "CCS8424: Runtime NUL-terminated buffer requires a known finite byte length without interior NULs."
                                         let cap = int (byteLen + 1I)
                                         let stagingId, stagingNodes =
                                             if residenceNode <> actual then residenceNode, []
@@ -2573,7 +2698,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                               Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.UncountedPathTermination termModel }
                                         let termCitizen = Ingredients.ownedObligationNode retained site enrichId termInfo
                                         let extraNodes = termCitizen :: stagingNodes
-                                        let tSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList [site.Id; actual; stagingId]]
+                                        let tSupport = Set.unionMany [sliceParticipants; absenceParticipants; Set.ofList [site.Id; actual; stagingId]]
                                         let combined = Enrichment.combine retEnrich { NewNodes = extraNodes; Annotated = []; NewEdges = [constrains (Set.toList tSupport) termCitizen] }
                                         let participants =
                                             [ { Role = ParticipantRole.ReadOnlyBufferCall; Node = site.Id; Ordinal = 0; Group = site.Id }
@@ -2649,8 +2774,16 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                     | SemanticKind.RecordExpr(fields, copyFrom) ->
                                         if (fields |> List.exists (snd >> derived.Contains)) || (copyFrom |> Option.exists derived.Contains) then
                                             add node.Id
-                                    | SemanticKind.Application(callee, [arg]) when isTupleAccessorIntrinsic graph callee ->
-                                        if derived.Contains arg then add node.Id
+                                    | SemanticKind.Application(callee, args) ->
+                                        match graph.Nodes.TryFind callee with
+                                        | Some { Kind = SemanticKind.Intrinsic info }
+                                            when info.Module = IntrinsicModule.Array &&
+                                                 not args.IsEmpty &&
+                                                 (info.FullName = "ReadOnlyView.ofArray" || info.FullName = "ReadOnlyView.ofString" || info.FullName = "ReadOnlyView.slice") ->
+                                            if derived.Contains args.Head then add node.Id
+                                        | _ when args.Length = 1 && isTupleAccessorIntrinsic graph callee ->
+                                            if derived.Contains args.Head then add node.Id
+                                        | _ -> ()
                                     | SemanticKind.Set(target, rhs)
                                     | SemanticKind.FieldSet(target, _, rhs) ->
                                         if derived.Contains rhs then
@@ -3276,7 +3409,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         | Some counted ->
                             match formalArgTy with
                             | Some ty when (match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
-                                            | NativeType.TApp(tc, [_]) when tc.Name = "ReadOnlyView" -> true
+                                            | NativeType.TApp(tc, [_]) when Types.isReadOnlyViewTypeCon tc -> true
                                             | substituted -> Types.tryGetNTUKind substituted = Some NTUKind.NTUptr) ->
                                 Ok(BoundaryScalar.ReadOnlyBytes counted.Quote)
                             | _ ->

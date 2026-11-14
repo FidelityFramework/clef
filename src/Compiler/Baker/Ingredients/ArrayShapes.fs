@@ -8,6 +8,15 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
 module Boundaries = Clef.Compiler.Baker.Recipes.BoundaryDeclarations
+module DirectCaptures = Clef.Compiler.PSGSaturation.SemanticGraph.DirectCaptures
+module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
+
+[<RequireQualifiedAccess>]
+type ReadOnlyViewProvenance =
+    | ByteBacked
+    | ArrayBacked
+    | MixedConflict
+    | Unknown
 
 [<RequireQualifiedAccess>]
 type Length = Constant of bigint | Count of NodeId
@@ -143,7 +152,9 @@ let reader (graph:SemanticGraph) =
         | Some {Kind=SemanticKind.Application _} ->
             match intrinsicApplication graph id with
             | Some({Module=IntrinsicModule.Array;Operation=("zeroCreate"|"create"|"init")},value::_,_) -> count value
-            | Some({Module=IntrinsicModule.Array;Operation="sub"},[_;_;value],_) -> count value
+            | Some({Module=IntrinsicModule.Array;Operation=("sub" | "slice")},[_;_;value],_) -> count value
+            | Some({Module=IntrinsicModule.Array;Operation=("ofArray" | "ofString")},[source],_) ->
+                follow seen source |> add
             | Some({Module=IntrinsicModule.String;Operation="toBytes"},[source],_) ->
                 follow seen source |> add
             | Some({Module=IntrinsicModule.String;Operation="fromBytes"},[snapshot],_) ->
@@ -199,3 +210,286 @@ let observations (graph:SemanticGraph) =
                 | _ -> None
             | _ -> None
         source |> Option.bind read |> Option.map(fun extent -> Map.add id extent values) |> Option.defaultValue values) Map.empty
+
+type private ProvenanceState =
+    | Unset
+    | Resolved of ReadOnlyViewProvenance
+
+let private joinState a b =
+    match a, b with
+    | Unset, x | x, Unset -> x
+    | Resolved ReadOnlyViewProvenance.MixedConflict, _
+    | _, Resolved ReadOnlyViewProvenance.MixedConflict -> Resolved ReadOnlyViewProvenance.MixedConflict
+    | Resolved x, Resolved y when x = y -> Resolved x
+    | Resolved _, Resolved _ -> Resolved ReadOnlyViewProvenance.MixedConflict
+
+let private joinNonEmpty states =
+    match states with
+    | [] -> Resolved ReadOnlyViewProvenance.Unknown
+    | _ -> List.fold joinState Unset states
+
+/// Graph-flow classification of whether a ReadOnlyView<'T> originates from
+/// UTF-8/byte storage (ReadOnlyView.ofString or byte BorrowedResultView),
+/// an array (ReadOnlyView.ofArray), or a mixed conflict across branches/calls.
+let readOnlyViewClassifier (graph: SemanticGraph) : NodeId -> ReadOnlyViewProvenance =
+    let flow = Origins.resolve graph
+    let inputs = FormalDemand.reader graph flow
+    let descriptors = PlatformResolution.readDescriptors graph
+    let borrowedByteBindings =
+        descriptors.BorrowedResultViews
+        |> List.choose (fun bv ->
+            match graph.Nodes.TryFind bv.Declaration.Body with
+            | Some bodyNode ->
+                let viewTy =
+                    match applySubst bodyNode.Type with
+                    | NativeType.TApp(tc, [inner]) when tc.Name = "option" || tc.Name = "Option" -> inner
+                    | ty -> ty
+                match Types.tryGetReadOnlyViewElement viewTy |> Option.bind Types.tryGetNTUKind with
+                | Some(NTUKind.NTUuint(NTUWidth.Fixed 8))
+                | Some(NTUKind.NTUint(NTUWidth.Resolved WidthDimension.Register))
+                | Some(NTUKind.NTUuint(NTUWidth.Resolved WidthDimension.Register)) -> Some bv.Declaration.Binding
+                | _ -> None
+            | None -> None)
+        |> Set.ofList
+    let setsByTarget = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
+    let fieldSetsByTarget = System.Collections.Generic.Dictionary<NodeId * string, NodeId list>()
+    let indexSetsByTarget = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
+    let patternScrutinees = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
+    let addToDict (dict: System.Collections.Generic.Dictionary<'K, NodeId list>) (key: 'K) (value: NodeId) =
+        match dict.TryGetValue key with
+        | true, existing -> dict[key] <- value :: existing
+        | false, _ -> dict[key] <- [value]
+    let rec targetRoots seen id =
+        if Set.contains id seen then [] else
+        let seen = Set.add id seen
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.VarRef(_, Some t) } -> t :: targetRoots seen t
+        | Some { Kind = SemanticKind.CellAddress b } -> b :: targetRoots seen b
+        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+        | Some { Kind = SemanticKind.EagerExpr inner }
+        | Some { Kind = SemanticKind.Deref inner }
+        | Some { Kind = SemanticKind.Reborrow inner } -> targetRoots seen inner
+        | _ -> [id]
+    for node in graph.Nodes.Values do
+        if node.IsReachable then
+            match node.Kind with
+            | SemanticKind.Set(target, rhs) ->
+                for t in targetRoots Set.empty target do
+                    addToDict setsByTarget t rhs
+            | SemanticKind.FieldSet(target, fieldName, rhs) ->
+                for t in targetRoots Set.empty target do
+                    addToDict fieldSetsByTarget (t, fieldName) rhs
+            | SemanticKind.IndexSet(target, _, rhs) ->
+                for t in targetRoots Set.empty target do
+                    addToDict indexSetsByTarget t rhs
+            | SemanticKind.Application _ ->
+                match intrinsicApplication graph node.Id with
+                | Some({ Module = IntrinsicModule.Array; Operation = "set" }, target :: _ :: rhs :: _, _) ->
+                    for t in targetRoots Set.empty target do
+                        addToDict indexSetsByTarget t rhs
+                | _ -> ()
+            | SemanticKind.Match(scrutinee, cases) ->
+                for c in cases do
+                    for pb in c.PatternBindings do
+                        addToDict patternScrutinees pb scrutinee
+            | SemanticKind.CaseElimination(scrutinee, arms) ->
+                for arm in arms do
+                    for b in arm.Bindings do
+                        addToDict patternScrutinees b scrutinee
+            | _ -> ()
+    let dictLookup (dict: System.Collections.Generic.Dictionary<'K, NodeId list>) key =
+        match dict.TryGetValue key with
+        | true, xs -> xs
+        | false, _ -> []
+    let rec rootCallee nid =
+        match graph.Nodes.TryFind nid with
+        | Some { Kind = SemanticKind.Application(c, _) } -> rootCallee c
+        | _ -> nid
+    let memo = System.Collections.Generic.Dictionary<NodeId, ProvenanceState>()
+    let rec walk seen seenFields seenTuples id =
+        if Set.isEmpty seen && Set.isEmpty seenFields && Set.isEmpty seenTuples then
+            match memo.TryGetValue id with
+            | true, cached -> cached
+            | false, _ ->
+                let res = compute seen seenFields seenTuples id
+                memo[id] <- res
+                res
+        else compute seen seenFields seenTuples id
+    and computeFieldRead seen seenFields seenTuples fieldName recId =
+        let key = recId, fieldName
+        if Set.contains key seenFields then Unset else
+        let seenFields = Set.add key seenFields
+        let fieldStores = dictLookup fieldSetsByTarget key |> List.map (walk seen seenFields seenTuples)
+        let recVal =
+            match graph.Nodes.TryFind recId with
+            | Some { Kind = SemanticKind.VarRef(_, Some inner) }
+            | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+            | Some { Kind = SemanticKind.EagerExpr inner }
+            | Some { Kind = SemanticKind.Deref inner }
+            | Some { Kind = SemanticKind.Reborrow inner } -> computeFieldRead seen seenFields seenTuples fieldName inner
+            | Some({ Kind = SemanticKind.Binding _ } as bnode) ->
+                (bnode.Children @ dictLookup setsByTarget recId)
+                |> List.map (computeFieldRead seen seenFields seenTuples fieldName)
+                |> joinNonEmpty
+            | Some({ Kind = SemanticKind.PatternBinding _ } as pnode) ->
+                let sources =
+                    match inputs recId with
+                    | Some formal -> formal.Demanded |> List.map _.Actual
+                    | None ->
+                        let sourceDef = DirectCaptures.sourceDefinition graph recId
+                        let captures = if sourceDef <> recId then [sourceDef] else []
+                        pnode.Children @ captures @ dictLookup patternScrutinees recId @ dictLookup setsByTarget recId
+                sources |> List.map (computeFieldRead seen seenFields seenTuples fieldName) |> joinNonEmpty
+            | Some { Kind = SemanticKind.Sequential items } ->
+                match List.tryLast items with
+                | Some lastId -> computeFieldRead seen seenFields seenTuples fieldName lastId
+                | None -> Resolved ReadOnlyViewProvenance.Unknown
+            | Some { Kind = SemanticKind.IfThenElse(_, yes, Some no) } ->
+                joinState (computeFieldRead seen seenFields seenTuples fieldName yes) (computeFieldRead seen seenFields seenTuples fieldName no)
+            | Some { Kind = SemanticKind.IfThenElse(_, yes, None) } ->
+                computeFieldRead seen seenFields seenTuples fieldName yes
+            | Some { Kind = SemanticKind.Match(_, cases) } ->
+                cases |> List.map (fun c -> computeFieldRead seen seenFields seenTuples fieldName c.Body) |> joinNonEmpty
+            | Some { Kind = SemanticKind.CaseElimination(_, arms) } ->
+                arms |> List.map (fun arm -> computeFieldRead seen seenFields seenTuples fieldName arm.Body) |> joinNonEmpty
+            | Some { Kind = SemanticKind.RecordExpr(fields, copyFrom) } ->
+                match fields |> List.tryPick (fun (fname, fval) -> if fname = fieldName then Some fval else None) with
+                | Some fval -> walk seen seenFields seenTuples fval
+                | None ->
+                    match copyFrom with
+                    | Some baseRec -> computeFieldRead seen seenFields seenTuples fieldName baseRec
+                    | None -> Resolved ReadOnlyViewProvenance.Unknown
+            | Some { Kind = SemanticKind.Application _ } ->
+                match flow.Calls.TryFind recId with
+                | Some { Complete = true; Unknown = false; Targets = targets } when not targets.IsEmpty ->
+                    targets |> List.map (fun t -> computeFieldRead seen seenFields seenTuples fieldName t.Body) |> joinNonEmpty
+                | _ -> Resolved ReadOnlyViewProvenance.Unknown
+            | _ -> Resolved ReadOnlyViewProvenance.Unknown
+        fieldStores |> List.fold joinState recVal
+    and computeTupleRead seen seenFields seenTuples index tupId =
+        let key = tupId, index
+        if Set.contains key seenTuples then Unset else
+        let seenTuples = Set.add key seenTuples
+        let tupleStores = dictLookup setsByTarget tupId |> List.map (computeTupleRead seen seenFields seenTuples index)
+        let tupVal =
+            match graph.Nodes.TryFind tupId with
+            | Some { Kind = SemanticKind.VarRef(_, Some inner) }
+            | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+            | Some { Kind = SemanticKind.EagerExpr inner }
+            | Some { Kind = SemanticKind.Deref inner }
+            | Some { Kind = SemanticKind.Reborrow inner } -> computeTupleRead seen seenFields seenTuples index inner
+            | Some({ Kind = SemanticKind.Binding _ } as bnode) ->
+                (bnode.Children @ dictLookup setsByTarget tupId)
+                |> List.map (computeTupleRead seen seenFields seenTuples index)
+                |> joinNonEmpty
+            | Some({ Kind = SemanticKind.PatternBinding _ } as pnode) ->
+                let sources =
+                    match inputs tupId with
+                    | Some formal -> formal.Demanded |> List.map _.Actual
+                    | None ->
+                        let sourceDef = DirectCaptures.sourceDefinition graph tupId
+                        let captures = if sourceDef <> tupId then [sourceDef] else []
+                        pnode.Children @ captures @ dictLookup patternScrutinees tupId @ dictLookup setsByTarget tupId
+                sources |> List.map (computeTupleRead seen seenFields seenTuples index) |> joinNonEmpty
+            | Some { Kind = SemanticKind.Sequential items } ->
+                match List.tryLast items with
+                | Some lastId -> computeTupleRead seen seenFields seenTuples index lastId
+                | None -> Resolved ReadOnlyViewProvenance.Unknown
+            | Some { Kind = SemanticKind.IfThenElse(_, yes, Some no) } ->
+                joinState (computeTupleRead seen seenFields seenTuples index yes) (computeTupleRead seen seenFields seenTuples index no)
+            | Some { Kind = SemanticKind.IfThenElse(_, yes, None) } ->
+                computeTupleRead seen seenFields seenTuples index yes
+            | Some { Kind = SemanticKind.Match(_, cases) } ->
+                cases |> List.map (fun c -> computeTupleRead seen seenFields seenTuples index c.Body) |> joinNonEmpty
+            | Some { Kind = SemanticKind.CaseElimination(_, arms) } ->
+                arms |> List.map (fun arm -> computeTupleRead seen seenFields seenTuples index arm.Body) |> joinNonEmpty
+            | Some { Kind = SemanticKind.TupleExpr items } ->
+                match List.tryItem index items with
+                | Some item -> walk seen seenFields seenTuples item
+                | None -> Resolved ReadOnlyViewProvenance.Unknown
+            | Some { Kind = SemanticKind.Application _ } ->
+                match flow.Calls.TryFind tupId with
+                | Some { Complete = true; Unknown = false; Targets = targets } when not targets.IsEmpty ->
+                    targets |> List.map (fun t -> computeTupleRead seen seenFields seenTuples index t.Body) |> joinNonEmpty
+                | _ -> Resolved ReadOnlyViewProvenance.Unknown
+            | _ -> Resolved ReadOnlyViewProvenance.Unknown
+        tupleStores |> List.fold joinState tupVal
+    and compute seen seenFields seenTuples id =
+        if Set.contains id seen then Unset else
+        let seen = Set.add id seen
+        let joinAll items = items |> List.map (walk seen seenFields seenTuples) |> joinNonEmpty
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.VarRef(_, Some inner) }
+        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+        | Some { Kind = SemanticKind.EagerExpr inner }
+        | Some { Kind = SemanticKind.DUEliminate(inner, _, _, _) }
+        | Some { Kind = SemanticKind.EnvironmentRead(_, inner) }
+        | Some { Kind = SemanticKind.DUConstruct(_, _, Some inner, _) } -> walk seen seenFields seenTuples inner
+        | Some { Kind = SemanticKind.DUConstruct(_, _, None, _) } -> Unset
+        | Some { Kind = SemanticKind.FieldGet(receiver, fieldName) } ->
+            computeFieldRead seen seenFields seenTuples fieldName receiver
+        | Some { Kind = SemanticKind.TupleGet(tupleId, index) } ->
+            computeTupleRead seen seenFields seenTuples index tupleId
+        | Some { Kind = SemanticKind.ArrayExpr elements } ->
+            match elements with
+            | [] -> Unset
+            | _ -> elements |> List.map (walk seen seenFields seenTuples) |> List.fold joinState Unset
+        | Some { Kind = SemanticKind.IndexGet(buffer, _) } ->
+            let elemStores =
+                [ for t in targetRoots Set.empty buffer do yield! dictLookup indexSetsByTarget t ]
+                |> List.map (walk seen seenFields seenTuples)
+            elemStores |> List.fold joinState (walk seen seenFields seenTuples buffer)
+        | Some({ Kind = SemanticKind.Binding _ } as node) ->
+            (node.Children @ dictLookup setsByTarget id) |> joinAll
+        | Some { Kind = SemanticKind.Sequential items } ->
+            match List.tryLast items with
+            | Some lastId -> walk seen seenFields seenTuples lastId
+            | None -> Resolved ReadOnlyViewProvenance.Unknown
+        | Some { Kind = SemanticKind.IfThenElse(_, yes, Some no) } ->
+            joinState (walk seen seenFields seenTuples yes) (walk seen seenFields seenTuples no)
+        | Some { Kind = SemanticKind.IfThenElse(_, yes, None) } ->
+            walk seen seenFields seenTuples yes
+        | Some { Kind = SemanticKind.Match(_, cases) } ->
+            cases |> List.map _.Body |> joinAll
+        | Some { Kind = SemanticKind.CaseElimination(_, arms) } ->
+            arms |> List.map _.Body |> joinAll
+        | Some({ Kind = SemanticKind.PatternBinding _ } as node) ->
+            match inputs id with
+            | Some formal ->
+                formal.Demanded |> List.map _.Actual |> joinAll
+            | None ->
+                let sourceDef = DirectCaptures.sourceDefinition graph id
+                let captures = if sourceDef <> id then [sourceDef] else []
+                let scrutinees = dictLookup patternScrutinees id
+                let stores = dictLookup setsByTarget id
+                (node.Children @ captures @ scrutinees @ stores) |> joinAll
+        | Some { Kind = SemanticKind.Application(callee, _) } ->
+            match intrinsicApplication graph id with
+            | Some({ Module = IntrinsicModule.Array; FullName = "ReadOnlyView.ofString" }, _, _) ->
+                Resolved ReadOnlyViewProvenance.ByteBacked
+            | Some({ Module = IntrinsicModule.Array; FullName = "ReadOnlyView.ofArray" }, _, _) ->
+                Resolved ReadOnlyViewProvenance.ArrayBacked
+            | Some({ Module = IntrinsicModule.Array; FullName = "ReadOnlyView.slice" }, sourceId :: _, _) ->
+                walk seen seenFields seenTuples sourceId
+            | Some({ Module = IntrinsicModule.Array; Operation = "get" }, buffer :: _, _) ->
+                let elemStores =
+                    [ for t in targetRoots Set.empty buffer do yield! dictLookup indexSetsByTarget t ]
+                    |> List.map (walk seen seenFields seenTuples)
+                elemStores |> List.fold joinState (walk seen seenFields seenTuples buffer)
+            | _ ->
+                let isBorrowedExternal =
+                    match Boundaries.target graph (rootCallee callee) with
+                    | Some(binding, _) -> Set.contains binding.Id borrowedByteBindings
+                    | None -> false
+                if isBorrowedExternal then
+                    Resolved ReadOnlyViewProvenance.ByteBacked
+                else
+                    match flow.Calls.TryFind id with
+                    | Some { Complete = true; Unknown = false; Targets = targets } when not targets.IsEmpty ->
+                        targets |> List.map _.Body |> joinAll
+                    | _ -> Resolved ReadOnlyViewProvenance.Unknown
+        | _ -> Resolved ReadOnlyViewProvenance.Unknown
+    fun id ->
+        match walk Set.empty Set.empty Set.empty id with
+        | Unset -> ReadOnlyViewProvenance.Unknown
+        | Resolved p -> p

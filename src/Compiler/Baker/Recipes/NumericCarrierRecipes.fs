@@ -268,28 +268,39 @@ let rec private kinds ty =
 
 /// Array element settlement shares the same range/representation owner. It is
 /// computed in Baker, never reconstructed by a collection witness.
-let private elementSlot (graph: SemanticGraph) (node: SemanticNode) =
+let private elementSlot (graph: SemanticGraph) (classifyView: NodeId -> Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance) (node: SemanticNode) =
+    let settledElementSlot element =
+        match Types.tryGetNTUKind element with
+        | Some NTUKind.NTUbool -> Some SettledSlot.Bool
+        | Some NTUKind.NTUchar -> Some SettledSlot.Char
+        | Some kind when NTUKind.isInteger kind ->
+            let key = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType element
+            match graph.ElementRanges.Value.TryFind key with
+            | Some range ->
+                match range, RangeAnalysis.heldWidthOf graph range with
+                | ValueRange.Bounded _, Some bits when bits > 0 ->
+                    let representation = RangeAnalysis.selectedRepresentationOf graph range
+                    let covered =
+                        match representation with
+                        | Some representation -> Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.RangeSources.declaredRange representation |> Option.exists (fun capacity -> ValueRange.contains capacity range)
+                        | None -> graph.Platform |> Option.exists (fun context -> PlatformContext.substrateKind context = SubstrateKind.FPGA)
+                    if covered then Some(SettledSlot.Integer(bits, representation |> Option.map _.Name)) else None
+                | _ -> None
+            | None -> None
+        | _ -> None
     match applySubst node.Type with
-    | NativeType.TApp(tc, [element]) when tc.NTUKind = Some NTUKind.NTUarray ->
+    | NativeType.TApp(tc, [element]) when tc.NTUKind = Some NTUKind.NTUarray || Types.isReadOnlyViewTypeCon tc ->
         match StringByteStorage.element graph node.Id with
         | Some slot -> Some slot
-        | None ->
-            match Types.tryGetNTUKind element with
-            | Some NTUKind.NTUbool -> Some SettledSlot.Bool
-            | Some NTUKind.NTUchar -> Some SettledSlot.Char
-            | Some kind when NTUKind.isInteger kind ->
-                let key = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType element
-                graph.ElementRanges.Value.TryFind key |> Option.bind (fun range ->
-                    match range, RangeAnalysis.heldWidthOf graph range with
-                    | ValueRange.Bounded _, Some bits when bits > 0 ->
-                        let representation = RangeAnalysis.selectedRepresentationOf graph range
-                        let covered =
-                            match representation with
-                            | Some representation -> Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.RangeSources.declaredRange representation |> Option.exists (fun capacity -> ValueRange.contains capacity range)
-                            | None -> graph.Platform |> Option.exists (fun context -> PlatformContext.substrateKind context = SubstrateKind.FPGA)
-                        if covered then Some(SettledSlot.Integer(bits, representation |> Option.map _.Name)) else None
-                    | _ -> None)
-            | _ -> None
+        | None when Types.isReadOnlyViewTypeCon tc ->
+            match classifyView node.Id with
+            | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked ->
+                Clef.Compiler.Baker.Ingredients.StringBytes.byteRepresentation graph
+                |> Option.map (fun (rep, _) -> SettledSlot.Integer(8, Some rep.Name))
+            | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict -> None
+            | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ArrayBacked
+            | Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.Unknown -> settledElementSlot element
+        | None -> settledElementSlot element
     | _ -> None
 
 let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inheritedCaptureReview: bool) (inheritedSequenceReview: bool)
@@ -419,11 +430,17 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
                 let reason = "The required scalar coverage obligation is unavailable."
                 values, Map.add id reason unresolved, Enrichment.combine proofs (pendingCoverage id reason)
             | _ -> carrier :: values, unresolved, proofs) ([], Map.empty, Enrichment.empty)
-    let elements = graph.Nodes |> Map.toList |> List.choose (fun (id, node) -> elementSlot graph node |> Option.map (fun slot -> id, slot)) |> Map.ofList
+    let classifyView = Clef.Compiler.Baker.Ingredients.ArrayShapes.readOnlyViewClassifier graph
+    let elements = graph.Nodes |> Map.toList |> List.choose (fun (id, node) -> elementSlot graph classifyView node |> Option.map (fun slot -> id, slot)) |> Map.ofList
     let elementTypes =
         graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
             match applySubst node.Type, elements.TryFind id with
-            | NativeType.TApp(tc, [element]), Some slot when tc.NTUKind = Some NTUKind.NTUarray -> Some(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType element, slot)
+            | NativeType.TApp(tc, [element]), Some slot
+                when tc.NTUKind = Some NTUKind.NTUarray ||
+                     (Types.isReadOnlyViewTypeCon tc &&
+                      classifyView id <> Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.ByteBacked &&
+                      classifyView id <> Clef.Compiler.Baker.Ingredients.ArrayShapes.ReadOnlyViewProvenance.MixedConflict) ->
+                Some(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType element, slot)
             | _ -> None)
         |> List.groupBy fst |> List.choose (fun (key, entries) ->
             match entries |> List.map snd |> List.distinct with [slot] -> Some(key, slot) | _ -> None) |> Map.ofList

@@ -245,6 +245,8 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
                         | NativeType.TApp(_, [ element ]),
                           Some(NTUKind.NTUarray | NTUKind.NTUborrowedview | NTUKind.NTUlazy | NTUKind.NTUseq | NTUKind.NTUlist | NTUKind.NTUset) ->
                             child "element" element
+                        | NativeType.TApp(tc, [ element ]), _ when Types.isReadOnlyViewTypeCon tc ->
+                            child "element" element
                         | NativeType.TApp(_, [ key; value ]), Some NTUKind.NTUmap -> child "key" key @ child "value" value
                         | _ -> []
 

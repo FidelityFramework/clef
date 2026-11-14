@@ -22,7 +22,7 @@ let private element (numeric:NumericWitnessProjection) id =
     numeric.Elements.TryFind id |> needed "An array construction lacks its complete-write element slot."
 let private elementIdentity (numeric:NumericWitnessProjection) id =
     match numeric.SourceTypes.TryFind id with
-    | Some(TypeIdentity.Application(constructor,[element])) when constructor.NativeKind=Some NTUKind.NTUarray -> element
+    | Some(TypeIdentity.Application((constructor: ConstructorIdentity),[element])) when constructor.NativeKind=Some NTUKind.NTUarray -> element
     | _ -> raise(MissingContract "An array copy operand lacks its exact source array element identity.")
 let private integer graph expected id =
     match (live graph id).Kind with

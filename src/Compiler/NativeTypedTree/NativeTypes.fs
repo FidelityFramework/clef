@@ -2148,6 +2148,33 @@ module Types =
     /// The schema is a nominal source type named by ViewLayoutDescriptor.
     let borrowedViewTyCon = mkNTUTypeConRefWithArity "BorrowedView" NTUKind.NTUborrowedview 1 TypeLayout.FatPointer
 
+    /// Read-only view over caller-owned or static byte/element storage (`memref<?xT>`).
+    let readOnlyViewTyCon =
+        { mkTypeConRef "ReadOnlyView" 1 TypeLayout.FatPointer with Module = ["__intrinsic"] }
+
+    /// Canonical intrinsic identity predicate for ReadOnlyView<'T>.
+    let isReadOnlyViewTypeCon (tc: TypeConRef) : bool =
+        tc.Name = readOnlyViewTyCon.Name
+        && tc.Module = readOnlyViewTyCon.Module
+        && tc.ParamKinds = readOnlyViewTyCon.ParamKinds
+        && tc.NTUKind = readOnlyViewTyCon.NTUKind
+        && TypeLayout.baseLayout tc.Layout = TypeLayout.FatPointer
+        && tc.FieldCount = 0
+        && tc.CaseCount = 0
+
+    /// Canonical intrinsic ConstructorIdentity predicate for ReadOnlyView<'T>.
+    let isReadOnlyViewConstructor (ci: ConstructorIdentity) : bool =
+        ci.Declaration.Name = readOnlyViewTyCon.Name
+        && ci.Declaration.Module = readOnlyViewTyCon.Module
+        && ci.Parameters = readOnlyViewTyCon.ParamKinds
+        && ci.NativeKind = readOnlyViewTyCon.NTUKind
+
+    /// Unwrap the element type when `ty` is an un-variable-wrapped ReadOnlyView<'T>.
+    let tryGetReadOnlyViewElement (ty: NativeType) : NativeType option =
+        match ty with
+        | NativeType.TApp(tc, [elem]) when isReadOnlyViewTypeCon tc -> Some elem
+        | _ -> None
+
     // Arena type constructor (arity 1 - lifetime measure parameter, design a.2:
     // `Arena<[<Measure>] 'lifetime>`; the position is measure-sorted and holds a TMeasure)
     // Usage: NativeType.TApp(Types.arenaTyCon, [lifetimeMeasure])

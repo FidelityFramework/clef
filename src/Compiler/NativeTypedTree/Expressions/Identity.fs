@@ -107,6 +107,13 @@ let rec private resolveIdentifierCore
 
     // 3. Two-part identifier (Module.operation) - check for module intrinsics
     elif parts.Length = 2 then
+        if parts.Head = "ReadOnlyView" && (tryLookupBinding fullName env).IsNone && (tryLookupBinding parts.Head env).IsNone then
+            match resolveReadOnlyViewOp parts.[1] range with
+            | Resolved (info, ty) -> IntrinsicNode (info, ty)
+            | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
+            | UnavailableSourceOperation msg -> RejectedSourceIntrinsic msg
+            | NotAnIntrinsic -> resolveBinding parts fullName env range
+        else
         // 3a. Try module-qualified intrinsic
         match tryParseModuleQualified fullName with
         | Some ((IntrinsicModule.Option | IntrinsicModule.Result | IntrinsicModule.Math), _) when

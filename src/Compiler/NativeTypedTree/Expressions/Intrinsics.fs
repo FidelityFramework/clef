@@ -387,6 +387,32 @@ let private resolveBorrowedViewOp (op: string) (range: SourceRange) : IntrinsicR
     | Some ty -> Resolved (mkIntrinsic IntrinsicModule.BorrowedView op IntrinsicCategory.Memory ("BorrowedView." + op), ty)
     | None -> UnknownOperation ("Unknown BorrowedView operation: " + op + ". Available: length, stride, get, set. Views are supplied only by declared mapping scopes.")
 
+let resolveReadOnlyViewOp (op: string) (range: SourceRange) : IntrinsicResolution =
+    let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
+    let tyParam = NativeType.TVar tyParamSpec
+    let view = NativeType.TApp(Types.readOnlyViewTyCon, [tyParam])
+    let arrayType = NativeType.TApp(Types.arrayTyCon, [tyParam])
+    let fullName = "ReadOnlyView." + op
+    match op with
+    | "length" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(view, Types.intType))
+        Resolved (mkIntrinsic IntrinsicModule.Array "length" IntrinsicCategory.Memory fullName, ty)
+    | "get" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(view, NativeType.TFun(Types.intType, tyParam)))
+        Resolved (mkIntrinsic IntrinsicModule.Array "get" IntrinsicCategory.Memory fullName, ty)
+    | "ofArray" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(arrayType, view))
+        Resolved (mkIntrinsic IntrinsicModule.Array "ofArray" IntrinsicCategory.Memory fullName, ty)
+    | "ofString" ->
+        let byteView = NativeType.TApp(Types.readOnlyViewTyCon, [Types.intType])
+        let ty = NativeType.TFun(Types.stringType, byteView)
+        Resolved (mkIntrinsic IntrinsicModule.Array "ofString" IntrinsicCategory.Memory fullName, ty)
+    | "slice" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(view, NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, view))))
+        Resolved (mkIntrinsic IntrinsicModule.Array "slice" IntrinsicCategory.Memory fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown ReadOnlyView operation: ReadOnlyView.{unknown}. Available: length, get, ofArray, ofString, slice"
+
 let private resolveFnPtrOp (op: string) (range: SourceRange) : IntrinsicResolution =
     let fullName = "FnPtr." + op
     let freshF = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
@@ -1426,7 +1452,8 @@ module RangeSources =
             [ "sub"; "copy"; "append"; "filter"; "rev"; "sort"; "sortBy"; "sortWith"; "sortDescending"
               "take"; "skip"; "truncate"; "concat"; "distinct"; "set"; "create"; "zeroCreate"
               "blit"; "fill"; "get"; "length"; "isEmpty"; "contains"; "exists"; "forall"; "iter"; "iteri"
-              "fold"; "sum"; "max"; "min"; "tryFind"; "find"; "tryFindIndex"; "findIndex"; "head"; "last" ]
+              "fold"; "sum"; "max"; "min"; "tryFind"; "find"; "tryFindIndex"; "findIndex"; "head"; "last"
+              "ofArray"; "slice" ]
         info.Module = IntrinsicModule.Array && List.contains info.Operation sameKeyOperations
 
     /// The array intrinsics whose elements are a function value's results, with the position

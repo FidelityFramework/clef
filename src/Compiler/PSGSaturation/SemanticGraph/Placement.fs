@@ -189,6 +189,7 @@ let rec private slotOf (p: Placer) (range: ValueRange) (ty: NativeType) : Settle
             | Some kind -> slotOfKind p range kind
             | None ->
                 match ty with
+                | NativeType.TApp (tycon, [_]) when Types.isReadOnlyViewTypeCon tycon -> SettledSlot.Pointer ViewWords
                 | NativeType.TApp (tycon, _) ->
                     match aggregateOf p.Graph ty with
                     | Some _ -> SettledSlot.Pointer ViewWords
@@ -726,9 +727,12 @@ let private captureSlot (p: Placer) (capture: CaptureInfo) : CaptureSlotKind * i
                 | None -> failwithf "Placement: the capture '%s' of the bare integer kind has no source node whose held width the slot can read" capture.Name
             | Some kind -> scalar (slotOfKind p ValueRange.Unbounded kind)
             | None ->
-                match aggregateOf p.Graph ty with
-                | Some _ -> CaptureSlotKind.Address, ptr
-                | None -> CaptureSlotKind.Handle, ptr
+                match ty with
+                | NativeType.TApp (tc, [_]) when Types.isReadOnlyViewTypeCon tc -> CaptureSlotKind.Decomposed, 2 * ptr
+                | _ ->
+                    match aggregateOf p.Graph ty with
+                    | Some _ -> CaptureSlotKind.Address, ptr
+                    | None -> CaptureSlotKind.Handle, ptr
 
 //-------------------------------------------------------------------------
 // Continuations: explicit Baker field identities, without a code-pointer slot.
@@ -935,7 +939,7 @@ let placeProgramSlot (graph: SemanticGraph) id =
             match ty with
             | NativeType.TTuple _ | NativeType.TUnion _ | NativeType.TAnon _ -> true
             | NativeType.TApp(tc, _) ->
-                tc.NTUKind = Some NTUKind.NTUarray || tc.NTUKind = Some NTUKind.NTUstring ||
+                tc.NTUKind = Some NTUKind.NTUarray || tc.NTUKind = Some NTUKind.NTUstring || Types.isReadOnlyViewTypeCon tc ||
                 tc.Name = "option" || tc.Name = "voption" || tc.Name = "Result" || tc.Name = "result" ||
                 (match TypeLayout.baseLayout tc.Layout with TypeLayout.Record | TypeLayout.Union -> true | _ -> false)
             | _ -> false
