@@ -37,6 +37,23 @@ type WritableFailure = {
 type private CheckedBuilder() =
     member _.Bind(value, next) = Result.bind next value
     member _.Return(value) = Ok value
+    member _.ReturnFrom(value: Result<'T, 'E>) = value
+    member _.Zero() = Ok ()
+    member _.Delay(f: unit -> Result<'T, 'E>) = f
+    member _.Run(f: unit -> Result<'T, 'E>) = f ()
+    member _.Combine(first: Result<unit, 'E>, second: unit -> Result<'T, 'E>) =
+        match first with
+        | Ok () -> second ()
+        | Result.Error err -> Result.Error err
+    member _.For(items: seq<'T>, body: 'T -> Result<unit, 'E>) =
+        use enumerator = items.GetEnumerator()
+        let rec loop () =
+            if not (enumerator.MoveNext()) then Ok ()
+            else
+                match body enumerator.Current with
+                | Ok () -> loop ()
+                | Result.Error err -> Result.Error err
+        loop ()
 let private checked' = CheckedBuilder()
 let private needed reason = function Some value -> Ok value | None -> Result.Error reason
 
@@ -762,46 +779,58 @@ let returnedExpansions (graph:SemanticGraph) =
 /// not widen ordinary array use closure or manufacture a missing lifetime.
 let returnedLifetime (graph:SemanticGraph) (construction:CheckedStringConstruction) =
     match construction.Returned with
-    | None -> None
+    | None -> Ok None
     | Some life ->
-        let demand okay reason=if not okay then invalidOp reason
-        let live id=graph.Nodes.TryFind id |> Option.filter _.IsReachable |> Option.defaultWith(fun()->invalidOp (sprintf "A returned checked lifetime participant %d was withdrawn." (NodeId.value id)))
-        let current=graph.Platform |> Option.bind _.ProjectMemoryPolicy
-        demand (current=Some(life.Policy.ProjectPath,life.Policy.SourceVersion,life.Policy.Model,true))
-            "The returned checked allocation permission or captured policy changed."
-        let platform=PlatformResolution.resolve graph |> Option.defaultWith(fun()->invalidOp "The returned checked platform is missing.")
-        let space=platform.Spaces |> List.tryFind(fun row->row.Node=life.Space && row.Kind="heap" && row.Access.Contains("w"))
-                  |> Option.defaultWith(fun()->invalidOp "The returned checked heap declaration changed.")
-        if life.MaximumLiveBytes<=0L then
-            match graph.Nodes.TryFind life.Capacity with
-            | Some{Kind=SemanticKind.Obligation{Body=ObligationBody.Pending reasons}} -> invalidOp(String.concat "; " reasons)
-            | _ -> invalidOp "The returned checked instance has no current positive settled lifetime."
-        demand (platform.Node=life.Platform && life.Body=construction.Owner)
-            "The returned checked instance has no current positive settled lifetime."
-        // Proof citizens are held logical support, not executable values.
-        // This exact role still needs its own current body and source incidence.
-        demand (match graph.Nodes.TryFind life.Capacity with
-                | Some{Kind=SemanticKind.Obligation info} -> info.Body=ObligationBody.CapacityFits(life.MaximumLiveBytes,space.Capacity)
-                | _ -> false) "The returned checked combined capacity citizen changed."
-        demand (graph.Edges |> List.exists(fun edge->
-                    edge.Target=life.Capacity && edge.Role=EdgeRole.Constrains &&
-                    ([life.Application;life.Platform;life.Space] |> List.forall(fun source->List.contains source edge.Sources))))
-            "The returned checked capacity citizen lost its exact owning source support."
-        let resolution=Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
-        demand (match resolution.Calls.TryFind life.Application with
-                | Some{Complete=true;Unknown=false;Targets=[target]} ->
-                    target.Lambda=life.Implementation && target.Body=life.Body && target.Arguments=[life.Argument] &&
-                    (match target.Parameters with [(_,_,formal)] -> formal=life.Formal | _ -> false)
-                | _ -> false) "The returned checked application lost its exact complete helper target."
-        demand (match (live life.Application).Kind with SemanticKind.Application(fn,[argument]) -> fn=life.Callee && argument=life.Argument | _ -> false)
-            "The returned checked application changed its callee or argument."
-        demand (match (live life.Callee).Kind,(live life.Declaration).Kind,(live life.Declaration).Children,(live life.Implementation).Kind with
-                | SemanticKind.VarRef(_,Some declaration),SemanticKind.Binding(_,false,false,_),[implementation],SemanticKind.Lambda([(_,_,formal)],body,[],_,_) ->
-                    declaration=life.Declaration && implementation=life.Implementation && formal=life.Formal && body=life.Body
-                | _ -> false) "The returned checked declaration, formal or body changed."
-        for site,name in [life.SomeBackingRetirement,"retireCheckedBacking";life.SomeCarrierRetirement,"retireCheckedCarrier";life.NoneCarrierRetirement,"retireCheckedCarrier"] do
-            match (live site).Kind with
-            | SemanticKind.Application(fn,[_]) -> demand (match (live fn).Kind with SemanticKind.Intrinsic{Module=IntrinsicModule.String;Operation=actual} -> actual=name | _ -> false)
-                                                    "The returned checked cleanup operation changed."
-            | _ -> invalidOp "The returned checked cleanup citizen was withdrawn."
-        Some(life,space)
+        let demand okay reason = if okay then Ok () else Result.Error reason
+        let live id =
+            graph.Nodes.TryFind id
+            |> Option.filter _.IsReachable
+            |> needed (sprintf "A returned checked lifetime participant %d was withdrawn." (NodeId.value id))
+        checked' {
+            let current = graph.Platform |> Option.bind _.ProjectMemoryPolicy
+            do! demand (current=Some(life.Policy.ProjectPath,life.Policy.SourceVersion,life.Policy.Model,true))
+                    "The returned checked allocation permission or captured policy changed."
+            let! platform = PlatformResolution.resolve graph |> needed "The returned checked platform is missing."
+            let! space =
+                platform.Spaces |> List.tryFind(fun row->row.Node=life.Space && row.Kind="heap" && row.Access.Contains("w"))
+                |> needed "The returned checked heap declaration changed."
+            do! if life.MaximumLiveBytes<=0L then
+                    match graph.Nodes.TryFind life.Capacity with
+                    | Some{Kind=SemanticKind.Obligation{Body=ObligationBody.Pending reasons}} -> Result.Error(String.concat "; " reasons)
+                    | _ -> Result.Error "The returned checked instance has no current positive settled lifetime."
+                else Ok ()
+            do! demand (platform.Node=life.Platform && life.Body=construction.Owner)
+                    "The returned checked instance has no current positive settled lifetime."
+            do! demand (match graph.Nodes.TryFind life.Capacity with
+                        | Some{Kind=SemanticKind.Obligation info} -> info.Body=ObligationBody.CapacityFits(life.MaximumLiveBytes,space.Capacity)
+                        | _ -> false) "The returned checked combined capacity citizen changed."
+            do! demand (graph.Edges |> List.exists(fun edge->
+                            edge.Target=life.Capacity && edge.Role=EdgeRole.Constrains &&
+                            ([life.Application;life.Platform;life.Space] |> List.forall(fun source->List.contains source edge.Sources))))
+                    "The returned checked capacity citizen lost its exact owning source support."
+            let resolution=Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+            do! demand (match resolution.Calls.TryFind life.Application with
+                        | Some{Complete=true;Unknown=false;Targets=[target]} ->
+                            target.Lambda=life.Implementation && target.Body=life.Body && target.Arguments=[life.Argument] &&
+                            (match target.Parameters with [(_,_,formal)] -> formal=life.Formal | _ -> false)
+                        | _ -> false) "The returned checked application lost its exact complete helper target."
+            let! appNode = live life.Application
+            do! demand (match appNode.Kind with SemanticKind.Application(fn,[argument]) -> fn=life.Callee && argument=life.Argument | _ -> false)
+                    "The returned checked application changed its callee or argument."
+            let! calleeNode = live life.Callee
+            let! declNode = live life.Declaration
+            let! implNode = live life.Implementation
+            do! demand (match calleeNode.Kind,declNode.Kind,declNode.Children,implNode.Kind with
+                        | SemanticKind.VarRef(_,Some declaration),SemanticKind.Binding(_,false,false,_),[implementation],SemanticKind.Lambda([(_,_,formal)],body,[],_,_) ->
+                            declaration=life.Declaration && implementation=life.Implementation && formal=life.Formal && body=life.Body
+                        | _ -> false) "The returned checked declaration, formal or body changed."
+            for site,name in [life.SomeBackingRetirement,"retireCheckedBacking";life.SomeCarrierRetirement,"retireCheckedCarrier";life.NoneCarrierRetirement,"retireCheckedCarrier"] do
+                let! siteNode = live site
+                match siteNode.Kind with
+                | SemanticKind.Application(fn,[_]) ->
+                    let! fnNode = live fn
+                    do! demand (match fnNode.Kind with SemanticKind.Intrinsic{Module=IntrinsicModule.String;Operation=actual} -> actual=name | _ -> false)
+                            "The returned checked cleanup operation changed."
+                | _ -> do! Result.Error "The returned checked cleanup citizen was withdrawn."
+            return Some(life,space)
+        }

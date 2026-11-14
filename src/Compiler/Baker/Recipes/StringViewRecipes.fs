@@ -1,33 +1,77 @@
 // SPDX-License-Identifier: MIT
-/// A string view follows an already validated source snapshot construction.
-/// Neither a byte carrier nor a historical snapshot marker proves a copy.
+// A string view follows an already validated source snapshot construction.
+// Neither a byte carrier nor a historical snapshot marker proves a copy.
 module Clef.Compiler.Baker.Recipes.StringViewRecipes
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
 
-exception private MissingContract of string
-let private demand condition reason = if not condition then raise (MissingContract reason)
-let private needed reason = function Some value -> value | None -> raise (MissingContract reason)
-let private only reason = function [value] -> value | _ -> raise (MissingContract reason)
+type private ResultBuilder() =
+    member _.Bind(value, next) = Result.bind next value
+    member _.Return(value) = Ok value
+    member _.ReturnFrom(value: Result<'T, 'E>) = value
+    member _.Zero() = Ok ()
+    member _.Delay(f: unit -> Result<'T, 'E>) = f
+    member _.Run(f: unit -> Result<'T, 'E>) = f ()
+    member _.Combine(first: Result<unit, 'E>, second: unit -> Result<'T, 'E>) =
+        match first with
+        | Ok () -> second ()
+        | Error err -> Error err
+    member _.For(items: seq<'T>, body: 'T -> Result<unit, 'E>) =
+        use enumerator = items.GetEnumerator()
+        let rec loop () =
+            if not (enumerator.MoveNext()) then Ok ()
+            else
+                match body enumerator.Current with
+                | Ok () -> loop ()
+                | Error err -> Error err
+        loop ()
+
+let private result = ResultBuilder()
+
+let private demand condition reason = if condition then Ok () else Error reason
+let private needed reason = function Some value -> Ok value | None -> Error reason
+let private only reason = function [value] -> Ok value | _ -> Error reason
 let private live (graph:SemanticGraph) id =
     graph.Nodes.TryFind id |> Option.filter _.IsReachable |> needed "A string snapshot premise is not a live source occurrence."
 
+let private isValidUtf8 (bytes: byte list) =
+    let isCont (b: byte) = b >= 0x80uy && b <= 0xBFuy
+    let rec loop remaining =
+        match remaining with
+        | [] -> true
+        | b0 :: rest when b0 <= 0x7Fuy -> loop rest
+        | b0 :: b1 :: rest when b0 >= 0xC2uy && b0 <= 0xDFuy && isCont b1 -> loop rest
+        | 0xE0uy :: b1 :: b2 :: rest when b1 >= 0xA0uy && b1 <= 0xBFuy && isCont b2 -> loop rest
+        | b0 :: b1 :: b2 :: rest when ((b0 >= 0xE1uy && b0 <= 0xECuy) || (b0 >= 0xEEuy && b0 <= 0xEFuy)) && isCont b1 && isCont b2 -> loop rest
+        | 0xEDuy :: b1 :: b2 :: rest when b1 >= 0x80uy && b1 <= 0x9Fuy && isCont b2 -> loop rest
+        | 0xF0uy :: b1 :: b2 :: b3 :: rest when b1 >= 0x90uy && b1 <= 0xBFuy && isCont b2 && isCont b3 -> loop rest
+        | b0 :: b1 :: b2 :: b3 :: rest when b0 >= 0xF1uy && b0 <= 0xF3uy && isCont b1 && isCont b2 && isCont b3 -> loop rest
+        | 0xF4uy :: b1 :: b2 :: b3 :: rest when b1 >= 0x80uy && b1 <= 0x8Fuy && isCont b2 && isCont b3 -> loop rest
+        | _ -> false
+    loop bytes
+
 let private endpoint (graph:SemanticGraph) start =
     let rec walk seen id =
-        demand (not(Set.contains id seen)) "A string snapshot alias is cyclic."
-        let seen=Set.add id seen
-        match (live graph id).Kind with
-        | SemanticKind.VarRef(_,Some binding) ->
-            match (live graph binding).Kind with
-            | SemanticKind.Binding(_,false,_,_) | SemanticKind.PatternBinding _ -> walk seen binding
-            | _ -> id
-        | SemanticKind.Binding(_,false,_,_) ->
-            match (live graph id).Children with [inner] -> walk seen inner | _ -> id
-        | SemanticKind.TypeAnnotation(inner,_) -> walk seen inner
-        | SemanticKind.Sequential values when not values.IsEmpty -> walk seen (List.last values)
-        | _ -> id
+        result {
+            do! demand (not(Set.contains id seen)) "A string snapshot alias is cyclic."
+            let seen = Set.add id seen
+            let! node = live graph id
+            match node.Kind with
+            | SemanticKind.VarRef(_,Some binding) ->
+                let! bindingNode = live graph binding
+                match bindingNode.Kind with
+                | SemanticKind.Binding(_,false,_,_) | SemanticKind.PatternBinding _ -> return! walk seen binding
+                | _ -> return id
+            | SemanticKind.Binding(_,false,_,_) ->
+                match node.Children with
+                | [inner] -> return! walk seen inner
+                | _ -> return id
+            | SemanticKind.TypeAnnotation(inner,_) -> return! walk seen inner
+            | SemanticKind.Sequential values when not values.IsEmpty -> return! walk seen (List.last values)
+            | _ -> return id
+        }
     walk Set.empty start
 
 let private application (graph:SemanticGraph) site =
@@ -52,20 +96,29 @@ let private view (graph:SemanticGraph) (node:SemanticNode) =
 
 let private carrierRepresentation (numeric:NumericWitnessProjection) id =
     match numeric.OccurrenceRepresentations.TryFind id with
-    | Some(Ok value) -> value
-    | Some(Error reason) -> raise(MissingContract reason)
-    | None -> raise(MissingContract "A string view lacks its exact source-settled buffer representation.")
+    | Some(Ok value) -> Ok value
+    | Some(Error reason) -> Error reason
+    | None -> Error "A string view lacks its exact source-settled buffer representation."
 
 let private zero (graph:SemanticGraph) id =
-    match (live graph (endpoint graph id)).Kind with
-    | SemanticKind.Literal(NativeLiteral.Int(0L,_)) | SemanticKind.Literal(NativeLiteral.UInt(0UL,_)) -> true
-    | _ -> false
+    result {
+        let! ep = endpoint graph id
+        let! node = live graph ep
+        match node.Kind with
+        | SemanticKind.Literal(NativeLiteral.Int(0L,_)) | SemanticKind.Literal(NativeLiteral.UInt(0UL,_)) -> return true
+        | _ -> return false
+    }
 
 let private completeCount graph source count =
-    match application graph (endpoint graph count) with
-    | Some(info,[buffer]) when info.Module=IntrinsicModule.Array && info.Operation="length" ->
-        endpoint graph source=endpoint graph buffer
-    | _ -> false
+    result {
+        let! countEp = endpoint graph count
+        match application graph countEp with
+        | Some(info,[buffer]) when info.Module=IntrinsicModule.Array && info.Operation="length" ->
+            let! srcEp = endpoint graph source
+            let! bufEp = endpoint graph buffer
+            return srcEp = bufEp
+        | _ -> return false
+    }
 
 let private excluded (graph:SemanticGraph) =
     let rec collect seen id =
@@ -83,43 +136,58 @@ let private checkedConstruction (graph:SemanticGraph) owner text snapshot =
         | EdgeRole.StringCheckedConstruction construction when edge.Target=owner -> Some(edge,construction)
         | _ -> None)
     match rows with
-    | [] -> None
+    | [] -> Ok None
     | [(row,construction)] ->
-        let incidence = [construction.Owner;construction.Input;construction.Snapshot;construction.Length
-                         construction.Validation;construction.Decision;construction.Text;construction.Success
-                         construction.Failure;construction.Retirement]
-        demand (row.Class=EdgeClass.Provenance && row.Ordinal=0 && construction.Owner=owner &&
-                construction.Text=text && construction.Snapshot=snapshot && construction.Validator="RFC3629-v1" &&
-                (incidence |> List.forall (fun id -> List.contains id row.Sources)))
-            "The checked string lost its exact snapshot/validator/outcome construction relation."
-        incidence |> List.iter (live graph >> ignore)
-        let intrinsic site operation =
-            match application graph site with
-            | Some(info,[actual]) -> info.Module=IntrinsicModule.String && info.Operation=operation && actual=snapshot
-            | _ -> false
-        demand (intrinsic construction.Validation "validateUtf8" && intrinsic construction.Retirement "retireSnapshot" &&
-                intrinsic text "fromBytes") "The checked string validator, retirement or text view uses another snapshot."
-        demand (completeCount graph construction.Input construction.Length)
-            "The checked string no longer retains its complete original input extent."
-        demand ((live graph construction.Validation).Type=Types.boolType)
-            "The checked string validator result is not the native Boolean decision."
-        let valueType=NativeType.TApp(Types.voptionTyCon,[Types.stringType])
-        demand ((live graph construction.Success).Type=valueType && (live graph construction.Failure).Type=valueType)
-            "The checked string outcome no longer has its exact native value-option carrier."
-        demand (match (live graph construction.Success).Kind,(live graph construction.Failure).Kind with
-                | SemanticKind.DUConstruct("ValueSome",1,Some payload,None),SemanticKind.DUConstruct("ValueNone",0,None,None) -> payload=text
-                | _ -> false) "The checked string changed its native success or failure case."
-        demand (match (live graph construction.Decision).Kind with
+        result {
+            let incidence = [construction.Owner;construction.Input;construction.Snapshot;construction.Length
+                             construction.Validation;construction.Decision;construction.Text;construction.Success
+                             construction.Failure;construction.Retirement]
+            do! demand (row.Class=EdgeClass.Provenance && row.Ordinal=0 && construction.Owner=owner &&
+                        construction.Text=text && construction.Snapshot=snapshot && construction.Validator="RFC3629-v1" &&
+                        (incidence |> List.forall (fun id -> List.contains id row.Sources)))
+                    "The checked string lost its exact snapshot/validator/outcome construction relation."
+            for incId in incidence do
+                let! _ = live graph incId
+                ()
+            let intrinsic site operation =
+                match application graph site with
+                | Some(info,[actual]) -> info.Module=IntrinsicModule.String && info.Operation=operation && actual=snapshot
+                | _ -> false
+            do! demand (intrinsic construction.Validation "validateUtf8" && intrinsic construction.Retirement "retireSnapshot" &&
+                        intrinsic text "fromBytes") "The checked string validator, retirement or text view uses another snapshot."
+            let! isCompleteCount = completeCount graph construction.Input construction.Length
+            do! demand isCompleteCount
+                    "The checked string no longer retains its complete original input extent."
+            let! validationNode = live graph construction.Validation
+            do! demand (validationNode.Type=Types.boolType)
+                    "The checked string validator result is not the native Boolean decision."
+            let valueType=NativeType.TApp(Types.voptionTyCon,[Types.stringType])
+            let! successNode = live graph construction.Success
+            let! failureNode = live graph construction.Failure
+            do! demand (successNode.Type=valueType && failureNode.Type=valueType)
+                    "The checked string outcome no longer has its exact native value-option carrier."
+            do! demand (match successNode.Kind,failureNode.Kind with
+                        | SemanticKind.DUConstruct("ValueSome",1,Some payload,None),SemanticKind.DUConstruct("ValueNone",0,None,None) -> payload=text
+                        | _ -> false) "The checked string changed its native success or failure case."
+            let! decisionNode = live graph construction.Decision
+            let! decisionValid =
+                match decisionNode.Kind with
                 | SemanticKind.IfThenElse(guard,success,Some failure) when guard=construction.Validation && success=construction.Success ->
-                    match (live graph failure).Kind with
-                    | SemanticKind.Sequential [retirement;none] -> retirement=construction.Retirement && none=construction.Failure
-                    | _ -> false
-                | _ -> false) "The checked string outcome is not guarded by its exact validator and failure retirement."
-        Some(row,construction)
-    | _ -> raise(MissingContract "The checked string construction relation is ambiguous.")
+                    result {
+                        let! failureBranch = live graph failure
+                        match failureBranch.Kind with
+                        | SemanticKind.Sequential [retirement;none] ->
+                            return (retirement=construction.Retirement && none=construction.Failure)
+                        | _ -> return false
+                    }
+                | _ -> Ok false
+            do! demand decisionValid "The checked string outcome is not guarded by its exact validator and failure retirement."
+            return Some(row,construction)
+        }
+    | _ -> Error "The checked string construction relation is ambiguous."
 
-/// Basic memory access and array-copy owners run first. Their immutable rows
-/// authorize this final view; this recipe never reconstructs a missing copy.
+// Basic memory access and array-copy owners run first. Their immutable rows
+// authorize this final view; this recipe never reconstructs a missing copy.
 let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
            (operations:Map<NodeId,MemoryWitnessOperation>) (copies:Map<NodeId,MemoryArrayCopyWitness>) =
     let mutable admitted=[]
@@ -144,194 +212,239 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection)
           | None -> ()
           | Some(direction,source) ->
             required<-Set.add node.Id required
-            try
-                let evidence=
-                    graph.Edges |> List.choose (fun edge ->
-                        match direction,edge.Role,edge.Sources with
-                        | MemoryStringViewDirection.FromBytes,EdgeRole.StringByteSnapshot,[input;snapshot]
-                            when snapshot=source -> Some(edge,input,snapshot)
-                        | MemoryStringViewDirection.ToBytes,EdgeRole.StringToBytesSnapshot,[input;inner;snapshot]
-                            when inner=node.Id && endpoint graph input=endpoint graph source -> Some(edge,input,snapshot)
-                        | _ -> None)
-                    |> only "A string view requires its unique complete source snapshot relation."
-                let snapshotRow,input,snapshot=evidence
-                demand (snapshotRow.Class=EdgeClass.Provenance && snapshotRow.Ordinal=0)
-                    "The string snapshot relation has changed its source role."
-                let owner=snapshotRow.Target
-                live graph owner |> ignore
-                let checkedText=checkedConstruction graph owner node.Id snapshot
-                let copySite=snapshot
-                let copy=copies.TryFind copySite |> needed "The string snapshot has no validated source array-copy construction."
-                demand (copy.Site=copySite && copy.CountCarrier.Site=copy.Count)
-                    "The string snapshot copy and extent refer to different source occurrences."
-                demand (zero graph copy.SourceOffset && zero graph copy.DestinationOffset && completeCount graph copy.Source copy.Count)
-                    "A string snapshot must copy the entire source extent from zero to zero."
-                let allocation=copy.Allocation |> needed "A string snapshot copy lacks its independent source allocation."
-                let snapshotStorage,storageCount,storageParticipants=
-                    match operations.TryFind allocation with
-                    | Some(MemoryWitnessOperation.ArrayAllocation fact) when fact.Site=allocation ->
-                        MemoryCheckedSnapshotStorage.Allocated fact,fact.Count,fact.Participants
-                    | Some(MemoryWitnessOperation.EmptySnapshot fact) when fact.Site=allocation ->
-                        demand (direction=MemoryStringViewDirection.FromBytes &&
-                                (checkedText |> Option.exists(fun (_,construction)->
-                                    construction.Returned.IsSome && fact.Owner=construction.Owner && fact.Snapshot=construction.Snapshot)))
-                            "The empty snapshot lacks its exact returned checked construction."
-                        demand (fact.Count=copy.CountOperand.Reference && copy.CountCarrier.Range=ValueRange.point 0I &&
-                                fact.SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType (live graph allocation).Type)
-                            "The empty snapshot lost its exact zero count or producer identity."
-                        MemoryCheckedSnapshotStorage.Empty fact,fact.Count,Clef.Compiler.Baker.Ingredients.MemoryValues.emptySnapshotIds fact
-                    | _ -> raise(MissingContract "The string snapshot allocation has no validated source allocation operation.")
-                demand (endpoint graph storageCount=endpoint graph copy.Count &&
-                        endpoint graph allocation=endpoint graph copy.Destination &&
-                        endpoint graph copy.Source<>endpoint graph copy.Destination)
-                    "The string snapshot does not retain an independent allocation for its complete copied extent."
-                demand (endpoint graph copy.Destination=endpoint graph snapshot)
-                    "The string snapshot relation does not name the copy's actual destination."
-                let storageTarget=
-                    match direction with
-                    | MemoryStringViewDirection.FromBytes ->
-                        demand (endpoint graph copy.Source=endpoint graph input)
-                            "The constructed string copies a different input than its snapshot relation."
-                        source
-                    | MemoryStringViewDirection.ToBytes ->
-                        demand (copy.Source=node.Id) "The string-to-array copy does not read this exact internal view."
-                        node.Id
-                let storage=graph.Edges |> List.choose (fun edge ->
-                    match edge.Role with
-                    | EdgeRole.StringByteStorage(lo,hi,name) when edge.Target=storageTarget -> Some(edge,lo,hi,name)
-                    | _ -> None) |> only "A string view needs its exact source byte-storage declaration."
-                let storageRow,lo,hi,name=storage
-                let representation,declaration=Bytes.byteRepresentation graph |> needed "A string view requires a declared unsigned byte representation."
-                demand (storageRow.Class=EdgeClass.Range && storageRow.Ordinal=0 && name=representation.Name &&
-                        0I<=lo && lo<=hi && hi<=255I && List.contains declaration storageRow.Sources)
-                    "The string view's storage range or representation declaration is inconsistent."
-                match snapshotStorage with
-                | MemoryCheckedSnapshotStorage.Empty empty ->
-                    demand (empty.Declaration=declaration)
-                        "The empty snapshot's octet declaration changed."
-                | _ -> ()
-                let textRows=
-                    match direction,checkedText with
-                    | MemoryStringViewDirection.FromBytes,Some(row,_) -> [row]
-                    | MemoryStringViewDirection.ToBytes,_ -> []
-                    | MemoryStringViewDirection.FromBytes,None ->
-                        let text=
-                            graph.Edges |> List.filter (fun edge ->
-                                edge.Target=owner && (match edge.Role with EdgeRole.StringAscii | EdgeRole.StringUtf8Constant _ -> true | _ -> false))
-                            |> only "The constructed string lacks its source UTF-8 validity premise."
-                        demand (text.Class=EdgeClass.Range && text.Ordinal=0) "The string text-validity relation has changed its source role."
-                        match text.Role with
-                        | EdgeRole.StringAscii -> demand (hi<=127I) "The source ASCII premise exceeds its encoded character range."
-                        | EdgeRole.StringUtf8Constant bytes ->
-                            try System.Text.UTF8Encoding(false,true).GetString(List.toArray bytes) |> ignore
-                            with :? System.Text.DecoderFallbackException -> raise(MissingContract "The source constant UTF-8 premise is invalid.")
-                        | _ -> ()
-                        [text]
-                let sourceCarrier,resultCarrier=carrierRepresentation numeric source,carrierRepresentation numeric node.Id
-                let byteBuffer = function
-                    | ValueRepresentation.Buffer(_,ValueRepresentation.Scalar(SettledSlot.Integer(8,selected))) ->
-                        selected |> Option.forall ((=) representation.Name)
-                    | _ -> false
-                demand (byteBuffer sourceCarrier && byteBuffer resultCarrier)
-                    "An internal string view requires matching source-selected byte buffer carriers."
-                match sourceCarrier,resultCarrier with
-                | ValueRepresentation.Buffer(sourceCount,_),ValueRepresentation.Buffer(resultCount,_) ->
-                    demand (sourceCount=resultCount || resultCount.IsNone) "A string view cannot invent a fixed descriptor extent."
-                | _ -> ()
-                let participants=
-                    [yield node.Id; yield source; yield owner; yield input; yield snapshot; yield allocation; yield declaration
-                     yield! snapshotRow.Sources; yield! storageRow.Sources
-                     for row in textRows do yield row.Target; yield! row.Sources]
-                    |> Set.ofList |> Set.union copy.Participants |> Set.union copy.CountCarrier.Participants
-                    |> Set.union storageParticipants
-                let fact:MemoryStringViewWitness=
-                    {Site=node.Id;Source=source;Owner=owner;Snapshot=snapshot;Direction=direction
-                     Checked=checkedText |> Option.map snd
-                     SourceCarrier=sourceCarrier;ResultCarrier=resultCarrier
-                     Element=SettledSlot.Integer(8,Some representation.Name);Representation=representation;Declaration=declaration
-                     Extent=copy.CountCarrier;Participants=participants}
-                admitted<-(node.Id,MemoryWitnessOperation.StringView fact)::admitted
-                match checkedText with
-                | None -> ()
-                | Some(_,construction) ->
-                    required<-required |> Set.add construction.Validation |> Set.add construction.Retirement
-                    let returned=try StringByteStorageRecipes.returnedLifetime graph construction with :? System.InvalidOperationException as error -> raise(MissingContract error.Message)
-                    let residence=match returned,snapshotStorage with
-                                  | None,MemoryCheckedSnapshotStorage.Allocated allocationFact ->
-                                      match allocationFact.Residence with MemoryResidence.Stack _ -> allocationFact.Residence | _ -> raise(MissingContract "The checked snapshot lacks its existing source-authorized stack-scope retirement.")
-                                  | Some(life,space),MemoryCheckedSnapshotStorage.Allocated allocationFact ->
-                                      let expected=MemoryResidence.Heap(life.Application,space.Node)
-                                      demand (allocationFact.Residence=expected && copy.CountCarrier.Range |> function ValueRange.Bounded(lo,_) -> lo>0I | _ -> false)
-                                          "The returned checked snapshot lacks its exact positive heap instance."
-                                      expected
-                                  | Some(life,space),MemoryCheckedSnapshotStorage.Empty _ ->
-                                      demand (copy.CountCarrier.Range=ValueRange.point 0I)
-                                          "The no-backing checked snapshot requires its exact zero extent."
-                                      MemoryResidence.Heap(life.Application,space.Node)
-                                  | _ -> raise(MissingContract "A no-backing snapshot lacks its returned-instance authority.")
-                    for site in [construction.Success;construction.Failure] do
-                        match operations.TryFind site with
-                        | Some(MemoryWitnessOperation.ConstructedValue value) when value.Site=site && value.Owner=construction.Owner &&
-                            value.SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType (live graph site).Type &&
-                            value.Residence=residence -> ()
-                        | _ -> raise(MissingContract "The checked native outcome lacks its exact source-authorized local constructed-value storage.")
-                    let validator:MemoryUtf8ValidationWitness=
-                        {Site=construction.Validation;Construction=construction;Copy=copy;Storage=snapshotStorage
-                         SourceCarrier=sourceCarrier}
-                    let retirement:MemorySnapshotRetirementWitness=
-                        {Site=construction.Retirement;Construction=construction;Storage=snapshotStorage}
-                    admitted<-(construction.Validation,MemoryWitnessOperation.Utf8Validation validator)::
-                              (construction.Retirement,MemoryWitnessOperation.SnapshotRetirement retirement)::admitted
-                    failures<-failures |> Map.remove construction.Validation |> Map.remove construction.Retirement
-                    match returned with
-                    | None -> ()
-                    | Some(life,_) ->
-                        let backingTarget=match snapshotStorage with
-                                          | MemoryCheckedSnapshotStorage.Allocated _ -> MemoryCheckedRetirementTarget.Backing
-                                          | MemoryCheckedSnapshotStorage.Empty _ -> MemoryCheckedRetirementTarget.EmptyBacking
-                        for site,target in [life.SomeBackingRetirement,backingTarget
-                                            life.SomeCarrierRetirement,MemoryCheckedRetirementTarget.Carrier
-                                            life.NoneCarrierRetirement,MemoryCheckedRetirementTarget.Carrier] do
-                            let value=match (live graph site).Kind with
-                                      | SemanticKind.Application(_,[value]) -> value
-                                      | _ -> raise(MissingContract "The returned checked cleanup has no exact source actual.")
-                            demand (target<>MemoryCheckedRetirementTarget.Carrier || value=life.Actual)
-                                "The checked carrier cleanup names a different actual instance."
-                            if target<>MemoryCheckedRetirementTarget.Carrier then
-                                demand (match (live graph life.SomeUse).Kind with SemanticKind.Application(_,[payload]) -> payload=value | _ -> false)
-                                    "The checked backing cleanup names a different scalar payload."
-                            required<-Set.add site required
-                            admitted<-(site,MemoryWitnessOperation.CheckedResultRetirement{Site=site;Value=value;Target=target;Construction=construction})::admitted
-                            failures<-Map.remove site failures
-            with MissingContract reason -> failures<-Map.add node.Id reason failures
+            let outcome =
+                result {
+                    let! sourceEp = endpoint graph source
+                    let! filteredCandidates =
+                        let rec collect acc (edges: Hyperedge list) =
+                            match edges with
+                            | [] -> Ok (List.rev acc)
+                            | edge :: rest ->
+                                match direction,edge.Role,edge.Sources with
+                                | MemoryStringViewDirection.FromBytes,EdgeRole.StringByteSnapshot,[input;snapshot]
+                                    when snapshot=source ->
+                                    collect ((edge,input,snapshot) :: acc) rest
+                                | MemoryStringViewDirection.ToBytes,EdgeRole.StringToBytesSnapshot,[input;inner;snapshot]
+                                    when inner=node.Id ->
+                                    match endpoint graph input with
+                                    | Ok inputEp when inputEp = sourceEp -> collect ((edge,input,snapshot) :: acc) rest
+                                    | Ok _ -> collect acc rest
+                                    | Error err -> Error err
+                                | _ -> collect acc rest
+                        collect [] graph.Edges
+                    let! snapshotRow,input,snapshot =
+                        only "A string view requires its unique complete source snapshot relation." filteredCandidates
+                    do! demand (snapshotRow.Class=EdgeClass.Provenance && snapshotRow.Ordinal=0)
+                            "The string snapshot relation has changed its source role."
+                    let owner=snapshotRow.Target
+                    let! _ = live graph owner
+                    let! checkedText = checkedConstruction graph owner node.Id snapshot
+                    let copySite=snapshot
+                    let! copy = copies.TryFind copySite |> needed "The string snapshot has no validated source array-copy construction."
+                    do! demand (copy.Site=copySite && copy.CountCarrier.Site=copy.Count)
+                            "The string snapshot copy and extent refer to different source occurrences."
+                    let! isZeroSrc = zero graph copy.SourceOffset
+                    let! isZeroDst = zero graph copy.DestinationOffset
+                    let! isCompleteCopy = completeCount graph copy.Source copy.Count
+                    do! demand (isZeroSrc && isZeroDst && isCompleteCopy)
+                            "A string snapshot must copy the entire source extent from zero to zero."
+                    let! allocation = copy.Allocation |> needed "A string snapshot copy lacks its independent source allocation."
+                    let! snapshotStorage,storageCount,storageParticipants =
+                        match operations.TryFind allocation with
+                        | Some(MemoryWitnessOperation.ArrayAllocation fact) when fact.Site=allocation ->
+                            Ok(MemoryCheckedSnapshotStorage.Allocated fact,fact.Count,fact.Participants)
+                        | Some(MemoryWitnessOperation.EmptySnapshot fact) when fact.Site=allocation ->
+                            result {
+                                do! demand (direction=MemoryStringViewDirection.FromBytes &&
+                                            (checkedText |> Option.exists(fun (_,construction)->
+                                                construction.Returned.IsSome && fact.Owner=construction.Owner && fact.Snapshot=construction.Snapshot)))
+                                        "The empty snapshot lacks its exact returned checked construction."
+                                let! allocNode = live graph allocation
+                                do! demand (fact.Count=copy.CountOperand.Reference && copy.CountCarrier.Range=ValueRange.point 0I &&
+                                            fact.SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType allocNode.Type)
+                                        "The empty snapshot lost its exact zero count or producer identity."
+                                return (MemoryCheckedSnapshotStorage.Empty fact,fact.Count,Clef.Compiler.Baker.Ingredients.MemoryValues.emptySnapshotIds fact)
+                            }
+                        | _ -> Error "The string snapshot allocation has no validated source allocation operation."
+                    let! storageCountEp = endpoint graph storageCount
+                    let! copyCountEp = endpoint graph copy.Count
+                    let! allocEp = endpoint graph allocation
+                    let! copyDstEp = endpoint graph copy.Destination
+                    let! copySrcEp = endpoint graph copy.Source
+                    do! demand (storageCountEp=copyCountEp && allocEp=copyDstEp && copySrcEp<>copyDstEp)
+                            "The string snapshot does not retain an independent allocation for its complete copied extent."
+                    let! snapshotEp = endpoint graph snapshot
+                    do! demand (copyDstEp=snapshotEp)
+                            "The string snapshot relation does not name the copy's actual destination."
+                    let! storageTarget =
+                        match direction with
+                        | MemoryStringViewDirection.FromBytes ->
+                            result {
+                                let! inputEp = endpoint graph input
+                                do! demand (copySrcEp=inputEp)
+                                        "The constructed string copies a different input than its snapshot relation."
+                                return source
+                            }
+                        | MemoryStringViewDirection.ToBytes ->
+                            result {
+                                do! demand (copy.Source=node.Id) "The string-to-array copy does not read this exact internal view."
+                                return node.Id
+                            }
+                    let! storageRow,lo,hi,name =
+                        graph.Edges |> List.choose (fun edge ->
+                            match edge.Role with
+                            | EdgeRole.StringByteStorage(lo,hi,name) when edge.Target=storageTarget -> Some(edge,lo,hi,name)
+                            | _ -> None) |> only "A string view needs its exact source byte-storage declaration."
+                    let! representation,declaration = Bytes.byteRepresentation graph |> needed "A string view requires a declared unsigned byte representation."
+                    do! demand (storageRow.Class=EdgeClass.Range && storageRow.Ordinal=0 && name=representation.Name &&
+                                0I<=lo && lo<=hi && hi<=255I && List.contains declaration storageRow.Sources)
+                            "The string view's storage range or representation declaration is inconsistent."
+                    do! match snapshotStorage with
+                        | MemoryCheckedSnapshotStorage.Empty empty ->
+                            demand (empty.Declaration=declaration)
+                                "The empty snapshot's octet declaration changed."
+                        | _ -> Ok ()
+                    let! textRows =
+                        match direction,checkedText with
+                        | MemoryStringViewDirection.FromBytes,Some(row,_) -> Ok [row]
+                        | MemoryStringViewDirection.ToBytes,_ -> Ok []
+                        | MemoryStringViewDirection.FromBytes,None ->
+                            result {
+                                let! text =
+                                    graph.Edges |> List.filter (fun edge ->
+                                        edge.Target=owner && (match edge.Role with EdgeRole.StringAscii | EdgeRole.StringUtf8Constant _ -> true | _ -> false))
+                                    |> only "The constructed string lacks its source UTF-8 validity premise."
+                                do! demand (text.Class=EdgeClass.Range && text.Ordinal=0) "The string text-validity relation has changed its source role."
+                                do! match text.Role with
+                                    | EdgeRole.StringAscii -> demand (hi<=127I) "The source ASCII premise exceeds its encoded character range."
+                                    | EdgeRole.StringUtf8Constant bytes ->
+                                        demand (isValidUtf8 bytes) "The source constant UTF-8 premise is invalid."
+                                    | _ -> Ok ()
+                                return [text]
+                            }
+                    let! sourceCarrier = carrierRepresentation numeric source
+                    let! resultCarrier = carrierRepresentation numeric node.Id
+                    let byteBuffer = function
+                        | ValueRepresentation.Buffer(_,ValueRepresentation.Scalar(SettledSlot.Integer(8,selected))) ->
+                            selected |> Option.forall ((=) representation.Name)
+                        | _ -> false
+                    do! demand (byteBuffer sourceCarrier && byteBuffer resultCarrier)
+                            "An internal string view requires matching source-selected byte buffer carriers."
+                    do! match sourceCarrier,resultCarrier with
+                        | ValueRepresentation.Buffer(sourceCount,_),ValueRepresentation.Buffer(resultCount,_) ->
+                            demand (sourceCount=resultCount || resultCount.IsNone) "A string view cannot invent a fixed descriptor extent."
+                        | _ -> Ok ()
+                    let participants=
+                        [yield node.Id; yield source; yield owner; yield input; yield snapshot; yield allocation; yield declaration
+                         yield! snapshotRow.Sources; yield! storageRow.Sources
+                         for row in textRows do yield row.Target; yield! row.Sources]
+                        |> Set.ofList |> Set.union copy.Participants |> Set.union copy.CountCarrier.Participants
+                        |> Set.union storageParticipants
+                    let fact:MemoryStringViewWitness=
+                        {Site=node.Id;Source=source;Owner=owner;Snapshot=snapshot;Direction=direction
+                         Checked=checkedText |> Option.map snd
+                         SourceCarrier=sourceCarrier;ResultCarrier=resultCarrier
+                         Element=SettledSlot.Integer(8,Some representation.Name);Representation=representation;Declaration=declaration
+                         Extent=copy.CountCarrier;Participants=participants}
+                    admitted<-(node.Id,MemoryWitnessOperation.StringView fact)::admitted
+                    match checkedText with
+                    | None -> return ()
+                    | Some(_,construction) ->
+                        required<-required |> Set.add construction.Validation |> Set.add construction.Retirement
+                        let! returned = StringByteStorageRecipes.returnedLifetime graph construction
+                        let! residence =
+                            match returned,snapshotStorage with
+                            | None,MemoryCheckedSnapshotStorage.Allocated allocationFact ->
+                                match allocationFact.Residence with
+                                | MemoryResidence.Stack _ -> Ok allocationFact.Residence
+                                | _ -> Error "The checked snapshot lacks its existing source-authorized stack-scope retirement."
+                            | Some(life,space),MemoryCheckedSnapshotStorage.Allocated allocationFact ->
+                                result {
+                                    let expected=MemoryResidence.Heap(life.Application,space.Node)
+                                    do! demand (allocationFact.Residence=expected && copy.CountCarrier.Range |> function ValueRange.Bounded(lo,_) -> lo>0I | _ -> false)
+                                            "The returned checked snapshot lacks its exact positive heap instance."
+                                    return expected
+                                }
+                            | Some(life,space),MemoryCheckedSnapshotStorage.Empty _ ->
+                                result {
+                                    do! demand (copy.CountCarrier.Range=ValueRange.point 0I)
+                                            "The no-backing checked snapshot requires its exact zero extent."
+                                    return MemoryResidence.Heap(life.Application,space.Node)
+                                }
+                            | _ -> Error "A no-backing snapshot lacks its returned-instance authority."
+                        for site in [construction.Success;construction.Failure] do
+                            let! siteNode = live graph site
+                            match operations.TryFind site with
+                            | Some(MemoryWitnessOperation.ConstructedValue value) when value.Site=site && value.Owner=construction.Owner &&
+                                value.SourceType=Clef.Compiler.NativeTypedTree.TypeIdentities.ofType siteNode.Type &&
+                                value.Residence=residence -> ()
+                            | _ -> do! Error "The checked native outcome lacks its exact source-authorized local constructed-value storage."
+                        let validator:MemoryUtf8ValidationWitness=
+                            {Site=construction.Validation;Construction=construction;Copy=copy;Storage=snapshotStorage
+                             SourceCarrier=sourceCarrier}
+                        let retirement:MemorySnapshotRetirementWitness=
+                            {Site=construction.Retirement;Construction=construction;Storage=snapshotStorage}
+                        admitted<-(construction.Validation,MemoryWitnessOperation.Utf8Validation validator)::
+                                  (construction.Retirement,MemoryWitnessOperation.SnapshotRetirement retirement)::admitted
+                        failures<-failures |> Map.remove construction.Validation |> Map.remove construction.Retirement
+                        match returned with
+                        | None -> return ()
+                        | Some(life,_) ->
+                            let backingTarget=match snapshotStorage with
+                                              | MemoryCheckedSnapshotStorage.Allocated _ -> MemoryCheckedRetirementTarget.Backing
+                                              | MemoryCheckedSnapshotStorage.Empty _ -> MemoryCheckedRetirementTarget.EmptyBacking
+                            for site,target in [life.SomeBackingRetirement,backingTarget
+                                                life.SomeCarrierRetirement,MemoryCheckedRetirementTarget.Carrier
+                                                life.NoneCarrierRetirement,MemoryCheckedRetirementTarget.Carrier] do
+                                let! siteNode = live graph site
+                                let! value =
+                                    match siteNode.Kind with
+                                    | SemanticKind.Application(_,[value]) -> Ok value
+                                    | _ -> Error "The returned checked cleanup has no exact source actual."
+                                do! demand (target<>MemoryCheckedRetirementTarget.Carrier || value=life.Actual)
+                                        "The checked carrier cleanup names a different actual instance."
+                                if target<>MemoryCheckedRetirementTarget.Carrier then
+                                    let! someUseNode = live graph life.SomeUse
+                                    do! demand (match someUseNode.Kind with SemanticKind.Application(_,[payload]) -> payload=value | _ -> false)
+                                            "The checked backing cleanup names a different scalar payload."
+                                required<-Set.add site required
+                                admitted<-(site,MemoryWitnessOperation.CheckedResultRetirement{Site=site;Value=value;Target=target;Construction=construction})::admitted
+                                failures<-Map.remove site failures
+                }
+            match outcome with
+            | Ok () -> ()
+            | Error reason -> failures<-Map.add node.Id reason failures
     List.rev admitted,failures,required
 
-/// The shared extent owner enumerates every terminal string value through the
-/// complete source flow. A constructed terminal needs the already admitted
-/// snapshot and copy; it never acquires program-resident literal authority.
+// The shared extent owner enumerates every terminal string value through the
+// complete source flow. A constructed terminal needs the already admitted
+// snapshot and copy; it never acquires program-resident literal authority.
 let localLineage (graph:SemanticGraph) (memory:MemoryWitnessProjection) source =
-    try
-        let extent = Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph source
-                     |> needed "The local string borrow lacks complete source descriptor lineage."
-        demand (not extent.StringSources.IsEmpty)
-            "The local string borrow has no complete terminal string-source inventory."
+    result {
+        let! extent =
+            Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph source
+            |> needed "The local string borrow lacks complete source descriptor lineage."
+        do! demand (not extent.StringSources.IsEmpty)
+                "The local string borrow has no complete terminal string-source inventory."
         let mutable snapshots=[]
         let mutable copies=[]
         let mutable participants=extent.Participants
         for terminal in extent.StringSources do
-            match (live graph terminal).Kind with
+            let! termNode = live graph terminal
+            match termNode.Kind with
             | SemanticKind.Literal(NativeLiteral.String _) -> ()
             | _ ->
-                let snapshot =
+                let! snapshot =
                     match memory.Operations.TryFind terminal with
-                    | Some(MemoryWitnessOperation.StringView fact) when fact.Direction=MemoryStringViewDirection.FromBytes && fact.Site=terminal -> fact
-                    | _ -> raise(MissingContract "A constructed string borrow lacks its source-admitted immutable snapshot view.")
-                let copy=memory.ArrayCopies.TryFind snapshot.Snapshot
-                         |> needed "The constructed string borrow lost its exact source array-copy receipt."
-                demand (copy.Site=snapshot.Snapshot && copy.CountCarrier=snapshot.Extent)
-                    "The constructed string's view and copied descriptor extent no longer correspond."
+                    | Some(MemoryWitnessOperation.StringView fact) when fact.Direction=MemoryStringViewDirection.FromBytes && fact.Site=terminal -> Ok fact
+                    | _ -> Error "A constructed string borrow lacks its source-admitted immutable snapshot view."
+                let! copy =
+                    memory.ArrayCopies.TryFind snapshot.Snapshot
+                    |> needed "The constructed string borrow lost its exact source array-copy receipt."
+                do! demand (copy.Site=snapshot.Snapshot && copy.CountCarrier=snapshot.Extent)
+                        "The constructed string's view and copied descriptor extent no longer correspond."
                 snapshots<-snapshot::snapshots
                 copies<-copy::copies
                 participants<-Set.unionMany[participants;snapshot.Participants;copy.Participants]
-        Ok(List.rev snapshots,List.rev copies,participants)
-    with MissingContract reason -> Error reason
+        return (List.rev snapshots,List.rev copies,participants)
+    }

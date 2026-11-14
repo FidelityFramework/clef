@@ -46,7 +46,18 @@ module private BakerNanopassCruftAnalyzer =
     let private isIdentPart (c: char) =
         Char.IsLetterOrDigit c || c = '_' || c = '\''
 
-    let analyzeSource (fileName: string) (source: string) : Diagnostic list =
+    let private isClrThrowIdent (ident: string) =
+        match ident with
+        | "failwith"
+        | "failwithf"
+        | "invalidArg"
+        | "invalidOp"
+        | "nullArg"
+        | "raise"
+        | "reraise" -> true
+        | _ -> false
+
+    let analyzeSource (checkThrows: bool) (fileName: string) (source: string) : Diagnostic list =
         let diagnostics = ResizeArray<Diagnostic>()
         let length = source.Length
         let mutable i = 0
@@ -84,6 +95,13 @@ module private BakerNanopassCruftAnalyzer =
                 ln
                 col
                 "Clef Baker and Nanopass code must not use %A reflection formatting."
+
+        let rejectClrThrow ident ln col =
+            addDiagnostic
+                "AXC008"
+                ln
+                col
+                (sprintf "Clef Baker and Nanopass code must not throw CLR exceptions (%s)." ident)
 
         while i < length do
             let c = source[i]
@@ -186,6 +204,8 @@ module private BakerNanopassCruftAnalyzer =
                 let ident = source.Substring(startPos, i - startPos)
                 if ident = "PhysicalEquality" || ident = "ReferenceEquals" then
                     rejectReferenceIdentity startLine startCol
+                elif checkThrows && isClrThrowIdent ident then
+                    rejectClrThrow ident startLine startCol
             else
                 advanceChar ()
 
@@ -223,28 +243,45 @@ module private BakerNanopassCruftAnalyzer =
                 else
                     None)
 
+    let throwFreeRecipeFiles =
+        let sep = string Path.DirectorySeparatorChar
+        Set.ofList [
+            "Baker" + sep + "Recipes" + sep + "HardwareModuleRecipes.fs"
+            "Baker" + sep + "Recipes" + sep + "ArrayMemoryRecipes.fs"
+            "Baker" + sep + "Recipes" + sep + "MemoryAccessRecipes.fs"
+            "Baker" + sep + "Recipes" + sep + "KernelModuleRecipes.fs"
+            "Baker" + sep + "Recipes" + sep + "KernelDeclarations.fs"
+            "Baker" + sep + "Recipes" + sep + "StringViewRecipes.fs"
+        ]
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BakerNanopassCruftContract")>]
 type BakerNanopassCruftContractCases() =
     [<Fact>]
-    member _.``All Baker and Nanopass compile items satisfy AXC006 and AXC007``() =
+    member _.``All Baker and Nanopass compile items satisfy AXC006 AXC007 and migrated AXC008``() =
         let files = BakerNanopassCruftAnalyzer.bakerAndNanopassFiles ()
         Assert.True(files.Length >= 103, sprintf "Expected at least 103 Baker and Nanopass compile items, found %d" files.Length)
+
+        let matchedThrowFree =
+            files
+            |> List.filter (fun (relativePath, _) -> BakerNanopassCruftAnalyzer.throwFreeRecipeFiles.Contains relativePath)
+        Assert.Equal(6, matchedThrowFree.Length)
 
         let violations =
             files
             |> List.collect (fun (relativePath, fullPath) ->
                 let source = File.ReadAllText(fullPath)
-                BakerNanopassCruftAnalyzer.analyzeSource relativePath source)
+                let checkThrows = BakerNanopassCruftAnalyzer.throwFreeRecipeFiles.Contains relativePath
+                BakerNanopassCruftAnalyzer.analyzeSource checkThrows relativePath source)
 
         if not violations.IsEmpty then
             let summary =
                 violations
                 |> List.map (fun v -> sprintf "%s:%d:%d [%s] %s" v.File v.Line v.Column v.Code v.Message)
                 |> String.concat "\n"
-            Assert.Fail(sprintf "Found %d AXC006/AXC007 violations in Baker/Nanopass:\n%s" violations.Length summary)
+            Assert.Fail(sprintf "Found %d AXC006/AXC007/AXC008 violations in Baker/Nanopass:\n%s" violations.Length summary)
 
     [<Fact>]
-    member _.``AXC006 and AXC007 analyzer detects ReferenceEquals PhysicalEquality and percent-A``() =
+    member _.``AXC006 AXC007 and AXC008 analyzer detects ReferenceEquals PhysicalEquality percent-A and CLR throws``() =
         let sample =
             String.concat "\n" [
                 "module Sample"
@@ -253,17 +290,20 @@ type BakerNanopassCruftContractCases() =
                 "let c x = sprintf \"%A\" x"
                 "let d x = failwithf \"%+A\" x"
                 "let e x = $\"val={x:%A}\""
+                "let f x = invalidOp \"bad\""
                 "let ok x = sprintf \"%s %%A %d\" x 1"
             ]
-        let diagnostics = BakerNanopassCruftAnalyzer.analyzeSource "Sample.fs" sample
+        let diagnostics = BakerNanopassCruftAnalyzer.analyzeSource true "Sample.fs" sample
         let codes = diagnostics |> List.map (fun d -> d.Code, d.Line)
         Assert.Equal<(string * int) list>(
             [
                 ("AXC006", 2)
                 ("AXC006", 3)
                 ("AXC007", 4)
+                ("AXC008", 5)
                 ("AXC007", 5)
                 ("AXC007", 6)
+                ("AXC008", 7)
             ],
             codes
         )

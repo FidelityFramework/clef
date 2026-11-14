@@ -14,13 +14,17 @@ let rec private elaborate (graph: SemanticGraph) =
     | Some source ->
         let name = "Memory.bounds"
         let context = mkContext source.Range source.Type graph.Platform name source.Id
-        let expansion = materialize context graph source
-        let create (node: SemanticNode) _ =
-            RecipeCreated { OriginalNodeId = node.Id; NewNodes = expansion.Structure.NewNodes
-                            ReplacementRootId = node.Id; ElaborationKind = "Baker"; NewEdges = []
-                            ElaborationSource = name }
-        let folded = FoldIn.foldIn (FanOut.fanOut name (fun node -> node.Id = source.Id) create graph) graph
-        elaborate { folded with Edges = expansion.Edges }
+        match materialize context graph source with
+        | Ok expansion ->
+            let create (node: SemanticNode) _ =
+                RecipeCreated { OriginalNodeId = node.Id; NewNodes = expansion.Structure.NewNodes
+                                ReplacementRootId = node.Id; ElaborationKind = "Baker"; NewEdges = []
+                                ElaborationSource = name }
+            let folded = FoldIn.foldIn (FanOut.fanOut name (fun node -> node.Id = source.Id) create graph) graph
+            elaborate { folded with Edges = expansion.Edges }
+        | Error reason ->
+            let create _ _ = CreationFailed(reason, Map.empty)
+            FoldIn.foldIn (FanOut.fanOut name (fun node -> node.Id = source.Id) create graph) graph
 
 let private normalizeCore graph =
     let result = elaborate graph

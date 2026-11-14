@@ -1,11 +1,44 @@
 // SPDX-License-Identifier: MIT
-/// Declared kernel transport is an external input domain, never a call site.
+// Declared kernel transport is an external input domain, never a call site.
 module Clef.Compiler.Baker.Recipes.KernelDeclarations
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Platform = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
+
+type private ResultBuilder() =
+    member _.Bind(value, next) = Result.bind next value
+    member _.Return(value) = Ok value
+    member _.ReturnFrom(value: Result<'T, 'E>) = value
+    member _.Zero() = Ok ()
+    member _.Delay(f: unit -> Result<'T, 'E>) = f
+    member _.Run(f: unit -> Result<'T, 'E>) = f ()
+    member _.Combine(first: Result<unit, 'E>, second: unit -> Result<'T, 'E>) =
+        match first with
+        | Ok () -> second ()
+        | Error err -> Error err
+    member _.For(items: seq<'T>, body: 'T -> Result<unit, 'E>) =
+        use enumerator = items.GetEnumerator()
+        let rec loop () =
+            if not (enumerator.MoveNext()) then Ok ()
+            else
+                match body enumerator.Current with
+                | Ok () -> loop ()
+                | Error err -> Error err
+        loop ()
+
+let private result = ResultBuilder()
+
+let private mapResult (fn: 'T -> Result<'U, 'E>) (items: 'T list) : Result<'U list, 'E> =
+    let rec loop acc remaining =
+        match remaining with
+        | [] -> Ok (List.rev acc)
+        | head :: tail ->
+            match fn head with
+            | Ok value -> loop (value :: acc) tail
+            | Error err -> Error err
+    loop [] items
 
 // Preserve the checker's nominal key for the canonical namespace declaration.
 // Comparing only a display name would also admit unrelated KernelTarget types.
@@ -23,111 +56,155 @@ let private uses (graph: SemanticGraph) path =
         else None) |> Map.ofSeq
 
 let private declaration (graph: SemanticGraph) (site: SemanticNode) =
-    try
-        let mutable participants = Set.singleton site.Id
-        let require condition reason = if not condition then failwith reason
-        let node id =
-            participants <- participants.Add id
-            graph.Nodes.TryFind id |> Option.defaultWith (fun () -> failwith "A kernel ingress participant is absent.")
-        let rec resolve seen id =
-            require (not(Set.contains id seen)) "The kernel ingress declaration is cyclic."
-            let current=node id
-            let seen=Set.add id seen
+    let mutable participants = Set.singleton site.Id
+    let require condition reason = if condition then Ok () else Error reason
+    let node id =
+        participants <- participants.Add id
+        match graph.Nodes.TryFind id with
+        | Some found -> Ok found
+        | None -> Error "A kernel ingress participant is absent."
+    let rec resolve seen id =
+        result {
+            do! require (not(Set.contains id seen)) "The kernel ingress declaration is cyclic."
+            let! current = node id
+            let seen = Set.add id seen
             match current.Kind,current.Children with
             | SemanticKind.TypeAnnotation(inner,_),_ | SemanticKind.Quote(inner,_),_
-            | SemanticKind.VarRef(_,Some inner),_ -> resolve seen inner
-            | SemanticKind.Binding(_,false,_,_),[inner] -> resolve seen inner
-            | _ -> current
-        let value id = resolve Set.empty id
-        let rec retain seen id =
+            | SemanticKind.VarRef(_,Some inner),_ -> return! resolve seen inner
+            | SemanticKind.Binding(_,false,_,_),[inner] -> return! resolve seen inner
+            | _ -> return current
+        }
+    let value id = resolve Set.empty id
+    let rec retain seen id =
+        result {
             if not(Set.contains id seen) then
-                let current=node id
-                let seen=Set.add id seen
-                let references=match current.Kind with SemanticKind.VarRef(_,Some target) -> [target] | _ -> []
-                (current.Children @ references) |> List.iter (retain seen)
-        let fields id =
-            match (value id).Kind with
-            | SemanticKind.RecordExpr(fields,None) -> fields
-            | _ -> failwith "A kernel ingress requires complete source records."
-        let field name fields =
-            match fields |> List.filter (fst >> (=) name) with
-            | [_,id] -> id
-            | _ -> failwith $"Kernel transport requires exactly one '{name}' declaration."
-        let text id =
-            match (value id).Kind with
-            | SemanticKind.Literal(NativeLiteral.String value) -> value
-            | _ -> failwith "Kernel transport representation names must be source string literals."
-        let scope =
-            match site.Parent |> Option.map node with
-            | Some {Id=id;Kind=SemanticKind.ModuleDef _} -> id
-            | _ -> failwith "Kernel ingress requires the declaration's actual module scope."
-        let compute=fields site.Id |> field "Compute"
-        let before=participants
-        let implementation=value compute
-        let computePath=Set.difference participants before |> Set.add compute |> Set.add implementation.Id
-        let parameters,result =
+                let! current = node id
+                let seen = Set.add id seen
+                let references = match current.Kind with SemanticKind.VarRef(_,Some target) -> [target] | _ -> []
+                for child in (current.Children @ references) do
+                    do! retain seen child
+        }
+    let fields id =
+        result {
+            let! resolved = value id
+            match resolved.Kind with
+            | SemanticKind.RecordExpr(fields,None) -> return fields
+            | _ -> return! Error "A kernel ingress requires complete source records."
+        }
+    let field name fields =
+        match fields |> List.filter (fst >> (=) name) with
+        | [_,id] -> Ok id
+        | _ -> Error $"Kernel transport requires exactly one '{name}' declaration."
+    let text id =
+        result {
+            let! resolved = value id
+            match resolved.Kind with
+            | SemanticKind.Literal(NativeLiteral.String value) -> return value
+            | _ -> return! Error "Kernel transport representation names must be source string literals."
+        }
+    let parseBigInt (raw: string) =
+        match System.Numerics.BigInteger.TryParse raw with
+        | true, parsed -> Ok parsed
+        | false, _ -> Error $"Invalid integer magnitude '{raw}' in kernel transport representation."
+    result {
+        let! parentNodeOpt =
+            match site.Parent with
+            | Some parentId -> node parentId |> Result.map Some
+            | None -> Ok None
+        let! scope =
+            match parentNodeOpt with
+            | Some {Id=id;Kind=SemanticKind.ModuleDef _} -> Ok id
+            | _ -> Error "Kernel ingress requires the declaration's actual module scope."
+        let! siteFields = fields site.Id
+        let! compute = field "Compute" siteFields
+        let before = participants
+        let! implementation = value compute
+        let computePath = Set.difference participants before |> Set.add compute |> Set.add implementation.Id
+        let! parameters,resultId =
             match implementation.Kind with
-            | SemanticKind.Lambda(parameters,result,[],_,_) when parameters.Length=2 ->
-                parameters |> List.map (fun (name,_,id) -> name,id),result
-            | _ -> failwith "Kernel ingress requires one capture-free declaration with exactly two scalar formals."
-        let binding =
-            match implementation.Parent |> Option.map node with
-            | Some {Id=id;Kind=SemanticKind.Binding(_,false,_,_)} -> id
-            | _ -> failwith "Kernel ingress requires the immutable Compute binding identity."
+            | SemanticKind.Lambda(parameters,resultId,[],_,_) when parameters.Length=2 ->
+                Ok (parameters |> List.map (fun (name,_,id) -> name,id),resultId)
+            | _ -> Error "Kernel ingress requires one capture-free declaration with exactly two scalar formals."
+        let! implParentOpt =
+            match implementation.Parent with
+            | Some parentId -> node parentId |> Result.map Some
+            | None -> Ok None
+        let! binding =
+            match implParentOpt with
+            | Some {Id=id;Kind=SemanticKind.Binding(_,false,_,_)} -> Ok id
+            | _ -> Error "Kernel ingress requires the immutable Compute binding identity."
         let ordinaryCalls = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
-        require (ordinaryCalls.Calls.Values |> Seq.forall (fun call -> call.Targets |> List.forall (fun target -> target.Lambda<>implementation.Id)))
+        do! require (ordinaryCalls.Calls.Values |> Seq.forall (fun call -> call.Targets |> List.forall (fun target -> target.Lambda<>implementation.Id)))
                 "Kernel Compute reused by ordinary calls requires a joint input domain and transport instantiation contract; this ingress cannot replace ordinary actual ranges."
-        let computeUses=uses graph computePath
-        require (computeUses |> Map.forall (fun useSite shape -> shape.Form="module" || participants.Contains useSite))
+        let computeUses = uses graph computePath
+        do! require (computeUses |> Map.forall (fun useSite shape -> shape.Form="module" || participants.Contains useSite))
                 "Kernel Compute used outside its declaration path requires a callable/transport instantiation contract."
-        parameters |> List.iter (snd >> node >> ignore)
-        node result |> ignore
+        for (_, paramId) in parameters do
+            let! _ = node paramId
+            ()
+        let! _ = node resultId
         let targets = graph.Nodes.Values |> Seq.filter (fun candidate ->
             match candidate.Kind,candidate.Type with
             | SemanticKind.Binding(_,false,_,_),NativeType.TApp(constructor,_) ->
                 NominalTypeIdentity.ofConstructor constructor=targetIdentity && Platform.isSelectedPlatformDeclaration graph candidate
             | _ -> false) |> Seq.toList
-        let target =
+        let! target =
             match targets with
-            | [target] -> target
-            | _ -> failwith "Exactly one selected Fidelity.Platform.Contracts.KernelTarget must declare kernel transport."
-        let targetFields=fields target.Id
-        let reading=Platform.read graph
-        require reading.Findings.IsEmpty "The selected kernel core declaration is invalid."
-        let core=reading.Platform |> Option.bind _.Core |> Option.defaultWith (fun () -> failwith "Kernel transport requires an explicit selected instruction core.")
-        retain Set.empty core.Node
+            | [target] -> Ok target
+            | _ -> Error "Exactly one selected Fidelity.Platform.Contracts.KernelTarget must declare kernel transport."
+        let! targetFields = fields target.Id
+        let reading = Platform.read graph
+        do! require reading.Findings.IsEmpty "The selected kernel core declaration is invalid."
+        let! core =
+            match reading.Platform |> Option.bind _.Core with
+            | Some core -> Ok core
+            | None -> Error "Kernel transport requires an explicit selected instruction core."
+        do! retain Set.empty core.Node
         let transport name =
-            let selected=core.Representations |> List.filter (fun item -> item.Representation.Name=name)
-            let declared =
-                match selected with
-                | [declared] -> declared
-                | _ -> failwith $"Kernel transport representation '{name}' is absent or duplicated in the selected core."
-            // Retain the complete selected representation record, including
-            // every literal defining its decoder, rather than only its name.
-            retain Set.empty declared.Node
-            let representation=declared.Representation
-            require (representation.Capability="native" && representation.Bits>0) "The kernel transport requires a declared native scalar decoder."
-            let capacity =
-                match representation.Family with
-                | "int" -> ValueRange.twosComplement representation.Bits
-                | "uint" -> ValueRange.unsignedOf representation.Bits
-                | _ -> failwith "This kernel transport admits explicit signed or unsigned integer decoders."
-            let range=ValueRange.bounded (System.Numerics.BigInteger.Parse representation.MinMagnitude) (System.Numerics.BigInteger.Parse representation.MaxMagnitude)
-            require (range=capacity) "A restricted kernel input domain requires an explicit validation contract; representation capacity alone cannot assert it."
-            {Declaration=declared.Node;Representation=representation;Range=range}
-        let inputs =
-            match (field "Inputs" targetFields |> value).Kind with
-            | SemanticKind.ArrayExpr names -> names |> List.map (text >> transport)
-            | _ -> failwith "KernelTarget.Inputs requires an ordered source array of representation names."
-        require (inputs.Length=parameters.Length) "Kernel transport input order must correspond exactly to the Compute formals."
-        let output=field "Result" targetFields |> text |> transport
-        Ok {Site=site.Id;Scope=scope;Target=target.Id;Core=core.Node;ComputeBinding=binding;Implementation=implementation.Id
-            ComputePath=computePath;Uses=computeUses
-            Parameters=parameters;Result=result;Inputs=inputs;Output=output;Participants=participants
-            Premises=participants |> Seq.map (fun id -> id,(Boundary.premise graph.Nodes[id]).Shape) |> Map.ofSeq
-            SourceFiles=participants |> Seq.map (fun id -> id,graph.Nodes[id].Range.File) |> Map.ofSeq
-            Platform=Boundary.platformPremise graph.Platform}
-    with error -> Error error.Message
+            result {
+                let selected = core.Representations |> List.filter (fun item -> item.Representation.Name=name)
+                let! declared =
+                    match selected with
+                    | [declared] -> Ok declared
+                    | _ -> Error $"Kernel transport representation '{name}' is absent or duplicated in the selected core."
+                // Retain the complete selected representation record, including
+                // every literal defining its decoder, rather than only its name.
+                do! retain Set.empty declared.Node
+                let representation = declared.Representation
+                do! require (representation.Capability="native" && representation.Bits>0) "The kernel transport requires a declared native scalar decoder."
+                let! capacity =
+                    match representation.Family with
+                    | "int" -> Ok (ValueRange.twosComplement representation.Bits)
+                    | "uint" -> Ok (ValueRange.unsignedOf representation.Bits)
+                    | _ -> Error "This kernel transport admits explicit signed or unsigned integer decoders."
+                let! minMag = parseBigInt representation.MinMagnitude
+                let! maxMag = parseBigInt representation.MaxMagnitude
+                let range = ValueRange.bounded minMag maxMag
+                do! require (range=capacity) "A restricted kernel input domain requires an explicit validation contract; representation capacity alone cannot assert it."
+                return {Declaration=declared.Node;Representation=representation;Range=range}
+            }
+        let! inputsFieldId = field "Inputs" targetFields
+        let! inputsNode = value inputsFieldId
+        let! inputs =
+            match inputsNode.Kind with
+            | SemanticKind.ArrayExpr names ->
+                names |> mapResult (fun nameId ->
+                    result {
+                        let! repName = text nameId
+                        return! transport repName
+                    })
+            | _ -> Error "KernelTarget.Inputs requires an ordered source array of representation names."
+        do! require (inputs.Length=parameters.Length) "Kernel transport input order must correspond exactly to the Compute formals."
+        let! resultFieldId = field "Result" targetFields
+        let! resultRepName = text resultFieldId
+        let! output = transport resultRepName
+        return {Site=site.Id;Scope=scope;Target=target.Id;Core=core.Node;ComputeBinding=binding;Implementation=implementation.Id
+                ComputePath=computePath;Uses=computeUses
+                Parameters=parameters;Result=resultId;Inputs=inputs;Output=output;Participants=participants
+                Premises=participants |> Seq.map (fun id -> id,(Boundary.premise graph.Nodes[id]).Shape) |> Map.ofSeq
+                SourceFiles=participants |> Seq.map (fun id -> id,graph.Nodes[id].Range.File) |> Map.ofSeq
+                Platform=Boundary.platformPremise graph.Platform}
+    }
 
 let elaborate (graph: SemanticGraph) =
     graph.Nodes.Values |> Seq.choose (fun site ->
@@ -135,9 +212,9 @@ let elaborate (graph: SemanticGraph) =
         | SemanticKind.Binding(_,false,_,Some DeclRoot.KernelModule) -> Some(site.Id,declaration graph site)
         | _ -> None) |> Map.ofSeq
 
-/// Correspondence of the held transport DTO to captured literal declarations.
-/// This validates the existing construction; it neither selects a carrier nor
-/// substitutes representation capacity for a computed value range.
+// Correspondence of the held transport DTO to captured literal declarations.
+// This validates the existing construction; it neither selects a carrier nor
+// substitutes representation capacity for a computed value range.
 let private transportFactsAgree (ingress: KernelIngress) =
     let fact id=ingress.Premises.TryFind id
     let rec resolve seen id =
@@ -178,12 +255,16 @@ let private transportFactsAgree (ingress: KernelIngress) =
      | None -> false) &&
     (fact ingress.Site |> Option.exists (fun site -> site.Parent=Some ingress.Scope))
 
-/// Passive exact-premise read. Missing/stale transport grants no range facts.
+// Passive exact-premise read. Missing/stale transport grants no range facts.
 let read (graph: SemanticGraph) site =
-    let rows=graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.KernelIngress ingress -> ingress.Site=site | _ -> false)
+    let rows =
+        graph.Edges
+        |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.KernelIngress ingress when ingress.Site=site -> Some(edge, ingress)
+            | _ -> None)
     match rows with
-    | [edge] ->
-        let ingress=match edge.Role with EdgeRole.KernelIngress ingress -> ingress | _ -> failwith "Unreachable ingress row."
+    | [edge, ingress] ->
         let current=ingress.Participants |> Seq.choose (fun id -> graph.Nodes.TryFind id |> Option.map (fun node -> id,(Boundary.premise node).Shape)) |> Map.ofSeq
         let files=ingress.Participants |> Seq.choose (fun id -> graph.Nodes.TryFind id |> Option.map (fun node -> id,node.Range.File)) |> Map.ofSeq
         let expected=row ingress
