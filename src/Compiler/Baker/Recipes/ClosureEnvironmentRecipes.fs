@@ -118,7 +118,7 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
         let! parameters, body, enclosing, context =
             match source.Kind with
             | SemanticKind.Lambda(parameters, body, _, enclosing, context) -> preturn (parameters, body, enclosing, context)
-            | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle a source Lambda for the environment plan at node %d: found %A" (NodeId.value source.Id) other))
+            | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle a source Lambda for the environment plan at node %d: found %s" (NodeId.value source.Id) (SemanticKind.describe other)))
         let! formal = patternBinding "__closure_environment" environmentType
         let implementation = NodeId.fresh()
         let binding = NodeId.fresh()
@@ -136,8 +136,9 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
                 | _ -> List.fold within (seen, missing) node.Children
             | None -> seen, id :: missing
         let bodyNodes, missing = within (Set.empty, []) body
+        let missingIds = missing |> List.rev |> List.map (NodeId.value >> string) |> String.concat "; "
         do! (if missing.IsEmpty then preturn () else
-                fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle the closure body of %d: structural children %A are missing from the graph" (NodeId.value source.Id) (missing |> List.rev |> List.map NodeId.value))))
+                fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle the closure body of %d: structural children [%s] are missing from the graph" (NodeId.value source.Id) missingIds)))
         let sourceOf id =
             match graph.Nodes.TryFind id with
             | Some { Kind = SemanticKind.VarRef(_, Some declaration) } when captures.ContainsKey declaration -> Some declaration
@@ -235,7 +236,7 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
                                  Target = call.Id; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentInvocation; Ordinal = 0 }
                 do! preturn ()
             | other ->
-                do! fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle an Application for known callable call %d of %d: found %A" (NodeId.value callId) (NodeId.value source.Id) other))
+                do! fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle an Application for known callable call %d of %d: found %s" (NodeId.value callId) (NodeId.value source.Id) (SemanticKind.describe other)))
         return environment, implementation, formal
     })
     match outcome with

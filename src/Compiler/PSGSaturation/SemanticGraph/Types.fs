@@ -83,6 +83,36 @@ type IntrinsicModule =
     | Option        // Option operations (map, bind, defaultValue, isSome, isNone)
     | Result        // Result operations (map, bind, mapError, isOk, isError, defaultValue)
 
+module IntrinsicModule =
+    let describe = function
+        | IntrinsicModule.Sys -> "Sys"
+        | IntrinsicModule.NativeDefault -> "NativeDefault"
+        | IntrinsicModule.String -> "String"
+        | IntrinsicModule.Array -> "Array"
+        | IntrinsicModule.Math -> "Math"
+        | IntrinsicModule.Unchecked -> "Unchecked"
+        | IntrinsicModule.Operators -> "Operators"
+        | IntrinsicModule.Parse -> "Parse"
+        | IntrinsicModule.Format -> "Format"
+        | IntrinsicModule.Convert -> "Convert"
+        | IntrinsicModule.Crypto -> "Crypto"
+        | IntrinsicModule.Bits -> "Bits"
+        | IntrinsicModule.DateTime -> "DateTime"
+        | IntrinsicModule.TimeSpan -> "TimeSpan"
+        | IntrinsicModule.FnPtr -> "FnPtr"
+        | IntrinsicModule.Mmio -> "Mmio"
+        | IntrinsicModule.BorrowedView -> "BorrowedView"
+        | IntrinsicModule.Lazy -> "Lazy"
+        | IntrinsicModule.Seq -> "Seq"
+        | IntrinsicModule.SeqEnumerator -> "SeqEnumerator"
+        | IntrinsicModule.Arena -> "Arena"
+        | IntrinsicModule.Platform -> "Platform"
+        | IntrinsicModule.Map -> "Map"
+        | IntrinsicModule.Set -> "Set"
+        | IntrinsicModule.List -> "List"
+        | IntrinsicModule.Option -> "Option"
+        | IntrinsicModule.Result -> "Result"
+
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]
 type IntrinsicCategory =
@@ -371,6 +401,27 @@ type EvaluationAccess = Value | Storage
 type EvaluationResidual =
     | MissingOperand | InvalidShape | MatchSelection | ExceptionFlow
     | CollectionIteration | CountedIteration | Delegation
+
+module EvaluationTransfer =
+    let describe = function
+        | EvaluationTransfer.Continue -> "Continue"
+        | EvaluationTransfer.WhenTrue -> "WhenTrue"
+        | EvaluationTransfer.WhenFalse -> "WhenFalse"
+        | EvaluationTransfer.Resume -> "Resume"
+        | EvaluationTransfer.WhenCase caseOrdinal -> sprintf "WhenCase(%d)" caseOrdinal
+        | EvaluationTransfer.WhenOtherCases ordinals ->
+            let items = ordinals |> List.map string |> String.concat "; "
+            sprintf "WhenOtherCases([%s])" items
+
+module EvaluationResidual =
+    let describe = function
+        | EvaluationResidual.MissingOperand -> "MissingOperand"
+        | EvaluationResidual.InvalidShape -> "InvalidShape"
+        | EvaluationResidual.MatchSelection -> "MatchSelection"
+        | EvaluationResidual.ExceptionFlow -> "ExceptionFlow"
+        | EvaluationResidual.CollectionIteration -> "CollectionIteration"
+        | EvaluationResidual.CountedIteration -> "CountedIteration"
+        | EvaluationResidual.Delegation -> "Delegation"
 
 /// A conversion alternative over opaque native results. Origin labels are
 /// static source identities, never native pointer bits.
@@ -873,6 +924,91 @@ and MemberKind =
     | Field
     | Constructor
     | Event
+
+module SemanticKind =
+    let describe = function
+        | SemanticKind.Binding(name, _, _, _) -> sprintf "Binding(%s)" name
+        | SemanticKind.Application(func, _) -> sprintf "Application(%d)" (NodeId.value func)
+        | SemanticKind.Lambda(_, body, _, _, _) -> sprintf "Lambda(%d)" (NodeId.value body)
+        | SemanticKind.Literal _ -> "Literal"
+        | SemanticKind.VarRef(name, _) -> sprintf "VarRef(%s)" name
+        | SemanticKind.Match(scrutinee, _) -> sprintf "Match(%d)" (NodeId.value scrutinee)
+        | SemanticKind.CaseElimination(scrutinee, _) -> sprintf "CaseElimination(%d)" (NodeId.value scrutinee)
+        | SemanticKind.Sequential _ -> "Sequential"
+        | SemanticKind.WhileLoop(guard, body) -> sprintf "WhileLoop(%d, %d)" (NodeId.value guard) (NodeId.value body)
+        | SemanticKind.ContinuationDispatch(selector, _, otherwise) -> sprintf "ContinuationDispatch(%d, %d)" (NodeId.value selector) (NodeId.value otherwise)
+        | SemanticKind.FrameRead(frame, slot) -> sprintf "FrameRead(%d, %d)" (NodeId.value frame) (NodeId.value slot)
+        | SemanticKind.FrameBorrow(frame, slot) -> sprintf "FrameBorrow(%d, %d)" (NodeId.value frame) (NodeId.value slot)
+        | SemanticKind.FrameWrite(frame, slot, value) -> sprintf "FrameWrite(%d, %d, %d)" (NodeId.value frame) (NodeId.value slot) (NodeId.value value)
+        | SemanticKind.ContinuationStorage owner -> sprintf "ContinuationStorage(%d)" (NodeId.value owner)
+        | SemanticKind.ContinuationAllocate owner -> sprintf "ContinuationAllocate(%d)" (NodeId.value owner)
+        | SemanticKind.AggregateStorage source -> sprintf "AggregateStorage(%d)" (NodeId.value source)
+        | SemanticKind.DUInitialize(destination, caseName, caseIndex, _) -> sprintf "DUInitialize(%d, %s#%d)" (NodeId.value destination) caseName caseIndex
+        | SemanticKind.ClosureValue(implementation, environment) -> sprintf "ClosureValue(%d, %d)" (NodeId.value implementation) (NodeId.value environment)
+        | SemanticKind.EnvironmentCreate(owner, _) -> sprintf "EnvironmentCreate(%d)" (NodeId.value owner)
+        | SemanticKind.EnvironmentAllocate owner -> sprintf "EnvironmentAllocate(%d)" (NodeId.value owner)
+        | SemanticKind.EnvironmentReference callable -> sprintf "EnvironmentReference(%d)" (NodeId.value callable)
+        | SemanticKind.EnvironmentRead(environment, slot) -> sprintf "EnvironmentRead(%d, %d)" (NodeId.value environment) (NodeId.value slot)
+        | SemanticKind.EnvironmentBorrow(environment, slot) -> sprintf "EnvironmentBorrow(%d, %d)" (NodeId.value environment) (NodeId.value slot)
+        | SemanticKind.EnvironmentWrite(environment, slot, value) -> sprintf "EnvironmentWrite(%d, %d, %d)" (NodeId.value environment) (NodeId.value slot) (NodeId.value value)
+        | SemanticKind.ForLoop(var, _, _, _, _) -> sprintf "ForLoop(%s)" var
+        | SemanticKind.ForEach(var, _, _, _) -> sprintf "ForEach(%s)" var
+        | SemanticKind.IfThenElse(guard, thenBranch, _) -> sprintf "IfThenElse(%d, %d)" (NodeId.value guard) (NodeId.value thenBranch)
+        | SemanticKind.Require(condition, diagnostic) -> sprintf "Require(%d, %s)" (NodeId.value condition) diagnostic
+        | SemanticKind.TryWith(body, handler) -> sprintf "TryWith(%d, %d)" (NodeId.value body) (NodeId.value handler)
+        | SemanticKind.TryFinally(body, cleanup) -> sprintf "TryFinally(%d, %d)" (NodeId.value body) (NodeId.value cleanup)
+        | SemanticKind.RecordExpr _ -> "RecordExpr"
+        | SemanticKind.UnionCase(caseName, caseIndex, _) -> sprintf "UnionCase(%s#%d)" caseName caseIndex
+        | SemanticKind.DUGetTag(duValue, _) -> sprintf "DUGetTag(%d)" (NodeId.value duValue)
+        | SemanticKind.DUEliminate(duValue, caseIndex, caseName, _) -> sprintf "DUEliminate(%d, %s#%d)" (NodeId.value duValue) caseName caseIndex
+        | SemanticKind.DUConstruct(caseName, caseIndex, _, _) -> sprintf "DUConstruct(%s#%d)" caseName caseIndex
+        | SemanticKind.TupleExpr _ -> "TupleExpr"
+        | SemanticKind.ArrayExpr _ -> "ArrayExpr"
+        | SemanticKind.ArrayAllocate count -> sprintf "ArrayAllocate(%d)" (NodeId.value count)
+        | SemanticKind.ListExpr _ -> "ListExpr"
+        | SemanticKind.FieldGet(expr, fieldName) -> sprintf "FieldGet(%d, %s)" (NodeId.value expr) fieldName
+        | SemanticKind.StringByteBorrow source -> sprintf "StringByteBorrow(%d)" (NodeId.value source)
+        | SemanticKind.FieldSet(expr, fieldName, value) -> sprintf "FieldSet(%d, %s, %d)" (NodeId.value expr) fieldName (NodeId.value value)
+        | SemanticKind.IndexGet(expr, index) -> sprintf "IndexGet(%d, %d)" (NodeId.value expr) (NodeId.value index)
+        | SemanticKind.IndexSet(expr, index, value) -> sprintf "IndexSet(%d, %d, %d)" (NodeId.value expr) (NodeId.value index) (NodeId.value value)
+        | SemanticKind.NamedIndexedPropertySet(expr, propName, index, value) -> sprintf "NamedIndexedPropertySet(%d, %s, %d, %d)" (NodeId.value expr) propName (NodeId.value index) (NodeId.value value)
+        | SemanticKind.TypeAnnotation(expr, _) -> sprintf "TypeAnnotation(%d)" (NodeId.value expr)
+        | SemanticKind.Upcast(expr, _) -> sprintf "Upcast(%d)" (NodeId.value expr)
+        | SemanticKind.Downcast(expr, _) -> sprintf "Downcast(%d)" (NodeId.value expr)
+        | SemanticKind.TypeTest(expr, _) -> sprintf "TypeTest(%d)" (NodeId.value expr)
+        | SemanticKind.AddressOf(expr, isByref) -> sprintf "AddressOf(%d, byref=%b)" (NodeId.value expr) isByref
+        | SemanticKind.CellAddress binding -> sprintf "CellAddress(%d)" (NodeId.value binding)
+        | SemanticKind.ElementAddress(buffer, index) -> sprintf "ElementAddress(%d, %d)" (NodeId.value buffer) (NodeId.value index)
+        | SemanticKind.FieldAddress(receiver, field) -> sprintf "FieldAddress(%d, %s)" (NodeId.value receiver) field
+        | SemanticKind.Reborrow reference -> sprintf "Reborrow(%d)" (NodeId.value reference)
+        | SemanticKind.Deref expr -> sprintf "Deref(%d)" (NodeId.value expr)
+        | SemanticKind.Set(target, value) -> sprintf "Set(%d, %d)" (NodeId.value target) (NodeId.value value)
+        | SemanticKind.PlatformBinding name -> sprintf "PlatformBinding(%s)" name
+        | SemanticKind.Intrinsic { FullName = fullName } -> sprintf "Intrinsic(%s)" fullName
+        | SemanticKind.TraitCall(memberName, _, arg) -> sprintf "TraitCall(%s, %d)" memberName (NodeId.value arg)
+        | SemanticKind.Quote(expr, isTyped) -> sprintf "Quote(%d, typed=%b)" (NodeId.value expr) isTyped
+        | SemanticKind.ObjectExpr _ -> "ObjectExpr"
+        | SemanticKind.ModuleDef(name, _) -> sprintf "ModuleDef(%s)" name
+        | SemanticKind.TypeDef(name, _, _) -> sprintf "TypeDef(%s)" name
+        | SemanticKind.MemberDef(name, _, _) -> sprintf "MemberDef(%s)" name
+        | SemanticKind.InterpolatedString _ -> "InterpolatedString"
+        | SemanticKind.PatternBinding name -> sprintf "PatternBinding(%s)" name
+        | SemanticKind.LazyExpr(body, _) -> sprintf "LazyExpr(%d)" (NodeId.value body)
+        | SemanticKind.LazyForce lazyValue -> sprintf "LazyForce(%d)" (NodeId.value lazyValue)
+        | SemanticKind.EagerExpr operand -> sprintf "EagerExpr(%d)" (NodeId.value operand)
+        | SemanticKind.LazyValue(thunk, environment) -> sprintf "LazyValue(%d, %d)" (NodeId.value thunk) (NodeId.value environment)
+        | SemanticKind.LazyEnvironment(owner, _) -> sprintf "LazyEnvironment(%d)" (NodeId.value owner)
+        | SemanticKind.LazyAllocate owner -> sprintf "LazyAllocate(%d)" (NodeId.value owner)
+        | SemanticKind.LazyEnvironmentReference lazyValue -> sprintf "LazyEnvironmentReference(%d)" (NodeId.value lazyValue)
+        | SemanticKind.LazyRead(environment, slot) -> sprintf "LazyRead(%d, %d)" (NodeId.value environment) (NodeId.value slot)
+        | SemanticKind.LazyBorrow(environment, slot) -> sprintf "LazyBorrow(%d, %d)" (NodeId.value environment) (NodeId.value slot)
+        | SemanticKind.LazyWrite(environment, slot, value) -> sprintf "LazyWrite(%d, %d, %d)" (NodeId.value environment) (NodeId.value slot) (NodeId.value value)
+        | SemanticKind.SeqExpr(body, _) -> sprintf "SeqExpr(%d)" (NodeId.value body)
+        | SemanticKind.Yield value -> sprintf "Yield(%d)" (NodeId.value value)
+        | SemanticKind.YieldBang seq -> sprintf "YieldBang(%d)" (NodeId.value seq)
+        | SemanticKind.TupleGet(tuple, index) -> sprintf "TupleGet(%d, %d)" (NodeId.value tuple) index
+        | SemanticKind.Error message -> sprintf "Error(%s)" message
+        | SemanticKind.Obligation { Id = obligationId } -> sprintf "Obligation(%s)" obligationId
 
 //-------------------------------------------------------------------------
 // Program Hypergraph: the edge set (F) and its annotation (beta)
@@ -1657,6 +1793,19 @@ type EdgeClass =
     | Boundary
     /// Source-settled hardware/kernel declaration and complete spatial plan.
     | Spatial
+
+module EdgeClass =
+    let describe = function
+        | EdgeClass.Structural -> "Structural"
+        | EdgeClass.Reference -> "Reference"
+        | EdgeClass.Provenance -> "Provenance"
+        | EdgeClass.Obligation -> "Obligation"
+        | EdgeClass.Suspension -> "Suspension"
+        | EdgeClass.Evaluation -> "Evaluation"
+        | EdgeClass.Demand -> "Demand"
+        | EdgeClass.Range -> "Range"
+        | EdgeClass.Boundary -> "Boundary"
+        | EdgeClass.Spatial -> "Spatial"
 
 [<RequireQualifiedAccess>]
 type FiniteCellRelationKind =
@@ -2653,6 +2802,196 @@ type EdgeRole =
     | BoundaryCallbackInvocation of BoundaryCallbackInvocation
     | BoundaryCallbackAbsence of BoundaryCallbackAbsence
     | BoundaryClosedEntry of BoundaryClosedEntry
+
+module EdgeRole =
+    let describe = function
+        | EdgeRole.NumericDomain _ -> "NumericDomain"
+        | EdgeRole.NumericCarrier _ -> "NumericCarrier"
+        | EdgeRole.NumericProof _ -> "NumericProof"
+        | EdgeRole.NumericOperation _ -> "NumericOperation"
+        | EdgeRole.NumericOperationProof _ -> "NumericOperationProof"
+        | EdgeRole.NumericIndexTransport _ -> "NumericIndexTransport"
+        | EdgeRole.MemoryDomain _ -> "MemoryDomain"
+        | EdgeRole.MemoryOperation _ -> "MemoryOperation"
+        | EdgeRole.MemoryArrayCopy _ -> "MemoryArrayCopy"
+        | EdgeRole.ArrayAllocationConstruction _ -> "ArrayAllocationConstruction"
+        | EdgeRole.ArrayCopyConstruction _ -> "ArrayCopyConstruction"
+        | EdgeRole.MemoryProof _ -> "MemoryProof"
+        | EdgeRole.MemoryAccessGuard -> "MemoryAccessGuard"
+        | EdgeRole.SpatialModuleDomain _ -> "SpatialModuleDomain"
+        | EdgeRole.HardwareModule _ -> "HardwareModule"
+        | EdgeRole.KernelModule _ -> "KernelModule"
+        | EdgeRole.KernelIngress _ -> "KernelIngress"
+        | EdgeRole.SpatialProof _ -> "SpatialProof"
+        | EdgeRole.BoundaryDeclaration _ -> "BoundaryDeclaration"
+        | EdgeRole.BoundaryDomain _ -> "BoundaryDomain"
+        | EdgeRole.BoundaryResourceDeclaration _ -> "BoundaryResourceDeclaration"
+        | EdgeRole.BoundaryWritableBufferDeclaration _ -> "BoundaryWritableBufferDeclaration"
+        | EdgeRole.BoundaryWritableBufferUse _ -> "BoundaryWritableBufferUse"
+        | EdgeRole.BoundaryReadOnlyBufferDeclaration _ -> "BoundaryReadOnlyBufferDeclaration"
+        | EdgeRole.BoundaryReadOnlyBufferUse _ -> "BoundaryReadOnlyBufferUse"
+        | EdgeRole.BoundaryBorrowedResultViewDeclaration _ -> "BoundaryBorrowedResultViewDeclaration"
+        | EdgeRole.BoundaryBorrowedResultViewUse _ -> "BoundaryBorrowedResultViewUse"
+        | EdgeRole.BoundaryBufferAbsence _ -> "BoundaryBufferAbsence"
+        | EdgeRole.BoundaryCountedEntryArray _ -> "BoundaryCountedEntryArray"
+        | EdgeRole.BoundaryResourceAccess _ -> "BoundaryResourceAccess"
+        | EdgeRole.BoundaryImport _ -> "BoundaryImport"
+        | EdgeRole.BoundaryCall _ -> "BoundaryCall"
+        | EdgeRole.BoundaryOperand _ -> "BoundaryOperand"
+        | EdgeRole.BoundaryAdaptation _ -> "BoundaryAdaptation"
+        | EdgeRole.BoundaryCoverage _ -> "BoundaryCoverage"
+        | EdgeRole.BoundaryProof _ -> "BoundaryProof"
+        | EdgeRole.StringByteView _ -> "StringByteView"
+        | EdgeRole.StringExtent _ -> "StringExtent"
+        | EdgeRole.StringBorrowHistory _ -> "StringBorrowHistory"
+        | EdgeRole.LiteralStorageHistory _ -> "LiteralStorageHistory"
+        | EdgeRole.StringComparisonConstruction _ -> "StringComparisonConstruction"
+        | EdgeRole.StringLengthComparison _ -> "StringLengthComparison"
+        | EdgeRole.IntrinsicWriteAbi _ -> "IntrinsicWriteAbi"
+        | EdgeRole.IntrinsicWriteImport _ -> "IntrinsicWriteImport"
+        | EdgeRole.IntrinsicWriteCall _ -> "IntrinsicWriteCall"
+        | EdgeRole.IntrinsicWriteOperand _ -> "IntrinsicWriteOperand"
+        | EdgeRole.IntrinsicWriteProof _ -> "IntrinsicWriteProof"
+        | EdgeRole.EagerDemand _ -> "EagerDemand"
+        | EdgeRole.EagerDemandPending -> "EagerDemandPending"
+        | EdgeRole.StringByteStorage _ -> "StringByteStorage"
+        | EdgeRole.StringByteRead -> "StringByteRead"
+        | EdgeRole.StringByteRange _ -> "StringByteRange"
+        | EdgeRole.StringByteSnapshot -> "StringByteSnapshot"
+        | EdgeRole.StringCheckedConstruction _ -> "StringCheckedConstruction"
+        | EdgeRole.StringToBytesSnapshot -> "StringToBytesSnapshot"
+        | EdgeRole.StringAscii -> "StringAscii"
+        | EdgeRole.StringUtf8Constant _ -> "StringUtf8Constant"
+        | EdgeRole.LoopInduction _ -> "LoopInduction"
+        | EdgeRole.LoopAccumulation -> "LoopAccumulation"
+        | EdgeRole.SequencePullBound -> "SequencePullBound"
+        | EdgeRole.SequencePullComposition _ -> "SequencePullComposition"
+        | EdgeRole.SequenceAccumulation -> "SequenceAccumulation"
+        | EdgeRole.LoopRangePending _ -> "LoopRangePending"
+        | EdgeRole.Callee -> "Callee"
+        | EdgeRole.Argument -> "Argument"
+        | EdgeRole.Parameter -> "Parameter"
+        | EdgeRole.Body -> "Body"
+        | EdgeRole.Scrutinee -> "Scrutinee"
+        | EdgeRole.CaseBinding -> "CaseBinding"
+        | EdgeRole.CaseGuard -> "CaseGuard"
+        | EdgeRole.CaseBody -> "CaseBody"
+        | EdgeRole.Guard -> "Guard"
+        | EdgeRole.ThenBranch -> "ThenBranch"
+        | EdgeRole.ElseBranch -> "ElseBranch"
+        | EdgeRole.LoopStart -> "LoopStart"
+        | EdgeRole.LoopFinish -> "LoopFinish"
+        | EdgeRole.Collection -> "Collection"
+        | EdgeRole.Handler -> "Handler"
+        | EdgeRole.Cleanup -> "Cleanup"
+        | EdgeRole.Element -> "Element"
+        | EdgeRole.FieldValue -> "FieldValue"
+        | EdgeRole.CopyFrom -> "CopyFrom"
+        | EdgeRole.Payload -> "Payload"
+        | EdgeRole.ArenaHint -> "ArenaHint"
+        | EdgeRole.AssignTarget -> "AssignTarget"
+        | EdgeRole.AssignValue -> "AssignValue"
+        | EdgeRole.Subject -> "Subject"
+        | EdgeRole.Index -> "Index"
+        | EdgeRole.Member -> "Member"
+        | EdgeRole.Operand -> "Operand"
+        | EdgeRole.InterpolationPart -> "InterpolationPart"
+        | EdgeRole.Attached -> "Attached"
+        | EdgeRole.Definition -> "Definition"
+        | EdgeRole.TypeDefinition -> "TypeDefinition"
+        | EdgeRole.IntrinsicImplementation -> "IntrinsicImplementation"
+        | EdgeRole.Symbol -> "Symbol"
+        | EdgeRole.EnrichedWith -> "EnrichedWith"
+        | EdgeRole.ProgramInitialization -> "ProgramInitialization"
+        | EdgeRole.ProgramInitializationPending _ -> "ProgramInitializationPending"
+        | EdgeRole.ProgramInitializer -> "ProgramInitializer"
+        | EdgeRole.ProgramUnitActivation -> "ProgramUnitActivation"
+        | EdgeRole.ProgramEntryCall -> "ProgramEntryCall"
+        | EdgeRole.ProgramValueIntent -> "ProgramValueIntent"
+        | EdgeRole.ProgramValue -> "ProgramValue"
+        | EdgeRole.ProgramActivationCall -> "ProgramActivationCall"
+        | EdgeRole.ProgramActivationCoverage -> "ProgramActivationCoverage"
+        | EdgeRole.SequenceInputBorrow -> "SequenceInputBorrow"
+        | EdgeRole.CallableInvocationBorrow -> "CallableInvocationBorrow"
+        | EdgeRole.BranchOccurrence -> "BranchOccurrence"
+        | EdgeRole.CaptureOrigin -> "CaptureOrigin"
+        | EdgeRole.EnvironmentCapture _ -> "EnvironmentCapture"
+        | EdgeRole.EnvironmentInitializer -> "EnvironmentInitializer"
+        | EdgeRole.EnvironmentFormal -> "EnvironmentFormal"
+        | EdgeRole.LazyInstance -> "LazyInstance"
+        | EdgeRole.LazyCapture _ -> "LazyCapture"
+        | EdgeRole.LazyMemoization -> "LazyMemoization"
+        | EdgeRole.LazyResultDestination -> "LazyResultDestination"
+        | EdgeRole.LazyResultCall -> "LazyResultCall"
+        | EdgeRole.LazyResidence -> "LazyResidence"
+        | EdgeRole.LazyLayout -> "LazyLayout"
+        | EdgeRole.EnvironmentResidence -> "EnvironmentResidence"
+        | EdgeRole.EnvironmentReservation _ -> "EnvironmentReservation"
+        | EdgeRole.ProgramInitializationOrder _ -> "ProgramInitializationOrder"
+        | EdgeRole.ProgramInitializationOrderHistory _ -> "ProgramInitializationOrderHistory"
+        | EdgeRole.EnvironmentResultDestination -> "EnvironmentResultDestination"
+        | EdgeRole.EnvironmentResultCall -> "EnvironmentResultCall"
+        | EdgeRole.SequenceCaptureFormation -> "SequenceCaptureFormation"
+        | EdgeRole.SequenceCaptureInitializer _ -> "SequenceCaptureInitializer"
+        | EdgeRole.SequenceEnvironmentBorrow -> "SequenceEnvironmentBorrow"
+        | EdgeRole.SequenceResultCapture -> "SequenceResultCapture"
+        | EdgeRole.Delimiter -> "Delimiter"
+        | EdgeRole.DelegationOrigin -> "DelegationOrigin"
+        | EdgeRole.IteratorCurrentAdmitted -> "IteratorCurrentAdmitted"
+        | EdgeRole.SequenceElementAdmission -> "SequenceElementAdmission"
+        | EdgeRole.SequenceElementOwner -> "SequenceElementOwner"
+        | EdgeRole.SequenceElementPayload -> "SequenceElementPayload"
+        | EdgeRole.SequenceElementUnknown -> "SequenceElementUnknown"
+        | EdgeRole.SequencePullBody -> "SequencePullBody"
+        | EdgeRole.SequenceInitialize -> "SequenceInitialize"
+        | EdgeRole.SequenceFamilyLayout -> "SequenceFamilyLayout"
+        | EdgeRole.SequenceFamilyCurrent -> "SequenceFamilyCurrent"
+        | EdgeRole.SequenceTemplateCopy -> "SequenceTemplateCopy"
+        | EdgeRole.SequenceEffectUnknown -> "SequenceEffectUnknown"
+        | EdgeRole.SuspensionCut state -> sprintf "SuspensionCut(%d)" state
+        | EdgeRole.SuspensionLiveAcross -> "SuspensionLiveAcross"
+        | EdgeRole.SuspensionResume state -> sprintf "SuspensionResume(%d)" state
+        | EdgeRole.SuspensionResumeAction state -> sprintf "SuspensionResumeAction(%d)" state
+        | EdgeRole.SuspensionCompleted -> "SuspensionCompleted"
+        | EdgeRole.EvaluationOperand _ -> "EvaluationOperand"
+        | EdgeRole.EvaluationFlow _ -> "EvaluationFlow"
+        | EdgeRole.EvaluationCapture -> "EvaluationCapture"
+        | EdgeRole.EvaluationRoot -> "EvaluationRoot"
+        | EdgeRole.EvaluationPending residual -> sprintf "EvaluationPending(%s)" (EvaluationResidual.describe residual)
+        | EdgeRole.ContinuationCase state -> sprintf "ContinuationCase(%d)" state
+        | EdgeRole.MatchRequirement -> "MatchRequirement"
+        | EdgeRole.ContinuationDefault -> "ContinuationDefault"
+        | EdgeRole.FrameSlot -> "FrameSlot"
+        | EdgeRole.ContinuationValue -> "ContinuationValue"
+        | EdgeRole.ContinuationSlotAccess -> "ContinuationSlotAccess"
+        | EdgeRole.ContinuationRegion -> "ContinuationRegion"
+        | EdgeRole.ContinuationBorrow -> "ContinuationBorrow"
+        | EdgeRole.AggregateCopy -> "AggregateCopy"
+        | EdgeRole.AggregateSnapshot -> "AggregateSnapshot"
+        | EdgeRole.SequenceTemplateBorrow -> "SequenceTemplateBorrow"
+        | EdgeRole.SequenceProgramBorrow -> "SequenceProgramBorrow"
+        | EdgeRole.SequenceSlotBorrow -> "SequenceSlotBorrow"
+        | EdgeRole.Resides -> "Resides"
+        | EdgeRole.Constrains -> "Constrains"
+        | EdgeRole.CallableReferenceOrigin -> "CallableReferenceOrigin"
+        | EdgeRole.CaptureReferenceOrigin -> "CaptureReferenceOrigin"
+        | EdgeRole.LoopLinearRecurrence -> "LoopLinearRecurrence"
+        | EdgeRole.EnvironmentInvocation -> "EnvironmentInvocation"
+        | EdgeRole.SequenceProgramStorage -> "SequenceProgramStorage"
+        | EdgeRole.SchemeSpecialization -> "SchemeSpecialization"
+        | EdgeRole.LazyEffectRange -> "LazyEffectRange"
+        | EdgeRole.OrdinaryUnusedFormal -> "OrdinaryUnusedFormal"
+        | EdgeRole.OrdinaryUnusedActual -> "OrdinaryUnusedActual"
+        | EdgeRole.OrdinaryUnusedBindingInitializer -> "OrdinaryUnusedBindingInitializer"
+        | EdgeRole.OrdinaryInactiveImplementation -> "OrdinaryInactiveImplementation"
+        | EdgeRole.OrdinaryBindingDemand _ -> "OrdinaryBindingDemand"
+        | EdgeRole.OrdinaryBindingDemandPending _ -> "OrdinaryBindingDemandPending"
+        | EdgeRole.OrdinaryBindingDemandHistory _ -> "OrdinaryBindingDemandHistory"
+        | EdgeRole.FiniteCellRange -> "FiniteCellRange"
+        | EdgeRole.BoundaryEntry _ -> "BoundaryEntry"
+        | EdgeRole.BoundaryCallbackInvocation _ -> "BoundaryCallbackInvocation"
+        | EdgeRole.BoundaryCallbackAbsence _ -> "BoundaryCallbackAbsence"
+        | EdgeRole.BoundaryClosedEntry _ -> "BoundaryClosedEntry"
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.

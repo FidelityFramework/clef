@@ -144,7 +144,7 @@ let private framePlan (graph: SemanticGraph) (family: Families.Plan option) (own
                     ResumeStates = control.ResumeEntries |> Map.toList |> List.map fst
                     Obligations = obligations.NewNodes |> List.map _.Id }
                 Ok (control, frame, [ { state with IsReachable = false }; { current with IsReachable = false } ], obligations)
-            | Result.Error error, _ | _, Result.Error error -> Result.Error (residual owner [] (sprintf "%A" error))
+            | Result.Error error, _ | _, Result.Error error -> Result.Error (residual owner [] (Placement.describeContinuationPlacementError error))
             | _ -> Result.Error (residual owner [] "The declared target has no concrete continuation extent and alignment.")
         | _ -> Result.Error (residual owner [control.Generator] "A sequence needs its typed, single-environment generator formal.")
 
@@ -236,7 +236,7 @@ let private normalizePreparedWhenSourceAdmittedCore sourceAdmitted (prepared: Se
         trace "residence"
         let graph = ObligationElaboration.foldIn { Enrichment.empty with NewEdges = residence.Evidence } graph
         let residenceDiagnostics = residence.Unresolved |> List.map (fun pending ->
-            residual graph.Nodes[pending.Site] [] (sprintf "Allocation residence is unresolved: %A" pending.Reason))
+            residual graph.Nodes[pending.Site] [] (sprintf "Allocation residence is unresolved: %s" (Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence.describeResidualReason pending.Reason)))
         let controls = graph.Nodes.Values |> Seq.choose (fun node ->
             match node.Kind with
             | SemanticKind.SeqExpr _ when node.IsReachable ->

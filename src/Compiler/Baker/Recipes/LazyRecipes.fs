@@ -49,8 +49,9 @@ let formation (ctx: Context) (graph: SemanticGraph) (plan: Lazy.Plan) : Expansio
                 | SemanticKind.Lambda _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ -> seen, missing
                 | _ -> List.fold within (seen, missing) node.Children
         let bodyNodes, missing = within (Set.empty, []) plan.Body
+        let missingIds = missing |> List.rev |> List.map (NodeId.value >> string) |> String.concat "; "
         do! (if missing.IsEmpty then preturn () else
-                fail (XParsec.ErrorType.Message (sprintf "PSG settlement (LazyValues) did not settle the lazy body of %d: structural children %A are missing from the graph" (NodeId.value owner.Id) (missing |> List.rev |> List.map NodeId.value))))
+                fail (XParsec.ErrorType.Message (sprintf "PSG settlement (LazyValues) did not settle the lazy body of %d: structural children [%s] are missing from the graph" (NodeId.value owner.Id) missingIds)))
         let destinations = bodyNodes |> Set.toList |> List.choose (fun id ->
             match graph.Nodes[id].Kind with SemanticKind.Set(target, _) -> Some target | _ -> None) |> Set.ofList
         let sourceOf id =
@@ -74,7 +75,7 @@ let formation (ctx: Context) (graph: SemanticGraph) (plan: Lazy.Plan) : Expansio
         let! enclosing =
             match thunk.Kind with
             | SemanticKind.Lambda(_, _, _, enclosing, _) -> preturn enclosing
-            | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (LazyValues) did not settle a Lambda thunk for lazy %d: thunk %d is %A" (NodeId.value owner.Id) (NodeId.value thunk.Id) other))
+            | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (LazyValues) did not settle a Lambda thunk for lazy %d: thunk %d is %s" (NodeId.value owner.Id) (NodeId.value thunk.Id) (SemanticKind.describe other)))
         let codeType = NativeType.TFun(Lazy.environmentType, element)
         do! enrich thunk (SemanticKind.Lambda(["__lazy_environment", Lazy.environmentType, formal], plan.Body, [], enclosing, LambdaContext.LazyThunk))
                         codeType [formal; plan.Body] thunk.EmissionStrategy false
@@ -102,7 +103,7 @@ let force (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) (contract
         let! operand =
             match source.Kind with
             | SemanticKind.LazyForce operand -> preturn operand
-            | other -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a force occurrence for Lazy.force at node %d: found %A" (NodeId.value source.Id) other))
+            | other -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a force occurrence for Lazy.force at node %d: found %s" (NodeId.value source.Id) (SemanticKind.describe other)))
         let invoke environment = saturation {
             let! code = varRef "__lazy_thunk" (Some contract.Thunk) (NativeType.TFun(Lazy.environmentType, contract.ElementType))
             return! app code [environment] contract.ElementType

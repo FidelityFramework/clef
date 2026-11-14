@@ -30,7 +30,7 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) =
                 | SemanticKind.Lambda(parameters, body, _, _, _) when graph.Nodes.ContainsKey body ->
                     preturn (parameters |> List.map (fun (name, ty, _) -> name, ty), graph.Nodes[body].Type)
                 | other ->
-                    fail (XParsec.ErrorType.Message (sprintf "PSG settlement (CallableDispatch) did not settle the declared Lambda of dispatch member %d for formal %d: found %A" (NodeId.value first.Implementation.Id) (NodeId.value source.Id) other))
+                    fail (XParsec.ErrorType.Message (sprintf "PSG settlement (CallableDispatch) did not settle the declared Lambda of dispatch member %d for formal %d: found %s" (NodeId.value first.Implementation.Id) (NodeId.value source.Id) (SemanticKind.describe other)))
         let! dispatcher = closure parameters [capture] None (fun arguments captures ->
             let rec branch ordinal members = saturation {
                 match members with
@@ -40,7 +40,7 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) =
                         match memberValue.Declaration.Kind with
                         | SemanticKind.Binding(name, _, _, _) -> preturn name
                         | other ->
-                            fail (XParsec.ErrorType.Message (sprintf "PSG settlement (CallableDispatch) did not settle the code declaration of dispatch member %d for formal %d: found %A" (NodeId.value memberValue.Declaration.Id) (NodeId.value source.Id) other))
+                            fail (XParsec.ErrorType.Message (sprintf "PSG settlement (CallableDispatch) did not settle the code declaration of dispatch member %d for formal %d: found %s" (NodeId.value memberValue.Declaration.Id) (NodeId.value source.Id) (SemanticKind.describe other)))
                     let! callee = varRef name (Some memberValue.Declaration.Id) source.Type
                     let! invocation = app callee arguments resultType
                     if rest.IsEmpty then return invocation else

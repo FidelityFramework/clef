@@ -765,7 +765,7 @@ let returnedLifetime (graph:SemanticGraph) (construction:CheckedStringConstructi
     | None -> None
     | Some life ->
         let demand okay reason=if not okay then invalidOp reason
-        let live id=graph.Nodes.TryFind id |> Option.filter _.IsReachable |> Option.defaultWith(fun()->invalidOp (sprintf "A returned checked lifetime participant %A was withdrawn." id))
+        let live id=graph.Nodes.TryFind id |> Option.filter _.IsReachable |> Option.defaultWith(fun()->invalidOp (sprintf "A returned checked lifetime participant %d was withdrawn." (NodeId.value id)))
         let current=graph.Platform |> Option.bind _.ProjectMemoryPolicy
         demand (current=Some(life.Policy.ProjectPath,life.Policy.SourceVersion,life.Policy.Model,true))
             "The returned checked allocation permission or captured policy changed."

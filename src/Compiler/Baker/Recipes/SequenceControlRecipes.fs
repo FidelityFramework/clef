@@ -196,8 +196,10 @@ let private definiteAssignment (graph: SemanticGraph) (owner: SemanticNode) entr
     let missing = steps.Values |> Seq.tryPick (fun step ->
         let unavailable = Set.difference step.Uses assigned[step.Label]
         if Set.isEmpty unavailable then None
-        else Some { Owner = owner.Id; Site = step.Origin
-                    Reason = sprintf "Values lack definite initialization at occurrence %d: %A" step.Label (Set.toList unavailable) })
+        else
+            let ids = unavailable |> Set.toList |> List.map (NodeId.value >> string) |> String.concat "; "
+            Some { Owner = owner.Id; Site = step.Origin
+                   Reason = sprintf "Values lack definite initialization at occurrence %d: [%s]" step.Label ids })
     match missing with Some residual -> Error residual | None -> Ok assigned
 
 /// The local projection is the authority for demands and transfers. The kind
@@ -225,7 +227,7 @@ let forOwner (graph: SemanticGraph) (owner: SemanticNode) : Result<Control, Resi
                 let flows = edges |> List.choose (fun edge ->
                     match edge.Role with EdgeRole.EvaluationFlow (before, after, transfer) -> Some (before, after, transfer) | _ -> None)
                 match pending with
-                | Some reason -> fail id (sprintf "Local evaluation remains pending: %A" reason)
+                | Some reason -> fail id (sprintf "Local evaluation remains pending: %s" (EvaluationResidual.describe reason))
                 | None when List.isEmpty flows -> fail id "Missing local evaluation contract."
                 | None ->
                     let node = graph.Nodes[id]

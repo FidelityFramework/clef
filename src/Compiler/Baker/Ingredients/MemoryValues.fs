@@ -18,7 +18,9 @@ let excludedValidated (graph:SemanticGraph) =
 let excluded graph =
     match excludedValidated graph with
     | Ok excluded -> excluded
-    | Error failures -> invalidOp(sprintf "Source memory demand premises are unsettled: %A" failures)
+    | Error failures ->
+        let reasons = failures |> List.map (fun f -> f.Reason) |> String.concat "; "
+        invalidOp(sprintf "Source memory demand premises are unsettled: [%s]" reasons)
 let executable (graph:SemanticGraph) excluded id =
     not(Set.contains id excluded) && (graph.Nodes.TryFind id |> Option.exists _.IsReachable)
 let premises (graph: SemanticGraph) =

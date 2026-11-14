@@ -370,7 +370,7 @@ let private partialRecipe (ctx: Context) operation supplied suppliedType inputTy
                 match operationRecipe operation [argument; opt] inputType (innerType resultType) with
                 | Some (recipe, _) -> recipe
                 | None ->
-                    fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the result type of partial Option.%s at node %d: input payload %A, result %A" operation (NodeId.value ctx.InspiringNode) inputType resultType))
+                    fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the result type of partial Option.%s at node %d: input payload %s, result %s" operation (NodeId.value ctx.InspiringNode) (formatType inputType) (formatType resultType)))
             | parameters, captures ->
                 fail (XParsec.ErrorType.Message (sprintf "Baker Option recipe did not settle the closure frontier for partial Option.%s at node %d: expected one option parameter and one supplied capture, got %d and %d" operation (NodeId.value ctx.InspiringNode) parameters.Length captures.Length))
         let! value = closure [("__option", Options.typeOf inputType)] [capture] enclosing body resultType

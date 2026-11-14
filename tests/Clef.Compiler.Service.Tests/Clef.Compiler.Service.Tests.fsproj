@@ -137,6 +137,7 @@
     <Compile Include="WitnessPreparedScopeCases.fs" />
     <Compile Include="ProjectLinkTests.fs" />
     <Compile Include="ProjectWorkspaceTests.fs" />
+    <Compile Include="BakerNanopassCruftContractCases.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

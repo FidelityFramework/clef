@@ -21,7 +21,7 @@ let expand (ctx: Context) (source: SemanticNode) (formal: SemanticNode) collecti
             match formal.Kind with
             | SemanticKind.PatternBinding name -> XParsec.Parsers.preturn name
             | other ->
-                XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the source formal for sequence consumption %d: formal %d is %A" (NodeId.value source.Id) (NodeId.value formal.Id) other))
+                XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the source formal for sequence consumption %d: formal %d is %s" (NodeId.value source.Id) (NodeId.value formal.Id) (SemanticKind.describe other)))
         let! iteration = iterate collection elementType (fun current -> saturation {
             do! enrich formal (SemanticKind.Binding(name, false, false, None)) elementType [current] formal.EmissionStrategy false
             return! evaluateBefore [formal.Id] body Types.unitType

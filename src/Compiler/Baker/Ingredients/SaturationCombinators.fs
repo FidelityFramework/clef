@@ -158,16 +158,32 @@ let private formatRange (r: SourceRange) =
 /// Any XParsec Error result means something threw or hit an unimplemented case inside
 /// the saturation CE.  Never convert this to a silent NoMatch — throw immediately with
 /// full state context so failures are immediately debuggable.
-let private failOnParserError (state: SaturationState) (rawError: obj) (emittedCount: int) : 'a =
+let rec private formatParserError (err: ErrorType<char, SaturationState>) : string =
+    match err with
+    | ErrorType.Expected c -> sprintf "Expected '%c'" c
+    | ErrorType.ExpectedSeq cs -> sprintf "Expected \"%s\"" (cs |> Seq.toArray |> System.String)
+    | ErrorType.ExpectedOneOf cs ->
+        cs |> Seq.map (sprintf "'%c'") |> String.concat " | " |> sprintf "ExpectedOneOf(%s)"
+    | ErrorType.ExpectedSeqOneOf css ->
+        css |> Seq.map (fun cs -> cs |> Seq.toArray |> System.String |> sprintf "\"%s\"") |> String.concat " | " |> sprintf "ExpectedSeqOneOf(%s)"
+    | ErrorType.Unexpected c -> sprintf "Unexpected '%c'" c
+    | ErrorType.UnexpectedSeq cs -> sprintf "Unexpected \"%s\"" (cs |> Seq.toArray |> System.String)
+    | ErrorType.Message msg -> sprintf "Message \"%s\"" msg
+    | ErrorType.EndOfInput -> "EndOfInput"
+    | ErrorType.Nested(parent, children) ->
+        let childText = children |> List.map (fun c -> formatParserError c.Errors) |> String.concat "; "
+        sprintf "Nested(%s, [%s])" (formatParserError parent) childText
+
+let private failOnParserError (state: SaturationState) (rawError: ErrorType<char, SaturationState>) (emittedCount: int) : 'a =
     failwithf
-        "[Baker] Saturation parser returned Error in '%s' at %s (inspiring node %A).\n\
-         \  XParsec error: %A\n\
+        "[Baker] Saturation parser returned Error in '%s' at %s (inspiring node %d).\n\
+         \  XParsec error: %s\n\
          \  Nodes emitted before failure: %d\n\
          \  Hint: search for a bare failwith/failwithf with no message, or an unimplemented pattern arm."
         state.OriginalHOF
         (formatRange state.SourceRange)
-        state.InspiringNode
-        rawError
+        (NodeId.value state.InspiringNode)
+        (formatParserError rawError)
         emittedCount
 
 /// Run a saturation parser with initial state, return result and emitted nodes.

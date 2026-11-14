@@ -384,4 +384,4 @@ let buildStartWrapper
     | NativeType.TFun (argType, returnType) ->
         Ok (startWrapperNodes startup mainNodeId mainType argType returnType sourceRange)
     | other ->
-        Error (sprintf "CCS source checking did not settle a function signature for the source entry %d: found %A" (NodeId.value mainNodeId) other)
+        Error (sprintf "CCS source checking did not settle a function signature for the source entry %d: found %s" (NodeId.value mainNodeId) (formatType other))

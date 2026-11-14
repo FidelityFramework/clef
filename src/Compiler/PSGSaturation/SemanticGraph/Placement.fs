@@ -759,6 +759,16 @@ type ContinuationPlacementError =
     | UnsettledField of source: NodeId * reason: string
     | ExtentOverflow
 
+let describeContinuationPlacementError = function
+    | ContinuationPlacementError.MissingPlatform -> "MissingPlatform"
+    | ContinuationPlacementError.InvalidPlatform reason -> sprintf "InvalidPlatform(%s)" reason
+    | ContinuationPlacementError.MissingSource id -> sprintf "MissingSource(%d)" (NodeId.value id)
+    | ContinuationPlacementError.DuplicateSource id -> sprintf "DuplicateSource(%d)" (NodeId.value id)
+    | ContinuationPlacementError.InvalidCapture(name, reason) -> sprintf "InvalidCapture(%s, %s)" name reason
+    | ContinuationPlacementError.UnsupportedField(source, reason) -> sprintf "UnsupportedField(%d, %s)" (NodeId.value source) reason
+    | ContinuationPlacementError.UnsettledField(source, reason) -> sprintf "UnsettledField(%d, %s)" (NodeId.value source) reason
+    | ContinuationPlacementError.ExtentOverflow -> "ExtentOverflow"
+
 /// Shared storage selection for explicitly enumerated continuation fields.
 /// This supplies neither liveness, definite assignment nor placement lifetime.
 let private placeContinuationFields (graph: SemanticGraph)

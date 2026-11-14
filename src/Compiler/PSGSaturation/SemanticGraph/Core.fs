@@ -271,3 +271,21 @@ module SemanticGraph =
             match n.Kind with
             | SemanticKind.Obligation info -> Some (n, info)
             | _ -> None)
+
+    let sameNode (left: SemanticNode) (right: SemanticNode) : bool =
+        left.Id = right.Id && left.Kind = right.Kind && left.Range = right.Range &&
+        left.Type = right.Type && left.SRTPResolution = right.SRTPResolution &&
+        left.ArenaAffinity = right.ArenaAffinity && left.LayoutHint = right.LayoutHint &&
+        left.Children = right.Children && left.Parent = right.Parent &&
+        left.Metadata = right.Metadata && left.IsReachable = right.IsReachable &&
+        left.EmissionStrategy = right.EmissionStrategy && left.ValueRange = right.ValueRange
+
+    let sameEdge (left: Hyperedge) (right: Hyperedge) : bool =
+        left.Class = right.Class && left.Role = right.Role && left.Ordinal = right.Ordinal &&
+        left.Sources = right.Sources && left.Target = right.Target
+
+    let sameNodesAndEdges (left: SemanticGraph) (right: SemanticGraph) : bool =
+        left.Nodes.Count = right.Nodes.Count &&
+        left.Edges.Length = right.Edges.Length &&
+        (left.Nodes |> Map.forall (fun id n -> right.Nodes.TryFind id |> Option.exists (sameNode n))) &&
+        List.forall2 sameEdge left.Edges right.Edges

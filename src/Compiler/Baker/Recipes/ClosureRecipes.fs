@@ -26,7 +26,7 @@ let direct (ctx: Context) (graph: SemanticGraph) (plan: Plan) : DirectResult =
             match plan.Lambda.Kind with
             | SemanticKind.Lambda (parameters, body, _, enclosing, context) -> XParsec.Parsers.preturn (parameters, body, enclosing, context)
             | other ->
-                XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "PSG settlement (DirectCaptures) did not settle a Lambda for the direct capture plan at node %d: found %A" (NodeId.value plan.Lambda.Id) other))
+                XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "PSG settlement (DirectCaptures) did not settle a Lambda for the direct capture plan at node %d: found %s" (NodeId.value plan.Lambda.Id) (SemanticKind.describe other)))
         let bodyReferences = plan.BodyNodes |> Set.filter (fun id ->
             let node = graph.Nodes[id]
             let captures =
@@ -56,7 +56,7 @@ let direct (ctx: Context) (graph: SemanticGraph) (plan: Plan) : DirectResult =
                             captureArgument source capture definition) |> sequence
                         return SemanticKind.Application (callee, captures @ args), callee :: (captures @ args)
                     | other ->
-                        return! XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "PSG settlement (DirectCaptures) did not settle an Application for direct capture call %d of Lambda %d: found %A" (NodeId.value id) (NodeId.value plan.Lambda.Id) other))
+                        return! XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "PSG settlement (DirectCaptures) did not settle an Application for direct capture call %d of Lambda %d: found %s" (NodeId.value id) (NodeId.value plan.Lambda.Id) (SemanticKind.describe other)))
                 else
                     let children = if inBody then source.Children |> List.map (fun id -> substitutions.TryFind id |> Option.defaultValue id) else source.Children
                     let kind =

@@ -174,7 +174,7 @@ let settleWhenSourceAdmitted admitted (graph: SemanticGraph) =
                             { edge with Sources = List.distinct (edge.Sources @ dependencies) })
                     let proof = { proof with NewEdges = evidence :: jointEdges }
                     Some (Ok(layout obligations, proof))
-            | Result.Error reason -> Some (Result.Error(residual contract.Formation [] (sprintf "%A" reason)))
+            | Result.Error reason -> Some (Result.Error(residual contract.Formation [] (Placement.describeContinuationPlacementError reason)))
             | _ -> Some (Result.Error(residual contract.Formation [] "The declared platform did not settle an exact lazy extent and alignment.")))
         |> Seq.toList
     let layouts = placed |> List.choose (function Ok(layout, _) -> Some(layout.Owner, layout) | _ -> None) |> Map.ofList

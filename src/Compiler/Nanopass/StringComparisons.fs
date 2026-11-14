@@ -52,5 +52,5 @@ let rec private elaborate graph =
 
 let normalize graph =
     let result = elaborate graph
-    if obj.ReferenceEquals(graph,result) || result.DeclarationRoots.IsEmpty then result
+    if Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.sameNodesAndEdges graph result || result.DeclarationRoots.IsEmpty then result
     else Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable result

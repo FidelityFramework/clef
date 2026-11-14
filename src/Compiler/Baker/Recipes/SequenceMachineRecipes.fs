@@ -104,7 +104,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
         let! envType =
             match owner.Type with
             | NativeType.TSeq item -> preturn (NativeType.TSeqEnumerator item)
-            | other -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a sequence type for continuation owner %d: found %A" (NodeId.value owner.Id) other))
+            | other -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a sequence type for continuation owner %d: found %s" (NodeId.value owner.Id) (formatType other)))
         let! storage = C.create (SemanticKind.ContinuationStorage owner.Id) (Types.internalStorageType) []
         let! storageBinding = letBind "__continuation_storage" storage (Types.internalStorageType)
         let! initialPc = C.index control.Entry
@@ -189,7 +189,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                                                    Metadata = target.Metadata.Add(sourceKey, MetadataValue.NodeId targetSource.Id) }
                         do! emit target
                         return! C.create (SemanticKind.Set(target.Id, input)) Types.unitType [target.Id; input]
-                | other -> return! fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a declaration identity for assignment %d in continuation owner %d: target is %A" (NodeId.value id) (NodeId.value owner.Id) other))
+                | other -> return! fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a declaration identity for assignment %d in continuation owner %d: target is %s" (NodeId.value id) (NodeId.value owner.Id) (SemanticKind.describe other)))
             | _ when isSymbolic graph Set.empty id ->
                 return! C.create (SemanticKind.Literal NativeLiteral.Unit) Types.unitType []
             | _ ->
@@ -271,7 +271,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                     let arc transfer =
                         match step.Successors |> List.tryFind (fun arc -> arc.Transfer = transfer) with
                         | Some arc -> preturn arc
-                        | None -> fail (XParsec.ErrorType.Message (sprintf "Baker SequenceControl recipe did not settle a %A successor for continuation branch at %d of owner %d" transfer (NodeId.value step.Origin) (NodeId.value owner.Id)))
+                        | None -> fail (XParsec.ErrorType.Message (sprintf "Baker SequenceControl recipe did not settle a %s successor for continuation branch at %d of owner %d" (EvaluationTransfer.describe transfer) (NodeId.value step.Origin) (NodeId.value owner.Id)))
                     let! yes = arc EvaluationTransfer.WhenTrue
                     let! no = arc EvaluationTransfer.WhenFalse
                     let! yesBody = setPc (target yes.Target)

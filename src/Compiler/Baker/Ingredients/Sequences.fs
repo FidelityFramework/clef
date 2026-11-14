@@ -16,7 +16,7 @@ let private sequenceOperation modl operation argument argumentType resultType =
         let info = {
             Module = modl; Operation = operation
             Category = if operation = "moveNext" then IntrinsicCategory.Memory else IntrinsicCategory.Pure
-            FullName = sprintf "%A.%s" modl operation
+            FullName = sprintf "%s.%s" (IntrinsicModule.describe modl) operation
         }
         let! state = getUserState
         let functionNode = mkNode state (SemanticKind.Intrinsic info) (NativeType.TFun (argumentType, resultType)) []

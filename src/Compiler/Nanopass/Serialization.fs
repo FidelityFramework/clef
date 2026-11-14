@@ -40,8 +40,8 @@ let private recipeValue (recipe: Recipe) =
             JsonValue.Object [
                 "sources", JsonValue.Array (edge.Sources |> List.map nodeId)
                 "target", nodeId edge.Target
-                "class", JsonValue.String (sprintf "%A" edge.Class)
-                "role", JsonValue.String (sprintf "%A" edge.Role)
+                "class", JsonValue.String (EdgeClass.describe edge.Class)
+                "role", JsonValue.String (EdgeRole.describe edge.Role)
                 "ordinal", number edge.Ordinal ]))
         "elaborationKind", JsonValue.String recipe.ElaborationKind
         "elaborationSource", JsonValue.String recipe.ElaborationSource ]
@@ -57,7 +57,7 @@ let serializeRecipeSet (recipeSet: RecipeSet) : string =
         recipes
         |> List.collect (fun recipe -> recipe.NewNodes)
         |> List.map (fun node ->
-            let kind = sprintf "%A" node.Kind
+            let kind = SemanticKind.describe node.Kind
             JsonValue.Object [
                 "id", nodeId node.Id
                 "kind", JsonValue.String (if kind.Length > 50 then kind.Substring(0, 50) + "..." else kind) ])

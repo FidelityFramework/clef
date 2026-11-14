@@ -423,7 +423,7 @@ let private replaceBindingMembership (bindingId: NodeId) (replacements: NodeId l
 /// Capture once, before any later rewrite or checker substitution can change
 /// the printed input/output. These records are not consumed by admission.
 let private snapshot (node: SemanticNode) : SpecializationNodeSnapshot =
-    { Kind = sprintf "%A" node.Kind; Type = formatType node.Type
+    { Kind = SemanticKind.describe node.Kind; Type = formatType node.Type
       Children = node.Children; Parent = node.Parent }
 
 let private recordDerivation retiresSource sourceDeclaration cloneDeclaration parameters arguments requests
@@ -474,6 +474,7 @@ let rec private specializeRecursiveComponents (retainedDeclarations: Set<NodeId>
     let mutable remaining = members
     let mutable current = nodes
     let mutable evidence = []
+    let mutable changed = false
     while not remaining.IsEmpty do
         let first = Set.minElement remaining
         let group = closure[first] |> Set.filter (fun id -> closure[id].Contains first)
@@ -623,6 +624,7 @@ let rec private specializeRecursiveComponents (retainedDeclarations: Set<NodeId>
                         if not retainSource && retired.Contains id then
                             { node with IsReachable = false; Metadata = node.Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) }
                         else node)
+                    changed <- true
                     for KeyValue(id, node) in created do current <- current.Add(id, node)
                     for node, original in uses do
                         let target = redirects[node.Id]
@@ -642,7 +644,7 @@ let rec private specializeRecursiveComponents (retainedDeclarations: Set<NodeId>
                                 replacements
 
                         current <- replaceBindingMembership original replacements true current
-    if obj.ReferenceEquals(nodes, current) then current, evidence
+    if not changed then current, evidence
     else
         let result, subsequent = specializeRecursiveComponents retainedDeclarations current
         result, evidence @ subsequent

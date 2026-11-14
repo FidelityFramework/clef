@@ -113,7 +113,7 @@ let private partialRecipe (ctx: Context) operation callback callbackType inputTy
                     return! evaluateBefore [callback; input] result outputType
                   }
                 | None ->
-                    fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle Result payload types for partial Result.%s at node %d: input %A, output %A" operation (NodeId.value ctx.InspiringNode) inputType outputType))
+                    fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle Result payload types for partial Result.%s at node %d: input %s, output %s" operation (NodeId.value ctx.InspiringNode) (formatType inputType) (formatType outputType)))
             | parameters, captures ->
                 fail (XParsec.ErrorType.Message (sprintf "Baker Result recipe did not settle the closure frontier for partial Result.%s at node %d: expected one input and one callback capture, got %d and %d" operation (NodeId.value ctx.InspiringNode) parameters.Length captures.Length))
         let! value = closure [("__result", inputType)] [capture] enclosing closureBody outputType

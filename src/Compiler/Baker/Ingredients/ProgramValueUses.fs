@@ -85,7 +85,7 @@ let read (graph: SemanticGraph) binding : Reading =
         let directMissing = directUses |> List.map (fun edge ->
             participants.Add(occurrence edge.Target ParticipantRole.InitializationUse edge.Ordinal edge.Target)
             participants.Add(occurrence edge.Target ParticipantRole.InitializationPremise edge.Ordinal binding)
-            sprintf "Direct structural callable-slot use (%A) at node %d needs a reading contract." edge.Role (NodeId.value edge.Target))
+            sprintf "Direct structural callable-slot use (%s) at node %d needs a reading contract." (EdgeRole.describe edge.Role) (NodeId.value edge.Target))
         // Capture metadata is independent of kind-derived/reference incidence.
         // Its formation phase is not the invocation phase of a deferred body.
         let captureMissing = nodes.Values |> Seq.collect (fun node ->

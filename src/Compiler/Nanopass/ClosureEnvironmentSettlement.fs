@@ -147,7 +147,7 @@ let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: 
           Range = graph.Nodes[site].Range; RelatedNodes = site :: related
           Reachability = ReachabilityContext.Unknown }
     let residence = Residence.analyzeEnvironmentsPrepared graph destinations factoryCalls
-    let residenceErrors = residence.Unresolved |> List.map (fun pending -> residual pending.Site [] (sprintf "%A" pending.Reason))
+    let residenceErrors = residence.Unresolved |> List.map (fun pending -> residual pending.Site [] (Residence.describeResidualReason pending.Reason))
     let regionErrors = residence.Regions |> Map.toList |> List.map (fun (site, generator) ->
         residual site [generator] "A generator-local callback needs a settled owned environment region; activation-local backing storage cannot survive a suspension.")
     let placed = graph.Nodes.Values |> Seq.choose (fun owner ->
@@ -183,7 +183,7 @@ let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: 
                                    Slots = slots; Bytes = bytes; Alignment = alignment
                                    Obligations = proof.NewNodes |> List.map _.Id }
                     Some (Ok(layout, proof))
-                | Result.Error reason -> Some (Result.Error (residual owner.Id [] (sprintf "%A" reason)))
+                | Result.Error reason -> Some (Result.Error (residual owner.Id [] (Placement.describeContinuationPlacementError reason)))
                 | _ -> Some (Result.Error (residual owner.Id [] "The target did not settle an exact environment extent and alignment."))
         | _ -> None) |> Seq.toList
     let layouts = placed |> List.choose (function Ok(layout, _) -> Some(layout.Owner, layout) | _ -> None) |> Map.ofList

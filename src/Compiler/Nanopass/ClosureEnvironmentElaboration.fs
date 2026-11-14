@@ -28,7 +28,7 @@ let private normalizeCore (graph: SemanticGraph) =
     // environment and value operands. Retain the old nodes and provenance,
     // but refresh executable reachability at this owning rewrite boundary.
     // Open library graphs have no executable roots authorizing that cut.
-    if obj.ReferenceEquals(graph, rewritten) || rewritten.DeclarationRoots.IsEmpty then rewritten
+    if Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.sameNodesAndEdges graph rewritten || rewritten.DeclarationRoots.IsEmpty then rewritten
     else Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable rewritten
 
 let normalize graph =

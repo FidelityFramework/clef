@@ -988,7 +988,9 @@ let private settledOperation (ctx: Context) operation arguments elemType outputE
     match operationRecipe operation arguments elemType outputElemType stateType enclosing with
     | Some recipe -> recipe
     | None ->
-        fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle an operation body for Seq.%s at node %d: %d operands, element %A, result element %A, state/key %A" operation (NodeId.value ctx.InspiringNode) (List.length arguments) elemType outputElemType stateType))
+        let outStr = outputElemType |> Option.map formatType |> Option.defaultValue "None"
+        let stateStr = stateType |> Option.map formatType |> Option.defaultValue "None"
+        fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle an operation body for Seq.%s at node %d: %d operands, element %s, result element %s, state/key %s" operation (NodeId.value ctx.InspiringNode) (List.length arguments) (formatType elemType) outStr stateStr))
 
 /// Snapshot supplied values at each formation frontier. Later invocations use
 /// local capture references, never replay the original supplied expressions.

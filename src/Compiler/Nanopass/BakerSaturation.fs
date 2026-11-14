@@ -395,7 +395,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             | _ -> false)
         if isApplied then NotApplicable "Library intrinsic is an application head"
         else
-            let name = sprintf "%A.%s" info.Module info.Operation
+            let name = sprintf "%s.%s" (IntrinsicModule.describe info.Module) info.Operation
             let ctx = mkContext node.Range node.Type graph.Platform name node.Id
             let reify =
                 match info.Module with
@@ -407,7 +407,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             | Some result -> RecipeCreated (toRecipe node.Id name result)
             | None ->
                 CreationFailed (
-                    sprintf "CCS source checking did not settle a callable instance for library value %s at node %d: its type %A has no reifiable function shape" name (NodeId.value node.Id) node.Type,
+                    sprintf "CCS source checking did not settle a callable instance for library value %s at node %d: its type %s has no reifiable function shape" name (NodeId.value node.Id) (formatType node.Type),
                     Map.ofList [ "operation", name; "nodeId", string (NodeId.value node.Id) ])
     | SemanticKind.Application (funcNodeId, argNodeIds) ->
         match SemanticGraph.tryGetNode funcNodeId graph with
@@ -432,18 +432,22 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 // closure and sequence producer for an unexecuted frontier.
                 NotApplicable "Unreachable Seq application has no live formation frontier"
             | SemanticKind.Intrinsic info when shouldDecomposeIntrinsic info ->
-                let hofName = sprintf "%A.%s" info.Module info.Operation
+                let hofName = sprintf "%s.%s" (IntrinsicModule.describe info.Module) info.Operation
                 let ctx = mkContext node.Range Types.unitType graph.Platform hofName node.Id
 
                 match applyIntrinsicRecipe graph ctx info argNodeIds node.Type with
                 | Some result ->
                     RecipeCreated (toRecipe node.Id hofName result)
                 | None ->
+                    let argTypes =
+                        argNodeIds
+                        |> List.map (fun id -> SemanticGraph.tryGetNode id graph |> Option.map (fun n -> formatType n.Type) |> Option.defaultValue "<missing>")
+                        |> String.concat "; "
                     CreationFailed (
-                        sprintf "Baker %s recipe did not settle a decomposition for application %d at %s:%d:%d: no recipe accepts the settled operand types %A with result %A"
+                        sprintf "Baker %s recipe did not settle a decomposition for application %d at %s:%d:%d: no recipe accepts the settled operand types [%s] with result %s"
                             hofName (NodeId.value node.Id) node.Range.File node.Range.Start.Line node.Range.Start.Column
-                            (argNodeIds |> List.map (fun id -> SemanticGraph.tryGetNode id graph |> Option.map _.Type))
-                            node.Type,
+                            argTypes
+                            (formatType node.Type),
                         Map.ofList [
                             "operation", hofName
                             "nodeId", string (NodeId.value node.Id)
@@ -451,7 +455,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                         ]
                     )
             | SemanticKind.Intrinsic info ->
-                NotApplicable (sprintf "Intrinsic %A.%s does not need decomposition" info.Module info.Operation)
+                NotApplicable (sprintf "Intrinsic %s.%s does not need decomposition" (IntrinsicModule.describe info.Module) info.Operation)
             | _ ->
                 NotApplicable "Function node is not an Intrinsic"
         | None ->
@@ -666,7 +670,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 RecipeCreated (toRecipe node.Id "FunctionValue" result)
             | _ ->
                 CreationFailed (
-                    sprintf "CCS source checking did not settle a function type of arity %d for value-position reference '%s' at node %d: found %A" arity name (NodeId.value node.Id) node.Type,
+                    sprintf "CCS source checking did not settle a function type of arity %d for value-position reference '%s' at node %d: found %s" arity name (NodeId.value node.Id) (formatType node.Type),
                     Map.ofList [ "nodeId", string (NodeId.value node.Id); "definition", string (NodeId.value defId) ])
 
     | _ ->

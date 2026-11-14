@@ -151,14 +151,18 @@ let rec private dimensionsAt path ty : (string * Dimension) list =
     | NativeType.TTuple (elements, isStruct) ->
         elements |> List.mapi (fun i element -> at (sprintf ".tuple(%b)[%d]" isStruct i) element) |> List.concat
     | NativeType.TApp (constructor, arguments) ->
-        arguments |> List.mapi (fun i argument -> at (sprintf ".type(%A,%A)[%d]" constructor.Module constructor.Name i) argument) |> List.concat
+        let modPath = String.concat "." constructor.Module
+        arguments |> List.mapi (fun i argument -> at (sprintf ".type([%s],%s)[%d]" modPath constructor.Name i) argument) |> List.concat
     | NativeType.TAnon (fields, isStruct) ->
-        fields |> List.collect (fun (name, field) -> at (sprintf ".record(%b)[%A]" isStruct name) field)
+        fields |> List.collect (fun (name, field) -> at (sprintf ".record(%b)[%s]" isStruct name) field)
     | NativeType.TUnion (constructor, cases) ->
+        let modPath = String.concat "." constructor.Module
         cases |> List.collect (fun case ->
             case.Fields |> List.mapi (fun i (_, field) ->
-                at (sprintf ".union(%A,%A).case[%d].field[%d]" constructor.Module constructor.Name case.Index i) field) |> List.concat)
-    | NativeType.TByref (element, kind) -> at (sprintf ".byref(%A)" kind) element
+                at (sprintf ".union([%s],%s).case[%d].field[%d]" modPath constructor.Name case.Index i) field) |> List.concat)
+    | NativeType.TByref (element, kind) ->
+        let kindStr = match kind with ByrefKind.In -> "In" | ByrefKind.Out -> "Out" | ByrefKind.InOut -> "InOut"
+        at (sprintf ".byref(%s)" kindStr) element
     | NativeType.TNativePtr element -> at ".pointer" element
     | NativeType.TLazy element -> at ".lazy" element
     | NativeType.TSeq element -> at ".seq" element
@@ -289,7 +293,7 @@ let private elaborateIntegers (graph: SemanticGraph) (core: DeclaredCore option)
             let range = Recipes.integerLiteral enrichId name site value lower upper
             let rangeErrors =
                 if lower <= value && value <= upper then []
-                else [error "CCS8012" (sprintf "The analysed range [%A, %A] does not contain integer literal %A." lower upper value)]
+                else [error "CCS8012" (sprintf "The analysed range [%s, %s] does not contain integer literal %s." (string lower) (string upper) (string value))]
             let selected = RangeAnalysis.selectedRepresentation graph site.Id
             match selected, core with
             | _ when deferred.Contains site.Id -> range, rangeErrors
@@ -305,13 +309,13 @@ let private elaborateIntegers (graph: SemanticGraph) (core: DeclaredCore option)
                         let coverage = Recipes.integerCoverage enrichId (name + "_coverage") site lower upper declared minimum maximum
                         let coverageErrors =
                             if minimum <= lower && lower <= upper && upper <= maximum then []
-                            else [error "CCS8012" (sprintf "The analysed integer range [%A, %A] is outside the declared bounds of selected representation %s." lower upper selected.Name)]
+                            else [error "CCS8012" (sprintf "The analysed integer range [%s, %s] is outside the declared bounds of selected representation %s." (string lower) (string upper) selected.Name)]
                         Enrichment.combine range coverage, rangeErrors @ coverageErrors
                     | _ -> range, rangeErrors @ [error "CCS8206" (sprintf "Cannot read ordered integer bounds for selected representation %s." selected.Name)]
                 | [] -> range, rangeErrors @ [error "CCS8204" (sprintf "Selected integer representation %s has no matching platform declaration." selected.Name)]
                 | [_] -> range, rangeErrors @ [error "CCS8206" (sprintf "Selected integer representation %s disagrees with its source declaration." selected.Name)]
                 | _ -> range, rangeErrors @ [error "CCS8208" (sprintf "Multiple platform declarations name selected integer representation %s." selected.Name)]
-        | _ -> Enrichment.empty, [error "CCS8011" (sprintf "Integer literal %A has no finite analysed range for proof dispatch." value)])
+        | _ -> Enrichment.empty, [error "CCS8011" (sprintf "Integer literal %s has no finite analysed range for proof dispatch." (string value))])
     results |> List.map fst |> Enrichment.concat, results |> List.collect snd
 
 /// Obligations requiring settled platform facts run after range/placement.

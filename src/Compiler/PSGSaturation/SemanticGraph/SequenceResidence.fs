@@ -23,6 +23,22 @@ type ResidualReason =
     | MissingResultCapture of NodeId * NodeId
     | RecursiveValueFlow of NodeId
 
+let describeResidualReason = function
+    | ResidualReason.MissingActivation -> "MissingActivation"
+    | ResidualReason.AmbiguousActivation owners ->
+        let ids = owners |> List.map (NodeId.value >> string) |> String.concat "; "
+        sprintf "AmbiguousActivation([%s])" ids
+    | ResidualReason.DeferredActivation id -> sprintf "DeferredActivation(%d)" (NodeId.value id)
+    | ResidualReason.ReturnsFrom id -> sprintf "ReturnsFrom(%d)" (NodeId.value id)
+    | ResidualReason.StoredAt id -> sprintf "StoredAt(%d)" (NodeId.value id)
+    | ResidualReason.UnsupportedConsumer id -> sprintf "UnsupportedConsumer(%d)" (NodeId.value id)
+    | ResidualReason.CrossesActivation id -> sprintf "CrossesActivation(%d)" (NodeId.value id)
+    | ResidualReason.FactoryResult id -> sprintf "FactoryResult(%d)" (NodeId.value id)
+    | ResidualReason.UnknownInputRegion id -> sprintf "UnknownInputRegion(%d)" (NodeId.value id)
+    | ResidualReason.InvalidResultDestination id -> sprintf "InvalidResultDestination(%d)" (NodeId.value id)
+    | ResidualReason.MissingResultCapture(slot, init) -> sprintf "MissingResultCapture(%d, %d)" (NodeId.value slot) (NodeId.value init)
+    | ResidualReason.RecursiveValueFlow id -> sprintf "RecursiveValueFlow(%d)" (NodeId.value id)
+
 type Unresolved = { Site: NodeId; Reason: ResidualReason }
 type Reading = {
     Sites: Map<NodeId, EscapeKind>

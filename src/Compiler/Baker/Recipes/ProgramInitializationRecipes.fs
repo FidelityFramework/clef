@@ -52,11 +52,11 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
                 let! formals, body =
                     match lambda.Kind with
                     | SemanticKind.Lambda(ps, body, [], _, _) -> preturn (ps, body)
-                    | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (platform startup) did not settle a captureless startup Lambda at node %d: found %A" (NodeId.value lambda.Id) other))
+                    | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (platform startup) did not settle a captureless startup Lambda at node %d: found %s" (NodeId.value lambda.Id) (SemanticKind.describe other)))
                 let! symbol =
                     match binding.Kind with
                     | SemanticKind.Binding(name, _, _, _) -> preturn name
-                    | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (platform startup) did not settle a startup declaration at node %d: found %A" (NodeId.value binding.Id) other))
+                    | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (platform startup) did not settle a startup declaration at node %d: found %s" (NodeId.value binding.Id) (SemanticKind.describe other)))
                 for node in startup.Nodes do do! emit node
                 return binding.Id, lambda.Id, startup.Call, symbol, binding.Type, formals, [body]
               }
