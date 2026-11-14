@@ -1303,3 +1303,1203 @@ let main _ = @ENTRY@
                 diagnostic.Code = "CCS8403" && diagnostic.Message = "Source settlement is required before witnessing: BoundaryEmission: " + reason),
             BoundaryEmissionFixture.diagnosticText result.Diagnostics)
         Assert.True(BoundaryWitness.admit result.Graph |> Result.isError)
+
+    static member private B1bCheck(name: string, source: string, ?prelude: (string * string) list) =
+        let authority =
+            SourcePlatformFixture.authority
+                .Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+                .Replace("Spaces = [| rodata |]", "Spaces = [| rodata; { Name = \"stack\"; Kind = \"stack\"; Capacity = 1048576; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"rw\"; Base = None } |]")
+        let root = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/scratch/step-b1b-projects", System.Guid.NewGuid().ToString("N")))
+        System.IO.Directory.CreateDirectory root |> ignore
+        try
+            let write file (text: string) = System.IO.File.WriteAllText(System.IO.Path.Combine(root, file), text)
+            let extra = defaultArg prelude []
+            for fileName, content in extra do
+                write fileName content
+            let appSources =
+                (extra |> List.map fst) @ [ name ]
+                |> List.map (sprintf "\"%s\"")
+                |> String.concat ", "
+            write "Platform.clef" authority
+            write name ("module BoundaryFixture\n" + source)
+            write "Platform.fidproj" "[package]\nname = \"Platform\"\n[compilation]\ntarget = \"cpu\"\n[build]\noutput_kind = \"library\"\nsources = [\"Platform.clef\"]\n[platform]\nruntime_model = \"libc\"\ndescription = \"WriteAuthority.description\"\n"
+            write "App.fidproj" ($"[package]\nname = \"App\"\n[compilation]\ntarget = \"cpu\"\nmemory_model = \"stack_only\"\n[build]\noutput_kind = \"executable\"\nsources = [{appSources}]\n[dependencies]\nplatform = {{ path = \"Platform.fidproj\" }}\n[link]\nlibraries = [\"c\"]\n")
+            let res =
+                Clef.Compiler.Project.ProjectChecker.checkProject (System.IO.Path.Combine(root, "App.fidproj"))
+                |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+            if not res.ParseErrors.IsEmpty then failwithf "Parse errors in %s: %A" name res.ParseErrors
+            res.CheckResult
+        finally
+            if System.IO.Directory.Exists root then
+                try System.IO.Directory.Delete(root, true) with _ -> ()
+
+    [<Fact>]
+    member _.``Step B1b readonly explicit-count buffer emits zero-copy and satisfies PSG integrity``() =
+        let source = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "digest_bytes")>]
+let digestBytes (handle: int) (data: int array) (len: int) : int = NativeDefault.zeroed ()
+let digestBytesDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "digest_bytes"
+    Parameters = [|
+        { Name = "handle"; Type = Integer (Signed, 32); PassBy = Value }
+        { Name = "data"; Type = Integer (Unsigned, 8); PassBy = ReadOnlyReference }
+        { Name = "len"; Type = Integer (Signed, 32); PassBy = Value }
+        { Name = "destructor"; Type = Pointer 64; PassBy = Fixed (EntrySentinel ("SQLITE_TRANSIENT", -1)) } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let digestBytesReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.digestBytes"; Parameter = 1
+    Extent = ExplicitCount 2; Content = RawBytes; Retention = DuringCall
+    Hypothesis = { Identity = "test.digest.ro"; Version = "1"; Source = "b1b-ro" } } @>
+
+[<EntryPoint>]
+let main _ =
+    let payload = Array.zeroCreate 4
+    if digestBytes 7 payload 4 = 0 then 0 else 1
+"""
+        let result = BoundaryEmissionCases.B1bCheck("b1b-ro.clef", source)
+        DimensionalCases.noErrors result
+        let projection = BoundaryEmissionFixture.project result.Graph
+        let roDecl = Assert.Single projection.ReadOnlyBufferDeclarations.Values
+        Assert.Equal(1, roDecl.Parameter)
+        Assert.Equal(Some 2, roDecl.CountParameter)
+        let roUse = Assert.Single projection.ReadOnlyBufferUses.Values
+        Assert.Equal(0, roUse.Copies)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``Step B1b readonly buffer rejects explicit-count overflow with CCS8424 and mutation alias with CCS8426``() =
+        let mkSource mutateCall =
+            let head = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "digest_check")>]
+let digestCheck (data: int array) (len: int) : int = NativeDefault.zeroed ()
+let digestCheckDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "digest_check"
+    Parameters = [| { Name = "data"; Type = Integer (Unsigned, 8); PassBy = ReadOnlyReference }; { Name = "len"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let digestCheckReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.digestCheck"; Parameter = 0
+    Extent = ExplicitCount 1; Content = RawBytes; Retention = DuringCall
+    Hypothesis = { Identity = "test.digest.check"; Version = "1"; Source = "b1b-ro-neg" } } @>
+
+[<EntryPoint>]
+let main _ =
+    let payload = [| 1; 2; 3 |]
+"""
+            head + mutateCall
+        let run call =
+            let res = BoundaryEmissionCases.B1bCheck("b1b-ro-neg.clef", mkSource call)
+            BoundaryEmissionFixture.rejected res.Graph
+        let overflowFailures = run "    if digestCheck payload 5 = 0 then 0 else 1\n"
+        Assert.Contains(overflowFailures, fun f -> f.Reason.Contains "CCS8424:")
+        let aliasSource = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ResourceRelease = { Binding: string; Parameter: int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "stmt_create_alias")>]
+let createStmt (k: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_create_alias"; Parameters = [| { Name = "k"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 })
+    Hypothesis = { Identity = "test.stmt.alias"; Version = "1"; Source = "b1b-ro-alias" } } @>
+
+[<FidelityExtern("c", "stmt_finalize_alias")>]
+let finalizeStmt (stmt: CHandle<unit>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_finalize_alias"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "stmt_bind_alias")>]
+let bindStatic (stmt: CHandle<unit>) (idx: int) (data: int array) (len: int) : int = NativeDefault.zeroed ()
+let bindStaticDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_bind_alias"
+    Parameters = [|
+        { Name = "stmt"; Type = Pointer 64; PassBy = Value }
+        { Name = "idx"; Type = Integer (Signed, 32); PassBy = Value }
+        { Name = "data"; Type = Integer (Unsigned, 8); PassBy = ReadOnlyReference }
+        { Name = "len"; Type = Integer (Signed, 32); PassBy = Value }
+        { Name = "dtor"; Type = Pointer 64; PassBy = Fixed (EntrySentinel ("SQLITE_STATIC", 0)) } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let bindStaticReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.bindStatic"; Parameter = 2
+    Extent = ExplicitCount 3; Content = RawBytes
+    Retention = RetainedUntil (0, [| OwnerRelease { Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 } |])
+    Hypothesis = { Identity = "test.bind.alias"; Version = "1"; Source = "b1b-ro-alias" } } @>
+
+let runTest () : int =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+        let payload = [| 9; 8 |]
+        let rc = bindStatic s 1 payload 2
+        payload[0] <- 7
+        finalizeStmt s
+        rc
+
+[<EntryPoint>]
+let main _ = if runTest () = 0 then 0 else 1
+"""
+        let aliasRes = BoundaryEmissionCases.B1bCheck("b1b-ro-alias.clef", aliasSource)
+        let aliasFailures = BoundaryEmissionFixture.rejected aliasRes.Graph
+        Assert.Contains(aliasFailures, fun f -> f.Reason.Contains "CCS8426:")
+
+    [<Fact>]
+    member _.``Step B1b uncounted NUL-terminated static path borrows static pool and rejects interior NUL``() =
+        let mkSource pathExpr =
+            let head = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "open_path")>]
+let openPath (path: string) : int = NativeDefault.zeroed ()
+let openPathDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "open_path"; Parameters = [| { Name = "path"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let openPathReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.openPath"; Parameter = 0
+    Extent = UncountedNulTerminated; Content = Utf8Text; Retention = DuringCall
+    Hypothesis = { Identity = "test.open.path"; Version = "1"; Source = "b1b-nul" } } @>
+
+[<EntryPoint>]
+let main _ = if openPath """
+            head + pathExpr + " = 0 then 0 else 1\n"
+        let okRes = BoundaryEmissionCases.B1bCheck("b1b-nul.clef", mkSource "\"/tmp/test.db\"")
+        DimensionalCases.noErrors okRes
+        let projection = BoundaryEmissionFixture.project okRes.Graph
+        let roUse = Assert.Single projection.ReadOnlyBufferUses.Values
+        Assert.Equal(0, roUse.Copies)
+        match roUse.Crossing with
+        | BoundaryReadOnlyBufferCrossing.StaticImageNulBorrowed _ -> ()
+        | other -> failwithf "Expected StaticImageNulBorrowed, got %A" other
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish okRes.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let badRes = BoundaryEmissionCases.B1bCheck("b1b-nul-bad.clef", mkSource "\"bad\\u0000path\"")
+        let badFailures = BoundaryEmissionFixture.rejected badRes.Graph
+        Assert.Contains(badFailures, fun f -> f.Reason.Contains "CCS8424:")
+
+    [<Fact>]
+    member _.``Step B1b retained buffer requires owner retirement and rejects non-retiring reset``() =
+        let mkSource trailer =
+            let head = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ResourceRelease = { Binding: string; Parameter: int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "stmt_create")>]
+let createStmt (k: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_create"; Parameters = [| { Name = "k"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 })
+    Hypothesis = { Identity = "test.stmt"; Version = "1"; Source = "b1b-ret" } } @>
+
+[<FidelityExtern("c", "stmt_reset")>]
+let resetStmt (stmt: CHandle<unit>) : int = NativeDefault.zeroed ()
+let resetStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_reset"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+
+[<FidelityExtern("c", "stmt_finalize")>]
+let finalizeStmt (stmt: CHandle<unit>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_finalize"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "stmt_bind_static")>]
+let bindStatic (stmt: CHandle<unit>) (idx: int) (data: int array) (len: int) : int = NativeDefault.zeroed ()
+let bindStaticDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_bind_static"
+    Parameters = [|
+        { Name = "stmt"; Type = Pointer 64; PassBy = Value }
+        { Name = "idx"; Type = Integer (Signed, 32); PassBy = Value }
+        { Name = "data"; Type = Integer (Unsigned, 8); PassBy = ReadOnlyReference }
+        { Name = "len"; Type = Integer (Signed, 32); PassBy = Value }
+        { Name = "dtor"; Type = Pointer 64; PassBy = Fixed (EntrySentinel ("SQLITE_STATIC", 0)) } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let bindStaticReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.bindStatic"; Parameter = 2
+    Extent = ExplicitCount 3; Content = RawBytes
+    Retention = RetainedUntil (0, [| OwnerRelease { Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 } |])
+    Hypothesis = { Identity = "test.bind.static"; Version = "1"; Source = "b1b-ret" } } @>
+
+let runTest () : int =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+        let buf = [| 9; 8 |]
+        let rc = bindStatic s 1 buf 2
+"""
+            head + trailer
+        let okSource = mkSource "        let rc2 = resetStmt s\n        finalizeStmt s\n        rc + rc2\n\n[<EntryPoint>]\nlet main _ = if runTest () = 0 then 0 else 1\n"
+        let okRes = BoundaryEmissionCases.B1bCheck("b1b-ret.clef", okSource)
+        DimensionalCases.noErrors okRes
+        let proj = BoundaryEmissionFixture.project okRes.Graph
+        let roUse = Assert.Single proj.ReadOnlyBufferUses.Values
+        Assert.NotEmpty roUse.Retirements
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish okRes.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let noFinalize = mkSource "        let rc2 = resetStmt s\n        rc + rc2\n\n[<EntryPoint>]\nlet main _ = if runTest () = 0 then 0 else 1\n"
+        let badRes = BoundaryEmissionCases.B1bCheck("b1b-ret-bad.clef", noFinalize)
+        let badFailures = BoundaryEmissionFixture.rejected badRes.Graph
+        Assert.Contains(badFailures, fun f -> f.Reason.Contains "CCS8425:")
+
+    [<Fact>]
+    member _.``Step B1b BufferAbsenceContract converts Option None and Some cleanly and rejects missing contract``() =
+        let barePrelude =
+            [ "BAREWireDescriptors.clef",
+              "namespace BAREWire.Descriptors\n"
+              + "type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }\n"
+              + "type BufferAbsenceContract = { Binding: string; Parameter: int; Hypothesis: ExternalExecutionHypothesis }\n" ]
+        let mkSource includeContract =
+            let contractDecl =
+                if includeContract then
+                    """
+let sendOptBufferAbsenceDescriptor: Expr<BAREWire.Descriptors.BufferAbsenceContract> = <@ {
+    BAREWire.Descriptors.BufferAbsenceContract.Binding = "BoundaryFixture.sendOpt"; Parameter = 0
+    Hypothesis = { BAREWire.Descriptors.ExternalExecutionHypothesis.Identity = "test.abs"; Version = "1"; Source = "b1b-abs" } } @>
+"""
+                else ""
+            let decls = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "send_opt")>]
+let sendOpt (buf: option<string>) (len: int) : int = NativeDefault.zeroed ()
+let sendOptDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "send_opt"
+    Parameters = [| { Name = "buf"; Type = Pointer 64; PassBy = Value }; { Name = "len"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let sendOptReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.sendOpt"; Parameter = 0
+    Extent = ExplicitCount 1; Content = RawBytes; Retention = DuringCall
+    Hypothesis = { Identity = "test.send.ro"; Version = "1"; Source = "b1b-abs" } } @>
+"""
+            let entry = """
+[<EntryPoint>]
+let main _ =
+    let a = sendOpt None 0
+    let b = sendOpt (Some "ab") 2
+    if a + b = 0 then 0 else 1
+"""
+            decls + contractDecl + entry
+        let okRes = BoundaryEmissionCases.B1bCheck("b1b-abs.clef", mkSource true, barePrelude)
+        DimensionalCases.noErrors okRes
+        let proj = BoundaryEmissionFixture.project okRes.Graph
+        Assert.NotEmpty proj.BufferAbsences
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish okRes.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let badRes = BoundaryEmissionCases.B1bCheck("b1b-abs-bad.clef", mkSource false, barePrelude)
+        let badFailures = BoundaryEmissionFixture.rejected badRes.Graph
+        Assert.Contains(badFailures, fun f -> f.Reason.Contains "CCS8427:")
+
+    [<Fact>]
+    member _.``Step B1b BorrowedResultViewDescriptor validates companion extent and rejects read past invalidation``() =
+        let mkSource useAfterInvalidate =
+            let body =
+                if useAfterInvalidate then
+                    """
+        let v = colText s 0
+        finalizeStmt s
+        readView v 0
+"""
+                else
+                    """
+        let col = 0
+        let v = colText s col
+        let n = colBytes s col
+        let r = readView v n
+        finalizeStmt s
+        r
+"""
+            let head = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ResourceRelease = { Binding: string; Parameter: int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }
+type BorrowedContent = | Utf8Text | RawBytes
+type BorrowedExtent = NulTerminated | CompanionCall of string * int array
+type OwnerInvalidationCall = { Binding: string; Parameter: int }
+type BorrowInvalidation = AnyOwnerCall | OwnerCall of OwnerInvalidationCall
+type BorrowedResultViewDescriptor = { Binding: string; Content: BorrowedContent; Extent: BorrowedExtent; Owner: int; InvalidatedBy: BorrowInvalidation array; Hypothesis: ExternalExecutionHypothesis }
+type StmtHandle = | StmtHandle
+
+[<FidelityExtern("c", "stmt_create2")>]
+let createStmt (k: int) : option<CHandle<StmtHandle>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_create2"; Parameters = [| { Name = "k"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 })
+    Hypothesis = { Identity = "test.stmt2"; Version = "1"; Source = "b1b-bv" } } @>
+
+[<FidelityExtern("c", "stmt_finalize2")>]
+let finalizeStmt (stmt: CHandle<StmtHandle>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_finalize2"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "stmt_col_bytes")>]
+let colBytes (stmt: CHandle<StmtHandle>) (col: int) : int = NativeDefault.zeroed ()
+let colBytesDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_col_bytes"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value }; { Name = "col"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+
+[<FidelityExtern("c", "stmt_col_text")>]
+let colText (stmt: CHandle<StmtHandle>) (col: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let colTextDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "stmt_col_text"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value }; { Name = "col"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let colTextBorrowedResultViewDescriptor: Expr<BorrowedResultViewDescriptor> = <@ {
+    Binding = "BoundaryFixture.colText"; Content = RawBytes
+    Extent = CompanionCall ("BoundaryFixture.colBytes", [| 0; 1 |]); Owner = 0
+    InvalidatedBy = [| OwnerCall { Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 } |]
+    Hypothesis = { Identity = "test.bv"; Version = "1"; Source = "b1b-bv" } } @>
+
+let readView (v: option<CHandle<unit>>) (n: int) : int =
+    match v with
+    | Some _ -> if n >= 0 then 0 else 1
+    | None -> 0
+
+[<EntryPoint>]
+let main (argv: string[]) =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+"""
+            head + body
+        let okRes = BoundaryEmissionCases.B1bCheck("b1b-bv.clef", mkSource false)
+        DimensionalCases.noErrors okRes
+        let proj = BoundaryEmissionFixture.project okRes.Graph
+        Assert.NotEmpty proj.BorrowedResultViewDeclarations
+        Assert.NotEmpty proj.BorrowedResultViewUses
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish okRes.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let badRes = BoundaryEmissionCases.B1bCheck("b1b-bv-bad.clef", mkSource true)
+        let badFailures = BoundaryEmissionFixture.rejected badRes.Graph
+        let mutSource =
+            (mkSource false).Replace(
+                "        let col = 0\n        let v = colText s col",
+                "        let mutable col = 0\n        let v = colText s col\n        col <- 1")
+        let mutRes = BoundaryEmissionCases.B1bCheck("b1b-bv-mut.clef", mutSource)
+        let mutFailures = BoundaryEmissionFixture.rejected mutRes.Graph
+        Assert.Contains(mutFailures, fun f -> f.Reason.Contains "CCS8424:")
+        Assert.Contains(mutRes.Diagnostics, fun d -> d.Code = "CCS8424")
+        let condSource =
+            (mkSource false).Replace(
+                "        let n = colBytes s col",
+                "        let n = if argv.Length > 0 then colBytes s col else 0")
+        let condRes = BoundaryEmissionCases.B1bCheck("b1b-bv-cond.clef", condSource)
+        let condFailures = BoundaryEmissionFixture.rejected condRes.Graph
+        Assert.Contains(condFailures, fun f -> f.Reason.Contains "CCS8424:")
+        Assert.Contains(condRes.Diagnostics, fun d -> d.Code = "CCS8424")
+        Assert.Contains(badFailures, fun f -> f.Reason.Contains "CCS8425:")
+
+    [<Fact>]
+    member _.``Step B1b RetainedCallbackDescriptor and CountedEntryArrayDescriptor emit clean PSG``() =
+        let mkSource uncontractedCallbackUnit useUndeclared =
+            let ctxType = if uncontractedCallbackUnit then "CHandle<unit>" else "CHandle<CtxMarker>"
+            let transferCase = if useUndeclared then "Undeclared" else "Borrowed"
+            $"""
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void | Entry of string
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = {{ Name: string; Type: TypeRef; PassBy: PassBy }}
+type FunctionDescriptor = {{ CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }}
+type EntrySignature = {{ Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv }}
+type ExternalExecutionHypothesis = {{ Identity: string; Version: string; Source: string }}
+type ResourceRelease = {{ Binding: string; Parameter: int }}
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = {{ Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }}
+type OwnerReleaseTarget = {{ Binding: string; Parameter: int }}
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type RetainedCallbackDescriptor = {{ Binding: string; Parameter: string; Owner: int; Releases: RetentionRelease array }}
+type CountedElement = Text | NullableText | Handle of string | NullableHandle of string
+type CountedEntryArrayDescriptor = {{ Binding: string; Parameter: int; Argument: int; CountArgument: int; Element: CountedElement }}
+type CallbackInvocationContract = {{ Binding: string; Parameter: int; Signature: EntrySignature; Hypothesis: ExternalExecutionHypothesis; Scope: string }}
+type DbMarker = | DbMarker
+type CtxMarker = | CtxMarker
+
+[<FidelityExtern("c", "db_open")>]
+let dbOpen (k: int) : option<CHandle<DbMarker>> = NativeDefault.zeroed ()
+let dbOpenDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "db_open"; Parameters = [| {{ Name = "k"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+let dbOpenResourceDescriptor: Expr<ResourceDescriptor> = <@ {{
+    Resource = OwnedNullableReturn ({{ Binding = "BoundaryFixture.dbClose"; Parameter = 0 }})
+    Hypothesis = {{ Identity = "test.db"; Version = "1"; Source = "b1b-cb" }} }} @>
+
+[<FidelityExtern("c", "db_close")>]
+let dbClose (db: CHandle<DbMarker>) : unit = NativeDefault.zeroed ()
+let dbCloseDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "db_close"; Parameters = [| {{ Name = "db"; Type = Pointer 64; PassBy = Value }} |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+
+[<FidelityExtern("c", "db_create_fn")>]
+let createFn (db: CHandle<DbMarker>) (xFunc: FnPtr<{ctxType} -> int -> CHandle<unit> -> unit>) : int = NativeDefault.zeroed ()
+let createFnDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "db_create_fn"
+    Parameters = [|
+        {{ Name = "db"; Type = Pointer 64; PassBy = Value }}
+        {{ Name = "eTextRep"; Type = Integer (Signed, 32); PassBy = Fixed (EntrySentinel ("SQLITE_UTF8", 1)) }}
+        {{ Name = "xFunc"; Type = Entry "BoundaryFixture.xFuncCallbackInvocationContract"; PassBy = Value }} |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = {transferCase} }} @>
+
+let xFuncScope: Expr<RetainedCallbackDescriptor> = <@ {{
+    Binding = "BoundaryFixture.createFn"; Parameter = "xFunc"; Owner = 0
+    Releases = [| OwnerRelease {{ Binding = "BoundaryFixture.dbClose"; Parameter = 0 }} |] }} @>
+
+let xFuncCallbackInvocationContract: Expr<CallbackInvocationContract> = <@ {{
+    Binding = "BoundaryFixture.createFn"; Parameter = 2
+    Signature = {{
+        Parameters = [|
+            {{ Name = "ctx"; Type = Pointer 64; PassBy = Value }}
+            {{ Name = "argc"; Type = Integer (Signed, 32); PassBy = Value }}
+            {{ Name = "argv"; Type = Pointer 64; PassBy = Value }} |]
+        ReturnType = Void; CallingConvention = CDecl }}
+    Hypothesis = {{ Identity = "test.xfunc.inv"; Version = "1"; Source = "b1b-cb" }}
+    Scope = "BoundaryFixture.xFuncScope" }} @>
+let xFuncCountedEntryArrayDescriptor: Expr<CountedEntryArrayDescriptor> = <@ {{
+    Binding = "BoundaryFixture.createFn"; Parameter = 2; Argument = 2; CountArgument = 1; Element = Text }} @>
+
+let handler (_ctx: {ctxType}) (argc: int) (_argv: CHandle<unit>) : unit =
+    let a = if argc < 0 then 0 elif argc > 15 then 15 else argc
+    if a >= 0 then () else ()
+
+let runTest () : int =
+    match dbOpen 1 with
+    | None -> 1
+    | Some db ->
+        let rc = createFn db (FnPtr.ofFunction handler)
+        dbClose db
+        rc
+
+[<EntryPoint>]
+let main _ =
+    if runTest () = 0 then 0 else 1
+"""
+        let okRes = BoundaryEmissionCases.B1bCheck("b1b-cb.clef", mkSource false false)
+        DimensionalCases.noErrors okRes
+        let proj = BoundaryEmissionFixture.project okRes.Graph
+        Assert.NotEmpty proj.CountedEntryArrays
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish okRes.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let badRes = BoundaryEmissionCases.B1bCheck("b1b-cb-bad.clef", mkSource true false)
+        let badFailures = BoundaryEmissionFixture.rejected badRes.Graph
+        Assert.Contains(badFailures, fun f -> f.Reason.Contains "CCS8403:")
+        Assert.Contains(badRes.Diagnostics, fun d -> d.Code = "CCS8403")
+        let badUndeclaredRes = BoundaryEmissionCases.B1bCheck("b1b-cb-undecl.clef", mkSource true true)
+        let badUndeclaredFailures = BoundaryEmissionFixture.rejected badUndeclaredRes.Graph
+        Assert.Contains(badUndeclaredFailures, fun f -> f.Reason.Contains "CCS8403:")
+        Assert.Contains(badUndeclaredRes.Diagnostics, fun d -> d.Code = "CCS8403")
+
+    [<Fact>]
+    member _.``Step B1b alias and extern writes during retained borrow are rejected with CCS8426``() =
+        let mkSource useExternWrite =
+            let mutStmt =
+                if useExternWrite then
+                    "        writeBuf alias 2"
+                else
+                    "        alias[0] <- 7"
+            $"""
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = {{ Name: string; Type: TypeRef; PassBy: PassBy }}
+type FunctionDescriptor = {{ CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }}
+type ExternalExecutionHypothesis = {{ Identity: string; Version: string; Source: string }}
+type ResourceRelease = {{ Binding: string; Parameter: int }}
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = {{ Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }}
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = {{ Binding: string; Parameter: int }}
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = {{ Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }}
+type WritableBufferDescriptor = {{ Binding: string; Parameter: int; CountParameter: int; Hypothesis: ExternalExecutionHypothesis }}
+
+[<FidelityExtern("c", "stmt_create_alias")>]
+let createStmt (k: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_create_alias"; Parameters = [| {{ Name = "k"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {{
+    Resource = OwnedNullableReturn ({{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }})
+    Hypothesis = {{ Identity = "test.stmt.alias"; Version = "1"; Source = "b1b-alias" }} }} @>
+
+[<FidelityExtern("c", "stmt_finalize_alias")>]
+let finalizeStmt (stmt: CHandle<unit>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_finalize_alias"; Parameters = [| {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }} |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+
+[<FidelityExtern("c", "stmt_write_buf")>]
+let writeBuf (data: int array) (len: int) : unit = NativeDefault.zeroed ()
+let writeBufDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_write_buf"
+    Parameters = [|
+        {{ Name = "data"; Type = Integer (Unsigned, 8); PassBy = Reference }}
+        {{ Name = "len"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Borrowed }} @>
+let writeBufWritableBufferDescriptor: Expr<WritableBufferDescriptor> = <@ {{
+    Binding = "BoundaryFixture.writeBuf"; Parameter = 0; CountParameter = 1
+    Hypothesis = {{ Identity = "test.write.alias"; Version = "1"; Source = "b1b-alias" }} }} @>
+
+[<FidelityExtern("c", "stmt_bind_alias")>]
+let bindStatic (stmt: CHandle<unit>) (idx: int) (data: int array) (len: int) : int = NativeDefault.zeroed ()
+let bindStaticDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_bind_alias"
+    Parameters = [|
+        {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }}
+        {{ Name = "idx"; Type = Integer (Signed, 32); PassBy = Value }}
+        {{ Name = "data"; Type = Integer (Unsigned, 8); PassBy = ReadOnlyReference }}
+        {{ Name = "len"; Type = Integer (Signed, 32); PassBy = Value }}
+        {{ Name = "dtor"; Type = Pointer 64; PassBy = Fixed (EntrySentinel ("SQLITE_STATIC", 0)) }} |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed }} @>
+let bindStaticReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {{
+    Binding = "BoundaryFixture.bindStatic"; Parameter = 2
+    Extent = ExplicitCount 3; Content = RawBytes
+    Retention = RetainedUntil (0, [| OwnerRelease {{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }} |])
+    Hypothesis = {{ Identity = "test.bind.alias"; Version = "1"; Source = "b1b-alias" }} }} @>
+
+let runTest () : int =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+        let arr = Array.zeroCreate 2
+        let alias = arr
+        let rc = bindStatic s 1 arr 2
+{mutStmt}
+        finalizeStmt s
+        rc
+
+[<EntryPoint>]
+let main _ = if runTest () = 0 then 0 else 1
+"""
+        for useExternWrite in [ false; true ] do
+            let name = if useExternWrite then "b1b-alias-ext-mut.clef" else "b1b-alias-idx-mut.clef"
+            let source = mkSource useExternWrite
+            let res = BoundaryEmissionCases.B1bCheck(name, source)
+            let failures = BoundaryEmissionFixture.rejected res.Graph
+            Assert.Contains(failures, fun f -> f.Reason.Contains "CCS8426:")
+            Assert.Contains(res.Diagnostics, fun d -> d.Code = "CCS8426")
+
+    [<Fact>]
+    member _.``Step B1b BorrowedResultView rejects match pattern escape and conditional invalidation with CCS8425``() =
+        let mkSource patternEscape =
+            let body =
+                if patternEscape then
+                    """
+        let v = colText s 0
+        match v with
+        | Some p ->
+            finalizeStmt s
+            touchPtr p
+        | None -> 1
+"""
+                else
+                    """
+        let v = colText s 0
+        let r = touchView v
+        if r > 0 then finalizeStmt s else ()
+        r
+"""
+            $"""
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = {{ Name: string; Type: TypeRef; PassBy: PassBy }}
+type FunctionDescriptor = {{ CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }}
+type ExternalExecutionHypothesis = {{ Identity: string; Version: string; Source: string }}
+type ResourceRelease = {{ Binding: string; Parameter: int }}
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = {{ Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }}
+type BorrowedContent = | Utf8Text | RawBytes
+type BorrowedExtent = NulTerminated | CompanionCall of string * int array
+type OwnerInvalidationCall = {{ Binding: string; Parameter: int }}
+type BorrowInvalidation = AnyOwnerCall | OwnerCall of OwnerInvalidationCall
+type BorrowedResultViewDescriptor = {{ Binding: string; Content: BorrowedContent; Extent: BorrowedExtent; Owner: int; InvalidatedBy: BorrowInvalidation array; Hypothesis: ExternalExecutionHypothesis }}
+type StmtHandle = | StmtHandle
+
+[<FidelityExtern("c", "stmt_create3")>]
+let createStmt (k: int) : option<CHandle<StmtHandle>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_create3"; Parameters = [| {{ Name = "k"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {{
+    Resource = OwnedNullableReturn ({{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }})
+    Hypothesis = {{ Identity = "test.stmt3"; Version = "1"; Source = "b1b-bv-neg" }} }} @>
+
+[<FidelityExtern("c", "stmt_finalize3")>]
+let finalizeStmt (stmt: CHandle<StmtHandle>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_finalize3"; Parameters = [| {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }} |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+
+[<FidelityExtern("c", "stmt_col_text3")>]
+let colText (stmt: CHandle<StmtHandle>) (col: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let colTextDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_col_text3"; Parameters = [| {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }}; {{ Name = "col"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Borrowed }} @>
+let colTextBorrowedResultViewDescriptor: Expr<BorrowedResultViewDescriptor> = <@ {{
+    Binding = "BoundaryFixture.colText"; Content = Utf8Text
+    Extent = NulTerminated; Owner = 0
+    InvalidatedBy = [| OwnerCall {{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }} |]
+    Hypothesis = {{ Identity = "test.bv.neg"; Version = "1"; Source = "b1b-bv-neg" }} }} @>
+
+let touchPtr (_p: CHandle<unit>) : int = 0
+let touchView (v: option<CHandle<unit>>) : int =
+    match v with
+    | Some _ -> 1
+    | None -> 0
+
+[<EntryPoint>]
+let main (argv: string[]) =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+{body}
+"""
+        let patRes = BoundaryEmissionCases.B1bCheck("b1b-bv-pat-escape.clef", mkSource true)
+        let patFailures = BoundaryEmissionFixture.rejected patRes.Graph
+        Assert.Contains(patFailures, fun f -> f.Reason.Contains "CCS8425:")
+        Assert.Contains(patRes.Diagnostics, fun d -> d.Code = "CCS8425")
+        let condRes = BoundaryEmissionCases.B1bCheck("b1b-bv-cond-inv.clef", mkSource false)
+        let condFailures = BoundaryEmissionFixture.rejected condRes.Graph
+        Assert.Contains(condFailures, fun f -> f.Reason.Contains "CCS8425:")
+        Assert.Contains(condRes.Diagnostics, fun d -> d.Code = "CCS8425")
+
+    [<Fact>]
+    member _.``Step B1b BorrowedResultView rejects deferred closure site, closure/tuple escape, and loop back-edge with CCS8425``() =
+        let mkSource mode =
+            let body =
+                match mode with
+                | "deferred" ->
+                    """
+        let f () =
+            let v = colText s 0
+            touchView v
+        let rc = f ()
+        finalizeStmt s
+        rc
+"""
+                | "loop" ->
+                    """
+        let v = colText s 0
+        while argv.Length >= 0 do
+            let _ = touchView v
+            let _ = resetStmt s
+            ()
+        finalizeStmt s
+        0
+"""
+                | _ ->
+                    """
+        let v = colText s 0
+        let box = (v, 0)
+        let readV () = touchView (fst box)
+        finalizeStmt s
+        readV ()
+"""
+            $"""
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = {{ Name: string; Type: TypeRef; PassBy: PassBy }}
+type FunctionDescriptor = {{ CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }}
+type ExternalExecutionHypothesis = {{ Identity: string; Version: string; Source: string }}
+type ResourceRelease = {{ Binding: string; Parameter: int }}
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = {{ Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }}
+type BorrowedContent = | Utf8Text | RawBytes
+type BorrowedExtent = NulTerminated | CompanionCall of string * int array
+type OwnerInvalidationCall = {{ Binding: string; Parameter: int }}
+type BorrowInvalidation = AnyOwnerCall | OwnerCall of OwnerInvalidationCall
+type BorrowedResultViewDescriptor = {{ Binding: string; Content: BorrowedContent; Extent: BorrowedExtent; Owner: int; InvalidatedBy: BorrowInvalidation array; Hypothesis: ExternalExecutionHypothesis }}
+type StmtHandle = | StmtHandle
+
+[<FidelityExtern("c", "stmt_create4")>]
+let createStmt (k: int) : option<CHandle<StmtHandle>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_create4"; Parameters = [| {{ Name = "k"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {{
+    Resource = OwnedNullableReturn ({{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }})
+    Hypothesis = {{ Identity = "test.stmt4"; Version = "1"; Source = "b1b-bv-r3" }} }} @>
+
+[<FidelityExtern("c", "stmt_reset4")>]
+let resetStmt (stmt: CHandle<StmtHandle>) : int = NativeDefault.zeroed ()
+let resetStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_reset4"; Parameters = [| {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }} |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+
+[<FidelityExtern("c", "stmt_finalize4")>]
+let finalizeStmt (stmt: CHandle<StmtHandle>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_finalize4"; Parameters = [| {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }} |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+
+[<FidelityExtern("c", "stmt_col_text4")>]
+let colText (stmt: CHandle<StmtHandle>) (col: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let colTextDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_col_text4"; Parameters = [| {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }}; {{ Name = "col"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Borrowed }} @>
+let colTextBorrowedResultViewDescriptor: Expr<BorrowedResultViewDescriptor> = <@ {{
+    Binding = "BoundaryFixture.colText"; Content = Utf8Text
+    Extent = NulTerminated; Owner = 0
+    InvalidatedBy = [| OwnerCall {{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }}; OwnerCall {{ Binding = "BoundaryFixture.resetStmt"; Parameter = 0 }} |]
+    Hypothesis = {{ Identity = "test.bv.r3"; Version = "1"; Source = "b1b-bv-r3" }} }} @>
+
+let touchView (v: option<CHandle<unit>>) : int =
+    match v with
+    | Some _ -> 1
+    | None -> 0
+
+[<EntryPoint>]
+let main (argv: string[]) =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+{body}
+"""
+        for mode in [ "deferred"; "loop"; "closure-tuple" ] do
+            let res = BoundaryEmissionCases.B1bCheck($"b1b-bv-{mode}.clef", mkSource mode)
+            let failures = BoundaryEmissionFixture.rejected res.Graph
+            Assert.Contains(failures, fun f -> f.Reason.Contains "CCS8425:")
+            if mode = "deferred" then
+                Assert.Contains(failures, fun f -> f.Reason.Contains "does not dominate")
+            Assert.Contains(res.Diagnostics, fun d -> d.Code = "CCS8425")
+
+    [<Fact>]
+    member _.``Step B1b RetainedUntil allows pure local closure, rejects closure/tuple write and loop alias mutation with CCS8426``() =
+        let mkSource mode =
+            let dataParamType, dataCAbi, helperDecl, runParams, body =
+                match mode with
+                | "loop" ->
+                    "int array",
+                    "Integer (Unsigned, 8); PassBy = ReadOnlyReference",
+                    "",
+                    "()",
+                    """
+        let arr = Array.zeroCreate 2
+        let alias = arr
+        let rc = bindStatic s 1 arr 2
+        while rc < 0 do
+            alias.[0] <- 7
+        finalizeStmt s
+        rc
+"""
+                | "pure-closure" ->
+                    "string",
+                    "Pointer 64; PassBy = Value",
+                    "let touchData (_: string) : unit = ()\n",
+                    "()",
+                    """
+        let data = "ab"
+        let pair = (data, 0)
+        let poke () = touchData (fst pair)
+        let rc = bindStatic s 1 data 2
+        poke ()
+        finalizeStmt s
+        rc
+"""
+                | "mixed-factory" ->
+                    "string",
+                    "Pointer 64; PassBy = Value",
+                    "let mk (c: int) (h: string -> unit) : string -> unit = if c > 0 then (fun _ -> ()) else h\n",
+                    "(hook: string -> unit)",
+                    """
+        let data = "ab"
+        let rc = bindStatic s 1 data 2
+        (mk rc hook) data
+        finalizeStmt s
+        rc
+"""
+                | "mixed-branch" ->
+                    "string",
+                    "Pointer 64; PassBy = Value",
+                    "",
+                    "(hook: string -> unit)",
+                    """
+        let data = "ab"
+        let rc = bindStatic s 1 data 2
+        (if rc > 0 then (fun _ -> ()) else hook) data
+        finalizeStmt s
+        rc
+"""
+                | "mixed-apply" ->
+                    "string",
+                    "Pointer 64; PassBy = Value",
+                    "let pass (f: string -> unit) : string -> unit = f\n",
+                    "(hook: string -> unit)",
+                    """
+        let data = "ab"
+        let rc = bindStatic s 1 data 2
+        (if rc > 0 then (fun _ -> ()) else pass hook) data
+        finalizeStmt s
+        rc
+"""
+                | "extern-alias" ->
+                    "string",
+                    "Pointer 64; PassBy = Value",
+                    "[<FidelityExtern(\"c\", \"ext_touch5\")>]\n"
+                    + "let extTouch (buf: string) : unit = NativeDefault.zeroed ()\n",
+                    "()",
+                    "        let data = \"ab\"\n"
+                    + "        let rc = bindStatic s 1 data 2\n"
+                    + "        let w = if rc > 0 then (fun _ -> ()) else extTouch\n"
+                    + "        w data\n"
+                    + "        finalizeStmt s\n"
+                    + "        rc\n"
+                | _ ->
+                    "string",
+                    "Pointer 64; PassBy = Value",
+                    "",
+                    "(hook: string -> unit)",
+                    """
+        let data = "ab"
+        let pair = (data, 0)
+        let poke () = hook (fst pair)
+        let rc = bindStatic s 1 data 2
+        poke ()
+        finalizeStmt s
+        rc
+"""
+            let mainBody =
+                if mode = "closure-write" || mode = "mixed-factory" || mode = "mixed-branch" || mode = "mixed-apply" then
+                    "if runTest (fun _ -> ()) = 0 && runTest (fun s -> let _ = s in ()) = 0 then 0 else 1"
+                else
+                    "if runTest () = 0 then 0 else 1"
+            $"""
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = {{ Name: string; Type: TypeRef; PassBy: PassBy }}
+type FunctionDescriptor = {{ CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }}
+type ExternalExecutionHypothesis = {{ Identity: string; Version: string; Source: string }}
+type ResourceRelease = {{ Binding: string; Parameter: int }}
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = {{ Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }}
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = {{ Binding: string; Parameter: int }}
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = {{ Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }}
+type StmtHandle = | StmtHandle
+
+[<FidelityExtern("c", "stmt_create5")>]
+let createStmt (k: int) : option<CHandle<StmtHandle>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_create5"; Parameters = [| {{ Name = "k"; Type = Integer (Signed, 32); PassBy = Value }} |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {{
+    Resource = OwnedNullableReturn ({{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }})
+    Hypothesis = {{ Identity = "test.stmt5"; Version = "1"; Source = "b1b-ret-clos" }} }} @>
+
+[<FidelityExtern("c", "stmt_finalize5")>]
+let finalizeStmt (stmt: CHandle<StmtHandle>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_finalize5"; Parameters = [| {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }} |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared }} @>
+
+[<FidelityExtern("c", "stmt_bind_static5")>]
+let bindStatic (stmt: CHandle<StmtHandle>) (col: int) (data: {dataParamType}) (n: int) : int = NativeDefault.zeroed ()
+let bindStaticDescriptor: Expr<FunctionDescriptor> = <@ {{
+    CName = "stmt_bind_static5"
+    Parameters = [|
+        {{ Name = "stmt"; Type = Pointer 64; PassBy = Value }}
+        {{ Name = "col"; Type = Integer (Signed, 32); PassBy = Value }}
+        {{ Name = "data"; Type = {dataCAbi} }}
+        {{ Name = "n"; Type = Integer (Signed, 32); PassBy = Value }}
+        {{ Name = "dtor"; Type = Pointer 64; PassBy = Fixed (EntrySentinel ("SQLITE_STATIC", 0)) }} |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed }} @>
+let bindStaticReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {{
+    Binding = "BoundaryFixture.bindStatic"; Parameter = 2
+    Extent = ExplicitCount 3; Content = RawBytes
+    Retention = RetainedUntil (0, [| OwnerRelease {{ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 }} |])
+    Hypothesis = {{ Identity = "test.bind.clos"; Version = "1"; Source = "b1b-ret-clos" }} }} @>
+
+{helperDecl}let runTest {runParams} : int =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+{body}
+
+[<EntryPoint>]
+let main _ = {mainBody}
+"""
+        let pureRes = BoundaryEmissionCases.B1bCheck("b1b-ret-pure-clos.clef", mkSource "pure-closure")
+        DimensionalCases.noErrors pureRes
+        let closRes = BoundaryEmissionCases.B1bCheck("b1b-ret-clos.clef", mkSource "closure-write")
+        let closFailures = BoundaryEmissionFixture.rejected closRes.Graph
+        Assert.Contains(closFailures, fun f -> f.Reason.Contains "CCS8426:")
+        Assert.Contains(closRes.Diagnostics, fun d -> d.Code = "CCS8426")
+        let mixedRes = BoundaryEmissionCases.B1bCheck("b1b-ret-mixed.clef", mkSource "mixed-factory")
+        let mixedFailures = BoundaryEmissionFixture.rejected mixedRes.Graph
+        Assert.Contains(mixedFailures, fun f -> f.Reason.Contains "CCS8426:")
+        Assert.Contains(mixedRes.Diagnostics, fun d -> d.Code = "CCS8426")
+        let branchRes = BoundaryEmissionCases.B1bCheck("b1b-ret-branch.clef", mkSource "mixed-branch")
+        let branchFailures = BoundaryEmissionFixture.rejected branchRes.Graph
+        Assert.Contains(branchFailures, fun f -> f.Reason.Contains "CCS8426:")
+        Assert.Contains(branchRes.Diagnostics, fun d -> d.Code = "CCS8426")
+        let idRes = BoundaryEmissionCases.B1bCheck("b1b-ret-id.clef", mkSource "mixed-apply")
+        let idFailures = BoundaryEmissionFixture.rejected idRes.Graph
+        Assert.Contains(idFailures, fun f -> f.Reason.Contains "CCS8426:")
+        Assert.Contains(idRes.Diagnostics, fun d -> d.Code = "CCS8426")
+        let extRes = BoundaryEmissionCases.B1bCheck("b1b-ret-ext.clef", mkSource "extern-alias")
+        let extFailures = BoundaryEmissionFixture.rejected extRes.Graph
+        Assert.Contains(extFailures, fun f -> f.Reason.Contains "CCS8426:")
+        Assert.Contains(extRes.Diagnostics, fun d -> d.Code = "CCS8426")
+        let loopRes = BoundaryEmissionCases.B1bCheck("b1b-ret-loop.clef", mkSource "loop")
+        let loopFailures = BoundaryEmissionFixture.rejected loopRes.Graph
+        Assert.Contains(loopFailures, fun f -> f.Reason.Contains "CCS8426:")
+        Assert.Contains(loopRes.Diagnostics, fun d -> d.Code = "CCS8426")
+
+    [<Fact>]
+    member _.``Step B1b Fixed sentinel before optional buffer resolves BufferAbsenceContract cleanly``() =
+        let barePrelude =
+            [ "BAREWireDescriptors.clef",
+              "namespace BAREWire.Descriptors\n"
+              + "type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }\n"
+              + "type BufferAbsenceContract = { Binding: string; Parameter: int; Hypothesis: ExternalExecutionHypothesis }\n" ]
+        let mkSource includeContract =
+            let contractDecl =
+                if includeContract then
+                    """
+let sendPrefixedBufferAbsenceDescriptor: Expr<BAREWire.Descriptors.BufferAbsenceContract> = <@ {
+    BAREWire.Descriptors.BufferAbsenceContract.Binding = "BoundaryFixture.sendPrefixed"; Parameter = 1
+    Hypothesis = { BAREWire.Descriptors.ExternalExecutionHypothesis.Identity = "test.abs.fixed"; Version = "1"; Source = "b1b-abs-fixed" } } @>
+"""
+                else ""
+            let decls = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "send_prefixed")>]
+let sendPrefixed (buf: option<string>) (len: int) : int = NativeDefault.zeroed ()
+let sendPrefixedDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "send_prefixed"
+    Parameters = [|
+        { Name = "flags"; Type = Integer (Signed, 32); PassBy = Fixed (EntrySentinel ("FLAGS_ZERO", 0)) }
+        { Name = "buf"; Type = Pointer 64; PassBy = Value }
+        { Name = "len"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let sendPrefixedReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.sendPrefixed"; Parameter = 1
+    Extent = ExplicitCount 2; Content = RawBytes; Retention = DuringCall
+    Hypothesis = { Identity = "test.send.fixed.ro"; Version = "1"; Source = "b1b-abs-fixed" } } @>
+"""
+            let entry = """
+[<EntryPoint>]
+let main _ =
+    let a = sendPrefixed None 0
+    let b = sendPrefixed (Some "ab") 2
+    if a + b = 0 then 0 else 1
+"""
+            decls + contractDecl + entry
+        let okRes = BoundaryEmissionCases.B1bCheck("b1b-abs-fixed.clef", mkSource true, barePrelude)
+        DimensionalCases.noErrors okRes
+        let proj = BoundaryEmissionFixture.project okRes.Graph
+        Assert.NotEmpty proj.BufferAbsences
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish okRes.Graph
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let badRes = BoundaryEmissionCases.B1bCheck("b1b-abs-fixed-bad.clef", mkSource false, barePrelude)
+        let badFailures = BoundaryEmissionFixture.rejected badRes.Graph
+        Assert.Contains(badFailures, fun f -> f.Reason.Contains "CCS8427:")
+
+    [<Fact>]
+    member _.``Step B1b import-side Pointer CHandle rejects ambiguous resource declarations with CCS8403``() =
+        let src =
+            """
+[<FidelityExtern("c", "res_destroy_a")>]
+let destroyA (h: CHandle<unit>) : unit = NativeDefault.zeroed ()
+let destroyADescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "res_destroy_a"; Parameters = [| { Name = "h"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "res_destroy_b")>]
+let destroyB (h: CHandle<unit>) : unit = NativeDefault.zeroed ()
+let destroyBDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "res_destroy_b"; Parameters = [| { Name = "h"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "res_create_a")>]
+let createA (k: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let createADescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "res_create_a"; Parameters = [| { Name = "k"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let createAResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.destroyA"; Parameter = 0 })
+    Hypothesis = { Identity = "test.res.a"; Version = "1"; Source = "b1b-amb" } } @>
+
+[<FidelityExtern("c", "res_create_b")>]
+let createB (k: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let createBDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "res_create_b"; Parameters = [| { Name = "k"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let createBResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.destroyB"; Parameter = 0 })
+    Hypothesis = { Identity = "test.res.b"; Version = "1"; Source = "b1b-amb" } } @>
+
+[<FidelityExtern("c", "res_use")>]
+let useRes (h: CHandle<unit>) : int = NativeDefault.zeroed ()
+let useResDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "res_use"; Parameters = [| { Name = "h"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+
+[<EntryPoint>]
+let main _ =
+    match createA 1, createB 1 with
+    | Some a, Some b ->
+        let r = useRes a
+        destroyA a
+        destroyB b
+        r
+    | _ -> 1
+"""
+        let res = BoundaryEmissionFixture.check (Some BoundaryEmissionFixture.platform) ("""
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ResourceRelease = { Binding: string; Parameter: int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }
+""" + src)
+        let failures = BoundaryEmissionFixture.rejected res.Graph
+        Assert.Contains(failures, fun f -> f.Reason.Contains "Ambiguous")
+        Assert.Contains(res.Diagnostics, fun d -> d.Code = "CCS8403" && d.Message.Contains "Ambiguous")

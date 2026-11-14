@@ -63,8 +63,9 @@ type private Placer = {
 }
 
 let private resourceHandles graph =
-    (PlatformResolution.readDescriptors graph).Resources
-    |> List.map _.HandleType |> Set.ofList
+    let descriptors = PlatformResolution.readDescriptors graph
+    (descriptors.Resources |> List.map _.HandleType) @ (PlatformResolution.callbackHandleTypes graph descriptors)
+    |> Set.ofList
 
 /// The rendered key of a type (as `ElementRanges` keys an element type).
 let private keyOf (ty: NativeType) : TypeIdentity = ofType ty

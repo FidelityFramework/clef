@@ -162,9 +162,22 @@ let signature (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
         |> Option.bind Result.toOption |> Option.map (fun result -> List.choose id selected, result))
     match graph.Nodes.TryFind carrier.Result, environment, representations with
     | Some result, Some bytes, Some(parameters, resultRepresentation) ->
+        let cHandle = function
+            | ValueRepresentation.Scalar(SettledSlot.CHandle(_, bits, align)) ->
+                bits > 0 && align > 0 && (graph.Platform |> Option.bind (fun p -> p.Dimensions.TryFind "Pointer") |> Option.forall ((=) bits))
+            | _ -> false
+        let nullableCHandle = function
+            | ValueRepresentation.Union([("None", []); ("Some", [inner])], Some _) -> cHandle inner
+            | _ -> false
         let scalar = function
             | ValueRepresentation.Scalar(SettledSlot.Integer _ | SettledSlot.Real _ | SettledSlot.Bool | SettledSlot.Char) -> true
-            | _ -> false
+            | rep -> cHandle rep
+        let nativeBufferElement = function
+            | ValueRepresentation.Scalar(SettledSlot.Integer(8, _)) -> true
+            | rep -> cHandle rep || nullableCHandle rep
+        let nativeParameter = function
+            | ValueRepresentation.Buffer(None, elem) -> nativeBufferElement elem
+            | rep -> scalar rep || nullableCHandle rep
         let unitResult =
             resultRepresentation = ValueRepresentation.Scalar SettledSlot.Unit
             && Types.tryGetNTUKind result.Type = Some NTUKind.NTUunit
@@ -182,7 +195,7 @@ let signature (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
             | CallableKind.OrdinaryFlatClosure -> Some CallableConvention.Ordinary
             | CallableKind.NativeEntry when bytes.IsNone && carrier.EnvironmentValue.IsNone &&
                                            (carrier.OmittedParameters.IsEmpty || unitParameterOmission) &&
-                                           (parameters |> List.forall (snd >> scalar)) && (scalar resultRepresentation || unitResult) ->
+                                           (parameters |> List.forall (snd >> nativeParameter)) && (scalar resultRepresentation || nullableCHandle resultRepresentation || unitResult) ->
                 match domain |> Option.bind _.Platform, Entries.tryImplementation graph carrier.Implementation,
                       Entries.tryFormation graph carrier.Occurrence with
                 | Some target, Some entry, Some formation

@@ -18,6 +18,20 @@ let private failure occurrence participants reason =
         Reason = "BoundaryEmission: " + reason
     }
 
+let private domainFailure occurrence participants (reason: string) =
+    let kind =
+        if reason.StartsWith("CCS8424:") then WitnessProjectionFailureKind.ForeignBufferExtent
+        elif reason.StartsWith("CCS8425:") then WitnessProjectionFailureKind.ForeignBufferRetention
+        elif reason.StartsWith("CCS8426:") then WitnessProjectionFailureKind.ForeignBufferExclusivity
+        elif reason.StartsWith("CCS8427:") then WitnessProjectionFailureKind.ForeignBufferAbsence
+        else WitnessProjectionFailureKind.Settlement
+    {
+        Kind = kind
+        Occurrence = occurrence
+        Participants = participants
+        Reason = "BoundaryEmission: " + reason
+    }
+
 let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessProjectionFailure list> =
     let domains = graph.Edges |> List.choose (fun edge ->
         match edge.Role with EdgeRole.BoundaryDomain domain -> Some (edge, domain) | _ -> None)
@@ -106,7 +120,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
         elif not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.platformPremise graph.Platform || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
             stale "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph."
         elif not domain.Failures.IsEmpty then
-            Error (domain.Failures |> List.map (fun (site, participants, reason) -> failure (Some site) participants reason))
+            Error (domain.Failures |> List.map (fun (site, participants, reason) -> domainFailure (Some site) participants reason))
         elif not borrowMembership then
             stale "The source-published snapshot, copy or allocation dependency account is incomplete."
         elif (match domain.StringOriginRelations with
@@ -121,6 +135,12 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
         else
             let writableDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryWritableBufferDeclaration row -> Some row | _ -> None)
             let writableUses = graph.Edges |> List.choose(fun edge -> match edge.Role with EdgeRole.BoundaryWritableBufferUse row -> Some row | _ -> None)
+            let readOnlyDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryReadOnlyBufferDeclaration row -> Some row | _ -> None)
+            let readOnlyUses = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryReadOnlyBufferUse row -> Some row | _ -> None)
+            let borrowedViewDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryBorrowedResultViewDeclaration row -> Some row | _ -> None)
+            let borrowedViewUses = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryBorrowedResultViewUse row -> Some row | _ -> None)
+            let bufferAbsences = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryBufferAbsence row -> Some row | _ -> None)
+            let countedEntryArrays = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCountedEntryArray row -> Some row | _ -> None)
             let resourceDeclarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceDeclaration row -> Some row | _ -> None)
             let resourceAccesses = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceAccess row -> Some row | _ -> None)
             let imports = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport import -> Some import | _ -> None)
@@ -130,8 +150,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             let closedEntries = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry entry -> Some entry | _ -> None)
             let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage coverage -> Some coverage | _ -> None)
             let expectedCoverage = calls |> List.collect (fun call ->
-                (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
-                (call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ | BoundaryScalar.ResourceHandle _ -> false | _ -> true) |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
+                (call.Arguments |> List.mapi (fun ordinal operand -> match operand.Abi with BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ | BoundaryScalar.ReadOnlyBytes _ | BoundaryScalar.BorrowedBytes _ -> None | _ -> Some(call.Site, ordinal, operand.Actual)) |> List.choose id) @
+                (call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.BorrowedBytes _ -> false | _ -> true) |> List.map (fun _ -> call.Site, -1, call.Site))) |> List.sort
             let resourceOwners=domain.ResourceEvaluationRoots |> List.map(fun (owner,_,_)->owner) |> Set.ofList
             let currentRelations=graph.Edges |> List.choose(fun edge ->
                 if edge.Class<>EdgeClass.Evaluation || not(edge.Sources |> List.tryHead |> Option.exists resourceOwners.Contains) then None else
@@ -210,7 +230,14 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                                  | Some(ResourceFlowEvent.Release(actual,binding)),[operand],Some import -> actual=operand.Actual && binding=import.Binding
                                  | _ -> false)))
                         | _ -> false
-                    | None -> not((call.Result |> Option.toList)@(call.Arguments |> List.map _.Abi) |> List.exists(function BoundaryScalar.ResourceHandle _->true|_->false))
+                    | None ->
+                        not (call.Result |> Option.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false)) &&
+                        (call.Arguments |> List.forall (fun arg ->
+                            match arg.Abi with
+                            | BoundaryScalar.ResourceHandle(decl, _) ->
+                                (resourceDeclarations |> List.exists (fun row -> row.Identity = decl)) ||
+                                (imports |> List.exists (fun imp -> imp.Identity = call.Import && imp.Parameters |> List.contains (decl, arg.Abi)))
+                            | _ -> true))
                 if valid then None else Some(failure (Some call.Site) call.Participants "The resource call lost its exact current conversion, cleanup or original declaration/operand account."))
             let resourceAccessErrors=resourceAccesses |> List.choose(fun access->
                 let valid =
@@ -306,6 +333,9 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                          | _ -> false))
                     if valid && Bytes.proofOutcome proof.Body = BoundaryProofOutcome.Proven then None else
                     Some(failure (Some proof.Site) proof.Participants "The intrinsic write obligation has no checked proof outcome for its exact settled premises."))
+                let evidenceNodes = function
+                    | ParticipantEvidence.Established rows -> rows |> List.map _.Node |> List.distinct
+                    | ParticipantEvidence.Pending early -> early.Derived |> List.map _.Node |> List.distinct
                 let expected =
                     [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 (Map.keys domain.Premises |> Seq.toList) domainRow.Target
                      { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = Map.keys domain.Premises |> Seq.toList; Target = domainRow.Target }]
@@ -313,6 +343,12 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     @ (resourceDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity))
                     @ (writableDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity))
                     @ (writableUses |> List.map(fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferUse row) 0 (Set.toList row.Participants) row.Call))
+                    @ (readOnlyDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryReadOnlyBufferDeclaration row) 0 (evidenceNodes row.Participants) row.Identity))
+                    @ (readOnlyUses |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryReadOnlyBufferUse row) 0 (evidenceNodes row.Participants) row.Call))
+                    @ (borrowedViewDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryBorrowedResultViewDeclaration row) 0 (evidenceNodes row.Participants) row.Identity))
+                    @ (borrowedViewUses |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryBorrowedResultViewUse row) 0 (evidenceNodes row.Participants) row.Call))
+                    @ (bufferAbsences |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryBufferAbsence row) 0 (row.DeclarationFacts |> Map.keys |> Seq.toList) row.Quote))
+                    @ (countedEntryArrays |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryCountedEntryArray row) 0 (evidenceNodes row.Participants) row.Identity))
                     @ (resourceAccesses |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site))
                     @ (imports |> List.map Ingredients.importRow)
                     @ (entries |> List.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation))
@@ -335,10 +371,24 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                         | Some(BoundaryResourceUse.AcquireNullable account)->[account.Conversion;account.Cleanup]
                         | _->[]) |> Set.ofList
                 let writableClaims=writableUses |> List.collect(fun row->[row.CountCoverage;row.StorageCoverage]) |> Set.ofList
+                let readOnlyClaims =
+                    readOnlyUses |> List.collect (fun row ->
+                        let crossingNodes =
+                            match row.Crossing with
+                            | BoundaryReadOnlyBufferCrossing.ExplicitZeroCopy (_, _, _, extentCoverage) -> [extentCoverage]
+                            | BoundaryReadOnlyBufferCrossing.StaticImageNulBorrowed (_, _, _, terminationProof) -> [terminationProof]
+                            | BoundaryReadOnlyBufferCrossing.CallScopedNulStaged (stagingBuffer, _, _, terminationProof) ->
+                                if stagingBuffer <> row.Buffer then [stagingBuffer; terminationProof] else [terminationProof]
+                        row.RetentionProof :: crossingNodes) |> Set.ofList
+                let borrowedViewClaims = borrowedViewUses |> List.map _.ScopeProof |> Set.ofList
+                let bufferAbsenceClaims =
+                    calls |> List.collect (fun call -> call.Arguments |> List.choose _.BufferAbsence |> List.collect BoundaryBufferAbsenceChoice.leaves |> List.map _.Obligation) |> Set.ofList
+                let newBufferClaims = Set.unionMany [readOnlyClaims; borrowedViewClaims; bufferAbsenceClaims]
                 let ownedTargets = Set.add domainRow.Target ((coverages |> List.map _.Obligation) @ (domain.IntrinsicProofs |> List.map _.Obligation) |> Set.ofList)
                 let expected=expected @ (graph.Edges |> List.filter(fun edge->resourceClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
-                let ownedTargets=Set.unionMany [ownedTargets;resourceClaims;writableClaims;Set.ofList optionalClaims]
+                let ownedTargets=Set.unionMany [ownedTargets;resourceClaims;writableClaims;newBufferClaims;Set.ofList optionalClaims]
                 let expected=expected @ (graph.Edges |> List.filter(fun edge->writableClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
+                let expected=expected @ (graph.Edges |> List.filter(fun edge->newBufferClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
                 let expected=expected @ List.concat optionalRows
                 let completeMembership = Set.union participants ownedTargets = (Map.keys graph.Nodes |> Set.ofSeq)
                 let actual = graph.Edges |> List.filter (fun edge ->
@@ -373,6 +423,18 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     stale "The source writable buffer declaration account was withdrawn or duplicated."
                 elif (writableUses |> List.map(fun row->row.Call,row.Parameter) |> List.sort)<>List.sort domain.WritableBufferUses then
                     stale "The exact writable application or native buffer ordinal was withdrawn or duplicated."
+                elif (readOnlyDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.ReadOnlyBufferDeclarations then
+                    stale "The source read-only buffer declaration account was withdrawn or duplicated."
+                elif (readOnlyUses |> List.map (fun row -> row.Call, row.Parameter) |> List.sort) <> List.sort domain.ReadOnlyBufferUses then
+                    stale "The exact read-only buffer application or native ordinal was withdrawn or duplicated."
+                elif (borrowedViewDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.BorrowedResultViewDeclarations then
+                    stale "The source borrowed result view declaration account was withdrawn or duplicated."
+                elif (borrowedViewUses |> List.map _.Call |> List.sort) <> List.sort domain.BorrowedResultViewUses then
+                    stale "The exact borrowed result view application was withdrawn or duplicated."
+                elif (bufferAbsences |> List.map _.Quote |> List.sort) <> List.sort domain.BufferAbsences then
+                    stale "The source buffer absence account was withdrawn or duplicated."
+                elif (countedEntryArrays |> List.map _.Identity |> List.sort) <> List.sort domain.CountedEntryArrays then
+                    stale "The source counted entry array account was withdrawn or duplicated."
                 elif (resourceDeclarations |> List.map _.Identity |> List.sort) <> List.sort domain.ResourceDeclarations then
                     stale "The source resource declaration account was withdrawn or duplicated."
                 elif not resourceFlowCurrent || not resourceEvidenceCurrent then stale "The complete current resource evaluation relation, original root or scoped source premise incidence changed."
@@ -386,6 +448,12 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     Ok { ResourceEvidence = domain.ResourceEvidence
                          WritableBufferDeclarations = writableDeclarations |> List.map(fun row -> row.Identity,row) |> Map.ofList
                          WritableBufferUses = writableUses |> List.map(fun row->(row.Call,row.Parameter),row) |> Map.ofList
+                         ReadOnlyBufferDeclarations = readOnlyDeclarations |> List.map (fun row -> row.Identity, row) |> Map.ofList
+                         ReadOnlyBufferUses = readOnlyUses |> List.map (fun row -> (row.Call, row.Parameter), row) |> Map.ofList
+                         BorrowedResultViewDeclarations = borrowedViewDeclarations |> List.map (fun row -> row.Identity, row) |> Map.ofList
+                         BorrowedResultViewUses = borrowedViewUses |> List.map (fun row -> row.Call, row) |> Map.ofList
+                         BufferAbsences = bufferAbsences |> List.map (fun row -> row.Quote, row) |> Map.ofList
+                         CountedEntryArrays = countedEntryArrays |> List.map (fun row -> row.Identity, row) |> Map.ofList
                          ResourceDeclarations = resourceDeclarations |> List.map (fun row -> row.Identity,row) |> Map.ofList
                          ResourceAccesses = resourceAccesses |> List.map(fun row->row.Site,row) |> Map.ofList
                          Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList

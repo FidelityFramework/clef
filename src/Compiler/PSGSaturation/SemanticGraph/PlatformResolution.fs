@@ -1110,6 +1110,8 @@ type DeclaredPointerReference = {
 type DeclaredEntrySignature = {
     Node: NodeId
     Parameters: (NodeId * DeclaredParameter option) list
+    ParameterOrdinals: Map<int, NodeId>
+    FixedSentinels: (int * string * int) list
     References: (NodeId * DeclaredParameter) list
     PointerReferences: (NodeId * DeclaredPointerReference) list
     RecordReferences: (NodeId * bool) list
@@ -1121,6 +1123,8 @@ type DeclaredFunction = {
     Node: NodeId
     CName: string
     Parameters: (NodeId * DeclaredParameter option) list
+    ParameterOrdinals: Map<int, NodeId>
+    FixedSentinels: (int * string * int) list
     /// A reference parameter exposes exactly one declared scalar in a bounded array.
     References: (NodeId * DeclaredParameter) list
     PointerReferences: (NodeId * DeclaredPointerReference) list
@@ -1208,6 +1212,64 @@ type DeclaredWritableBuffer = {
     Participants: NodeId list
 }
 
+type DeclaredReadOnlyBuffer = {
+    Node: NodeId
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    SourcePath: NodeId list
+    Declaration: BoundaryDeclaration
+    AbiDescriptor: NodeId
+    AbiDescriptorBinding: NodeId
+    Parameter: int
+    CountParameter: int option
+    BufferFormal: NodeId
+    CountFormal: NodeId option
+    Contract: BAREWire.Descriptors.ReadOnlyBufferDescriptor
+    Participants: NodeId list
+}
+
+type DeclaredBufferAbsence = {
+    Node: NodeId
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    SourcePath: NodeId list
+    Declaration: BoundaryDeclaration
+    AbiDescriptor: NodeId
+    Parameter: int
+    Formal: NodeId
+    BufferDeclaration: NodeId
+    BufferHypothesisIdentity: string
+    Contract: BAREWire.Descriptors.BufferAbsenceContract
+    Inputs: (BufferAbsenceInputRole * NodeId list) list
+    Participants: NodeId list
+}
+
+type DeclaredBorrowedResultView = {
+    Node: NodeId
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    SourcePath: NodeId list
+    Declaration: BoundaryDeclaration
+    AbiDescriptor: NodeId
+    AbiDescriptorBinding: NodeId
+    OwnerParameter: int
+    OwnerFormal: NodeId
+    CompanionDeclaration: (BoundaryDeclaration * NodeId) option
+    InvalidationBindings: Map<string, BoundaryDeclaration * NodeId>
+    Contract: BAREWire.Descriptors.BorrowedResultViewDescriptor
+    Participants: NodeId list
+}
+
+type DeclaredCountedEntryArray = {
+    Node: NodeId
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    SourcePath: NodeId list
+    Invocation: DeclaredCallbackInvocation
+    Contract: BAREWire.Descriptors.CountedEntryArrayDescriptor
+    Participants: NodeId list
+}
+
 type Descriptors = {
     Layouts: DeclaredLayout list
     Functions: DeclaredFunction list
@@ -1216,6 +1278,10 @@ type Descriptors = {
     CallbackAbsences: DeclaredCallbackAbsence list
     Resources: DeclaredResource list
     WritableBuffers: DeclaredWritableBuffer list
+    ReadOnlyBuffers: DeclaredReadOnlyBuffer list
+    BufferAbsences: DeclaredBufferAbsence list
+    BorrowedResultViews: DeclaredBorrowedResultView list
+    CountedEntryArrays: DeclaredCountedEntryArray list
     Findings: DeclarationFinding list
 }
 
@@ -1292,6 +1358,8 @@ let scalarRange = function
     | BoundaryScalar.Entry _ -> invalidOp "An entry declaration has no scalar integer range."
     | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle has no scalar integer range."
     | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar integer range."
+    | BoundaryScalar.ReadOnlyBytes _ -> invalidOp "A read-only byte buffer has no scalar integer range."
+    | BoundaryScalar.BorrowedBytes _ -> invalidOp "A borrowed result view has no scalar integer range."
 
 let private numericType = function
     | DeclaredTypeRef.Scalar scalar -> Some (scalarRange scalar)
@@ -1325,7 +1393,7 @@ let readTypeRef (graph: SemanticGraph) (id: NodeId) : Result<DeclaredTypeRef, De
     | None -> Error (findingOn graph id DeclarationDefect.Malformed "a Type must be a TypeRef case (Integer, Float, Pointer, Bool, Void, Named, Entry)")
 
 /// One `ParameterInfo` as declared.
-let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string * DeclaredParameter option * bool * DeclaredPointerReference option * string option * bool), DeclarationFinding> =
+let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string * DeclaredParameter option * bool * DeclaredPointerReference option * string option * bool * (string * int) option), DeclarationFinding> =
     match recordOf graph id with
     | Some (node, fields) when typeName node = Some "ParameterInfo" ->
         match field "Name" fields |> Option.bind (stringOf graph), field "Type" fields with
@@ -1333,14 +1401,28 @@ let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string *
             // PassBy is a closed vocabulary; a present value outside it is not "by value".
             let passBy =
                 match field "PassBy" fields with
-                | None -> Ok None
+                | None -> Ok (None, None)
                 | Some id ->
                     match caseOf graph id with
-                    | Some (_, ("Value" | "Reference" | "ReadOnlyReference"), _) as passing -> Ok passing
-                    | _ -> Error (findingOn graph id DeclarationDefect.Invalid (sprintf "the PassBy of parameter '%s' must be Value, Reference or ReadOnlyReference" name))
+                    | Some (_, ("Value" | "Reference" | "ReadOnlyReference"), _) as passing -> Ok (passing, None)
+                    | Some (_, "Fixed", Some payload) ->
+                        match caseOf graph payload with
+                        | Some (_, "EntrySentinel", Some sentinelPayload) ->
+                            match pairOf graph sentinelPayload with
+                            | Some (sentinelNameId, sentinelValueId) ->
+                                match stringOf graph sentinelNameId, int64Of graph sentinelValueId with
+                                | Some sentinelName, Some sentinelValue
+                                    when not (System.String.IsNullOrWhiteSpace sentinelName)
+                                      && sentinelValue >= int64 System.Int32.MinValue
+                                      && sentinelValue <= int64 System.Int32.MaxValue ->
+                                    Ok (None, Some (sentinelName, int sentinelValue))
+                                | _ -> Error (findingOn graph payload DeclarationDefect.Invalid (sprintf "the Fixed EntrySentinel of parameter '%s' requires a nonempty name and int32 value" name))
+                            | None -> Error (findingOn graph sentinelPayload DeclarationDefect.Malformed (sprintf "the EntrySentinel of parameter '%s' must be (name, value)" name))
+                        | _ -> Error (findingOn graph payload DeclarationDefect.Invalid (sprintf "the Fixed argument of parameter '%s' must be EntrySentinel(name, value)" name))
+                    | _ -> Error (findingOn graph id DeclarationDefect.Invalid (sprintf "the PassBy of parameter '%s' must be Value, Reference, ReadOnlyReference or Fixed" name))
             match passBy with
             | Error finding -> Error finding
-            | Ok passing ->
+            | Ok (passing, fixedSentinel) ->
             readTypeRef graph typeId
             |> Result.map numericType
             |> Result.map (Option.map (fun (bits, range) -> { Node = node.Id; Name = name; Bits = bits; Range = range }))
@@ -1356,7 +1438,7 @@ let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string *
                     match caseOf graph typeId with
                     | Some (_, "Named", Some name) -> stringOf graph name
                     | _ -> None
-                name, declared, byReference, pointer, named, readOnly)
+                name, declared, byReference, pointer, named, readOnly, fixedSentinel)
         | _ -> Error (findingAt node DeclarationDefect.Malformed "a ParameterInfo's Name must be a string literal and it must declare a Type")
     | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Parameters is not a ParameterInfo record")
 
@@ -1532,17 +1614,28 @@ let private readSignatureForBinding
             | Ok None -> None, []
             | Error f -> None, [ f ]
 
-        let pairs, references, pointerReferences, recordReferences, body, externFindings =
+        let pairs, parameterOrdinals, fixedSentinels, references, pointerReferences, recordReferences, body, externFindings =
+            let fixedSentinels =
+                parameters
+                |> List.indexed
+                |> List.choose (fun (ordinal, (_, _, _, _, _, _, sentinel)) ->
+                    sentinel |> Option.map (fun (sentinelName, sentinelValue) -> ordinal, sentinelName, sentinelValue))
+            let unfixed =
+                parameters
+                |> List.indexed
+                |> List.filter (fun (_, (_, _, _, _, _, _, sentinel)) -> Option.isNone sentinel)
             match lambdaOfBinding graph binding.Id with
-            | None -> [], [], [], [], None, []
+            | None -> [], Map.empty, fixedSentinels, [], [], [], None, []
             | Some(lambdaParameters, body) ->
                 let lambdaParameters =
-                    match parameters, lambdaParameters with
+                    match unfixed, lambdaParameters with
                     | [], [ (_, ty, _) ] when Types.tryGetNTUKind ty = Some NTUKind.NTUunit -> []
                     | _ -> lambdaParameters
 
-                if List.length lambdaParameters <> List.length parameters then
+                if List.length lambdaParameters <> List.length unfixed then
                     [],
+                    Map.empty,
+                    fixedSentinels,
                     [],
                     [],
                     [],
@@ -1554,13 +1647,17 @@ let private readSignatureForBinding
                             (sprintf
                                 "the descriptor of '%s' declares %d parameters; the binding takes %d"
                                 cname
-                                parameters.Length
+                                unfixed.Length
                                 lambdaParameters.Length)
                     ]
                 else
+                    let ordinals =
+                        List.zip lambdaParameters unfixed
+                        |> List.map (fun ((_, _, paramId), (nativeOrdinal, _)) -> nativeOrdinal, paramId)
+                        |> Map.ofList
                     let rows =
-                        List.zip lambdaParameters parameters
-                        |> List.map (fun ((_, ty, paramId), (declaredName, declared, byReference, pointer, named, readOnly)) ->
+                        List.zip lambdaParameters unfixed
+                        |> List.map (fun ((_, ty, paramId), (_, (declaredName, declared, byReference, pointer, named, readOnly, _))) ->
                             let ranged ty =
                                 Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool
 
@@ -1614,6 +1711,8 @@ let private readSignatureForBinding
                             | _ -> (paramId, (if ranged ty then declared else None)), None, None, None, None)
 
                     rows |> List.map (fun (p, _, _, _, _) -> p),
+                    ordinals,
+                    fixedSentinels,
                     rows |> List.choose (fun (_, r, _, _, _) -> r),
                     rows |> List.choose (fun (_, _, p, _, _) -> p),
                     rows |> List.choose (fun (_, _, _, r, _) -> r),
@@ -1624,6 +1723,8 @@ let private readSignatureForBinding
             {
                 Node = node.Id
                 Parameters = pairs
+                ParameterOrdinals = parameterOrdinals
+                FixedSentinels = fixedSentinels
                 References = references
                 PointerReferences = pointerReferences
                 RecordReferences = recordReferences
@@ -1649,6 +1750,8 @@ let readFunctionForBinding graph binding (_bindingName: string) node fields : De
                 Node = signature.Node
                 CName = cname
                 Parameters = signature.Parameters
+                ParameterOrdinals = signature.ParameterOrdinals
+                FixedSentinels = signature.FixedSentinels
                 References = signature.References
                 PointerReferences = signature.PointerReferences
                 RecordReferences = signature.RecordReferences
@@ -1693,15 +1796,19 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
     // Keep the existing single source census. Resolve result contracts from the
     // retained declaration/ABI inventories, never by C symbol or beside-name.
     let absenceDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
-    let exactAbsence (node: SemanticNode) =
+    let bufferAbsenceDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
+    let exactDescriptor name (node: SemanticNode) =
         match Clef.Compiler.NativeTypedTree.UnionFind.applySubst node.Type with
         | NativeType.TApp(constructor, []) ->
             let identity = NominalTypeIdentity.ofConstructor constructor
             identity.Module = ["BAREWire";"Descriptors"] &&
-            identity.Name = "Descriptors.CallbackAbsenceContract" &&
+            identity.Name = "Descriptors." + name &&
             (RecordInstances.definitions graph |> Map.tryFind identity |> Option.exists(fun definition ->
                 match definition.Kind with SemanticKind.TypeDef(_, TypeDefKind.RecordDef _, _) -> true | _ -> false))
         | _ -> false
+    let readOnlyBufferDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
+    let borrowedViewDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
+    let countedEntryArrayDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
     let layouts, functionDeclarations, resultDeclarations, invocationDeclarations, resourceDeclarations, writableDeclarations, externs, findings =
         graph.Nodes
         |> Map.toList
@@ -1714,7 +1821,8 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
             | SemanticKind.Binding (name, _, _, _) when isModuleLevel node && not (List.isEmpty node.Children) ->
                 match valuePath graph (List.last node.Children) with
                 | Some (({ Kind = SemanticKind.RecordExpr(fields, _) } as record), path) ->
-                    if exactAbsence record then absenceDeclarations.Add(node, record, fields, path)
+                    if exactDescriptor "CallbackAbsenceContract" record then absenceDeclarations.Add(node, record, fields, path)
+                    if exactDescriptor "BufferAbsenceContract" record then bufferAbsenceDeclarations.Add(node, record, fields, path)
                     match typeName record with
                     | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
                         let layout, more = readLayout graph record fields
@@ -1728,19 +1836,30 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                         (layouts, functions, ranges, invocations, (node, record, fields, path) :: resources, writable, externs, findings)
                     | Some "WritableBufferDescriptor" ->
                         (layouts, functions, ranges, invocations, resources, (node, record, fields, path) :: writable, externs, findings)
+                    | Some "ReadOnlyBufferDescriptor" ->
+                        readOnlyBufferDeclarations.Add(node, record, fields, path)
+                        (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                    | Some "BorrowedResultViewDescriptor" ->
+                        borrowedViewDeclarations.Add(node, record, fields, path)
+                        (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                    | Some "CountedEntryArrayDescriptor" ->
+                        countedEntryArrayDeclarations.Add(node, record, fields, path)
+                        (layouts, functions, ranges, invocations, resources, writable, externs, findings)
                     | Some "CallbackInvocationContract" ->
                         (layouts, functions, ranges, (node, record, fields, path) :: invocations, resources, writable, externs, findings)
                     | _ -> (layouts, functions, ranges, invocations, resources, writable, externs, findings)
-                | Some (value, _) when exactAbsence value ->
+                | Some (value, _) when exactDescriptor "CallbackAbsenceContract" value ->
                     (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed "A CallbackAbsenceContract must retain its exact immutable quoted record."])
-                | Some (value, _) when typeName value = Some "ResultRangeDescriptor" || typeName value = Some "WritableBufferDescriptor" ->
+                | Some (value, _) when exactDescriptor "BufferAbsenceContract" value ->
+                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed "A BufferAbsenceContract must retain its exact immutable quoted record."])
+                | Some (value, _) when List.contains (typeName value) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"] ->
                     let name=typeName value |> Option.defaultValue "ResultRangeDescriptor"
                     (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed ($"a {name} must retain its quoted record declaration")])
                 | _ ->
                     let declared =
                         match node.Type with
-                        | NativeType.TApp(_, [inner]) -> List.contains (typeName { node with Type = inner }) [Some "ResultRangeDescriptor";Some "WritableBufferDescriptor"]
-                        | _ -> List.contains (typeName node) [Some "ResultRangeDescriptor";Some "WritableBufferDescriptor"]
+                        | NativeType.TApp(_, [inner]) -> List.contains (typeName { node with Type = inner }) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BufferAbsenceContract"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"]
+                        | _ -> List.contains (typeName node) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BufferAbsenceContract"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"]
                     let name=match node.Type with NativeType.TApp(_, [inner]) -> typeName {node with Type=inner} | _ -> typeName node
                     let descriptorName=name |> Option.defaultValue "ResultRangeDescriptor"
                     let more = if declared then [findingAt node DeclarationDefect.Malformed ($"a {descriptorName} must retain its quoted record declaration")] else []
@@ -1785,7 +1904,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                             let parameters = field "Parameters" abiFields |> Option.bind (elementsOf graph)
                             let returned = field "ReturnType" abiFields |> Option.map (readTypeRef graph)
                             match parameters, returned with
-                            | Some parameters, Some (Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer _))) when abi.Body = Some body && abi.Parameters.Length = parameters.Length &&
+                            | Some parameters, Some (Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer _))) when abi.Body = Some body && abi.Parameters.Length + abi.FixedSentinels.Length = parameters.Length &&
                                    (graph.Nodes.TryFind body |> Option.exists (fun body -> Types.isIntegerType body.Type)) ->
                                 let endpoint key =
                                     match field key fields |> Option.bind (caseOf graph) with
@@ -1797,10 +1916,20 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                         match int64Of graph payload with
                                         | Some ordinal when ordinal >= 0L && ordinal < int64 parameters.Length ->
                                             let index = int ordinal
-                                            match recordOf graph parameters[index] with
-                                            | Some (_, parameterFields) ->
-                                                match field "PassBy" parameterFields |> Option.bind (caseOf graph), field "Type" parameterFields |> Option.map (readTypeRef graph), List.tryItem index abi.Parameters with
-                                                | Some (_, "Value", None), Some (Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer _))), Some (_, Some _) when List.tryItem index formals |> Option.exists (fun (_, ty, _) -> Types.isIntegerType ty) -> Ok (ForeignResultBound.Argument index)
+                                            let abiParam =
+                                                abi.ParameterOrdinals.TryFind index
+                                                |> Option.bind (fun formal -> abi.Parameters |> List.tryFind (fun (id, _) -> id = formal))
+                                            let sourceIndex =
+                                                abi.ParameterOrdinals.TryFind index
+                                                |> Option.bind (fun formal -> abi.Parameters |> List.tryFindIndex (fun (id, _) -> id = formal))
+                                            let formalMatches =
+                                                abi.ParameterOrdinals.TryFind index
+                                                |> Option.bind (fun formal -> formals |> List.tryFind (fun (_, _, id) -> id = formal))
+                                                |> Option.exists (fun (_, ty, _) -> Types.isIntegerType ty)
+                                            match recordOf graph parameters[index], sourceIndex with
+                                            | Some (_, parameterFields), Some sourceOrd ->
+                                                match field "PassBy" parameterFields |> Option.bind (caseOf graph), field "Type" parameterFields |> Option.map (readTypeRef graph), abiParam with
+                                                | Some (_, "Value", None), Some (Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer _))), Some (_, Some _) when formalMatches -> Ok (ForeignResultBound.Argument sourceOrd)
                                                 | _ -> invalid (sprintf "%s Argument %d requires a native scalar integer Value parameter" key index)
                                             | _ -> malformed (key + " Argument requires a ParameterInfo record")
                                         | _ -> invalid (key + " Argument is outside the exact native arity")
@@ -1889,7 +2018,9 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                             with
                             | Some name, Some(_, "Value", None), Some typeId ->
                                 readTypeRef graph typeId
-                                |> Result.bind integer
+                                |> Result.bind (function
+                                    | DeclaredTypeRef.Pointer bits -> Ok(BAREWire.Descriptors.TypeRef.Pointer bits)
+                                    | other -> integer other)
                                 |> Result.map (fun ty ->
                                     {
                                         Name = name
@@ -1897,7 +2028,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                         PassBy = BAREWire.Descriptors.PassBy.Value
                                     }
                                     : BAREWire.Descriptors.ParameterInfo)
-                            | _ -> invalid "requires entry ParameterInfo Name, integer Type and explicit PassBy.Value."
+                            | _ -> invalid "requires entry ParameterInfo Name, integer or pointer Type and explicit PassBy.Value."
                         | _ -> invalid "requires entry ParameterInfo records.")
 
                 let parameters =
@@ -1952,10 +2083,11 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                         edge.Sources = declaration.Path @ declaration.Formals @ [ declaration.Body ]
                         && (edge.Sources |> List.forall graph.Nodes.ContainsKey)
                         && ordinal >= 0L
-                        && ordinal < int64 declaration.Formals.Length
+                        && ordinal <= int64 System.Int32.MaxValue
+                        && abi.ParameterOrdinals.ContainsKey(int ordinal)
                         ->
                         let ordinal = int ordinal
-                        let formal = declaration.Formals[ordinal]
+                        let formal = abi.ParameterOrdinals[ordinal]
                         let ownName = qualifiedExportName graph binding
 
                         let declaredEntry =
@@ -1983,7 +2115,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                                 | Some(scopeNode, _) when typeName scopeNode = Some "ProcessExitCallbackDescriptor" && (optionalEntrySignature formalNode.Type |> Option.isSome) ->
                                     invalid "Optional native entries require a during-call activation; process-exit optional callbacks are not admitted."
                                 | Some(scopeNode, scopePath) when
-                                    (typeName scopeNode = Some "ScopedCallbackDescriptor" || typeName scopeNode = Some "ProcessExitCallbackDescriptor")
+                                    (typeName scopeNode = Some "ScopedCallbackDescriptor" || typeName scopeNode = Some "ProcessExitCallbackDescriptor" || typeName scopeNode = Some "RetainedCallbackDescriptor")
                                     && immutable (scopeBinding.Id :: scopePath)
                                     ->
                                     match quoted scopePath with
@@ -2157,11 +2289,11 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                 match declarations, functions |> List.filter (fun (id,_) -> id=target) with
                 | [edge,declaration],[_,abi] when edge.Sources=declaration.Path@declaration.Formals@[declaration.Body] && abi.Body=Some declaration.Body ->
                     match descriptorBinding target abi.Node, recordOf graph abi.Node with
-                    | Some abiBinding,Some(_,abiFields) when parameter>=0L && countParameter>=0L && parameter<>countParameter &&
-                                                           parameter<int64 declaration.Formals.Length && countParameter<int64 declaration.Formals.Length &&
+                    | Some abiBinding,Some(_,abiFields) when parameter>=0L && parameter<=int64 System.Int32.MaxValue && countParameter>=0L && countParameter<=int64 System.Int32.MaxValue && parameter<>countParameter &&
+                                                           abi.ParameterOrdinals.ContainsKey(int parameter) && abi.ParameterOrdinals.ContainsKey(int countParameter) &&
                                                            (abi.Parameters |> List.map fst) = declaration.Formals ->
                         let parameter,countParameter=int parameter,int countParameter
-                        let bufferFormal,countFormal=declaration.Formals[parameter],declaration.Formals[countParameter]
+                        let bufferFormal,countFormal=abi.ParameterOrdinals[parameter],abi.ParameterOrdinals[countParameter]
                         let parameters=field "Parameters" abiFields |> Option.bind (elementsOf graph)
                         let parameterFields ordinal=parameters |> Option.bind(List.tryItem ordinal) |> Option.bind(recordOf graph) |> Option.map snd
                         let byteReference = parameterFields parameter |> Option.exists(fun fields ->
@@ -2190,6 +2322,239 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                 | _ -> invalid "requires the exact current source extern declaration and FunctionDescriptor."
             | _ -> invalid "Binding must select one exact qualified extern with a nonempty versioned hypothesis."
         | _ -> invalid "requires one immutable quotation with exact Binding, Parameter, CountParameter and Hypothesis."
+
+    let parseReleases items =
+        let rec loop acc extra = function
+            | [] -> Some(List.rev acc |> Array.ofList, List.rev extra)
+            | item :: rest ->
+                match caseOf graph item with
+                | Some(_, "Redefinition", Some payload) ->
+                    match elementsOf graph payload with
+                    | Some ordinals ->
+                        let parsed =
+                            ordinals |> List.choose (fun ordinal ->
+                                match int64Of graph ordinal with
+                                | Some value when value >= 0L && value <= int64 System.Int32.MaxValue -> Some(int value)
+                                | _ -> None)
+                        if parsed.Length = ordinals.Length then
+                            loop (BAREWire.Descriptors.RetentionRelease.Redefinition(Array.ofList parsed) :: acc) extra rest
+                        else None
+                    | None -> None
+                | Some(_, "OwnerRelease", Some payload) ->
+                    match recordOf graph payload with
+                    | Some(_, releaseFields) ->
+                        match field "Binding" releaseFields |> Option.bind (stringOf graph),
+                              field "Parameter" releaseFields |> Option.bind (int64Of graph) with
+                        | Some releaseBinding, Some releaseParam when releaseParam >= 0L && releaseParam <= int64 System.Int32.MaxValue ->
+                            let releaseExtra =
+                                externs |> List.choose (fun (candidate, target) -> if candidate = releaseBinding then Some target else None)
+                            loop (BAREWire.Descriptors.RetentionRelease.OwnerRelease { Binding = releaseBinding; Parameter = int releaseParam } :: acc) (releaseExtra @ extra) rest
+                        | _ -> None
+                    | None -> None
+                | _ -> None
+        loop [] [] items
+
+    let readReadOnlyBuffer (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredReadOnlyBuffer, DeclarationFinding> =
+        let invalid reason = Error (findingAt node DeclarationDefect.Invalid ("A ReadOnlyBufferDescriptor " + reason))
+        let text name fields = field name fields |> Option.bind (stringOf graph) |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+        let immutable ids = ids |> List.forall (fun id ->
+            match graph.Nodes.TryFind id |> Option.map _.Kind with
+            | Some (SemanticKind.Binding(_, true, _, _)) -> false
+            | _ -> true)
+        let quotes = path |> List.filter (fun id -> graph.Nodes.TryFind id |> Option.exists (fun value -> match value.Kind with SemanticKind.Quote _ -> true | _ -> false))
+        match quotes, text "Binding" fields, field "Parameter" fields |> Option.bind (int64Of graph),
+              field "Extent" fields |> Option.bind (caseOf graph), field "Content" fields |> Option.bind (caseOf graph),
+              field "Retention" fields |> Option.bind (caseOf graph), field "Hypothesis" fields |> Option.bind (recordOf graph) with
+        | [quote], Some name, Some parameter, Some(_, extentCase, extentPayload), Some(_, contentCase, None),
+          Some(_, retentionCase, retentionPayload), Some(hypothesis, hypothesisFields)
+            when immutable (binding.Id::path) && typeName hypothesis = Some "ExternalExecutionHypothesis" ->
+            match text "Identity" hypothesisFields, text "Version" hypothesisFields, text "Source" hypothesisFields,
+                  externs |> List.filter (fun (candidate,_) -> candidate = name) with
+            | Some identity, Some version, Some source, [_, target] ->
+                let declarations = graph.Edges |> List.choose (fun edge ->
+                    match edge.Class, edge.Role with
+                    | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration declaration when edge.Target=target && declaration.Binding=target -> Some(edge,declaration)
+                    | _ -> None)
+                match declarations, functions |> List.filter (fun (id,_) -> id=target) with
+                | [edge, declaration], [_, abi] when edge.Sources=declaration.Path@declaration.Formals@[declaration.Body] && abi.Body=Some declaration.Body ->
+                    let extentParsed =
+                        match extentCase, extentPayload with
+                        | "ExplicitCount", Some payload ->
+                            int64Of graph payload |> Option.bind (fun cp ->
+                                if cp >= 0L && cp <= int64 System.Int32.MaxValue then Some(BAREWire.Descriptors.ReadOnlyBufferExtent.ExplicitCount(int cp), Some(int cp)) else None)
+                        | "UncountedNulTerminated", None ->
+                            Some(BAREWire.Descriptors.ReadOnlyBufferExtent.UncountedNulTerminated, None)
+                        | _ -> None
+                    let contentParsed =
+                        match contentCase with
+                        | "Utf8Text" -> Some BAREWire.Descriptors.BorrowedContent.Utf8Text
+                        | "RawBytes" -> Some BAREWire.Descriptors.BorrowedContent.RawBytes
+                        | _ -> None
+                    let retentionParsed =
+                        match retentionCase, retentionPayload with
+                        | "DuringCall", None -> Some(BAREWire.Descriptors.BufferRetention.DuringCall, [])
+                        | "RetainedUntil", Some payload ->
+                            match pairOf graph payload with
+                            | Some(ownerId, releasesId) ->
+                                match int64Of graph ownerId, elementsOf graph releasesId with
+                                | Some owner, Some releaseItems when owner >= 0L && owner <= int64 System.Int32.MaxValue && not releaseItems.IsEmpty ->
+                                    parseReleases releaseItems |> Option.map (fun (releases, extra) ->
+                                        BAREWire.Descriptors.BufferRetention.RetainedUntil(int owner, releases), extra)
+                                | _ -> None
+                            | None -> None
+                        | _ -> None
+                    match descriptorBinding target abi.Node, recordOf graph abi.Node, extentParsed, contentParsed, retentionParsed with
+                    | Some abiBinding, Some(_, abiFields), Some(extent, countOpt), Some content, Some(retention, releaseExtra)
+                        when parameter >= 0L && parameter <= int64 System.Int32.MaxValue && abi.ParameterOrdinals.ContainsKey(int parameter) && (abi.Parameters |> List.map fst) = declaration.Formals ->
+                        let parameter = int parameter
+                        let bufferFormal = abi.ParameterOrdinals[parameter]
+                        let countValid =
+                            match countOpt with
+                            | None -> Ok None
+                            | Some cp ->
+                                match abi.ParameterOrdinals.TryFind cp with
+                                | Some countFormal when cp <> parameter ->
+                                    let parameters = field "Parameters" abiFields |> Option.bind (elementsOf graph)
+                                    let scalarCount =
+                                        parameters |> Option.bind (List.tryItem cp) |> Option.bind (recordOf graph) |> Option.map snd
+                                        |> Option.exists (fun pfields ->
+                                            (field "PassBy" pfields |> Option.bind (caseOf graph) |> Option.map (fun (_, n, p) -> n, p)) = Some("Value", None) &&
+                                            (field "Type" pfields |> Option.map (readTypeRef graph) |> Option.exists (function Ok(DeclaredTypeRef.Scalar(BoundaryScalar.Integer _)) -> true | _ -> false)))
+                                    if scalarCount then Ok(Some countFormal)
+                                    else Error "ExplicitCount parameter requires a distinct by-value integer formal."
+                                | _ -> Error "ExplicitCount parameter must be a distinct in-range native ordinal."
+                        let retentionValid =
+                            match extent, retention with
+                            | BAREWire.Descriptors.ReadOnlyBufferExtent.UncountedNulTerminated, BAREWire.Descriptors.BufferRetention.RetainedUntil _ ->
+                                Error "UncountedNulTerminated buffers require DuringCall retention."
+                            | _, BAREWire.Descriptors.BufferRetention.RetainedUntil(owner, _) when owner = parameter || not (abi.ParameterOrdinals.ContainsKey owner) ->
+                                Error "RetainedUntil requires a valid distinct owner ordinal."
+                            | _ -> Ok ()
+                        let parameters = field "Parameters" abiFields |> Option.bind (elementsOf graph)
+                        let ptrOrReadOnly =
+                            parameters |> Option.bind (List.tryItem parameter) |> Option.bind (recordOf graph) |> Option.map snd
+                            |> Option.exists (fun pfields ->
+                                let pass = field "PassBy" pfields |> Option.bind (caseOf graph) |> Option.map (fun (_, n, p) -> n, p)
+                                let ty = field "Type" pfields |> Option.map (readTypeRef graph)
+                                match pass, ty with
+                                | Some("Value", None), Some(Ok(DeclaredTypeRef.Pointer _)) -> true
+                                | Some("ReadOnlyReference", None), Some(Ok(DeclaredTypeRef.Scalar(BoundaryScalar.Integer(8, false)))) -> true
+                                | _ -> false)
+                        if graph.Nodes.TryFind target |> Option.bind (fun n -> match n.Metadata.TryFind "FidelityExtern.Symbol" with Some(MetadataValue.String s) -> Some s | _ -> None) <> Some abi.CName then
+                            invalid "FunctionDescriptor.CName differs from the exact external declaration symbol."
+                        elif not ptrOrReadOnly then
+                            invalid "requires a Pointer Value or unsigned-8 ReadOnlyReference parameter contract."
+                        else
+                            match countValid, retentionValid with
+                            | Error msg, _ | _, Error msg -> invalid msg
+                            | Ok countFormal, Ok () ->
+                                let paths = (fields @ hypothesisFields) |> List.collect (fun (_, id) -> match valuePath graph id with Some (_, p) -> p | None -> [id])
+                                if not (immutable paths) then invalid "requires immutable descriptor and hypothesis inputs." else
+                                Ok { Node = node.Id; Quote = quote; DescriptorBinding = binding.Id; SourcePath = path; Declaration = declaration
+                                     AbiDescriptor = abi.Node; AbiDescriptorBinding = abiBinding; Parameter = parameter; CountParameter = countOpt
+                                     BufferFormal = bufferFormal; CountFormal = countFormal
+                                     Contract = { Binding = name; Parameter = parameter; Extent = extent; Content = content; Retention = retention
+                                                  Hypothesis = { Identity = identity; Version = version; Source = source } }
+                                     Participants = binding.Id :: path @ paths @ edge.Sources @ [abi.Node; abiBinding; hypothesis.Id] @ releaseExtra }
+                    | _ -> invalid "requires valid Extent, Content, Retention, and complete unchanged FunctionDescriptor."
+                | _ -> invalid "requires the exact current source extern declaration and FunctionDescriptor."
+            | _ -> invalid "Binding must select one exact qualified extern with a nonempty versioned hypothesis."
+        | _ -> invalid "requires one immutable quotation with exact Binding, Parameter, Extent, Content, Retention and Hypothesis."
+
+    let readBorrowedResultView (binding: SemanticNode, node: SemanticNode, fields, path) : Result<DeclaredBorrowedResultView, DeclarationFinding> =
+        let invalid reason = Error (findingAt node DeclarationDefect.Invalid ("A BorrowedResultViewDescriptor " + reason))
+        let text name fields = field name fields |> Option.bind (stringOf graph) |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+        let immutable ids = ids |> List.forall (fun id ->
+            match graph.Nodes.TryFind id |> Option.map _.Kind with
+            | Some (SemanticKind.Binding(_, true, _, _)) -> false
+            | _ -> true)
+        let quotes = path |> List.filter (fun id -> graph.Nodes.TryFind id |> Option.exists (fun value -> match value.Kind with SemanticKind.Quote _ -> true | _ -> false))
+        match quotes, text "Binding" fields, field "Content" fields |> Option.bind (caseOf graph),
+              field "Extent" fields |> Option.bind (caseOf graph), field "Owner" fields |> Option.bind (int64Of graph),
+              field "InvalidatedBy" fields |> Option.bind (elementsOf graph), field "Hypothesis" fields |> Option.bind (recordOf graph) with
+        | [quote], Some name, Some(_, contentCase, None), Some(_, extentCase, extentPayload), Some owner, Some invItems, Some(hypothesis, hypothesisFields)
+            when immutable (binding.Id::path) && typeName hypothesis = Some "ExternalExecutionHypothesis" && not invItems.IsEmpty ->
+            match text "Identity" hypothesisFields, text "Version" hypothesisFields, text "Source" hypothesisFields,
+                  externs |> List.filter (fun (candidate, _) -> candidate = name) with
+            | Some identity, Some version, Some source, [_, target] ->
+                let declarations = graph.Edges |> List.choose (fun edge ->
+                    match edge.Class, edge.Role with
+                    | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration declaration when edge.Target=target && declaration.Binding=target -> Some(edge, declaration)
+                    | _ -> None)
+                match declarations, functions |> List.filter (fun (id, _) -> id=target) with
+                | [edge, declaration], [_, abi] when edge.Sources=declaration.Path@declaration.Formals@[declaration.Body] && abi.Body=Some declaration.Body ->
+                    let contentParsed =
+                        match contentCase with
+                        | "Utf8Text" -> Some BAREWire.Descriptors.BorrowedContent.Utf8Text
+                        | "RawBytes" -> Some BAREWire.Descriptors.BorrowedContent.RawBytes
+                        | _ -> None
+                    let extentParsed =
+                        match extentCase, extentPayload with
+                        | "NulTerminated", None -> Some(BAREWire.Descriptors.BorrowedExtent.NulTerminated, None, [])
+                        | "CompanionCall", Some payload ->
+                            match pairOf graph payload with
+                            | Some(compId, argsId) ->
+                                match stringOf graph compId, elementsOf graph argsId with
+                                | Some compBinding, Some argItems ->
+                                    let args = argItems |> List.choose (int64Of graph) |> List.filter (fun v -> v >= 0L && v <= int64 System.Int32.MaxValue) |> List.map int
+                                    if args.Length = argItems.Length && (args |> List.forall abi.ParameterOrdinals.ContainsKey) then
+                                        let compDecl =
+                                            externs |> List.tryFind (fst >> (=) compBinding) |> Option.bind (fun (_, cid) ->
+                                                graph.Edges |> List.tryPick (fun e ->
+                                                    match e.Class, e.Role with
+                                                    | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration d when e.Target=cid && d.Binding=cid ->
+                                                        functions |> List.tryFind (fst >> (=) cid) |> Option.map (fun (_, cabi) -> d, cabi.Node)
+                                                    | _ -> None))
+                                        Some(BAREWire.Descriptors.BorrowedExtent.CompanionCall(compBinding, Array.ofList args), compDecl, [])
+                                    else None
+                                | _ -> None
+                            | None -> None
+                        | _ -> None
+                    let parseInvalidations items =
+                        let rec loop acc extraMap extraNodes = function
+                            | [] -> Some(List.rev acc |> Array.ofList, extraMap, extraNodes)
+                            | item :: rest ->
+                                match caseOf graph item with
+                                | Some(_, "AnyOwnerCall", None) ->
+                                    loop (BAREWire.Descriptors.BorrowInvalidation.AnyOwnerCall :: acc) extraMap extraNodes rest
+                                | Some(_, "OwnerCall", Some payload) ->
+                                    match recordOf graph payload with
+                                    | Some(_, relFields) ->
+                                        match text "Binding" relFields, field "Parameter" relFields |> Option.bind (int64Of graph) with
+                                        | Some relBinding, Some relParam when relParam >= 0L && relParam <= int64 System.Int32.MaxValue ->
+                                            let nextMap, nextExtra =
+                                                match externs |> List.tryFind (fst >> (=) relBinding) with
+                                                | Some(_, rid) ->
+                                                    match graph.Edges |> List.tryPick (fun e ->
+                                                        match e.Class, e.Role with
+                                                        | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration d when e.Target=rid && d.Binding=rid ->
+                                                            functions |> List.tryFind (fst >> (=) rid) |> Option.map (fun (_, rabi) -> d, rabi.Node)
+                                                        | _ -> None) with
+                                                    | Some(d, abiNode) -> Map.add relBinding (d, abiNode) extraMap, rid :: abiNode :: extraNodes
+                                                    | None -> extraMap, extraNodes
+                                                | None -> extraMap, extraNodes
+                                            loop (BAREWire.Descriptors.BorrowInvalidation.OwnerCall { Binding = relBinding; Parameter = int relParam } :: acc) nextMap nextExtra rest
+                                        | _ -> None
+                                    | None -> None
+                                | _ -> None
+                        loop [] Map.empty [] items
+                    match descriptorBinding target abi.Node, contentParsed, extentParsed, parseInvalidations invItems with
+                    | Some abiBinding, Some content, Some(extent, companionDecl, _), Some(invalidations, invMap, invExtra)
+                        when owner >= 0L && owner <= int64 System.Int32.MaxValue && abi.ParameterOrdinals.ContainsKey(int owner) && (abi.Parameters |> List.map fst) = declaration.Formals ->
+                        let owner = int owner
+                        let ownerFormal = abi.ParameterOrdinals[owner]
+                        let paths = (fields @ hypothesisFields) |> List.collect (fun (_, id) -> match valuePath graph id with Some (_, p) -> p | None -> [id])
+                        if not (immutable paths) then invalid "requires immutable descriptor and hypothesis inputs." else
+                        Ok { Node = node.Id; Quote = quote; DescriptorBinding = binding.Id; SourcePath = path; Declaration = declaration
+                             AbiDescriptor = abi.Node; AbiDescriptorBinding = abiBinding; OwnerParameter = owner; OwnerFormal = ownerFormal
+                             CompanionDeclaration = companionDecl; InvalidationBindings = invMap
+                             Contract = { Binding = name; Content = content; Extent = extent; Owner = owner
+                                          InvalidatedBy = invalidations; Hypothesis = { Identity = identity; Version = version; Source = source } }
+                             Participants = binding.Id :: path @ paths @ edge.Sources @ [abi.Node; abiBinding; hypothesis.Id] @ invExtra }
+                    | _ -> invalid "requires valid Content, Extent, Owner, InvalidatedBy and unchanged FunctionDescriptor."
+                | _ -> invalid "requires the exact current source extern declaration and FunctionDescriptor."
+            | _ -> invalid "Binding must select one exact qualified extern with a nonempty versioned hypothesis."
+        | _ -> invalid "requires one immutable quotation with exact Binding, Content, Extent, Owner, InvalidatedBy and Hypothesis."
 
     let results = List.rev resultDeclarations |> List.map readResult
     let ranges = results |> List.choose (function Ok range -> Some range | _ -> None)
@@ -2231,13 +2596,109 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
     let writableResults = List.rev writableDeclarations |> List.map readWritable
     let writable = writableResults |> List.choose (function Ok value -> Some value | _ -> None)
     let writableDuplicates = duplicates "writable buffer contract" (fun (value:DeclaredWritableBuffer) -> string value.Declaration.Binding+":"+string value.Parameter) _.Node graph writable
+    let readOnlyResults = readOnlyBufferDeclarations |> Seq.toList |> List.map readReadOnlyBuffer
+    let readOnlyBuffers = readOnlyResults |> List.choose (function Ok value -> Some value | _ -> None)
+    let readOnlyDuplicates = duplicates "read-only buffer contract" (fun (value: DeclaredReadOnlyBuffer) -> string value.Declaration.Binding + ":" + string value.Parameter) _.Node graph readOnlyBuffers
+    let bufferAbsenceResults =
+        bufferAbsenceDeclarations |> Seq.toList |> List.map (fun (binding, node, fields, path) ->
+            let invalid reason = Error(findingAt node DeclarationDefect.Invalid ("A BufferAbsenceContract " + reason))
+            let quotes = path |> List.filter (fun id -> match graph.Nodes[id].Kind with SemanticKind.Quote _ -> true | _ -> false)
+            let text fields name = field name fields |> Option.bind (stringOf graph) |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+            match quotes, text fields "Binding", field "Parameter" fields |> Option.bind (int64Of graph), field "Hypothesis" fields |> Option.bind (recordOf graph) with
+            | [quote], Some receiver, Some ordinal, Some(_, hypothesisFields) ->
+                let roMatches = readOnlyBuffers |> List.filter (fun ro -> ro.Contract.Binding = receiver && int64 ro.Parameter = ordinal) |> List.map (fun ro -> ro.Declaration, ro.AbiDescriptor, ro.BufferFormal, ro.Quote, ro.Contract.Hypothesis.Identity, ro.Participants)
+                let rwMatches = writable |> List.filter (fun rw -> rw.Contract.Binding = receiver && int64 rw.Parameter = ordinal) |> List.map (fun rw -> rw.Declaration, rw.AbiDescriptor, rw.BufferFormal, rw.Quote, rw.Contract.Hypothesis.Identity, rw.Participants)
+                let matches = roMatches @ rwMatches
+                match matches, text hypothesisFields "Identity", text hypothesisFields "Version", text hypothesisFields "Source" with
+                | [declaration, abiDescriptor, formal, bufferDeclaration, bufferIdentity, bufferParticipants], Some identity, Some version, Some source ->
+                    let inputs =
+                        [ BufferAbsenceInputRole.Binding, field "Binding" fields
+                          BufferAbsenceInputRole.Parameter, field "Parameter" fields
+                          BufferAbsenceInputRole.Hypothesis, field "Hypothesis" fields
+                          BufferAbsenceInputRole.HypothesisIdentity, field "Identity" hypothesisFields
+                          BufferAbsenceInputRole.HypothesisVersion, field "Version" hypothesisFields
+                          BufferAbsenceInputRole.HypothesisSource, field "Source" hypothesisFields ]
+                        |> List.map (fun (role, id) -> role, match id |> Option.bind (valuePath graph) with Some (_, p) -> p | None -> [])
+                    let immutable = binding.Id :: path @ (inputs |> List.collect snd) |> List.forall (fun id ->
+                        match graph.Nodes[id].Kind with SemanticKind.Binding(_, true, _, _) -> false | _ -> true)
+                    let optionalBuffer =
+                        match graph.Nodes[formal].Type with
+                        | NativeType.TApp(tc, [_]) when tc.Name = "option" || tc.Name = "Option" -> true
+                        | _ -> false
+                    if not immutable || (inputs |> List.exists (snd >> List.isEmpty)) then invalid "requires complete immutable quoted content paths."
+                    elif identity = bufferIdentity then invalid "requires an absence hypothesis identity distinct from buffer access."
+                    elif not optionalBuffer then invalid "conflicts with the receiving nonnull buffer formal."
+                    else
+                        Ok { Node = node.Id; Quote = quote; DescriptorBinding = binding.Id; SourcePath = path
+                             Declaration = declaration; AbiDescriptor = abiDescriptor; Parameter = int ordinal; Formal = formal
+                             BufferDeclaration = bufferDeclaration; BufferHypothesisIdentity = bufferIdentity
+                             Contract = { Binding = receiver; Parameter = int ordinal; Hypothesis = { Identity = identity; Version = version; Source = source } }
+                             Inputs = inputs
+                             Participants = binding.Id :: path @ (inputs |> List.collect snd) @ bufferParticipants }
+                | _ -> invalid "requires one exact current buffer contract and an independent nonempty versioned hypothesis."
+            | _ -> invalid "requires one immutable quote and exact Binding, Parameter and Hypothesis fields.")
+    let bufferAbsences = bufferAbsenceResults |> List.choose (function Ok value -> Some value | _ -> None)
+    let bufferAbsenceDuplicates = duplicates "buffer absence contract" (fun (value: DeclaredBufferAbsence) -> string value.Declaration.Binding + ":" + string value.Contract.Parameter) _.Node graph bufferAbsences
+    let borrowedViewResults = borrowedViewDeclarations |> Seq.toList |> List.map readBorrowedResultView
+    let borrowedViews = borrowedViewResults |> List.choose (function Ok value -> Some value | _ -> None)
+    let borrowedViewDuplicates = duplicates "borrowed result view contract" (fun (value: DeclaredBorrowedResultView) -> string value.Declaration.Binding) _.Node graph borrowedViews
+    let countedEntryArrayResults =
+        countedEntryArrayDeclarations |> Seq.toList |> List.map (fun (binding, node, fields, path) ->
+            let invalid reason = Error(findingAt node DeclarationDefect.Invalid ("A CountedEntryArrayDescriptor " + reason))
+            let quotes = path |> List.filter (fun id -> match graph.Nodes[id].Kind with SemanticKind.Quote _ -> true | _ -> false)
+            let text fields name = field name fields |> Option.bind (stringOf graph) |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+            let immutable ids = ids |> List.forall (fun id ->
+                match graph.Nodes.TryFind id |> Option.map _.Kind with Some(SemanticKind.Binding(_, true, _, _)) -> false | _ -> true)
+            match quotes, text fields "Binding", field "Parameter" fields |> Option.bind (int64Of graph),
+                  field "Argument" fields |> Option.bind (int64Of graph), field "CountArgument" fields |> Option.bind (int64Of graph),
+                  field "Element" fields |> Option.bind (caseOf graph) with
+            | [quote], Some receiver, Some ordinal, Some argOrdinal, Some countOrdinal, Some(_, elementCase, elementPayload)
+                when immutable (binding.Id :: path) ->
+                let elementParsed =
+                    match elementCase, elementPayload with
+                    | "Text", None -> Some BAREWire.Descriptors.CountedElement.Text
+                    | "NullableText", None -> Some BAREWire.Descriptors.CountedElement.NullableText
+                    | "Handle", Some payload -> text [ "Marker", payload ] "Marker" |> Option.map BAREWire.Descriptors.CountedElement.Handle
+                    | "NullableHandle", Some payload -> text [ "Marker", payload ] "Marker" |> Option.map BAREWire.Descriptors.CountedElement.NullableHandle
+                    | _ -> None
+                let matches = invocations |> List.filter (fun invocation -> invocation.Contract.Binding = receiver && int64 invocation.Parameter = ordinal)
+                match matches, elementParsed with
+                | [invocation], Some element
+                    when argOrdinal >= 0L && countOrdinal >= 0L &&
+                         argOrdinal <= int64 System.Int32.MaxValue &&
+                         countOrdinal <= int64 System.Int32.MaxValue &&
+                         argOrdinal <> countOrdinal &&
+                         int argOrdinal < invocation.Contract.Signature.Parameters.Length &&
+                         int countOrdinal < invocation.Contract.Signature.Parameters.Length ->
+                    let countOk =
+                        match invocation.Contract.Signature.Parameters[int countOrdinal].Type with
+                        | BAREWire.Descriptors.TypeRef.Integer _ -> true
+                        | _ -> false
+                    if not countOk then invalid "CountArgument requires a scalar integer entry argument."
+                    else
+                        let paths = fields |> List.collect (fun (_, id) -> match valuePath graph id with Some (_, p) -> p | None -> [id])
+                        if not (immutable paths) then invalid "requires immutable descriptor inputs."
+                        else
+                            Ok { Node = node.Id; Quote = quote; DescriptorBinding = binding.Id; SourcePath = path
+                                 Invocation = invocation
+                                 Contract = { Binding = receiver; Parameter = int ordinal; Argument = int argOrdinal; CountArgument = int countOrdinal; Element = element }
+                                 Participants = binding.Id :: path @ paths @ invocation.Participants }
+                | _ -> invalid "requires one exact current receiving callback invocation, distinct in-range entry ordinals, and a valid CountedElement."
+            | _ -> invalid "requires one immutable quote and exact Binding, Parameter, Argument, CountArgument and Element fields.")
+    let countedEntryArrays = countedEntryArrayResults |> List.choose (function Ok value -> Some value | _ -> None)
+    let countedEntryArrayDuplicates = duplicates "counted entry array contract" (fun (value: DeclaredCountedEntryArray) -> string value.Invocation.Declaration.Binding + ":" + string value.Contract.Parameter + ":" + string value.Contract.Argument) _.Node graph countedEntryArrays
     { Layouts = List.rev layouts; Functions = List.rev functions |> List.map snd; ResultRanges = ranges
       CallbackInvocations = invocations; CallbackAbsences = absences; Resources = resources; WritableBuffers = writable
+      ReadOnlyBuffers = readOnlyBuffers; BufferAbsences = bufferAbsences; BorrowedResultViews = borrowedViews; CountedEntryArrays = countedEntryArrays
       Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings
                  @ (invocationResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ invocationDuplicates
                  @ (absenceResults |> List.choose(function Error finding->Some finding | _->None)) @ absenceDuplicates
                  @ (resourceResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ resourceDuplicates
-                 @ (writableResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ writableDuplicates }
+                 @ (writableResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ writableDuplicates
+                 @ (readOnlyResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ readOnlyDuplicates
+                 @ (bufferAbsenceResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ bufferAbsenceDuplicates
+                 @ (borrowedViewResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ borrowedViewDuplicates
+                 @ (countedEntryArrayResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ countedEntryArrayDuplicates }
 
 /// The bounded scalar references a call passes, paired with its actual arrays.
 /// The descriptor supplies the element ABI; the lowering must retain an extent
@@ -2269,9 +2730,60 @@ let writableReferenceArguments (graph:SemanticGraph) funcId (args:NodeId list) =
     | Some declaration when descriptors.Findings.IsEmpty ->
         descriptors.WritableBuffers |> List.choose(fun row ->
             if row.Declaration.Binding=declaration && row.Declaration.Formals.Length=args.Length then
-                args |> List.tryItem row.Parameter |> Option.map(fun actual->actual,row)
+                row.Declaration.Formals
+                |> List.tryFindIndex ((=) row.BufferFormal)
+                |> Option.bind (fun sourceOrd -> args |> List.tryItem sourceOrd |> Option.map (fun actual -> actual, row, sourceOrd))
             else None)
     | _ -> []
+
+/// Callback CHandle<'T> types declared on receiving callback invocation formals
+/// so placement and value-representation assign opaque handle slots uniformly.
+let callbackHandleTypes (graph: SemanticGraph) (descriptors: Descriptors) : TypeIdentity list =
+    let countedEntryArrayArgs =
+        descriptors.CountedEntryArrays
+        |> List.map (fun a -> a.Invocation.Quote, a.Contract.Argument)
+        |> Set.ofList
+    let isMarkerPointee (allowUnit: bool) (ty: NativeType) =
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+        | NativeType.TApp(tc, []) ->
+            (allowUnit && tc.Name = "unit") ||
+            (tc.NTUKind.IsNone && tc.Name <> "unit" && tc.Name <> "option" && tc.Name <> "Option")
+        | _ -> false
+    let rec isCallbackCHandleType (allowUnit: bool) (ty: NativeType) =
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+        | NativeType.TApp(tc, [inner]) when tc.Name = "option" || tc.Name = "Option" ->
+            match Clef.Compiler.NativeTypedTree.UnionFind.applySubst inner with
+            | NativeType.TApp(innerTc, [marker]) as substituted
+                when innerTc.Name = "CHandle" && Types.tryGetNTUKind substituted = Some NTUKind.NTUptr && isMarkerPointee allowUnit marker ->
+                Some(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType substituted)
+            | _ -> None
+        | NativeType.TApp(tc, [marker]) as substituted
+            when tc.Name = "CHandle" && Types.tryGetNTUKind substituted = Some NTUKind.NTUptr && isMarkerPointee allowUnit marker ->
+            Some(Clef.Compiler.NativeTypedTree.TypeIdentities.ofType substituted)
+        | _ -> None
+    let rec funHandles (invQuote: NodeId) (argOrd: int) ty =
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+        | NativeType.TFun(dom, cod) ->
+            let allowUnit = countedEntryArrayArgs.Contains(invQuote, argOrd)
+            let domHandles =
+                match isCallbackCHandleType allowUnit dom with
+                | Some id -> [id]
+                | None -> []
+            domHandles @ funHandles invQuote (argOrd + 1) cod
+        | _ -> []
+    let unwrapFnPtr (invQuote: NodeId) ty =
+        let inner =
+            match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+            | NativeType.TApp(tc, [arg]) when tc.Name = "option" || tc.Name = "Option" -> arg
+            | substituted -> substituted
+        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst inner with
+        | NativeType.TApp(tc, [fnTy]) when tc.Name = "FnPtr" -> funHandles invQuote 0 fnTy
+        | substituted -> funHandles invQuote 0 substituted
+    descriptors.CallbackInvocations
+    |> List.collect (fun inv ->
+        match graph.Nodes.TryFind inv.Formal with
+        | Some node -> unwrapFnPtr inv.Quote node.Type
+        | None -> invalidOp (sprintf "Callback invocation formal %d missing from SemanticGraph." (NodeId.value inv.Formal)))
 
 /// Scalar arrays retain their interior representation. A native projection may
 /// omit copy-back only when the parameter declaration explicitly permits reads.
@@ -2345,3 +2857,22 @@ let cAbiOfGraph (graph: SemanticGraph) : Result<(string * int * int) list, strin
 let readOnlyRecordReferenceArguments graph funcId args =
     actualReferences graph funcId args (fun f -> f.RecordReferences)
     |> List.choose (fun (id, readOnly) -> if readOnly then Some id else None) |> Set.ofList
+
+/// Actual buffer arguments governed by a declared ReadOnlyBufferDescriptor.
+let readOnlyBufferArguments (graph: SemanticGraph) (funcId: NodeId) (args: NodeId list) =
+    let rec binding id =
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> binding inner
+        | Some { Kind = SemanticKind.VarRef (_, Some id) } -> Some id
+        | _ -> None
+    match binding funcId |> Option.bind (lambdaOfBinding graph) with
+    | Some (parameters, body) when parameters.Length = args.Length ->
+        (readDescriptors graph).ReadOnlyBuffers
+        |> List.choose (fun ro ->
+            if ro.Declaration.Body = body then
+                parameters
+                |> List.tryFindIndex (fun (_, _, id) -> id = ro.BufferFormal)
+                |> Option.bind (fun sourceOrdinal ->
+                    List.tryItem sourceOrdinal args |> Option.map (fun actual -> actual, ro, sourceOrdinal))
+            else None)
+    | _ -> []

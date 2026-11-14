@@ -1064,12 +1064,32 @@ type ForeignReferenceTests() =
     [<Theory>]
     [<InlineData("Integer (Unsigned, 32)")>]
     [<InlineData("Integer (Signed, 64)")>]
-    member _.``Writable POSIX fd requires its exact signed32 ABI profile``(abi:string) =
+    member _.``Writable POSIX admits non-buffer scalar ABI profiles``(abi:string) =
         let source=ForeignCases.writablePosixSource.Replace("Name = \"fd\"; Type = Integer (Signed, 32)","Name = \"fd\"; Type = "+abi)
         Assert.NotEqual<string>(ForeignCases.writablePosixSource,source)
         let result=ForeignCases.writableVoidApplication source ForeignCases.writablePosixBody
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result,String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        Assert.Contains(result.CheckResult.Graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryWritableBufferUse _->true | _->false)
+        let revision=Clef.Compiler.Project.ProjectChecker.publish result |> Result.defaultWith failwith
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+
+    [<Fact>]
+    member _.``Writable POSIX refuses undeclared raw pointer scalar parameter``() =
+        let source=ForeignCases.writablePosixSource.Replace("Name = \"fd\"; Type = Integer (Signed, 32)","Name = \"fd\"; Type = Pointer 64")
+        Assert.NotEqual<string>(ForeignCases.writablePosixSource,source)
+        let result=ForeignCases.writableVoidApplication source ForeignCases.writablePosixBody
         Assert.DoesNotContain(result.CheckResult.Graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryCall _->true | _->false)
-        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->message.Contains "or signed-32 fd0/buffer1/count2 unsigned-64 with signed-64 result.")
+        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->message.Contains "pointer and aggregate values require a source-settled adapter.")
+
+    [<Theory>]
+    [<InlineData("Integer (Signed, 32)")>]
+    [<InlineData("Integer (Unsigned, 64)")>]
+    member _.``Writable POSIX profile requires its Void or signed64 result ABI``(abi:string) =
+        let source=ForeignCases.writablePosixSource.Replace("ReturnType = Integer (Signed, 64)","ReturnType = "+abi)
+        Assert.NotEqual<string>(ForeignCases.writablePosixSource,source)
+        let result=ForeignCases.writableVoidApplication source ForeignCases.writablePosixBody
+        Assert.DoesNotContain(result.CheckResult.Graph.Edges,fun edge->match edge.Role with EdgeRole.BoundaryCall _->true | _->false)
+        Assert.Contains(Clef.Compiler.Project.ProjectChecker.getErrorMessages result,fun message->message.Contains "The writable buffer adapter requires matching buffer/count ordinals with Void or signed-64 result.")
 
     [<Theory>]
     [<InlineData("missing")>]
@@ -1155,9 +1175,9 @@ type ForeignReferenceTests() =
                               | "order" -> [{fd with Actual=count.Actual};call.Arguments[1];{count with Actual=fd.Actual}]
                               | "arity" -> call.Arguments.Tail
                               | "formal" -> {fd with Formal=count.Formal}::call.Arguments.Tail
-                              | _ -> {fd with Abi=Fidelity.PSG.BoundaryScalar.Integer(64,true)}::call.Arguments.Tail
+                              | _ -> [fd;call.Arguments[1];{count with Abi=Fidelity.PSG.BoundaryScalar.Boolean}]
                 let imported=boundary.Imports[call.Import]
-                let imports=if shape="abi" then boundary.Imports.Add(imported.Identity,{imported with Parameters=(fd.Formal,Fidelity.PSG.BoundaryScalar.Integer(64,true))::imported.Parameters.Tail}) else boundary.Imports
+                let imports=if shape="abi" then boundary.Imports.Add(imported.Identity,{imported with Parameters=[imported.Parameters[0];imported.Parameters[1];count.Formal,Fidelity.PSG.BoundaryScalar.Boolean]}) else boundary.Imports
                 {revision with Emission={revision.Emission with Boundary={boundary with Imports=imports;Calls=boundary.Calls.Add(call.Site,{call with Arguments=arguments})}}}
         Assert.Contains(Fidelity.PSG.Integrity.check changed,fun issue->issue.Part="Emission.Boundary.WritableBufferUses.Account")
 

@@ -96,7 +96,7 @@ let analyze (graph: SemanticGraph) : Reading =
                     not (declared.Value.Activations.Values |> Seq.exists(fun declaration ->
                         declaration.Parameter = formal &&
                         match declaration.Extent with
-                        | BoundaryCallbackExtent.ProcessExit _ -> true
+                        | BoundaryCallbackExtent.ProcessExit _ | BoundaryCallbackExtent.Retained _ -> true
                         | BoundaryCallbackExtent.DuringCall -> false))))
         let accounted =
             ordinary |> List.choose (fun (implementation, arity) ->

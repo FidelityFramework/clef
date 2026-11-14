@@ -2505,7 +2505,7 @@ let main _ =
             if part = "Emission.Boundary.ClosedEntries.Declaration" then
                 "The closed entry differs from its original capture-free implementation, body or complete ordered native formals."
             else
-                "The callback signature differs from its complete nonempty integer-formal CDecl receiving quotation and exact integer or void result."
+                "The callback signature differs from its complete nonempty CDecl receiving quotation and exact formal/result contract."
         Assert.Contains(Fidelity.PSG.Integrity.check changed, fun error -> error.Part = part && error.Reason = reason)
 
     [<Theory>]
@@ -2620,7 +2620,7 @@ let main _ =
 
                 withInvocation invocation,
                 "Emission.Boundary.CallbackInvocations.Signature",
-                "The callback signature differs from its complete nonempty integer-formal CDecl receiving quotation and exact integer or void result."
+                "The callback signature differs from its complete nonempty CDecl receiving quotation and exact formal/result contract."
             else
                 let changed =
                     if shape = "unit-fact" then
@@ -2918,7 +2918,7 @@ let main _ =
         let part, reason =
             if shape = "convention" then
                 "Emission.Boundary.CallbackInvocations.Signature",
-                "The callback signature differs from its complete nonempty integer-formal CDecl receiving quotation and exact integer or void result."
+                "The callback signature differs from its complete nonempty CDecl receiving quotation and exact formal/result contract."
             else
                 "Emission.Boundary.ClosedEntries.UnitParameters",
                 "A zero-argument void callback requires its exact sole source unit formal and current unit representation."

@@ -403,14 +403,22 @@ let arrayUses graph site =
                          nearestLambda graph target.Id = nearestLambda graph site &&
                          (nearestLambda graph site).IsSome -> ()
                 | _ ->
-                    readonly <- false
                     let hypotheses=Platform.writableReferenceArguments graph callee actuals
                     match hypotheses with
-                    | [buffer,declaration] when aliases.Contains buffer &&
-                        actuals |> List.mapi(fun ordinal actual->ordinal=declaration.Parameter || not(aliases.Contains actual)) |> List.forall id ->
+                    | [buffer, _, bufferOrd] when aliases.Contains buffer &&
+                        (actuals |> List.mapi(fun ordinal actual->ordinal=bufferOrd || not(aliases.Contains actual)) |> List.forall id) ->
+                        readonly <- false
                         let scope=nearestLambda graph site
                         closed <- closed && scope.IsSome && nearestLambda graph target.Id=scope
-                    | _ -> closed <- false
+                    | _ ->
+                        match Platform.readOnlyBufferArguments graph callee actuals with
+                        | [buffer, _, sourceOrdinal] when aliases.Contains buffer &&
+                            actuals |> List.mapi(fun ordinal actual -> ordinal = sourceOrdinal || not(aliases.Contains actual)) |> List.forall id ->
+                            let scope = nearestLambda graph site
+                            closed <- closed && scope.IsSome && nearestLambda graph target.Id = scope
+                        | _ ->
+                            readonly <- false
+                            closed <- false
             | _ -> readonly <- false; closed <- false
     readonly && closed, closed, participants
 

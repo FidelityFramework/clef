@@ -454,6 +454,92 @@ type OptionalEntryArgumentConversionModel = {
     ResultRetirement: CallableAggregateResultRetirement option
 }
 
+/// Model for zero-copy explicit-count read-only buffer extent bounds.
+type ZeroCopyBufferExtentModel = {
+    Call: NodeId
+    Declaration: NodeId
+    Parameter: int
+    CountParameter: int
+    Buffer: NodeId
+    Count: NodeId
+    MinimumCount: bigint
+    MaximumCount: bigint
+    ExtentCapacity: bigint
+    ElementBytes: int
+    CountCoverage: NodeId
+}
+
+/// Retention discipline for a borrowed read-only buffer crossing.
+[<RequireQualifiedAccess>]
+type BufferRetentionMode =
+    | DuringCall
+    | RetainedUntilOwner of ownerParameter: int * releaseOrdinal: int
+
+/// Model proving storage residence dominates all retained foreign accesses until retirement.
+type BufferRetentionDominationModel = {
+    Call: NodeId
+    Declaration: NodeId
+    Buffer: NodeId
+    Residence: NodeId
+    Mode: BufferRetentionMode
+    AcquireOrder: int
+    RetirementOrders: int list
+}
+
+/// Crossing realization mode for a legacy uncounted NUL-terminated foreign path.
+[<RequireQualifiedAccess>]
+type UncountedPathStagingMode =
+    | StaticImageZeroCopy of poolEntry: int
+    | CallScopedStaged of stagingBuffer: NodeId * capacity: int
+
+/// Model proving zero interior 0x00 bytes and trailing 0x00 at byte length.
+type UncountedPathTerminationModel = {
+    Call: NodeId
+    Declaration: NodeId
+    Parameter: int
+    Source: NodeId
+    Mode: UncountedPathStagingMode
+    ByteLength: bigint
+    RequiresNoInteriorNul: bool
+    RequiresTrailingNul: bool
+}
+
+/// Model proving non-owning borrowed result views respect NULL->None at the boundary
+/// and every read occurs before owner invalidation or companion measurement.
+type BorrowedResultViewScopeModel = {
+    Call: NodeId
+    Declaration: NodeId
+    Owner: NodeId
+    View: NodeId
+    CallOrder: int
+    InvalidationOrders: int list
+    ReadOrders: int list
+    NullToNoneBoundary: bool
+}
+
+/// Foreign choice of one Option<'Buffer> arm strictly at the call boundary.
+[<RequireQualifiedAccess>]
+type BufferAbsencePlanChoice =
+    | AbsentNull
+    | RequiresNonNullBuffer
+
+/// One arm of an immutable Option<'Buffer> absence conversion plan.
+type BufferAbsencePlanArm = {
+    CaseOrdinal: int
+    Choice: BufferAbsencePlanChoice
+}
+
+/// Model converting interior Option<'Buffer> (`None -> 0` strictly at call boundary).
+type BufferAbsenceArgumentConversionModel = {
+    Call: NodeId
+    Parameter: int
+    Actual: NodeId
+    Construction: NodeId
+    SourceCase: int
+    Absence: NodeId
+    Arms: BufferAbsencePlanArm list
+}
+
 /// Observations of the existing evaluation owner's rows, not another flow
 /// producer. Their complete ordered census is a current boundary premise.
 [<RequireQualifiedAccess>]
@@ -616,6 +702,11 @@ type ObligationBody =
     | ResourceCleanup of ResourceCleanupModel
     | OptionalEntryArgumentConversion of OptionalEntryArgumentConversionModel
     | OptionalEntryAbsenceArgumentConversion of OptionalEntryAbsenceArgumentConversionModel
+    | ZeroCopyBufferExtent of ZeroCopyBufferExtentModel
+    | BufferRetentionDomination of BufferRetentionDominationModel
+    | UncountedPathTermination of UncountedPathTerminationModel
+    | BorrowedResultViewScope of BorrowedResultViewScopeModel
+    | BufferAbsenceArgumentConversion of BufferAbsenceArgumentConversionModel
     /// One dynamic snapshot count is shared by the write, complete copy and
     /// allocation. Exact source incidence is replayed separately from bounds.
     | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint * elementBytes: bigint * allocationCapacity: bigint
@@ -853,6 +944,10 @@ type BoundaryScalar =
     | ResourceHandle of declaration: NodeId * nullable: bool
     /// Exact direct-call writable byte-buffer declaration; never a numeric scalar.
     | WritableBytes of declaration: NodeId
+    /// Exact direct-call read-only byte or UTF-8 buffer declaration; never a CString or nullable scalar.
+    | ReadOnlyBytes of declaration: NodeId
+    /// Exact borrowed result view declaration returned at the boundary (NULL -> None strictly at boundary).
+    | BorrowedBytes of declaration: NodeId
 
 /// A physical slot settled by the source numeric/layout owner.
 [<RequireQualifiedAccess>]
@@ -1032,7 +1127,48 @@ module BoundaryOptionalEntryChoice =
         | BoundaryOptionalEntryChoice.Direct entry -> [entry]
         | BoundaryOptionalEntryChoice.Conditional(_, _, whenTrue, whenFalse) -> [whenTrue; whenFalse]
 
-type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option; OptionalEntry: BoundaryOptionalEntryChoice option }
+[<RequireQualifiedAccess>]
+type BufferAbsenceInputRole =
+    | Binding | Parameter | Hypothesis | HypothesisIdentity | HypothesisVersion | HypothesisSource
+
+/// Independent quoted BAREWire.Descriptors.BufferAbsenceContract promise.
+type BoundaryBufferAbsence = {
+    Quote: NodeId
+    DescriptorBinding: NodeId
+    Record: NodeId
+    Import: NodeId
+    Parameter: int
+    Formal: NodeId
+    BufferDeclaration: NodeId
+    Contract: BAREWire.Descriptors.BufferAbsenceContract
+    SourcePath: NodeId list
+    Inputs: (BufferAbsenceInputRole * NodeId list) list
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+}
+
+/// Call-site operand selection converting interior Option<'Buffer> strictly at the
+/// foreign call boundary (`None -> 0`), keeping interior fat pointers non-null.
+type BoundaryBufferAbsenceSelection = {
+    Construction: NodeId
+    CaseOrdinal: int
+    Payload: NodeId option
+    Absence: NodeId
+    Transport: NodeId list
+    Obligation: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type BoundaryBufferAbsenceChoice =
+    | Direct of BoundaryBufferAbsenceSelection
+    | Conditional of selection: NodeId * tagProjection: NodeId * whenTrue: BoundaryBufferAbsenceSelection * whenFalse: BoundaryBufferAbsenceSelection
+
+[<RequireQualifiedAccess>]
+module BoundaryBufferAbsenceChoice =
+    let leaves = function
+        | BoundaryBufferAbsenceChoice.Direct selected -> [selected]
+        | BoundaryBufferAbsenceChoice.Conditional(_, _, whenTrue, whenFalse) -> [whenTrue; whenFalse]
+
+type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option; OptionalEntry: BoundaryOptionalEntryChoice option; BufferAbsence: BoundaryBufferAbsenceChoice option }
 
 /// Current source incidence for a separately stated process-link assumption.
 /// Identity/Version/Source belong to Contract, not this revision's node IDs.
@@ -1071,6 +1207,7 @@ type NativeEntrySignature = {
 type BoundaryCallbackExtent =
     | DuringCall
     | ProcessExit of ExitBinding: NodeId option * SuccessStatus: int
+    | Retained of Owner: int * Releases: BAREWire.Descriptors.RetentionRelease array
 
 type BoundaryCallbackRegistration = {
     Call: NodeId
@@ -1167,6 +1304,17 @@ type ParticipantRole =
     | BranchTrueArm | BranchFalseArm | BranchSelectedArm | BranchConstructor | BranchPayload
     | ForeignResultDeclaration | ForeignResultCall | ForeignResultContext
     | ForeignResultHypothesis | ForeignResultActual | ForeignResultAbi | ForeignResultDestination
+    /// Zero-copy read-only buffer, uncounted path, borrowed result view,
+    /// counted entry array, and buffer absence accounts.
+    | ReadOnlyBufferDeclaration | ReadOnlyBufferCall | ReadOnlyBufferFormal
+    | ReadOnlyBufferActual | ReadOnlyBufferCount | ReadOnlyBufferExtent
+    | ReadOnlyBufferResidence | ReadOnlyBufferRetirement
+    | UncountedPathSource | UncountedPathStaging
+    | BorrowedResultViewDeclaration | BorrowedResultViewCall | BorrowedResultViewOwner
+    | BorrowedResultViewCompanion | BorrowedResultViewInvalidation | BorrowedResultViewRead
+    | BufferAbsenceQuote | BufferAbsenceFormal | BufferAbsenceCall | BufferAbsenceOperand
+    | CountedEntryArrayDeclaration | CountedEntryArrayInvocation
+    | RetainedCallbackOwner | RetainedCallbackRelease
 
 /// One occurrence in a relation: the node, its role, its ordinal within the role (an
 /// argument or parameter position; 0 for a role without positions) and its group. The
@@ -1192,6 +1340,89 @@ type EarlyDerivation = { Derived: Participant list }
 type ParticipantEvidence =
     | Pending of EarlyDerivation
     | Established of Participant list
+
+/// Exact read-only buffer declaration provenance settled from a quoted
+/// BAREWire.Descriptors.ReadOnlyBufferDescriptor. Grants no write access,
+/// nullability, or unverified retention.
+type BoundaryReadOnlyBufferDeclaration = {
+    Identity: NodeId
+    Declaration: NodeId
+    Body: NodeId
+    Formals: NodeId list
+    Descriptor: NodeId
+    Parameter: int
+    CountParameter: int option
+    BufferFormal: NodeId
+    CountFormal: NodeId option
+    Contract: BAREWire.Descriptors.ReadOnlyBufferDescriptor
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: ParticipantEvidence
+}
+
+/// Settled crossing mechanism for one read-only byte or UTF-8 text foreign buffer argument.
+[<RequireQualifiedAccess>]
+type BoundaryReadOnlyBufferCrossing =
+    | ExplicitZeroCopy of countParameter: int * countNode: NodeId * extentCapacity: bigint * extentCoverage: NodeId
+    | StaticImageNulBorrowed of poolEntry: int * staticOrigin: NodeId * byteLength: bigint * terminationProof: NodeId
+    | CallScopedNulStaged of stagingBuffer: NodeId * capacity: int * byteLength: bigint * terminationProof: NodeId
+
+/// Current direct-call read-only buffer or uncounted path crossing account.
+type BoundaryReadOnlyBufferUse = {
+    Call: NodeId
+    Declaration: NodeId
+    Parameter: int
+    Buffer: NodeId
+    Residence: NodeId
+    Retirements: NodeId list
+    Copies: int
+    Crossing: BoundaryReadOnlyBufferCrossing
+    RetentionProof: NodeId
+    AccessExclusivityProof: NodeId option
+    Participants: ParticipantEvidence
+}
+
+/// Exact quoted BAREWire.Descriptors.BorrowedResultViewDescriptor provenance.
+type BoundaryBorrowedResultViewDeclaration = {
+    Identity: NodeId
+    Declaration: NodeId
+    Body: NodeId
+    Formals: NodeId list
+    Descriptor: NodeId
+    OwnerParameter: int
+    OwnerFormal: NodeId
+    Contract: BAREWire.Descriptors.BorrowedResultViewDescriptor
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: ParticipantEvidence
+}
+
+/// Current non-owning foreign result view slice and invalidation-frontier proof.
+type BoundaryBorrowedResultViewUse = {
+    Call: NodeId
+    Declaration: NodeId
+    Owner: NodeId
+    View: NodeId
+    CompanionCall: NodeId option
+    CompanionArguments: NodeId list
+    CallOrder: int
+    Invalidations: NodeId list
+    InvalidationOrders: int list
+    Reads: NodeId list
+    ReadOrders: int list
+    NullToNoneBoundary: bool
+    ScopeProof: NodeId
+    Participants: ParticipantEvidence
+}
+
+/// Exact quoted BAREWire.Descriptors.CountedEntryArrayDescriptor provenance.
+type BoundaryCountedEntryArray = {
+    Identity: NodeId
+    Import: NodeId
+    Parameter: int
+    Invocation: NodeId
+    Contract: BAREWire.Descriptors.CountedEntryArrayDescriptor
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: ParticipantEvidence
+}
 
 /// The current source account links existing claim citizens; it does not duplicate
 /// their obligation records or grant solver, ABI or execution authority.
@@ -1992,6 +2223,12 @@ type BoundaryDomain = {
     ResultHypotheses: ForeignResultHypothesis list
     WritableBufferDeclarations: NodeId list
     WritableBufferUses: (NodeId * int) list
+    ReadOnlyBufferDeclarations: NodeId list
+    ReadOnlyBufferUses: (NodeId * int) list
+    BorrowedResultViewDeclarations: NodeId list
+    BorrowedResultViewUses: NodeId list
+    BufferAbsences: NodeId list
+    CountedEntryArrays: NodeId list
     ResourceDeclarations: NodeId list
     ResourceAccesses: NodeId list
     ResourceEvaluationRoots: (NodeId * NodeId * NodeId) list
@@ -2068,6 +2305,12 @@ type EdgeRole =
     | BoundaryResourceDeclaration of BoundaryResourceDeclaration
     | BoundaryWritableBufferDeclaration of BoundaryWritableBufferDeclaration
     | BoundaryWritableBufferUse of BoundaryWritableBufferUse
+    | BoundaryReadOnlyBufferDeclaration of BoundaryReadOnlyBufferDeclaration
+    | BoundaryReadOnlyBufferUse of BoundaryReadOnlyBufferUse
+    | BoundaryBorrowedResultViewDeclaration of BoundaryBorrowedResultViewDeclaration
+    | BoundaryBorrowedResultViewUse of BoundaryBorrowedResultViewUse
+    | BoundaryBufferAbsence of BoundaryBufferAbsence
+    | BoundaryCountedEntryArray of BoundaryCountedEntryArray
     | BoundaryResourceAccess of BoundaryResourceAccess
     | BoundaryImport of BoundaryImport
     | BoundaryCall of BoundaryCall
@@ -3422,6 +3665,10 @@ type OrdinaryCallProjection = {
 type WitnessProjectionFailureKind =
     | Settlement
     | LibraryNativeInterfaceLoading
+    | ForeignBufferExtent
+    | ForeignBufferRetention
+    | ForeignBufferExclusivity
+    | ForeignBufferAbsence
 
 type WitnessProjectionFailure = {
     Kind: WitnessProjectionFailureKind
@@ -3676,6 +3923,12 @@ type BoundaryEmissionProjection = {
     ResourceEvidence: BoundaryResourceEvidence option
     WritableBufferDeclarations: Map<NodeId, BoundaryWritableBufferDeclaration>
     WritableBufferUses: Map<NodeId * int, BoundaryWritableBufferUse>
+    ReadOnlyBufferDeclarations: Map<NodeId, BoundaryReadOnlyBufferDeclaration>
+    ReadOnlyBufferUses: Map<NodeId * int, BoundaryReadOnlyBufferUse>
+    BorrowedResultViewDeclarations: Map<NodeId, BoundaryBorrowedResultViewDeclaration>
+    BorrowedResultViewUses: Map<NodeId, BoundaryBorrowedResultViewUse>
+    BufferAbsences: Map<NodeId, BoundaryBufferAbsence>
+    CountedEntryArrays: Map<NodeId, BoundaryCountedEntryArray>
     ResourceDeclarations: Map<NodeId, BoundaryResourceDeclaration>
     ResourceAccesses: Map<NodeId, BoundaryResourceAccess>
     Imports: Map<NodeId, BoundaryImport>

@@ -69,13 +69,45 @@ let private readUncached (graph: SemanticGraph) =
     let annotatedScope ty =
         match applySubst ty with
         | NativeType.TApp(quote, [NativeType.TApp(descriptor, _)]) when quote.Name = "Expr" ->
-            ["ScopedCallbackDescriptor"; "ProcessExitCallbackDescriptor"] |> List.contains (descriptor.Name.Split('.') |> Array.last)
+            ["ScopedCallbackDescriptor"; "ProcessExitCallbackDescriptor"; "RetainedCallbackDescriptor"] |> List.contains (descriptor.Name.Split('.') |> Array.last)
         | _ -> false
+    let parseReleases items =
+        let rec loop acc extra = function
+            | [] -> Some(List.rev acc |> Array.ofList, List.rev extra)
+            | item :: rest ->
+                match caseOf graph item with
+                | Some(_, "Redefinition", Some payload) ->
+                    match elementsOf graph payload with
+                    | Some ordinals ->
+                        let parsed =
+                            ordinals |> List.choose (fun ordinal ->
+                                match int64Of graph ordinal with
+                                | Some value when value >= 0L && value <= int64 System.Int32.MaxValue -> Some(int value)
+                                | _ -> None)
+                        if parsed.Length = ordinals.Length then
+                            loop (BAREWire.Descriptors.RetentionRelease.Redefinition(Array.ofList parsed) :: acc) extra rest
+                        else None
+                    | None -> None
+                | Some(_, "OwnerRelease", Some payload) ->
+                    match recordOf graph payload with
+                    | Some(_, releaseFields) ->
+                        match field "Binding" releaseFields |> Option.bind (stringOf graph),
+                              field "Parameter" releaseFields |> Option.bind (int64Of graph) with
+                        | Some releaseBinding, Some releaseParam when releaseParam >= 0L && releaseParam <= int64 System.Int32.MaxValue ->
+                            let releaseExtra =
+                                match graph.Nodes.Values |> Seq.filter (fun candidate -> MappedBindings.qualifiedBindingName graph candidate = releaseBinding) |> Seq.toList with
+                                | [{ Kind = SemanticKind.Binding _; Id = releaseId }] -> releaseId :: extra
+                                | _ -> extra
+                            loop (BAREWire.Descriptors.RetentionRelease.OwnerRelease { Binding = releaseBinding; Parameter = int releaseParam } :: acc) releaseExtra rest
+                        | _ -> None
+                    | None -> None
+                | _ -> None
+        loop [] [] items
     for node in graph.Nodes.Values do
         match node.Kind, List.tryLast node.Children with
         | SemanticKind.Binding _, Some body ->
             match recordOf graph body with
-            | Some(descriptor, fields) when typeName descriptor = Some "ScopedCallbackDescriptor" || typeName descriptor = Some "ProcessExitCallbackDescriptor" ->
+            | Some(descriptor, fields) when typeName descriptor = Some "ScopedCallbackDescriptor" || typeName descriptor = Some "ProcessExitCallbackDescriptor" || typeName descriptor = Some "RetainedCallbackDescriptor" ->
                 match field "Binding" fields |> Option.bind (stringOf graph), field "Parameter" fields |> Option.bind (stringOf graph) with
                 | Some bindingName, Some parameterName ->
                     match graph.Nodes.Values |> Seq.filter (fun candidate -> MappedBindings.qualifiedBindingName graph candidate = bindingName) |> Seq.toList with
@@ -91,7 +123,16 @@ let private readUncached (graph: SemanticGraph) =
                             let scope = valuePath graph body |> Option.map snd |> Option.defaultValue [] |> List.filter(fun id ->
                                 match graph.Nodes[id].Kind with SemanticKind.Quote _ -> true | _ -> false)
                             let extent =
-                                if typeName descriptor = Some "ScopedCallbackDescriptor" then Some(BoundaryCallbackExtent.DuringCall, []) else
+                                if typeName descriptor = Some "ScopedCallbackDescriptor" then Some(BoundaryCallbackExtent.DuringCall, [])
+                                elif typeName descriptor = Some "RetainedCallbackDescriptor" then
+                                    match field "Owner" fields |> Option.bind (int64Of graph),
+                                          field "Releases" fields |> Option.bind (elementsOf graph) with
+                                    | Some owner, Some releaseItems when owner >= 0L && owner <= int64 System.Int32.MaxValue && not releaseItems.IsEmpty ->
+                                        match parseReleases releaseItems with
+                                        | Some(releases, extra) -> Some(BoundaryCallbackExtent.Retained(int owner, releases), extra)
+                                        | None -> finding descriptor "RetainedCallbackDescriptor Releases must be non-empty Redefinition or OwnerRelease cases."; None
+                                    | _ -> finding descriptor "RetainedCallbackDescriptor requires a nonnegative signed32 Owner and non-empty Releases."; None
+                                else
                                 match field "SuccessStatus" fields |> Option.bind (int64Of graph), field "ExitBinding" fields |> Option.bind (optionOf graph) with
                                 | Some status, Some selected when status >= int64 System.Int32.MinValue && status <= int64 System.Int32.MaxValue ->
                                     match selected with
@@ -114,7 +155,7 @@ let private readUncached (graph: SemanticGraph) =
                                 activations <- activations.Add(node.Id, { Scope=quote; Binding=binding.Id; Parameter=id; Extent=extent; Participants=related })
                                 match extent with
                                 | BoundaryCallbackExtent.DuringCall -> declare id [node.Id; descriptor.Id; binding.Id]
-                                | BoundaryCallbackExtent.ProcessExit _ -> ()
+                                | BoundaryCallbackExtent.ProcessExit _ | BoundaryCallbackExtent.Retained _ -> ()
                             | false, _, _ -> finding descriptor "A callback activation descriptor must name a function-valued parameter."
                             | _, [_], None -> ()
                             | _ -> finding descriptor "A callback activation descriptor requires its exact immutable source quotation."

@@ -404,7 +404,12 @@ let private emissionRows ids valueIds types metadata (value: WitnessEmissionProj
                   ProgramInitializationOrders = rows storage.ProgramInitializationOrders }
       // Project the issued loading account whenever retained native-entry/callback
       // incidence still needs it; this projection never creates loading authority.
-      Boundary = { WritableBufferDeclarations = boundary.WritableBufferDeclarations; WritableBufferUses = boundary.WritableBufferUses |> Map.filter(fun (site,_) _->ids.Contains site); ResourceEvidence = boundary.ResourceEvidence; ResourceDeclarations = boundary.ResourceDeclarations; ResourceAccesses = rows boundary.ResourceAccesses; Imports = imports; Loading = loading
+      Boundary = { WritableBufferDeclarations = boundary.WritableBufferDeclarations; WritableBufferUses = boundary.WritableBufferUses |> Map.filter(fun (site,_) _->ids.Contains site)
+                   ReadOnlyBufferDeclarations = boundary.ReadOnlyBufferDeclarations; ReadOnlyBufferUses = boundary.ReadOnlyBufferUses |> Map.filter(fun (site,_) _->ids.Contains site)
+                   BorrowedResultViewDeclarations = boundary.BorrowedResultViewDeclarations; BorrowedResultViewUses = boundary.BorrowedResultViewUses |> Map.filter(fun site _->ids.Contains site)
+                   BufferAbsences = boundary.BufferAbsences |> Map.filter(fun _ row->imports.ContainsKey row.Import)
+                   CountedEntryArrays = boundary.CountedEntryArrays |> Map.filter(fun _ row->imports.ContainsKey row.Import)
+                   ResourceEvidence = boundary.ResourceEvidence; ResourceDeclarations = boundary.ResourceDeclarations; ResourceAccesses = rows boundary.ResourceAccesses; Imports = imports; Loading = loading
                    Entries = rows boundary.Entries; CallbackInvocations = rows boundary.CallbackInvocations; CallbackAbsences = boundary.CallbackAbsences |> Map.filter(fun _ row->imports.ContainsKey row.Import); ClosedEntries = rows boundary.ClosedEntries; ResultHypotheses = resultHypotheses
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)
                    Calls = rows boundary.Calls; ByteViews = rows boundary.ByteViews; StringExtents = rows boundary.StringExtents

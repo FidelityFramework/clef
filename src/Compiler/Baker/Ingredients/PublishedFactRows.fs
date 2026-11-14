@@ -160,6 +160,7 @@ and mapBoundaryCallbackExtent (value: S.BoundaryCallbackExtent) : Fidelity.PSG.B
     match value with
     | S.BoundaryCallbackExtent.DuringCall -> Fidelity.PSG.BoundaryCallbackExtent.DuringCall
     | S.BoundaryCallbackExtent.ProcessExit(a0, a1) -> Fidelity.PSG.BoundaryCallbackExtent.ProcessExit((a0 |> Option.map (fun x -> nodeId x)), a1)
+    | S.BoundaryCallbackExtent.Retained(owner, releases) -> Fidelity.PSG.BoundaryCallbackExtent.Retained(owner, releases)
 
 and mapBoundaryCallbackInvocation (value: S.BoundaryCallbackInvocation) : Fidelity.PSG.BoundaryCallbackInvocation =
     ({
@@ -241,6 +242,12 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         Declarations = (value.Declarations |> List.map (fun x -> mapBoundaryDeclaration x))
         WritableBufferDeclarations = (value.WritableBufferDeclarations |> List.map (fun x -> nodeId x))
         WritableBufferUses = (value.WritableBufferUses |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, t1))))
+        ReadOnlyBufferDeclarations = (value.ReadOnlyBufferDeclarations |> List.map nodeId)
+        ReadOnlyBufferUses = (value.ReadOnlyBufferUses |> List.map (fun (t0, t1) -> nodeId t0, t1))
+        BorrowedResultViewDeclarations = (value.BorrowedResultViewDeclarations |> List.map nodeId)
+        BorrowedResultViewUses = (value.BorrowedResultViewUses |> List.map nodeId)
+        BufferAbsences = (value.BufferAbsences |> List.map nodeId)
+        CountedEntryArrays = (value.CountedEntryArrays |> List.map nodeId)
         ResourceDeclarations = (value.ResourceDeclarations |> List.map (fun x -> nodeId x))
         ResourceAccesses = (value.ResourceAccesses |> List.map (fun x -> nodeId x))
         ResourceEvaluationRoots = (value.ResourceEvaluationRoots |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, nodeId t1, nodeId t2))))
@@ -278,6 +285,12 @@ and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fideli
     ({
         WritableBufferDeclarations = (value.WritableBufferDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryWritableBufferDeclaration v) |> Map.ofSeq)
         WritableBufferUses = (value.WritableBufferUses |> Map.toSeq |> Seq.map (fun (k, v) -> (let (t0, t1) = k in (nodeId t0, t1)), mapBoundaryWritableBufferUse v) |> Map.ofSeq)
+        ReadOnlyBufferDeclarations = (value.ReadOnlyBufferDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryReadOnlyBufferDeclaration v) |> Map.ofSeq)
+        ReadOnlyBufferUses = (value.ReadOnlyBufferUses |> Map.toSeq |> Seq.map (fun (k, v) -> (let (t0, t1) = k in (nodeId t0, t1)), mapBoundaryReadOnlyBufferUse v) |> Map.ofSeq)
+        BorrowedResultViewDeclarations = (value.BorrowedResultViewDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryBorrowedResultViewDeclaration v) |> Map.ofSeq)
+        BorrowedResultViewUses = (value.BorrowedResultViewUses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryBorrowedResultViewUse v) |> Map.ofSeq)
+        BufferAbsences = (value.BufferAbsences |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryBufferAbsence v) |> Map.ofSeq)
+        CountedEntryArrays = (value.CountedEntryArrays |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryCountedEntryArray v) |> Map.ofSeq)
         ResourceEvidence = (value.ResourceEvidence |> Option.map (fun x -> mapBoundaryResourceEvidence x))
         ResourceDeclarations = (value.ResourceDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceDeclaration v) |> Map.ofSeq)
         ResourceAccesses = (value.ResourceAccesses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceAccess v) |> Map.ofSeq)
@@ -369,6 +382,130 @@ and mapBoundaryOptionalEntryChoice (value: S.BoundaryOptionalEntryChoice) : Fide
     | S.BoundaryOptionalEntryChoice.Conditional(selection, tagProjection, whenTrue, whenFalse) ->
         Fidelity.PSG.BoundaryOptionalEntryChoice.Conditional(nodeId selection, nodeId tagProjection, mapBoundaryOptionalEntry whenTrue, mapBoundaryOptionalEntry whenFalse)
 
+and mapBufferAbsenceInputRole (value: S.BufferAbsenceInputRole) : Fidelity.PSG.BufferAbsenceInputRole =
+    match value with
+    | S.BufferAbsenceInputRole.Binding -> Fidelity.PSG.BufferAbsenceInputRole.Binding
+    | S.BufferAbsenceInputRole.Parameter -> Fidelity.PSG.BufferAbsenceInputRole.Parameter
+    | S.BufferAbsenceInputRole.Hypothesis -> Fidelity.PSG.BufferAbsenceInputRole.Hypothesis
+    | S.BufferAbsenceInputRole.HypothesisIdentity -> Fidelity.PSG.BufferAbsenceInputRole.HypothesisIdentity
+    | S.BufferAbsenceInputRole.HypothesisVersion -> Fidelity.PSG.BufferAbsenceInputRole.HypothesisVersion
+    | S.BufferAbsenceInputRole.HypothesisSource -> Fidelity.PSG.BufferAbsenceInputRole.HypothesisSource
+
+and mapBoundaryBufferAbsence (value: S.BoundaryBufferAbsence) : Fidelity.PSG.BoundaryBufferAbsence =
+    ({
+        Quote = nodeId value.Quote
+        DescriptorBinding = nodeId value.DescriptorBinding
+        Record = nodeId value.Record
+        Import = nodeId value.Import
+        Parameter = value.Parameter
+        Formal = nodeId value.Formal
+        BufferDeclaration = nodeId value.BufferDeclaration
+        Contract = value.Contract
+        SourcePath = List.map nodeId value.SourcePath
+        Inputs = value.Inputs |> List.map (fun (role, path) -> mapBufferAbsenceInputRole role, List.map nodeId path)
+        DeclarationFacts = value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq
+    } : Fidelity.PSG.BoundaryBufferAbsence)
+
+and mapBoundaryBufferAbsenceSelection (value: S.BoundaryBufferAbsenceSelection) : Fidelity.PSG.BoundaryBufferAbsenceSelection =
+    ({
+        Construction = nodeId value.Construction
+        CaseOrdinal = value.CaseOrdinal
+        Payload = Option.map nodeId value.Payload
+        Absence = nodeId value.Absence
+        Transport = List.map nodeId value.Transport
+        Obligation = nodeId value.Obligation
+    } : Fidelity.PSG.BoundaryBufferAbsenceSelection)
+
+and mapBoundaryBufferAbsenceChoice (value: S.BoundaryBufferAbsenceChoice) : Fidelity.PSG.BoundaryBufferAbsenceChoice =
+    match value with
+    | S.BoundaryBufferAbsenceChoice.Direct selected ->
+        Fidelity.PSG.BoundaryBufferAbsenceChoice.Direct(mapBoundaryBufferAbsenceSelection selected)
+    | S.BoundaryBufferAbsenceChoice.Conditional(selection, tagProjection, whenTrue, whenFalse) ->
+        Fidelity.PSG.BoundaryBufferAbsenceChoice.Conditional(nodeId selection, nodeId tagProjection, mapBoundaryBufferAbsenceSelection whenTrue, mapBoundaryBufferAbsenceSelection whenFalse)
+
+and mapBoundaryReadOnlyBufferDeclaration (value: S.BoundaryReadOnlyBufferDeclaration) : Fidelity.PSG.BoundaryReadOnlyBufferDeclaration =
+    ({
+        Identity = nodeId value.Identity
+        Declaration = nodeId value.Declaration
+        Body = nodeId value.Body
+        Formals = List.map nodeId value.Formals
+        Descriptor = nodeId value.Descriptor
+        Parameter = value.Parameter
+        CountParameter = value.CountParameter
+        BufferFormal = nodeId value.BufferFormal
+        CountFormal = Option.map nodeId value.CountFormal
+        Contract = value.Contract
+        DeclarationFacts = value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq
+        Participants = mapParticipantEvidence value.Participants
+    } : Fidelity.PSG.BoundaryReadOnlyBufferDeclaration)
+
+and mapBoundaryReadOnlyBufferCrossing (value: S.BoundaryReadOnlyBufferCrossing) : Fidelity.PSG.BoundaryReadOnlyBufferCrossing =
+    match value with
+    | S.BoundaryReadOnlyBufferCrossing.ExplicitZeroCopy(countParameter, countNode, extentCapacity, extentCoverage) ->
+        Fidelity.PSG.BoundaryReadOnlyBufferCrossing.ExplicitZeroCopy(countParameter, nodeId countNode, extentCapacity, nodeId extentCoverage)
+    | S.BoundaryReadOnlyBufferCrossing.StaticImageNulBorrowed(poolEntry, staticOrigin, byteLength, terminationProof) ->
+        Fidelity.PSG.BoundaryReadOnlyBufferCrossing.StaticImageNulBorrowed(poolEntry, nodeId staticOrigin, byteLength, nodeId terminationProof)
+    | S.BoundaryReadOnlyBufferCrossing.CallScopedNulStaged(stagingBuffer, capacity, byteLength, terminationProof) ->
+        Fidelity.PSG.BoundaryReadOnlyBufferCrossing.CallScopedNulStaged(nodeId stagingBuffer, capacity, byteLength, nodeId terminationProof)
+
+and mapBoundaryReadOnlyBufferUse (value: S.BoundaryReadOnlyBufferUse) : Fidelity.PSG.BoundaryReadOnlyBufferUse =
+    ({
+        Call = nodeId value.Call
+        Declaration = nodeId value.Declaration
+        Parameter = value.Parameter
+        Buffer = nodeId value.Buffer
+        Residence = nodeId value.Residence
+        Retirements = List.map nodeId value.Retirements
+        Copies = value.Copies
+        Crossing = mapBoundaryReadOnlyBufferCrossing value.Crossing
+        RetentionProof = nodeId value.RetentionProof
+        AccessExclusivityProof = Option.map nodeId value.AccessExclusivityProof
+        Participants = mapParticipantEvidence value.Participants
+    } : Fidelity.PSG.BoundaryReadOnlyBufferUse)
+
+and mapBoundaryBorrowedResultViewDeclaration (value: S.BoundaryBorrowedResultViewDeclaration) : Fidelity.PSG.BoundaryBorrowedResultViewDeclaration =
+    ({
+        Identity = nodeId value.Identity
+        Declaration = nodeId value.Declaration
+        Body = nodeId value.Body
+        Formals = List.map nodeId value.Formals
+        Descriptor = nodeId value.Descriptor
+        OwnerParameter = value.OwnerParameter
+        OwnerFormal = nodeId value.OwnerFormal
+        Contract = value.Contract
+        DeclarationFacts = value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq
+        Participants = mapParticipantEvidence value.Participants
+    } : Fidelity.PSG.BoundaryBorrowedResultViewDeclaration)
+
+and mapBoundaryBorrowedResultViewUse (value: S.BoundaryBorrowedResultViewUse) : Fidelity.PSG.BoundaryBorrowedResultViewUse =
+    ({
+        Call = nodeId value.Call
+        Declaration = nodeId value.Declaration
+        Owner = nodeId value.Owner
+        View = nodeId value.View
+        CompanionCall = Option.map nodeId value.CompanionCall
+        CompanionArguments = List.map nodeId value.CompanionArguments
+        CallOrder = value.CallOrder
+        Invalidations = List.map nodeId value.Invalidations
+        InvalidationOrders = value.InvalidationOrders
+        Reads = List.map nodeId value.Reads
+        ReadOrders = value.ReadOrders
+        NullToNoneBoundary = value.NullToNoneBoundary
+        ScopeProof = nodeId value.ScopeProof
+        Participants = mapParticipantEvidence value.Participants
+    } : Fidelity.PSG.BoundaryBorrowedResultViewUse)
+
+and mapBoundaryCountedEntryArray (value: S.BoundaryCountedEntryArray) : Fidelity.PSG.BoundaryCountedEntryArray =
+    ({
+        Identity = nodeId value.Identity
+        Import = nodeId value.Import
+        Parameter = value.Parameter
+        Invocation = nodeId value.Invocation
+        Contract = value.Contract
+        DeclarationFacts = value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq
+        Participants = mapParticipantEvidence value.Participants
+    } : Fidelity.PSG.BoundaryCountedEntryArray)
+
 and mapBoundaryOperand (value: S.BoundaryOperand) : Fidelity.PSG.BoundaryOperand =
     ({
         Actual = nodeId value.Actual
@@ -376,6 +513,7 @@ and mapBoundaryOperand (value: S.BoundaryOperand) : Fidelity.PSG.BoundaryOperand
         Abi = mapBoundaryScalar value.Abi
         Adaptation = (value.Adaptation |> Option.map (fun x -> mapMeet x))
         OptionalEntry = Option.map mapBoundaryOptionalEntryChoice value.OptionalEntry
+        BufferAbsence = Option.map mapBoundaryBufferAbsenceChoice value.BufferAbsence
     } : Fidelity.PSG.BoundaryOperand)
 
 and mapBoundaryPlatformPremise (value: S.BoundaryPlatformPremise) : Fidelity.PSG.BoundaryPlatformPremise =
@@ -485,6 +623,8 @@ and mapBoundaryScalar (value: S.BoundaryScalar) : Fidelity.PSG.BoundaryScalar =
     | S.BoundaryScalar.Entry(a0) -> Fidelity.PSG.BoundaryScalar.Entry(nodeId a0)
     | S.BoundaryScalar.ResourceHandle(a0, a1) -> Fidelity.PSG.BoundaryScalar.ResourceHandle(nodeId a0, a1)
     | S.BoundaryScalar.WritableBytes(a0) -> Fidelity.PSG.BoundaryScalar.WritableBytes(nodeId a0)
+    | S.BoundaryScalar.ReadOnlyBytes(a0) -> Fidelity.PSG.BoundaryScalar.ReadOnlyBytes(nodeId a0)
+    | S.BoundaryScalar.BorrowedBytes(a0) -> Fidelity.PSG.BoundaryScalar.BorrowedBytes(nodeId a0)
 
 and mapBoundarySourcePremise (value: S.BoundarySourcePremise) : Fidelity.PSG.BoundarySourcePremise =
     ({
@@ -1101,6 +1241,12 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.BoundaryResourceDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryResourceDeclaration(mapBoundaryResourceDeclaration a0)
     | S.EdgeRole.BoundaryWritableBufferDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryWritableBufferDeclaration(mapBoundaryWritableBufferDeclaration a0)
     | S.EdgeRole.BoundaryWritableBufferUse(a0) -> Fidelity.PSG.EdgeRole.BoundaryWritableBufferUse(mapBoundaryWritableBufferUse a0)
+    | S.EdgeRole.BoundaryReadOnlyBufferDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryReadOnlyBufferDeclaration(mapBoundaryReadOnlyBufferDeclaration a0)
+    | S.EdgeRole.BoundaryReadOnlyBufferUse(a0) -> Fidelity.PSG.EdgeRole.BoundaryReadOnlyBufferUse(mapBoundaryReadOnlyBufferUse a0)
+    | S.EdgeRole.BoundaryBorrowedResultViewDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryBorrowedResultViewDeclaration(mapBoundaryBorrowedResultViewDeclaration a0)
+    | S.EdgeRole.BoundaryBorrowedResultViewUse(a0) -> Fidelity.PSG.EdgeRole.BoundaryBorrowedResultViewUse(mapBoundaryBorrowedResultViewUse a0)
+    | S.EdgeRole.BoundaryBufferAbsence(a0) -> Fidelity.PSG.EdgeRole.BoundaryBufferAbsence(mapBoundaryBufferAbsence a0)
+    | S.EdgeRole.BoundaryCountedEntryArray(a0) -> Fidelity.PSG.EdgeRole.BoundaryCountedEntryArray(mapBoundaryCountedEntryArray a0)
     | S.EdgeRole.BoundaryResourceAccess(a0) -> Fidelity.PSG.EdgeRole.BoundaryResourceAccess(mapBoundaryResourceAccess a0)
     | S.EdgeRole.BoundaryImport(a0) -> Fidelity.PSG.EdgeRole.BoundaryImport(mapBoundaryImport a0)
     | S.EdgeRole.BoundaryCall(a0) -> Fidelity.PSG.EdgeRole.BoundaryCall(mapBoundaryCall a0)
@@ -2344,11 +2490,50 @@ and mapOptionalEntryAbsenceArgumentConversionModel (value:S.OptionalEntryAbsence
      ResultRetirement=value.ResultRetirement |> Option.map mapCallableAggregateResultRetirement
      Arms=value.Arms |> List.map(fun arm -> {CaseOrdinal=arm.CaseOrdinal;Choice=(match arm.Choice with S.OptionalEntryAbsencePlanChoice.AbsentEntry->Fidelity.PSG.OptionalEntryAbsencePlanChoice.AbsentEntry | S.OptionalEntryAbsencePlanChoice.RequiresClosedEntry->Fidelity.PSG.OptionalEntryAbsencePlanChoice.RequiresClosedEntry)})}
 
+and mapZeroCopyBufferExtentModel (value: S.ZeroCopyBufferExtentModel) : Fidelity.PSG.ZeroCopyBufferExtentModel =
+    ({ Call = nodeId value.Call; Declaration = nodeId value.Declaration; Parameter = value.Parameter; CountParameter = value.CountParameter
+       Buffer = nodeId value.Buffer; Count = nodeId value.Count; MinimumCount = value.MinimumCount; MaximumCount = value.MaximumCount
+       ExtentCapacity = value.ExtentCapacity; ElementBytes = value.ElementBytes; CountCoverage = nodeId value.CountCoverage } : Fidelity.PSG.ZeroCopyBufferExtentModel)
+
+and mapBufferRetentionDominationModel (value: S.BufferRetentionDominationModel) : Fidelity.PSG.BufferRetentionDominationModel =
+    let mode =
+        match value.Mode with
+        | S.BufferRetentionMode.DuringCall -> Fidelity.PSG.BufferRetentionMode.DuringCall
+        | S.BufferRetentionMode.RetainedUntilOwner(ownerParam, releaseOrd) -> Fidelity.PSG.BufferRetentionMode.RetainedUntilOwner(ownerParam, releaseOrd)
+    ({ Call = nodeId value.Call; Declaration = nodeId value.Declaration; Buffer = nodeId value.Buffer; Residence = nodeId value.Residence
+       Mode = mode; AcquireOrder = value.AcquireOrder; RetirementOrders = value.RetirementOrders } : Fidelity.PSG.BufferRetentionDominationModel)
+
+and mapUncountedPathTerminationModel (value: S.UncountedPathTerminationModel) : Fidelity.PSG.UncountedPathTerminationModel =
+    let mode =
+        match value.Mode with
+        | S.UncountedPathStagingMode.StaticImageZeroCopy poolEntry -> Fidelity.PSG.UncountedPathStagingMode.StaticImageZeroCopy poolEntry
+        | S.UncountedPathStagingMode.CallScopedStaged(buf, cap) -> Fidelity.PSG.UncountedPathStagingMode.CallScopedStaged(nodeId buf, cap)
+    ({ Call = nodeId value.Call; Declaration = nodeId value.Declaration; Parameter = value.Parameter; Source = nodeId value.Source
+       Mode = mode; ByteLength = value.ByteLength; RequiresNoInteriorNul = value.RequiresNoInteriorNul; RequiresTrailingNul = value.RequiresTrailingNul } : Fidelity.PSG.UncountedPathTerminationModel)
+
+and mapBorrowedResultViewScopeModel (value: S.BorrowedResultViewScopeModel) : Fidelity.PSG.BorrowedResultViewScopeModel =
+    ({ Call = nodeId value.Call; Declaration = nodeId value.Declaration; Owner = nodeId value.Owner; View = nodeId value.View
+       CallOrder = value.CallOrder; InvalidationOrders = value.InvalidationOrders; ReadOrders = value.ReadOrders; NullToNoneBoundary = value.NullToNoneBoundary } : Fidelity.PSG.BorrowedResultViewScopeModel)
+
+and mapBufferAbsenceArgumentConversionModel (value: S.BufferAbsenceArgumentConversionModel) : Fidelity.PSG.BufferAbsenceArgumentConversionModel =
+    ({ Call = nodeId value.Call; Parameter = value.Parameter; Actual = nodeId value.Actual; Construction = nodeId value.Construction
+       SourceCase = value.SourceCase; Absence = nodeId value.Absence
+       Arms = value.Arms |> List.map (fun arm ->
+           ({ CaseOrdinal = arm.CaseOrdinal
+              Choice = (match arm.Choice with
+                        | S.BufferAbsencePlanChoice.AbsentNull -> Fidelity.PSG.BufferAbsencePlanChoice.AbsentNull
+                        | S.BufferAbsencePlanChoice.RequiresNonNullBuffer -> Fidelity.PSG.BufferAbsencePlanChoice.RequiresNonNullBuffer) } : Fidelity.PSG.BufferAbsencePlanArm)) } : Fidelity.PSG.BufferAbsenceArgumentConversionModel)
+
 and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     match value with
     | S.ObligationBody.Pending reasons -> invalidOp ("A pending obligation cannot be published: " + String.concat "; " reasons)
     | S.ObligationBody.OptionalEntryAbsenceArgumentConversion model -> Fidelity.PSG.ObligationBody.OptionalEntryAbsenceArgumentConversion(mapOptionalEntryAbsenceArgumentConversionModel model)
     | S.ObligationBody.OptionalEntryArgumentConversion model -> Fidelity.PSG.ObligationBody.OptionalEntryArgumentConversion(mapOptionalEntryArgumentConversionModel model)
+    | S.ObligationBody.ZeroCopyBufferExtent model -> Fidelity.PSG.ObligationBody.ZeroCopyBufferExtent(mapZeroCopyBufferExtentModel model)
+    | S.ObligationBody.BufferRetentionDomination model -> Fidelity.PSG.ObligationBody.BufferRetentionDomination(mapBufferRetentionDominationModel model)
+    | S.ObligationBody.UncountedPathTermination model -> Fidelity.PSG.ObligationBody.UncountedPathTermination(mapUncountedPathTerminationModel model)
+    | S.ObligationBody.BorrowedResultViewScope model -> Fidelity.PSG.ObligationBody.BorrowedResultViewScope(mapBorrowedResultViewScopeModel model)
+    | S.ObligationBody.BufferAbsenceArgumentConversion model -> Fidelity.PSG.ObligationBody.BufferAbsenceArgumentConversion(mapBufferAbsenceArgumentConversionModel model)
     | S.ObligationBody.ProgramInitializationOrder(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ProgramInitializationOrder(a0, a1, a2)
     | S.ObligationBody.FiniteLoopTrip(a0) -> Fidelity.PSG.ObligationBody.FiniteLoopTrip(mapFiniteLoopTripModel a0)
     | S.ObligationBody.FiniteSequencePull(a0) -> Fidelity.PSG.ObligationBody.FiniteSequencePull(mapFiniteSequencePullModel a0)
@@ -2568,6 +2753,30 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.ForeignResultActual -> Fidelity.PSG.ParticipantRole.ForeignResultActual
     | S.ParticipantRole.ForeignResultAbi -> Fidelity.PSG.ParticipantRole.ForeignResultAbi
     | S.ParticipantRole.ForeignResultDestination -> Fidelity.PSG.ParticipantRole.ForeignResultDestination
+    | S.ParticipantRole.ReadOnlyBufferDeclaration -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferDeclaration
+    | S.ParticipantRole.ReadOnlyBufferCall -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferCall
+    | S.ParticipantRole.ReadOnlyBufferFormal -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferFormal
+    | S.ParticipantRole.ReadOnlyBufferActual -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferActual
+    | S.ParticipantRole.ReadOnlyBufferCount -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferCount
+    | S.ParticipantRole.ReadOnlyBufferExtent -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferExtent
+    | S.ParticipantRole.ReadOnlyBufferResidence -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferResidence
+    | S.ParticipantRole.ReadOnlyBufferRetirement -> Fidelity.PSG.ParticipantRole.ReadOnlyBufferRetirement
+    | S.ParticipantRole.UncountedPathSource -> Fidelity.PSG.ParticipantRole.UncountedPathSource
+    | S.ParticipantRole.UncountedPathStaging -> Fidelity.PSG.ParticipantRole.UncountedPathStaging
+    | S.ParticipantRole.BorrowedResultViewDeclaration -> Fidelity.PSG.ParticipantRole.BorrowedResultViewDeclaration
+    | S.ParticipantRole.BorrowedResultViewCall -> Fidelity.PSG.ParticipantRole.BorrowedResultViewCall
+    | S.ParticipantRole.BorrowedResultViewOwner -> Fidelity.PSG.ParticipantRole.BorrowedResultViewOwner
+    | S.ParticipantRole.BorrowedResultViewCompanion -> Fidelity.PSG.ParticipantRole.BorrowedResultViewCompanion
+    | S.ParticipantRole.BorrowedResultViewInvalidation -> Fidelity.PSG.ParticipantRole.BorrowedResultViewInvalidation
+    | S.ParticipantRole.BorrowedResultViewRead -> Fidelity.PSG.ParticipantRole.BorrowedResultViewRead
+    | S.ParticipantRole.BufferAbsenceQuote -> Fidelity.PSG.ParticipantRole.BufferAbsenceQuote
+    | S.ParticipantRole.BufferAbsenceFormal -> Fidelity.PSG.ParticipantRole.BufferAbsenceFormal
+    | S.ParticipantRole.BufferAbsenceCall -> Fidelity.PSG.ParticipantRole.BufferAbsenceCall
+    | S.ParticipantRole.BufferAbsenceOperand -> Fidelity.PSG.ParticipantRole.BufferAbsenceOperand
+    | S.ParticipantRole.CountedEntryArrayDeclaration -> Fidelity.PSG.ParticipantRole.CountedEntryArrayDeclaration
+    | S.ParticipantRole.CountedEntryArrayInvocation -> Fidelity.PSG.ParticipantRole.CountedEntryArrayInvocation
+    | S.ParticipantRole.RetainedCallbackOwner -> Fidelity.PSG.ParticipantRole.RetainedCallbackOwner
+    | S.ParticipantRole.RetainedCallbackRelease -> Fidelity.PSG.ParticipantRole.RetainedCallbackRelease
 
 and mapPattern (value: S.Pattern) : Fidelity.PSG.Pattern =
     match value with

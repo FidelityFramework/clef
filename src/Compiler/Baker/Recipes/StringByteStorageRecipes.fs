@@ -120,8 +120,12 @@ let private analyze renew (graph: SemanticGraph) =
                     let observed = checked' {
                         do! if descriptors.Findings.IsEmpty then Ok() else Result.Error "The writable descriptor census has unresolved findings."
                         do! if arguments.Length=declaration.Declaration.Formals.Length then Ok() else Result.Error "A writable application requires its complete ordered actual vector."
-                        let! buffer=List.tryItem declaration.Parameter arguments |> needed "The writable buffer actual is absent."
-                        let! count=List.tryItem declaration.CountParameter arguments |> needed "The writable count actual is absent."
+                        let sourceArg formal =
+                            declaration.Declaration.Formals
+                            |> List.tryFindIndex ((=) formal)
+                            |> Option.bind (fun idx -> List.tryItem idx arguments)
+                        let! buffer=sourceArg declaration.BufferFormal |> needed "The writable buffer actual is absent."
+                        let! count=sourceArg declaration.CountFormal |> needed "The writable count actual is absent."
                         let! allocation=origins.TryFind buffer |> needed "The writable buffer requires an exact local zeroCreate allocation and immutable aliases."
                         let! capacity =
                             match calls.TryFind allocation, nodes[allocation].Kind with
@@ -173,7 +177,10 @@ let private analyze renew (graph: SemanticGraph) =
                 args |> List.iteri (fun index arg -> if not allowed || index <> 0 then block arg)
             | None ->
                 match writable.TryFind node.Id with
-                | Some(Ok application) -> directArgs |> List.iteri(fun ordinal actual -> if ordinal<>application.Declaration.Parameter then block actual)
+                | Some(Ok application) ->
+                    match application.Declaration.Declaration.Formals |> List.tryFindIndex ((=) application.Declaration.BufferFormal) with
+                    | Some bufferOrdinal -> directArgs |> List.iteri(fun ordinal actual -> if ordinal <> bufferOrdinal then block actual)
+                    | None -> directArgs |> List.iter block
                 | _ -> directArgs |> List.iter block
         | SemanticKind.Binding(_, false, _, _) | SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _ | SemanticKind.Sequential _ -> ()
         | SemanticKind.IndexGet _ | SemanticKind.IndexSet _ -> ()

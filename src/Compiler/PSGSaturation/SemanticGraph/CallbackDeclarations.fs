@@ -230,11 +230,11 @@ let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (g
             match target callee with
             | Some(receiver, _, _) ->
                 for invocation in descriptors.CallbackInvocations do
-                    if
+                    match invocation.Declaration.Formals |> List.tryFindIndex ((=) invocation.Formal) with
+                    | Some formalOrdinal when
                         invocation.Declaration.Binding = receiver.Id
-                        && actuals.Length = invocation.Declaration.Formals.Length
-                    then
-                        let actual = actuals[invocation.Parameter]
+                        && actuals.Length = invocation.Declaration.Formals.Length ->
+                        let actual = actuals[formalOrdinal]
                         let optional = optionalEntrySignature graph.Nodes[invocation.Formal].Type |> Option.isSome
                         let selections =
                             if not optional then [None] else
@@ -341,7 +341,17 @@ let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (g
                                         | Some signature when
                                             more.IsEmpty
                                             && signature.Body.IsSome
-                                            && (signature.Parameters |> List.forall (snd >> Option.isSome))
+                                            && (signature.Parameters |> List.forall (fun (paramId, declared) ->
+                                                declared.IsSome ||
+                                                (graph.Nodes.TryFind paramId |> Option.exists (fun n ->
+                                                    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst n.Type with
+                                                    | NativeType.TApp(tc, [inner]) when tc.Name = "option" || tc.Name = "Option" ->
+                                                        Types.tryGetNTUKind inner = Some NTUKind.NTUptr
+                                                    | NativeType.TApp(tc, [_]) when tc.Name = "ReadOnlyView" -> true
+                                                    | ty ->
+                                                        match Types.tryGetNTUKind ty with
+                                                        | Some NTUKind.NTUptr -> true
+                                                        | _ -> false))))
                                             ->
                                             let evidence =
                                                 {
@@ -382,6 +392,7 @@ let private readUncached (aggregateOrigins: Lazy<CallableOrigins.Resolution>) (g
                                     call
                                     DeclarationDefect.Invalid
                                     "The receiving entry needs current FnPtr.ofFunction transport or one immutable record projection with an exact source supplier."
+                    | _ -> ()
             | _ -> ()
         | _ -> ()
 

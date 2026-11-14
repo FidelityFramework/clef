@@ -118,9 +118,11 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
     // turning those declarations into executable bodies.
     let accountedDeclarations =
         emission |> Option.map (fun rows ->
-            Seq.append
-                (rows.Boundary.ResourceDeclarations.Values |> Seq.collect (fun row -> [row.Acquisition; row.Release]))
-                (rows.Boundary.WritableBufferDeclarations.Values |> Seq.map _.Declaration)
+            [ rows.Boundary.ResourceDeclarations.Values |> Seq.collect (fun row -> [row.Acquisition; row.Release])
+              rows.Boundary.WritableBufferDeclarations.Values |> Seq.map _.Declaration
+              rows.Boundary.ReadOnlyBufferDeclarations.Values |> Seq.map _.Declaration
+              rows.Boundary.BorrowedResultViewDeclarations.Values |> Seq.map _.Declaration ]
+            |> Seq.concat
             |> Set.ofSeq)
         |> Option.defaultValue Set.empty
     // Full-owner membership is inspected conservatively, but inactive members

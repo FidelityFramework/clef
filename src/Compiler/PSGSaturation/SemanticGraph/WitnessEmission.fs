@@ -317,6 +317,10 @@ let diagnostics (graph: SemanticGraph) (failures: WitnessProjectionFailure list)
             match failure.Kind with
             | WitnessProjectionFailureKind.Settlement -> "CCS8403"
             | WitnessProjectionFailureKind.LibraryNativeInterfaceLoading -> Codes.CCS8416_LibraryNativeInterfaceLoading
+            | WitnessProjectionFailureKind.ForeignBufferExtent -> Codes.CCS8424_ForeignBufferExtentViolation
+            | WitnessProjectionFailureKind.ForeignBufferRetention -> Codes.CCS8425_ForeignBufferRetentionViolation
+            | WitnessProjectionFailureKind.ForeignBufferExclusivity -> Codes.CCS8426_ForeignBufferAccessExclusivity
+            | WitnessProjectionFailureKind.ForeignBufferAbsence -> Codes.CCS8427_ForeignBufferAbsenceUncontracted
         ({ Severity = Diagnostics.NativeDiagnosticSeverity.Error; Code = code
            Message = "Source settlement is required before witnessing: " + failure.Reason
            Range = failure.Occurrence |> Option.bind graph.Nodes.TryFind |> Option.map _.Range |> Option.defaultValue Clef.Compiler.NativeTypedTree.NativeTypes.dummyRange

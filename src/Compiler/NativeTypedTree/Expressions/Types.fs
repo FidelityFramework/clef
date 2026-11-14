@@ -132,6 +132,11 @@ module DiagnosticCodes =
     let CCS8416_LibraryNativeInterfaceLoading = "CCS8416"
     // An explicit executable entry cannot be declared by a library output.
     let CCS8417_LibraryEntryPointConflict = "CCS8417"
+    // Zero-copy fat-pointer marshaling and descriptor contract violations.
+    let CCS8424_ForeignBufferExtentViolation = "CCS8424"
+    let CCS8425_ForeignBufferRetentionViolation = "CCS8425"
+    let CCS8426_ForeignBufferAccessExclusivity = "CCS8426"
+    let CCS8427_ForeignBufferAbsenceUncontracted = "CCS8427"
     // An own-project source function has no incoming reference in an executable.
     let CCS8500_UnusedBinding = "CCS8500"
     // Record field label resolution (CCS8701-CCS8705, inference-name-resolution.md)

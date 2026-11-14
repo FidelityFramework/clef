@@ -20,8 +20,9 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
     let fabric = graph.Platform |> Option.exists (fun p -> PlatformContext.substrateKind p = SubstrateKind.FPGA)
     let pointerBytes = graph.Platform |> Option.bind (fun p -> PlatformContext.tryWidth p "Pointer" |> Result.toOption)
                        |> Option.bind (fun bits -> if bits > 0 && bits % 8 = 0 then Some(bits / 8) else None)
-    let resources = (PlatformResolution.readDescriptors graph).Resources
-    let resourceHandles = resources |> List.map _.HandleType |> Set.ofList
+    let descriptors = PlatformResolution.readDescriptors graph
+    let resources = descriptors.Resources
+    let resourceHandles = (resources |> List.map _.HandleType) @ (PlatformResolution.callbackHandleTypes graph descriptors) |> Set.ofList
     let resourceOptions = resources |> List.map (fun row -> row.ResultType, row.HandleType) |> Map.ofList
     let mutable types = Map.empty<TypeIdentity, Result<ValueRepresentation, string>>
     let rec represent (visiting: Set<TypeIdentity>) (ty: NativeType) = representAt visiting (Identity.ofType ty) [] ty

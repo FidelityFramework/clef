@@ -55,6 +55,7 @@ let private declarationFact (node: SemanticNode) =
     | SemanticKind.Literal NativeLiteral.Unit -> fact "unit" [] [] []
     | SemanticKind.VarRef(name, binding) -> fact "reference" [name] [] (Option.toList binding)
     | SemanticKind.Binding(name, mutable', recursive', _) -> fact "binding" [name] [if mutable' then 1I else 0I; if recursive' then 1I else 0I] node.Children
+    | SemanticKind.PatternBinding name -> fact "pattern-binding" [name] [] []
     | SemanticKind.Lambda(parameters, _, [], _, _) ->
         fact "declaration-lambda" (parameters |> List.map(fun (name,_,_) -> name)) [] node.Children
     | SemanticKind.TypeAnnotation(inner, _) -> fact "annotation" [] [] [inner]
@@ -88,6 +89,412 @@ let private absenceAccounts (graph:SemanticGraph) (descriptors:Declarations.Desc
                     Map.add source.Quote account rows)
             | _ -> Ok rows)) (Ok Map.empty)
 
+let private bufferAbsenceAccounts (graph: SemanticGraph) (descriptors: Declarations.Descriptors) (imports: Map<NodeId, BoundaryImport>) =
+    descriptors.BufferAbsences |> List.fold (fun state source ->
+        state |> Result.bind (fun rows ->
+            match imports.TryFind source.AbiDescriptor with
+            | Some imported when imported.Binding = source.Declaration.Binding ->
+                declarationFacts graph source.DescriptorBinding |> Result.map (fun facts ->
+                    let account: BoundaryBufferAbsence =
+                        { Quote = source.Quote; DescriptorBinding = source.DescriptorBinding; Record = source.Node; Import = imported.Identity
+                          Parameter = source.Contract.Parameter; Formal = source.Formal; BufferDeclaration = source.BufferDeclaration
+                          Contract = source.Contract; SourcePath = source.SourcePath; Inputs = source.Inputs; DeclarationFacts = facts }
+                    Map.add source.Quote account rows)
+            | _ -> Ok rows)) (Ok Map.empty)
+
+let private computeProgramOrders (graph: SemanticGraph) =
+    let orders = System.Collections.Generic.Dictionary<NodeId, int>()
+    let visiting = System.Collections.Generic.HashSet<NodeId>()
+    let mutable counter = 0
+    let rec walk id =
+        if not (orders.ContainsKey id) && not (visiting.Contains id) then
+            visiting.Add id |> ignore
+            match graph.Nodes.TryFind id with
+            | Some node ->
+                node.Children |> List.iter walk
+                counter <- counter + 1
+                orders[id] <- counter
+            | None -> ()
+            visiting.Remove id |> ignore
+    let reachableNodes =
+        graph.Nodes |> Map.toList |> List.sortBy (fst >> NodeId.value) |> List.filter (fun (_, node) -> node.IsReachable)
+    reachableNodes
+    |> List.filter (fun (_, node) ->
+        not (node.Parent |> Option.exists (fun p -> graph.Nodes.TryFind p |> Option.exists _.IsReachable)))
+    |> List.iter (fun (id, _) -> walk id)
+    reachableNodes |> List.iter (fun (id, _) -> walk id)
+    orders |> Seq.map (fun kv -> kv.Key, kv.Value) |> Map.ofSeq
+
+let rec private canonicalExprOrigin (graph: SemanticGraph) (seen: Set<NodeId>) (id: NodeId) =
+    if Set.contains id seen then id else
+    let seen = Set.add id seen
+    match graph.Nodes.TryFind id with
+    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+    | Some { Kind = SemanticKind.EagerExpr inner }
+    | Some { Kind = SemanticKind.VarRef(_, Some inner) } -> canonicalExprOrigin graph seen inner
+    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> canonicalExprOrigin graph seen value
+    | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> canonicalExprOrigin graph seen (List.last items)
+    | Some { Kind = SemanticKind.StringByteBorrow source } -> canonicalExprOrigin graph seen source
+    | _ -> id
+
+let rec private immutableExprOrigin (graph: SemanticGraph) (seen: Set<NodeId>) (id: NodeId) =
+    if Set.contains id seen then id else
+    let seen = Set.add id seen
+    match graph.Nodes.TryFind id with
+    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+    | Some { Kind = SemanticKind.EagerExpr inner } -> immutableExprOrigin graph seen inner
+    | Some { Kind = SemanticKind.VarRef(_, Some inner) } ->
+        match graph.Nodes.TryFind inner with
+        | Some { Kind = SemanticKind.Binding(_, false, _, _) }
+        | Some { Kind = SemanticKind.PatternBinding _ } -> immutableExprOrigin graph seen inner
+        | _ -> id
+    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> immutableExprOrigin graph seen value
+    | Some { Kind = SemanticKind.PatternBinding _ } ->
+        let sourceDef = DirectCaptures.sourceDefinition graph id
+        if sourceDef <> id then immutableExprOrigin graph seen sourceDef else id
+    | Some { Kind = SemanticKind.EnvironmentRead(_, declaration) } ->
+        match graph.Nodes.TryFind declaration with
+        | Some { Kind = SemanticKind.Binding(_, false, _, _) }
+        | Some { Kind = SemanticKind.PatternBinding _ } -> immutableExprOrigin graph seen declaration
+        | _ -> id
+    | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> immutableExprOrigin graph seen (List.last items)
+    | Some { Kind = SemanticKind.StringByteBorrow source } -> immutableExprOrigin graph seen source
+    | _ -> id
+
+let private buildAliasEnv (graph: SemanticGraph) =
+    let setsByTarget = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
+    let patternScrutinees = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
+    let addToDict (dict: System.Collections.Generic.Dictionary<NodeId, NodeId list>) key value =
+        match dict.TryGetValue key with
+        | true, existing -> dict[key] <- value :: existing
+        | false, _ -> dict[key] <- [value]
+    let rec targetRoots seen id =
+        if Set.contains id seen then [] else
+        let seen = Set.add id seen
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.VarRef(_, Some t) } -> t :: targetRoots seen t
+        | Some { Kind = SemanticKind.CellAddress b } -> b :: targetRoots seen b
+        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+        | Some { Kind = SemanticKind.EagerExpr inner }
+        | Some { Kind = SemanticKind.Deref inner }
+        | Some { Kind = SemanticKind.Reborrow inner } -> targetRoots seen inner
+        | _ -> [id]
+    for node in graph.Nodes.Values do
+        if node.IsReachable then
+            match node.Kind with
+            | SemanticKind.Set(target, rhs)
+            | SemanticKind.FieldSet(target, _, rhs) ->
+                for t in targetRoots Set.empty target do
+                    addToDict setsByTarget t rhs
+            | SemanticKind.Match(scrutinee, cases) ->
+                for c in cases do
+                    for pb in c.PatternBindings do
+                        addToDict patternScrutinees pb scrutinee
+            | SemanticKind.CaseElimination(scrutinee, arms) ->
+                for arm in arms do
+                    for b in arm.Bindings do
+                        addToDict patternScrutinees b scrutinee
+            | _ -> ()
+    setsByTarget, patternScrutinees
+
+let private isTupleAccessorIntrinsic (graph: SemanticGraph) (callee: NodeId) =
+    match target graph callee with
+    | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Operators; Operation = ("fst" | "snd") } }, _) -> true
+    | _ -> false
+
+let private isNonInvokingIntrinsic (graph: SemanticGraph) (callee: NodeId) =
+    match target graph callee with
+    | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Operators; Operation = ("fst" | "snd" | "ignore" | "id") } }, _)
+    | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = "ofExtern" } }, _) -> true
+    | _ -> false
+
+let private isCallableContainer = function
+    | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _ -> true
+    | _ -> false
+
+let private enclosingCallable (graph: SemanticGraph) (id: NodeId) : NodeId option =
+    let rec walk seen cur =
+        match graph.Nodes.TryFind cur |> Option.bind _.Parent with
+        | Some p when not (Set.contains p seen) ->
+            match graph.Nodes.TryFind p with
+            | Some pn when isCallableContainer pn.Kind -> Some p
+            | _ -> walk (Set.add p seen) p
+        | _ -> None
+    walk Set.empty id
+
+let private possibleOrigins
+    (graph: SemanticGraph)
+    (setsByTarget: System.Collections.Generic.Dictionary<NodeId, NodeId list>)
+    (patternScrutinees: System.Collections.Generic.Dictionary<NodeId, NodeId list>)
+    (startId: NodeId) : Set<NodeId> =
+    let visited = System.Collections.Generic.HashSet<NodeId>()
+    let queue = System.Collections.Generic.Queue<NodeId>()
+    let enqueue id =
+        if visited.Add id then queue.Enqueue id
+    enqueue startId
+    while queue.Count > 0 do
+        let cur = queue.Dequeue ()
+        match graph.Nodes.TryFind cur with
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.TypeAnnotation(inner, _)
+            | SemanticKind.EagerExpr inner
+            | SemanticKind.StringByteBorrow inner
+            | SemanticKind.Reborrow inner
+            | SemanticKind.Deref inner
+            | SemanticKind.AddressOf(inner, _)
+            | SemanticKind.TupleGet(inner, _)
+            | SemanticKind.FieldGet(inner, _)
+            | SemanticKind.DUEliminate(inner, _, _, _)
+            | SemanticKind.UnionCase(_, _, Some inner)
+            | SemanticKind.DUConstruct(_, _, Some inner, _) ->
+                enqueue inner
+            | SemanticKind.VarRef(_, Some inner) ->
+                enqueue inner
+            | SemanticKind.EnvironmentRead(_, declaration) ->
+                enqueue declaration
+            | SemanticKind.ClosureValue(implementation, _) ->
+                enqueue implementation
+            | SemanticKind.Binding _ ->
+                for child in node.Children do enqueue child
+                match setsByTarget.TryGetValue cur with
+                | true, rhss -> for rhs in rhss do enqueue rhs
+                | false, _ -> ()
+            | SemanticKind.PatternBinding _ ->
+                for child in node.Children do enqueue child
+                let sourceDef = DirectCaptures.sourceDefinition graph cur
+                if sourceDef <> cur then enqueue sourceDef
+                match patternScrutinees.TryGetValue cur with
+                | true, srcs -> for src in srcs do enqueue src
+                | false, _ -> ()
+            | SemanticKind.TupleExpr elements ->
+                for elem in elements do enqueue elem
+            | SemanticKind.RecordExpr(fields, copyFrom) ->
+                for _, v in fields do enqueue v
+                copyFrom |> Option.iter enqueue
+            | SemanticKind.Application(callee, [arg]) when isTupleAccessorIntrinsic graph callee ->
+                enqueue arg
+            | SemanticKind.Sequential items ->
+                if not items.IsEmpty then enqueue (List.last items)
+            | SemanticKind.IfThenElse(_, t, e) ->
+                enqueue t
+                e |> Option.iter enqueue
+            | SemanticKind.Match(_, cases) ->
+                for c in cases do enqueue c.Body
+            | SemanticKind.CaseElimination(_, arms) ->
+                for arm in arms do enqueue arm.Body
+            | SemanticKind.TryWith(body, handler) ->
+                enqueue body
+                enqueue handler
+            | SemanticKind.TryFinally(body, _) ->
+                enqueue body
+            | _ -> ()
+        | None -> ()
+    Set.ofSeq visited
+
+let private callableTargets
+    (graph: SemanticGraph)
+    (setsByTarget: System.Collections.Generic.Dictionary<NodeId, NodeId list>)
+    (patternScrutinees: System.Collections.Generic.Dictionary<NodeId, NodeId list>)
+    (startId: NodeId) : Set<NodeId> =
+    let seen = System.Collections.Generic.HashSet<NodeId>()
+    let result = System.Collections.Generic.HashSet<NodeId>()
+    let queue = System.Collections.Generic.Queue<NodeId>()
+    let enqueue id =
+        if seen.Add id then queue.Enqueue id
+    enqueue startId
+    while queue.Count > 0 do
+        let cur = queue.Dequeue ()
+        for origin in possibleOrigins graph setsByTarget patternScrutinees cur do
+            match graph.Nodes.TryFind origin with
+            | Some { Kind = SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _ } ->
+                result.Add origin |> ignore
+            | Some { Kind = SemanticKind.Application(callee, _) }
+                when not (isTupleAccessorIntrinsic graph callee) && not (isNonInvokingIntrinsic graph callee) ->
+                for targetOrigin in possibleOrigins graph setsByTarget patternScrutinees callee do
+                    match graph.Nodes.TryFind targetOrigin with
+                    | Some { Kind = SemanticKind.Lambda(_, body, _, _, _) } -> enqueue body
+                    | _ -> ()
+            | _ -> ()
+    Set.ofSeq result
+
+let private ancestorChain (graph: SemanticGraph) (id: NodeId) : NodeId list =
+    let rec walk acc seen cur =
+        if Set.contains cur seen then List.rev acc else
+        let seen = Set.add cur seen
+        match graph.Nodes.TryFind cur |> Option.bind _.Parent with
+        | Some p -> walk (p :: acc) seen p
+        | None -> List.rev acc
+    walk [id] Set.empty id
+
+let private isControlFlowBoundaryKind = function
+    | SemanticKind.IfThenElse _
+    | SemanticKind.Match _
+    | SemanticKind.CaseElimination _
+    | SemanticKind.WhileLoop _
+    | SemanticKind.ForLoop _
+    | SemanticKind.ForEach _
+    | SemanticKind.TryWith _
+    | SemanticKind.TryFinally _
+    | SemanticKind.Lambda _
+    | SemanticKind.LazyExpr _
+    | SemanticKind.SeqExpr _
+    | SemanticKind.ContinuationDispatch _ -> true
+    | _ -> false
+
+let private enclosingLoops (graph: SemanticGraph) (id: NodeId) : Set<NodeId> =
+    ancestorChain graph id
+    |> List.filter (fun aid ->
+        match graph.Nodes.TryFind aid with
+        | Some { Kind = SemanticKind.WhileLoop _ | SemanticKind.ForLoop _ | SemanticKind.ForEach _ } -> true
+        | _ -> false)
+    |> Set.ofList
+
+let private findLcaAndSuffixes (graph: SemanticGraph) (a: NodeId) (b: NodeId) =
+    let aChain = ancestorChain graph a
+    let bChain = ancestorChain graph b
+    let aSet = Set.ofList aChain
+    match bChain |> List.tryFind aSet.Contains with
+    | None -> None
+    | Some lca ->
+        let prefixBefore chain = chain |> List.takeWhile ((<>) lca)
+        Some(lca, prefixBefore aChain, prefixBefore bChain)
+
+let private dominatesOnUnconditionalSpine (graph: SemanticGraph) (siteId: NodeId) (candId: NodeId) : bool =
+    match findLcaAndSuffixes graph siteId candId with
+    | None -> false
+    | Some(lca, sitePrefix, candPrefix) ->
+        let lcaIsBranchOrLoop =
+            lca <> candId &&
+            (graph.Nodes.TryFind lca |> Option.exists (fun n -> isControlFlowBoundaryKind n.Kind))
+        let sitePrefixHasControlBoundary =
+            sitePrefix |> List.exists (fun pid ->
+                pid <> siteId &&
+                (graph.Nodes.TryFind pid |> Option.exists (fun n -> isControlFlowBoundaryKind n.Kind)))
+        let candPrefixHasControlBoundary =
+            candPrefix |> List.exists (fun pid ->
+                pid <> candId &&
+                (graph.Nodes.TryFind pid |> Option.exists (fun n -> isControlFlowBoundaryKind n.Kind)))
+        not lcaIsBranchOrLoop &&
+        not sitePrefixHasControlBoundary &&
+        not candPrefixHasControlBoundary &&
+        Set.isSubset (enclosingLoops graph candId) (enclosingLoops graph siteId)
+
+let private subtreeContains (graph: SemanticGraph) (root: NodeId) (target: NodeId) : bool =
+    ancestorChain graph target |> List.contains root
+
+let private canPrecedeInExecution (graph: SemanticGraph) (earlierId: NodeId) (laterId: NodeId) : bool =
+    match findLcaAndSuffixes graph earlierId laterId with
+    | None -> true
+    | Some(lca, _, _) ->
+        match graph.Nodes.TryFind lca with
+        | Some { Kind = SemanticKind.IfThenElse(_, t, e) } ->
+            let inT n = subtreeContains graph t n
+            let inE n = e |> Option.exists (fun eb -> subtreeContains graph eb n)
+            not ((inT earlierId && inE laterId) || (inE earlierId && inT laterId))
+        | Some { Kind = SemanticKind.Match(_, cases) } ->
+            let armOf n = cases |> List.tryFindIndex (fun c -> subtreeContains graph c.Body n)
+            match armOf earlierId, armOf laterId with
+            | Some i, Some j -> i = j
+            | _ -> true
+        | Some { Kind = SemanticKind.CaseElimination(_, arms) } ->
+            let armOf n = arms |> List.tryFindIndex (fun a -> subtreeContains graph a.Body n)
+            match armOf earlierId, armOf laterId with
+            | Some i, Some j -> i = j
+            | _ -> true
+        | _ -> true
+
+let private isOptionType (ty: NativeType) =
+    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+    | NativeType.TApp(tc, [_]) -> tc.Name = "option" || tc.Name = "Option"
+    | _ -> false
+
+let private isNominalMarkerPointee (ty: NativeType) =
+    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+    | NativeType.TApp(tc, []) ->
+        tc.NTUKind.IsNone && tc.Name <> "unit" && tc.Name <> "option" && tc.Name <> "Option"
+    | _ -> false
+
+let rec private isNominalCHandleType (nullable: bool) (ty: NativeType) =
+    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+    | NativeType.TApp(tc, [inner]) when tc.Name = "option" || tc.Name = "Option" ->
+        nullable && isNominalCHandleType false inner
+    | NativeType.TApp(tc, [marker]) as substituted ->
+        not nullable && tc.Name = "CHandle" && Types.tryGetNTUKind substituted = Some NTUKind.NTUptr && isNominalMarkerPointee marker
+    | _ -> false
+
+let private resolveBufferAbsenceChoice (graph: SemanticGraph) (absences: Declarations.DeclaredBufferAbsence list)
+                                       (site: SemanticNode) (declarationBinding: NodeId) (nativeOrdinal: int) (tagOrdinal: int) (actual: NodeId) =
+    match graph.Nodes.TryFind actual with
+    | None -> Ok(None, Set.empty, false, Some actual)
+    | Some actualNode when not (isOptionType actualNode.Type) ->
+        Ok(None, Set.empty, false, Some actual)
+    | Some _ ->
+        let absenceMatches =
+            absences |> List.filter (fun row -> row.Declaration.Binding = declarationBinding && row.Contract.Parameter = nativeOrdinal)
+        match absenceMatches with
+        | [] -> Error "CCS8427: An optional foreign buffer argument requires an explicit BufferAbsenceContract."
+        | [absence] ->
+            let directConstruction id =
+                let rec walk seen current path =
+                    if Set.contains current seen then None else
+                    let seen = Set.add current seen
+                    let path = current :: path
+                    match graph.Nodes.TryFind current with
+                    | Some { Kind = SemanticKind.DUConstruct(_, caseOrdinal, payload, _) }
+                    | Some { Kind = SemanticKind.UnionCase(_, caseOrdinal, payload) }
+                        when (caseOrdinal = 0 && payload.IsNone) || (caseOrdinal = 1 && payload.IsSome) ->
+                        Some(current, caseOrdinal, payload, path)
+                    | Some { Kind = SemanticKind.VarRef(_, Some inner) }
+                    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> walk seen inner path
+                    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> walk seen value path
+                    | _ -> None
+                walk Set.empty id []
+            match directConstruction actual with
+            | Some(construction, caseOrdinal, payload, transport) ->
+                let selected: BoundaryBufferAbsenceSelection =
+                    { Construction = construction; CaseOrdinal = caseOrdinal; Payload = payload
+                      Absence = absence.Quote; Transport = transport; Obligation = NodeId 0 }
+                let support = Set.union (Set.ofList transport) (Set.ofList absence.Participants)
+                Ok(Some(BoundaryBufferAbsenceChoice.Direct selected), support, (caseOrdinal = 0), payload)
+            | None ->
+                match Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph actual with
+                | Ok account ->
+                    let selects =
+                        account.Values |> List.filter (fun row ->
+                            row.Occurrence = actual && row.Operation = CallableAggregateOperation.Select && row.Selection.IsSome)
+                    match selects with
+                    | [select] when select.Selection.IsSome ->
+                        let sel = select.Selection.Value
+                        match directConstruction sel.WhenTrue, directConstruction sel.WhenFalse with
+                        | Some(tCons, tOrd, tPay, tTr), Some(fCons, fOrd, fPay, fTr) when Set.ofList [tOrd; fOrd] = Set.ofList [0; 1] ->
+                            let attachedProjection =
+                                site.Children |> List.tryFind (fun child ->
+                                    match graph.Nodes.TryFind child with
+                                    | Some pNode ->
+                                        match pNode.Kind, pNode.Metadata.TryFind "Baker.BoundaryOptionalTagProjection", pNode.Metadata.TryFind "Baker.BoundaryOptionalTagParameter" with
+                                        | SemanticKind.DUGetTag(ta, _), Some(MetadataValue.NodeIdList [callId; ma]), Some(MetadataValue.Int pOrd) ->
+                                            callId = site.Id && pOrd = tagOrdinal && ta = actual && ma = actual
+                                        | _ -> false
+                                    | None -> false)
+                            match attachedProjection with
+                            | Some tagProj ->
+                                let mkLeaf cons ord pay tr =
+                                    { Construction = cons; CaseOrdinal = ord; Payload = pay; Absence = absence.Quote
+                                      Transport = List.distinct (actual :: tr); Obligation = NodeId 0 }
+                                let choice = BoundaryBufferAbsenceChoice.Conditional(select.Occurrence, tagProj, mkLeaf tCons tOrd tPay tTr, mkLeaf fCons fOrd fPay fTr)
+                                let support = Set.unionMany [Set.ofList absence.Participants; Set.ofList tTr; Set.ofList fTr; Set.ofList [actual; tagProj]]
+                                let payloadOpt =
+                                    match tPay, fPay with
+                                    | Some p, None | None, Some p -> Some p
+                                    | _ -> None
+                                Ok(Some choice, support, false, payloadOpt)
+                            | None -> Error "The conditional optional buffer lacks its Baker-authored option-tag projection."
+                        | _ -> Error "The conditional optional buffer arms lost their None/Some constructors."
+                    | _ -> Error "CCS8427: The optional foreign buffer argument lost its source Option construction or BufferAbsenceContract."
+                | Error _ -> Error "CCS8427: The optional foreign buffer argument lost its source Option construction."
+        | _ -> Error "CCS8427: Ambiguous BufferAbsenceContract declarations for the same parameter."
+
 let private demandedAbsences (calls:BoundaryCall list) (rows:Map<NodeId,BoundaryCallbackAbsence>) =
     rows |> Map.filter(fun _ row -> calls |> List.exists(fun call -> call.Import=row.Import && (call.Arguments |> List.indexed |> List.exists(fun(ordinal,operand)->ordinal=row.Parameter && operand.Abi=BoundaryScalar.Entry row.Invocation && (operand.OptionalEntry |> Option.toList |> List.collect BoundaryOptionalEntryChoice.leaves |> List.exists(fun selected->selected.Payload.IsNone))))))
 
@@ -105,7 +512,7 @@ let private optionalOnlyUses (invocations:Map<NodeId,BoundaryCallbackInvocation>
             invocations.TryFind identity |> Option.exists(fun invocation->invocation.Extent=BoundaryCallbackExtent.DuringCall)
         | _ -> false))
 
-let private optionalCodeWitness invocations calls entry (receiving:BoundaryCallbackInvocation) =
+let private optionalCodeWitness invocations calls (entry: BoundaryClosedEntry) (receiving: BoundaryCallbackInvocation) =
     match Map.tryFind entry.Invocation invocations with
     | Some witness when sameDuringCallAbi witness receiving && entry.Registrations.IsEmpty ->
         entry.Invocation=receiving.Identity || optionalOnlyUses invocations calls entry
@@ -207,7 +614,7 @@ let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id
                            (List.item ordinal call.Arguments).Abi=BoundaryScalar.Entry model.Invocation && model.Arms=arms &&
                            Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement graph model.Actual model.Call=Ok model.ResultRetirement &&
                            (match entry,invocations.TryFind model.Invocation with
-                            | [entry],Some receiving ->
+                            | [entry: BoundaryClosedEntry],Some receiving ->
                                 currentOptionalInvocation graph call ordinal receiving &&
                                 optionalCodeWitness invocations calls entry receiving && entry.Transport.IsSupersetOf selected.Transport
                             | _ -> false) &&
@@ -215,7 +622,7 @@ let optionalEntryClaimRows (graph: SemanticGraph) (calls: BoundaryCall list) (id
                         else Error "The optional-entry conversion claim lost its exact current Some source plan."
                     | Choice3Of3 model ->
                         let account = heldAbsences.TryFind model.Absence
-                        let arms=[{CaseOrdinal=0;Choice=OptionalEntryAbsencePlanChoice.AbsentEntry};{CaseOrdinal=1;Choice=OptionalEntryAbsencePlanChoice.RequiresClosedEntry}]
+                        let arms=[{OptionalEntryAbsencePlanArm.CaseOrdinal=0;Choice=OptionalEntryAbsencePlanChoice.AbsentEntry};{OptionalEntryAbsencePlanArm.CaseOrdinal=1;Choice=OptionalEntryAbsencePlanChoice.RequiresClosedEntry}]
                         if model.Call=call.Site && model.Parameter=ordinal && model.Actual=call.Arguments[ordinal].Actual &&
                            model.Construction=selected.Construction && model.SourceCase=0 && selected.CaseOrdinal=0 && selected.Payload.IsNone && selected.Formation.IsNone && model.Arms=arms &&
                            Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.resultRetirement graph model.Actual model.Call=Ok model.ResultRetirement &&
@@ -252,6 +659,8 @@ let private scalarRange = function
     | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric range."
     | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle has no scalar numeric range."
     | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar numeric range."
+    | BoundaryScalar.ReadOnlyBytes _ -> invalidOp "A read-only byte buffer has no scalar numeric range."
+    | BoundaryScalar.BorrowedBytes _ -> invalidOp "A borrowed result view has no scalar numeric range."
 
 let private scalarBits = function
     | BoundaryScalar.Boolean -> 1
@@ -259,6 +668,8 @@ let private scalarBits = function
     | BoundaryScalar.Entry _ -> invalidOp "A native entry has no scalar numeric width."
     | BoundaryScalar.ResourceHandle _ -> invalidOp "An opaque resource handle requires its exact resource conversion account."
     | BoundaryScalar.WritableBytes _ -> invalidOp "A writable byte buffer has no scalar numeric width."
+    | BoundaryScalar.ReadOnlyBytes _ -> invalidOp "A read-only byte buffer has no scalar numeric width."
+    | BoundaryScalar.BorrowedBytes _ -> invalidOp "A borrowed result view has no scalar numeric width."
 
 let private supportedType scalar ty =
     match scalar, Types.tryGetNTUKind ty with
@@ -279,7 +690,9 @@ let private bindingPath = BoundaryDeclarations.bindingPath
 
 let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descriptors)
                        (resources: Map<NodeId, BoundaryResourceDeclaration>)
-                       (writables:Map<NodeId,BoundaryWritableBufferDeclaration>) (binding: SemanticNode) library symbol =
+                       (writables:Map<NodeId,BoundaryWritableBufferDeclaration>)
+                       (readOnlyBuffers: Map<NodeId, BoundaryReadOnlyBufferDeclaration>)
+                       (borrowedViews: Map<NodeId, BoundaryBorrowedResultViewDeclaration>) (binding: SemanticNode) library symbol =
     checked' {
         let! scope =
             binding.Parent |> needed "The external binding has no source module owner."
@@ -322,13 +735,25 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
 
         let writable = writables.Values |> Seq.filter(fun row -> row.Declaration=binding.Id && row.Descriptor=descriptor.Node) |> Seq.toList
         let writable =
-            match writable, descriptor.Parameters with
-            | [row], [buffer;count] when row.Parameter=0 && row.CountParameter=1 && fst buffer=row.BufferFormal && fst count=row.CountFormal -> Some row
-            | [row], [_fd;buffer;count] when row.Parameter=1 && row.CountParameter=2 && fst buffer=row.BufferFormal && fst count=row.CountFormal -> Some row
+            match writable with
+            | [row] when row.Parameter >= 0 && row.CountParameter >= 0 && row.Parameter <> row.CountParameter &&
+                         descriptor.ParameterOrdinals.TryFind row.Parameter = Some row.BufferFormal &&
+                         descriptor.ParameterOrdinals.TryFind row.CountParameter = Some row.CountFormal -> Some row
             | _ -> None
+        let readOnlyRows =
+            readOnlyBuffers.Values
+            |> Seq.filter (fun row ->
+                row.Declaration = binding.Id && row.Descriptor = descriptor.Node &&
+                row.Parameter >= 0 &&
+                descriptor.ParameterOrdinals.TryFind row.Parameter = Some row.BufferFormal &&
+                (match row.CountParameter, row.CountFormal with
+                 | None, None -> true
+                 | Some cp, Some cf -> cp >= 0 && cp <> row.Parameter && descriptor.ParameterOrdinals.TryFind cp = Some cf
+                 | _ -> false))
+            |> Seq.toList
         do!
             require
-                ((descriptor.References.IsEmpty || writable.IsSome)
+                ((descriptor.References.IsEmpty || writable.IsSome || not readOnlyRows.IsEmpty)
                  && descriptor.PointerReferences.IsEmpty
                  && descriptor.RecordReferences.IsEmpty)
                 "Reference arguments require source-settled boundary adapters; scalar C publication cannot substitute a pointer."
@@ -340,12 +765,28 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
 
         do!
             require
-                (parameterRecords.Length = descriptor.Parameters.Length)
+                (parameterRecords.Length = descriptor.Parameters.Length + descriptor.FixedSentinels.Length)
                 "The boundary descriptor's native ordinal vector is incomplete."
 
+        let sortedOrdinals = descriptor.ParameterOrdinals |> Map.toList |> List.sortBy fst
+        do!
+            require
+                (List.map snd sortedOrdinals = List.map fst descriptor.Parameters)
+                "The boundary descriptor's parameter ordinal map differs from its formal order."
+
+        do!
+            require
+                (descriptor.FixedSentinels |> List.forall (fun (ordinal, _, _) ->
+                    List.tryItem ordinal parameterRecords
+                    |> Option.bind (Declarations.recordOf graph)
+                    |> Option.bind (snd >> field "PassBy")
+                    |> Option.bind (Declarations.caseOf graph)
+                    |> Option.exists (fun (_, name, payload) -> name = "Fixed" && payload.IsSome)))
+                "A fixed sentinel ABI parameter lost its Fixed PassBy contract."
+
         let parameters =
-            descriptor.Parameters
-            |> List.mapi (fun ordinal (formal, declared) ->
+            List.zip sortedOrdinals descriptor.Parameters
+            |> List.map (fun ((ordinal, _), (formal, declared)) ->
                 checked' {
                     let! _, parameterFields =
                         Declarations.recordOf graph parameterRecords[ordinal]
@@ -356,10 +797,14 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                         |> needed "A boundary parameter must explicitly declare PassBy.Value."
 
                     let writableParameter = writable |> Option.filter(fun row -> row.Parameter=ordinal && row.BufferFormal=formal)
+                    let readOnlyParameter = readOnlyRows |> List.tryFind(fun row -> row.Parameter=ordinal && row.BufferFormal=formal)
                     do!
                         require
                             (Declarations.caseOf graph passing
-                             |> Option.exists (fun (_, name, _) -> name = (if writableParameter.IsSome then "Reference" else "Value")))
+                             |> Option.exists (fun (_, name, _) ->
+                                 if writableParameter.IsSome then name = "Reference"
+                                 elif readOnlyParameter.IsSome then name = "Value" || name = "ReadOnlyReference"
+                                 else name = "Value"))
                             "A boundary parameter must explicitly declare PassBy.Value."
 
                     let! typeId =
@@ -372,6 +817,8 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                     match Declarations.readTypeRef graph typeId |> Result.mapError _.Message with
                     | Ok _ when writableParameter.IsSome ->
                         return formal, BoundaryScalar.WritableBytes writableParameter.Value.Identity
+                    | Ok _ when readOnlyParameter.IsSome ->
+                        return formal, BoundaryScalar.ReadOnlyBytes readOnlyParameter.Value.Identity
                     | Ok(Declarations.DeclaredTypeRef.Entry selector) ->
                         let! invocation =
                             match
@@ -406,6 +853,25 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                         do! require (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType formalNode.Type = resource.HandleType)
                                 "The exact release formal no longer has its declared opaque handle identity."
                         return formal, BoundaryScalar.ResourceHandle(resource.Identity, false)
+                    | Ok(Declarations.DeclaredTypeRef.Pointer width) ->
+                        let formalTypeId = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType formalNode.Type
+                        let matchingResources =
+                            resources.Values
+                            |> Seq.choose (fun row ->
+                                if row.PointerBits = width && formalTypeId = row.HandleType then Some(row, false)
+                                elif row.PointerBits = width && formalTypeId = row.ResultType then Some(row, true)
+                                else None)
+                            |> Seq.toList
+                        match matchingResources with
+                        | [resource, nullable] -> return formal, BoundaryScalar.ResourceHandle(resource.Identity, nullable)
+                        | _ :: _ :: _ -> return! Error "CCS8403: Ambiguous resource declarations for boundary resource handle parameter."
+                        | [] ->
+                            if isNominalCHandleType false formalNode.Type then
+                                return formal, BoundaryScalar.ResourceHandle(formal, false)
+                            elif isNominalCHandleType true formalNode.Type then
+                                return formal, BoundaryScalar.ResourceHandle(formal, true)
+                            else
+                                return! Error "A boundary parameter has no admitted integer or boolean declaration; pointer and aggregate values require a source-settled adapter."
                     | _ ->
                         let! declared =
                             declared
@@ -450,7 +916,11 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         let! result =
             match resources.Values |> Seq.filter (fun row -> row.Acquisition = binding.Id && row.AcquisitionDescriptor = descriptor.Node) |> Seq.toList with
             | [resource] -> Ok(Some(BoundaryScalar.ResourceHandle(resource.Identity, true)))
-            | [] -> typeRef graph returnId
+            | [] ->
+                match borrowedViews.Values |> Seq.filter (fun row -> row.Declaration = binding.Id && row.Descriptor = descriptor.Node) |> Seq.toList with
+                | [view] -> Ok(Some(BoundaryScalar.BorrowedBytes view.Identity))
+                | [] -> typeRef graph returnId
+                | _ -> Error "The borrowed result view declaration has ambiguous binding ownership."
             | _ -> Error "The acquisition declaration has ambiguous resource ownership."
 
         // A release import publishes its declared result unchanged: None for Void,
@@ -463,12 +933,20 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                       | _ -> false))
                 "A resource release result must be declared Void or a signed 32-bit integer status."
 
-        do! require (writable.IsNone ||
-                     (match (parameters |> List.map snd),result with
-                     | [BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)],(None | Some(BoundaryScalar.Integer(64,true))) -> true
-                     | [BoundaryScalar.Integer(32,true);BoundaryScalar.WritableBytes _;BoundaryScalar.Integer(64,false)],Some(BoundaryScalar.Integer(64,true)) -> true
-                     | _ -> false))
-                "The writable buffer adapter requires buffer0/count1 unsigned-64 with Void or signed-64 result, or signed-32 fd0/buffer1/count2 unsigned-64 with signed-64 result."
+        let paramByNativeOrdinal = List.zip (List.map fst sortedOrdinals) parameters |> Map.ofList
+        do! require (writable |> Option.forall (fun row ->
+                        paramByNativeOrdinal.TryFind row.Parameter = Some(row.BufferFormal, BoundaryScalar.WritableBytes row.Identity) &&
+                        (paramByNativeOrdinal.TryFind row.CountParameter |> Option.exists (function f, BoundaryScalar.Integer _ -> f = row.CountFormal | _ -> false)) &&
+                        (match result with None | Some(BoundaryScalar.Integer(64, true)) -> true | _ -> false)))
+                "The writable buffer adapter requires matching buffer/count ordinals with Void or signed-64 result."
+
+        do! require (readOnlyRows |> List.forall (fun row ->
+                        paramByNativeOrdinal.TryFind row.Parameter = Some(row.BufferFormal, BoundaryScalar.ReadOnlyBytes row.Identity) &&
+                        (match row.CountParameter, row.CountFormal with
+                         | None, None -> true
+                         | Some cp, Some cf -> paramByNativeOrdinal.TryFind cp |> Option.exists (function f, BoundaryScalar.Integer _ -> f = cf | _ -> false)
+                         | _ -> false)))
+                "The read-only buffer adapter requires matching buffer and optional count parameter ordinals."
 
         let! bodyNode =
             graph.Nodes.TryFind body
@@ -479,6 +957,7 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                 (match result with
                  | Some(BoundaryScalar.ResourceHandle(identity, true)) ->
                      resources.TryFind identity |> Option.exists (fun row -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType bodyNode.Type = row.ResultType)
+                 | Some(BoundaryScalar.BorrowedBytes _) -> isOptionType bodyNode.Type
                  | Some scalar -> supportedType scalar bodyNode.Type
                  | None -> Types.tryGetNTUKind bodyNode.Type = Some NTUKind.NTUunit)
                 "The binding result's source kind disagrees with its declared boundary result."
@@ -516,13 +995,35 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         let writableRoots =
             descriptors.WritableBuffers |> List.filter(fun row -> writable |> Option.exists(fun current->row.Quote=current.Identity))
             |> List.map _.DescriptorBinding
+        let readOnlyRoots =
+            descriptors.ReadOnlyBuffers |> List.filter(fun row -> readOnlyRows |> List.exists(fun current -> row.Quote = current.Identity))
+            |> List.map _.DescriptorBinding
+        let callbackContextRoots =
+            match Declarations.qualifiedExportName graph binding with
+            | None -> []
+            | Some bindingName ->
+                graph.Nodes.Values
+                |> Seq.choose (fun node ->
+                    match node.Kind, node.Children with
+                    | SemanticKind.Binding _, [bodyId] ->
+                        match graph.Nodes.TryFind bodyId with
+                        | Some { Kind = SemanticKind.Quote(recordId, _) } ->
+                            match Declarations.recordOf graph recordId with
+                            | Some(recNode, recFields) when Declarations.typeName recNode = Some "CallbackContextDescriptor" ->
+                                match field "Binding" recFields |> Option.bind (Declarations.stringOf graph) with
+                                | Some declaredBinding when declaredBinding = bindingName -> Some node.Id
+                                | _ -> None
+                            | _ -> None
+                        | _ -> None
+                    | _ -> None)
+                |> Seq.toList
         let! byteRoots =
             if writable.IsNone then Ok [] else
                 Bytes.byteRepresentation graph |> needed "The writable import lacks its current offered byte representation."
                 |> Result.map(fun (_,declaration)->[declaration])
 
         let! facts =
-            (descriptorBinding :: invocationRoots @ writableRoots @ byteRoots)
+            (descriptorBinding :: invocationRoots @ writableRoots @ readOnlyRoots @ callbackContextRoots @ byteRoots)
             |> List.distinct
             |> List.fold
                 (fun state root ->
@@ -534,7 +1035,7 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
 
         // The original immutable binding's name/parent are declaration facts,
         // even when an optional anchor has no executable source occurrence.
-        let! original = declarationPath |> List.map(fun id ->
+        let! original = (declarationPath @ retainedFormals) |> List.distinct |> List.map(fun id ->
             graph.Nodes.TryFind id |> needed "The original external declaration path was withdrawn."
             |> Result.bind declarationFact |> Result.map(fun fact -> id,fact)) |> collect
         let facts = original |> List.fold(fun facts (id,fact) -> Map.add id fact facts) facts
@@ -592,6 +1093,8 @@ let private sourceWidth graph id scalar =
     | BoundaryScalar.Entry _ -> Error "Native entry arguments require their declared code signature, not a numeric width."
     | BoundaryScalar.ResourceHandle _ -> Error "An opaque resource handle has no source numeric width."
     | BoundaryScalar.WritableBytes _ -> Error "A writable byte buffer has no source numeric width."
+    | BoundaryScalar.ReadOnlyBytes _ -> Error "A read-only byte buffer has no source numeric width."
+    | BoundaryScalar.BorrowedBytes _ -> Error "A borrowed result view has no source numeric width."
     | BoundaryScalar.Integer _ -> checked' {
         let! representation = RangeAnalysis.selectedRepresentation graph id |> needed "The scalar occurrence has no source-selected offered integer representation."
         do! require (NumericRepresentation.isOffered representation && (representation.Family = "int" || representation.Family = "uint"))
@@ -601,10 +1104,17 @@ let private sourceWidth graph id scalar =
         return representation.Bits }
 
 let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args path (import: BoundaryImport)
-                     (entry:NodeId option) (resource:BoundaryResourceUse option) (writable:BoundaryWritableBufferUse option) = checked' {
-    let resourceAbi = (import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false)
-    do! require (not resourceAbi || (resource.IsSome && entry.IsNone))
-            "A resource-bearing call requires its exact direct acquisition/conversion or release/cleanup account; scalar and indirect calls grant no such authority."
+                     (entry:NodeId option) (resource:BoundaryResourceUse option) (writable:BoundaryWritableBufferUse option)
+                     (readOnlyBuffers: Map<NodeId, BoundaryReadOnlyBufferDeclaration>)
+                     (readOnlyUses: Map<NodeId * int, BoundaryReadOnlyBufferUse>)
+                     (resources: Map<NodeId, BoundaryResourceDeclaration>)
+                     (resolveBufferAbsence: int -> NodeId -> NodeId -> Result<BoundaryBufferAbsenceChoice option * Set<NodeId>, string>) = checked' {
+    let resourceResultAbi = import.Result |> Option.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false)
+    do! require (not resourceResultAbi || (resource.IsSome && entry.IsNone))
+            "A resource-acquiring call requires its exact direct acquisition/conversion account; scalar and indirect calls grant no such authority."
+    let hasResourceHandleArg = import.Parameters |> List.exists (snd >> function BoundaryScalar.ResourceHandle _ -> true | _ -> false)
+    do! require (not hasResourceHandleArg || entry.IsNone)
+            "An indirect entry call cannot take opaque resource handle parameters directly without a boundary declaration."
     do! require (import.Parameters |> List.forall(fun (_,abi)->
                     match abi with
                     | BoundaryScalar.WritableBytes declaration -> writable |> Option.exists(fun row->row.Call=site.Id && row.Declaration=declaration && entry.IsNone && resource.IsNone)
@@ -760,24 +1270,58 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
                         let support = Set.unionMany [participants; whenTrue.Transport; whenFalse.Transport; Set.ofList [tagProjection; whenTrue.Construction; whenFalse.Construction]]
                         return Some (BoundaryOptionalEntryChoice.Conditional(select.Occurrence, tagProjection, whenTrue, whenFalse)), support }
                 | _ -> Ok (None, Set.empty)
-            do! require (match abi with BoundaryScalar.Entry _ when optionalEntry.IsSome -> true | BoundaryScalar.ResourceHandle _ -> resource.IsSome | BoundaryScalar.WritableBytes _ -> writable |> Option.exists(fun row->row.Buffer=actual) | _ -> supportedType abi node.Type) "An actual boundary argument's source kind disagrees with the declared formal."
+            let! bufferAbsence, absenceSupport =
+                match abi with
+                | BoundaryScalar.ReadOnlyBytes _ | BoundaryScalar.WritableBytes _ ->
+                    resolveBufferAbsence ordinal actual formal
+                | _ -> Ok(None, Set.empty)
+            let optionalNullBuffer =
+                bufferAbsence |> Option.exists (fun choice ->
+                    BoundaryBufferAbsenceChoice.leaves choice |> List.forall (fun leaf -> leaf.CaseOrdinal = 0 && leaf.Payload.IsNone))
+            let readOnlyRow =
+                match abi with
+                | BoundaryScalar.ReadOnlyBytes declId ->
+                    readOnlyBuffers.TryFind declId
+                    |> Option.bind (fun roDecl -> readOnlyUses.TryFind(site.Id, roDecl.Parameter))
+                | _ -> None
+            do! require (match abi with
+                         | BoundaryScalar.Entry _ when optionalEntry.IsSome -> true
+                         | BoundaryScalar.ResourceHandle(decl, nullable) ->
+                             resource.IsSome ||
+                             (resources.TryFind decl |> Option.exists (fun res ->
+                                 let actualType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type
+                                 if nullable then actualType = res.ResultType else actualType = res.HandleType)) ||
+                             (decl = formal && isNominalCHandleType nullable node.Type &&
+                              import.SourceTypes.TryFind formal = Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type))
+                         | BoundaryScalar.WritableBytes _ ->
+                             writable |> Option.exists (fun row -> row.Buffer = actual) || optionalNullBuffer
+                         | BoundaryScalar.ReadOnlyBytes _ ->
+                             (readOnlyRow |> Option.exists (fun row -> row.Buffer = actual)) || optionalNullBuffer
+                         | _ -> supportedType abi node.Type)
+                    "An actual boundary argument's source kind disagrees with the declared formal."
             do! require (import.SourceTypes.TryFind formal = Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type))
                     "The actual boundary argument does not retain its formal's native kind and dimension identity."
             let! meet =
                 match abi with
-                | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> Ok None
+                | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ | BoundaryScalar.ReadOnlyBytes _ -> Ok None
                 | _ -> checked' {
                     let! range = match abi with BoundaryScalar.Boolean -> Ok ValueRange.boolean | _ -> node.ValueRange |> needed "The actual scalar argument lacks an established source range."
                     let! sourceBits = sourceWidth graph actual abi
                     return! adaptation graph site.Id actual sourceBits (scalarBits abi) range }
-            return { Actual = actual; Formal = formal; Abi = abi; Adaptation = meet; OptionalEntry=optionalEntry }, optionalSupport }) |> collect
+            return { Actual = actual; Formal = formal; Abi = abi; Adaptation = meet; OptionalEntry = optionalEntry; BufferAbsence = bufferAbsence }, Set.union optionalSupport absenceSupport }) |> collect
     let arguments = supportedArguments |> List.map fst
     let expectedProjections =
         arguments
-        |> List.choose (fun argument ->
-            match argument.OptionalEntry with
-            | Some(BoundaryOptionalEntryChoice.Conditional(_, tagProjection, _, _)) -> Some tagProjection
-            | _ -> None)
+        |> List.collect (fun argument ->
+            let entryProj =
+                match argument.OptionalEntry with
+                | Some(BoundaryOptionalEntryChoice.Conditional(_, tagProjection, _, _)) -> [tagProjection]
+                | _ -> []
+            let bufferProj =
+                match argument.BufferAbsence with
+                | Some(BoundaryBufferAbsenceChoice.Conditional(_, tagProjection, _, _)) -> [tagProjection]
+                | _ -> []
+            entryProj @ bufferProj)
     do! require (attachedProjections = expectedProjections) "The boundary application's attached option-tag projections disagree with its conditional optional arguments."
     let! resultAdaptation =
         match import.Result with
@@ -785,6 +1329,9 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
             do! require (Types.tryGetNTUKind site.Type = Some NTUKind.NTUunit) "A void foreign call cannot publish a non-unit source result."
             return None }
         | Some(BoundaryScalar.ResourceHandle _) -> Ok None
+        | Some(BoundaryScalar.BorrowedBytes _) -> checked' {
+            do! require (isOptionType site.Type) "The borrowed result view call result must retain its nullable Option type."
+            return None }
         | Some abi -> checked' {
             do! require (supportedType abi site.Type) "The call result's source kind disagrees with its boundary declaration."
             let! targetBits = sourceWidth graph site.Id abi
@@ -892,17 +1439,45 @@ let private resourceFlow (graph: SemanticGraph) (resource: BoundaryResourceDecla
             operands row.Target |> List.tryFind(fst>>(=)0) |> Option.exists(snd>>knownGuard)
         | ResourceEvaluationRole.Flow(_,_,EvaluationTransfer.Resume) -> false
         | _ -> true)) "Resource cleanup has unknown or uncorrelated guard feasibility."
-    let declaredReleases=(Declarations.readDescriptors graph).Resources |> List.map(fun row->row.Release.Binding) |> Set.ofList
-    let! releaseSites =
+    let descriptors = Declarations.readDescriptors graph
+    let declaredReleases = descriptors.Resources |> List.map (fun row -> row.Release.Binding) |> Set.ofList
+    let isBorrowedHandleCall (binding: SemanticNode) (args: NodeId list) =
+        Declarations.lambdaOfBinding graph binding.Id
+        |> Option.bind (fun (_, body) -> descriptors.Functions |> List.tryFind (fun f -> f.Body = Some body))
+        |> Option.exists (fun declaredFn ->
+            let isBorrowed =
+                Declarations.recordOf graph declaredFn.Node
+                |> Option.bind (fun (_, fields) -> field "OwnershipTransfer" fields)
+                |> Option.bind (Declarations.caseOf graph)
+                |> Option.exists (fun (_, name, _) -> name = "Borrowed")
+            isBorrowed &&
+            args.Length = declaredFn.Parameters.Length &&
+            (List.zip args declaredFn.Parameters
+             |> List.forall (fun (actual, (formalId, _)) ->
+                 not (handleSites.Contains actual) ||
+                 (not (List.exists (fst >> (=) formalId) declaredFn.References) &&
+                  not (List.exists (fst >> (=) formalId) declaredFn.PointerReferences) &&
+                  not (List.exists (fst >> (=) formalId) declaredFn.RecordReferences)))))
+    let! siteActions =
         siteIds |> Set.toList |> List.choose (fun id ->
             match graph.Nodes[id].Kind with
-            | SemanticKind.Application(callee,args) when id<>conversion.Acquisition -> Some(checked' {
-                let! binding,_ = target graph callee |> needed "A resource path contains an unresolved call."
-                let! actual = match args with [actual] when handleSites.Contains actual -> Ok actual | _ -> Error "A resource path permits only its explicit unary handle release call."
+            | SemanticKind.Application(callee, args)
+                when id <> conversion.Acquisition &&
+                     (args |> List.exists (fun actual -> handleSites.Contains actual || optionSites.Contains actual)) -> Some(checked' {
+                let! binding, _ = target graph callee |> needed "A resource path contains an unresolved call."
                 do! require (BoundaryDeclarations.isExternal binding) "Interprocedural resource use is outside the admitted local profile."
-                do! require (declaredReleases.Contains binding.Id) "A handle can be passed only to an exact current declared resource release."
-                return id,(actual,binding.Id) })
-            | _ -> None) |> collect |> Result.map Map.ofList
+                if declaredReleases.Contains binding.Id then
+                    let! actual = match args with [actual] when handleSites.Contains actual -> Ok actual | _ -> Error "A resource path permits only its explicit unary handle release call."
+                    return Choice1Of2 (id, (actual, binding.Id))
+                elif isBorrowedHandleCall binding args then
+                    return Choice2Of2 id
+                else
+                    let! actual = match args with [actual] when handleSites.Contains actual -> Ok actual | _ -> Error "A resource path permits only its explicit unary handle release call."
+                    let _ = actual
+                    return! Error "A handle can be passed only to an exact current declared resource release." })
+            | _ -> None) |> collect
+    let releaseSites = siteActions |> List.choose (function Choice1Of2 item -> Some item | Choice2Of2 _ -> None) |> Map.ofList
+    let borrowedSites = siteActions |> List.choose (function Choice2Of2 id -> Some id | Choice1Of2 _ -> None) |> Set.ofList
     let contained =
         relations
         |> List.forall (fun row ->
@@ -918,8 +1493,9 @@ let private resourceFlow (graph: SemanticGraph) (resource: BoundaryResourceDecla
                 | SemanticKind.DUEliminate(subject, ordinal, _, _) ->
                     subject = actual && optionSites.Contains actual && ordinal = conversion.SomeCase
                 | SemanticKind.Application _ ->
-                    releaseSites.TryFind row.Target
-                    |> Option.exists (fun (operand, _) -> operand = actual && handleSites.Contains actual)
+                    (releaseSites.TryFind row.Target
+                     |> Option.exists (fun (operand, _) -> operand = actual && handleSites.Contains actual))
+                    || (borrowedSites.Contains row.Target && handleSites.Contains actual)
                 | _ ->
                     forwarded parent = Some actual
                     && (optionSites.Contains parent.Id || handleSites.Contains parent.Id)
@@ -1306,7 +1882,11 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                 account.Application.Call=application.Site && account.Application.Declaration=application.Declaration.Declaration.Binding)
                          |> List.tryExactlyOne |> needed "The writable result requires one exact current foreign-result call/context account."
             let! hypothesis=account.Application.Hypothesis |> needed "The writable result requires its current declared -1..count behavior hypothesis."
-            do! require (hypothesis.Lower=ForeignResultBound.Constant -1I && hypothesis.Upper=ForeignResultBound.Argument application.Declaration.CountParameter &&
+            let! countSourceIdx =
+                application.Declaration.Declaration.Formals
+                |> List.tryFindIndex ((=) application.Declaration.CountFormal)
+                |> needed "The writable result lost its count formal ordinal in its source declaration."
+            do! require (hypothesis.Lower=ForeignResultBound.Constant -1I && hypothesis.Upper=ForeignResultBound.Argument countSourceIdx &&
                          (account.Application.Arguments |> List.map(fun argument->argument.Index,argument.Node)) = (application.Arguments |> List.indexed))
                     "The writable result hypothesis or ordered actuals differ from this call's exact -1..count relation."
             do! require (descriptors.ResultRanges |> List.exists(fun declared->
@@ -1333,10 +1913,17 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
         | _ -> return! Error "The writable result requires its separately supported signed-64 scalar declaration." }
     let writableStorage (application:StringByteStorageRecipes.WritableApplication) = checked' {
         let declaration=application.Declaration
-        do! require (match declaration.Parameter,declaration.CountParameter,application.Arguments.Length with
-                     | 0,1,2 | 1,2,3 -> true
+        let bufferSourceIdx = declaration.Declaration.Formals |> List.tryFindIndex ((=) declaration.BufferFormal)
+        let countSourceIdx = declaration.Declaration.Formals |> List.tryFindIndex ((=) declaration.CountFormal)
+        do! require (declaration.Parameter >= 0 && declaration.CountParameter >= 0 &&
+                     declaration.Parameter <> declaration.CountParameter &&
+                     match bufferSourceIdx, countSourceIdx with
+                     | Some bIdx, Some cIdx ->
+                         bIdx <> cIdx &&
+                         bIdx < application.Arguments.Length &&
+                         cIdx < application.Arguments.Length
                      | _ -> false)
-                "The writable adapter requires exactly buffer0/count1 or fd0/buffer1/count2."
+                "The writable adapter requires distinct in-range buffer and count ordinals."
         let! rep,format=Bytes.byteRepresentation graph |> needed "The writable application lost its selected unsigned-8 byte declaration."
         do! require (rep.Name=application.Representation) "The writable storage analysis and byte declaration disagree."
         let! memory=MemoryPublication.project graph |> Result.mapError(fun failures->failures |> List.map _.Reason |> String.concat "; ")
@@ -1450,6 +2037,788 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                          BufferFormal=writable.BufferFormal;CountFormal=writable.CountFormal;Contract=writable.Contract
                          DeclarationFacts=facts;Participants=Map.keys facts |> Set.ofSeq}
                     Map.add row.Identity row rows,errors) (Map.empty,[])
+    let readOnlyDeclarations, readOnlyDeclarationErrors =
+        descriptors.ReadOnlyBuffers |> List.fold (fun (rows, errors) ro ->
+            let roots = [ro.DescriptorBinding; ro.AbiDescriptorBinding]
+            let observed = roots |> List.fold (fun state root -> state |> Result.bind (fun facts ->
+                declarationFacts graph root |> Result.map (fun current -> Map.fold (fun all id fact -> Map.add id fact all) facts current))) (Ok Map.empty)
+            match observed with
+            | Error reason -> rows, (ro.Node, Set.ofList ro.Participants, reason) :: errors
+            | Ok declared ->
+                let declaration = ro.Declaration
+                let support = declaration.Path @ declaration.Formals @ [declaration.Body]
+                let facts = support |> List.fold (fun (facts: Map<NodeId, BoundaryDeclarationFact>) id ->
+                    match graph.Nodes.TryFind id with
+                    | Some node when not (facts.ContainsKey id) -> Map.add id (Ingredients.premise node).Shape facts
+                    | _ -> facts) declared
+                if support |> List.exists (fun id -> not (facts.ContainsKey id)) then
+                    rows, (ro.Node, Set.ofList support, "A read-only buffer declaration lost its exact source declaration support.") :: errors
+                else
+                    let evidence =
+                        [ { Role = ParticipantRole.ReadOnlyBufferDeclaration; Node = ro.Quote; Ordinal = ro.Parameter; Group = ro.Quote }
+                          { Role = ParticipantRole.ReadOnlyBufferFormal; Node = ro.BufferFormal; Ordinal = ro.Parameter; Group = ro.Quote } ] @
+                        (match ro.CountParameter, ro.CountFormal with
+                         | Some cp, Some cf -> [ { Role = ParticipantRole.ReadOnlyBufferFormal; Node = cf; Ordinal = cp; Group = ro.Quote } ]
+                         | _ -> [])
+                    let row: BoundaryReadOnlyBufferDeclaration =
+                        { Identity = ro.Quote; Declaration = declaration.Binding; Body = declaration.Body; Formals = declaration.Formals
+                          Descriptor = ro.AbiDescriptor; Parameter = ro.Parameter; CountParameter = ro.CountParameter
+                          BufferFormal = ro.BufferFormal; CountFormal = ro.CountFormal; Contract = ro.Contract
+                          DeclarationFacts = facts; Participants = ParticipantEvidence.Established evidence }
+                    Map.add row.Identity row rows, errors) (Map.empty, [])
+    let borrowedViewDeclarations, borrowedViewDeclarationErrors =
+        descriptors.BorrowedResultViews |> List.fold (fun (rows, errors) view ->
+            let roots = [view.DescriptorBinding; view.AbiDescriptorBinding]
+            let observed = roots |> List.fold (fun state root -> state |> Result.bind (fun facts ->
+                declarationFacts graph root |> Result.map (fun current -> Map.fold (fun all id fact -> Map.add id fact all) facts current))) (Ok Map.empty)
+            match observed with
+            | Error reason -> rows, (view.Node, Set.ofList view.Participants, reason) :: errors
+            | Ok declared ->
+                let declaration = view.Declaration
+                let support = declaration.Path @ declaration.Formals @ [declaration.Body]
+                let facts = support |> List.fold (fun (facts: Map<NodeId, BoundaryDeclarationFact>) id ->
+                    match graph.Nodes.TryFind id with
+                    | Some node when not (facts.ContainsKey id) -> Map.add id (Ingredients.premise node).Shape facts
+                    | _ -> facts) declared
+                if support |> List.exists (fun id -> not (facts.ContainsKey id)) then
+                    rows, (view.Node, Set.ofList support, "A borrowed result view declaration lost its exact source declaration support.") :: errors
+                else
+                    let evidence =
+                        [ { Role = ParticipantRole.BorrowedResultViewDeclaration; Node = view.Quote; Ordinal = view.OwnerParameter; Group = view.Quote }
+                          { Role = ParticipantRole.BorrowedResultViewOwner; Node = view.OwnerFormal; Ordinal = view.OwnerParameter; Group = view.Quote } ]
+                    let row: BoundaryBorrowedResultViewDeclaration =
+                        { Identity = view.Quote; Declaration = declaration.Binding; Body = declaration.Body; Formals = declaration.Formals
+                          Descriptor = view.AbiDescriptor; OwnerParameter = view.OwnerParameter; OwnerFormal = view.OwnerFormal
+                          Contract = view.Contract; DeclarationFacts = facts
+                          Participants = ParticipantEvidence.Established evidence }
+                    Map.add row.Identity row rows, errors) (Map.empty, [])
+    let programOrders = computeProgramOrders graph
+    let nativeToSourceArg, sourceToNativeArg, mutableRefOrdinalsByBinding =
+        let byBody = descriptors.Functions |> List.choose (fun f -> f.Body |> Option.map (fun b -> b, f)) |> Map.ofList
+        let declPairs =
+            graph.Edges |> List.choose (fun e ->
+                match e.Class, e.Role with
+                | EdgeClass.Boundary, EdgeRole.BoundaryDeclaration decl ->
+                    byBody.TryFind decl.Body |> Option.map (fun abi ->
+                        let ordPairs =
+                            abi.ParameterOrdinals |> Map.toSeq |> Seq.choose (fun (nativeOrd, formal) ->
+                                decl.Formals |> List.tryFindIndex ((=) formal) |> Option.map (fun idx -> nativeOrd, idx))
+                            |> Seq.toList
+                        let ordMap = ordPairs |> Map.ofList
+                        let revOrdMap = ordPairs |> List.map (fun (nativeOrd, idx) -> idx, nativeOrd) |> Map.ofList
+                        let mutableFormalIds =
+                            (abi.References |> List.map fst) @
+                            (abi.PointerReferences |> List.map fst) @
+                            (abi.RecordReferences |> List.choose (fun (fid, isRo) -> if not isRo then Some fid else None))
+                            |> Set.ofList
+                        let mutableOrds =
+                            decl.Formals
+                            |> List.indexed
+                            |> List.choose (fun (idx, formal) -> if mutableFormalIds.Contains formal then Some idx else None)
+                            |> Set.ofList
+                        (decl.Binding, ordMap), (decl.Binding, revOrdMap), (decl.Binding, mutableOrds))
+                | _ -> None)
+        (declPairs |> List.map (fun (a, _, _) -> a) |> Map.ofList),
+        (declPairs |> List.map (fun (_, b, _) -> b) |> Map.ofList),
+        (declPairs |> List.map (fun (_, _, c) -> c) |> Map.ofList)
+    let argAt (binding: NodeId) (args: NodeId list) (nativeOrd: int) =
+        nativeToSourceArg.TryFind binding
+        |> Option.bind (Map.tryFind nativeOrd)
+        |> Option.bind (fun sourceIdx -> List.tryItem sourceIdx args)
+    let memoryLazy = lazy (MemoryPublication.project graph)
+    let setsByTarget, patternScrutinees = buildAliasEnv graph
+    let allReadsAndWritesInScope =
+        let writes = System.Collections.Generic.List<NodeId * Set<NodeId> * int>()
+        let callsInGraph = System.Collections.Generic.List<SemanticNode * NodeId * NodeId list * int>()
+        let appCallables = System.Collections.Generic.List<NodeId * Set<NodeId> * int>()
+        let localLambdaCalls = System.Collections.Generic.List<NodeId * Set<NodeId> * NodeId list * int>()
+        let callGraph = System.Collections.Generic.Dictionary<NodeId, Set<NodeId>>()
+        let addWrite siteId exprId order =
+            writes.Add(siteId, possibleOrigins graph setsByTarget patternScrutinees exprId, order)
+        let isUnderExternalBinding nid =
+            ancestorChain graph nid
+            |> List.exists (fun aid -> graph.Nodes.TryFind aid |> Option.exists BoundaryDeclarations.isExternal)
+        let isKnownLocalCallableTarget oid =
+            match graph.Nodes.TryFind oid with
+            | Some node ->
+                match node.Kind with
+                | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _ ->
+                    not (isUnderExternalBinding oid)
+                | SemanticKind.Binding _ ->
+                    not (BoundaryDeclarations.isExternal node) && not node.Children.IsEmpty
+                | SemanticKind.VarRef(_, Some _) -> true
+                | SemanticKind.ClosureValue _ | SemanticKind.EnvironmentRead _
+                | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _
+                | SemanticKind.Sequential _ | SemanticKind.IfThenElse _
+                | SemanticKind.Match _ | SemanticKind.CaseElimination _
+                | SemanticKind.TupleExpr _ | SemanticKind.TupleGet _
+                | SemanticKind.RecordExpr _ | SemanticKind.FieldGet _
+                | SemanticKind.UnionCase _ | SemanticKind.DUConstruct _
+                | SemanticKind.DUEliminate _ | SemanticKind.TryWith _
+                | SemanticKind.TryFinally _ -> true
+                | SemanticKind.PatternBinding _ ->
+                    DirectCaptures.sourceDefinition graph oid <> oid || patternScrutinees.ContainsKey oid
+                | SemanticKind.Application(innerCallee, _) ->
+                    isTupleAccessorIntrinsic graph innerCallee
+                | _ -> false
+            | None -> false
+        for node in graph.Nodes.Values do
+            if node.IsReachable then
+                match programOrders.TryFind node.Id with
+                | None -> invalidOp (sprintf "Reachable node %d missing from boundary programOrders." (NodeId.value node.Id))
+                | Some order ->
+                match node.Kind with
+                | SemanticKind.IndexSet(buf, _, _) ->
+                    addWrite node.Id buf order
+                | SemanticKind.FieldSet(expr, _, _) ->
+                    addWrite node.Id expr order
+                | SemanticKind.Application(callee, args) ->
+                    let calleeLambdas = callableTargets graph setsByTarget patternScrutinees callee
+                    let argLambdas =
+                        if isNonInvokingIntrinsic graph callee then Set.empty
+                        else args |> List.map (callableTargets graph setsByTarget patternScrutinees) |> Set.unionMany
+                    let allAppLambdas = Set.union calleeLambdas argLambdas
+                    if not (Set.isEmpty allAppLambdas) then
+                        appCallables.Add(node.Id, allAppLambdas, order)
+                        match enclosingCallable graph node.Id with
+                        | Some callerId ->
+                            match callGraph.TryGetValue callerId with
+                            | true, existing -> callGraph[callerId] <- Set.union existing allAppLambdas
+                            | false, _ -> callGraph[callerId] <- allAppLambdas
+                        | None -> ()
+                    match writableApplications.TryFind node.Id with
+                    | Some(Ok wApp) ->
+                        addWrite node.Id wApp.Buffer order
+                        addWrite node.Id wApp.Allocation order
+                    | Some(Error _) ->
+                        for a in args do addWrite node.Id a order
+                    | None -> ()
+                    match target graph callee with
+                    | Some(binding, _) when BoundaryDeclarations.isExternal binding ->
+                        callsInGraph.Add(node, binding.Id, args, order)
+                        match mutableRefOrdinalsByBinding.TryFind binding.Id with
+                        | Some mutableOrds ->
+                            args |> List.iteri (fun idx arg ->
+                                if mutableOrds.Contains idx then addWrite node.Id arg order)
+                        | None ->
+                            for a in args do addWrite node.Id a order
+                    | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Array; Operation = ("set" | "fill") } }, _) ->
+                        match args with
+                        | buf :: _ -> addWrite node.Id buf order
+                        | _ -> ()
+                    | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Array; Operation = "blit" } }, _) ->
+                        match List.tryItem 2 args with
+                        | Some targetBuf -> addWrite node.Id targetBuf order
+                        | None -> ()
+                    | Some({ Kind = SemanticKind.Intrinsic _ }, _) -> ()
+                    | Some _ | None ->
+                        let calleeOrigins = possibleOrigins graph setsByTarget patternScrutinees callee
+                        let allTargetsKnownLambdas =
+                            not (Set.isEmpty calleeLambdas) &&
+                            (calleeOrigins |> Set.forall isKnownLocalCallableTarget)
+                        if allTargetsKnownLambdas then
+                            localLambdaCalls.Add(node.Id, calleeLambdas, args, order)
+                        else
+                            for a in args do addWrite node.Id a order
+                | _ -> ()
+        let callableWrites = System.Collections.Generic.Dictionary<NodeId, Set<NodeId>>()
+        let mergeWrites cid originSet =
+            if not (Set.isEmpty originSet) then
+                match callableWrites.TryGetValue cid with
+                | true, existing -> callableWrites[cid] <- Set.union existing originSet
+                | false, _ -> callableWrites[cid] <- originSet
+        for wSite, wOrigins, _ in writes do
+            match enclosingCallable graph wSite with
+            | Some cid -> mergeWrites cid wOrigins
+            | None -> ()
+        let mutable changed = true
+        while changed do
+            changed <- false
+            for KeyValue(callerId, callees) in callGraph do
+                let beforeCount =
+                    match callableWrites.TryGetValue callerId with
+                    | true, s -> s.Count
+                    | false, _ -> 0
+                for targetId in callees do
+                    match callableWrites.TryGetValue targetId with
+                    | true, targetOrigins -> mergeWrites callerId targetOrigins
+                    | false, _ -> ()
+                let afterCount =
+                    match callableWrites.TryGetValue callerId with
+                    | true, s -> s.Count
+                    | false, _ -> 0
+                if afterCount > beforeCount then changed <- true
+            for appId, targets, args, _ in localLambdaCalls do
+                match enclosingCallable graph appId with
+                | Some callerId ->
+                    let beforeCount =
+                        match callableWrites.TryGetValue callerId with
+                        | true, s -> s.Count
+                        | false, _ -> 0
+                    for targetId in targets do
+                        match graph.Nodes.TryFind targetId, callableWrites.TryGetValue targetId with
+                        | Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _) }, (true, targetOrigins) ->
+                            parameters |> List.iteri (fun idx (_, _, formalId) ->
+                                if idx < args.Length && targetOrigins.Contains formalId then
+                                    mergeWrites callerId (possibleOrigins graph setsByTarget patternScrutinees args[idx]))
+                        | _ -> ()
+                    let afterCount =
+                        match callableWrites.TryGetValue callerId with
+                        | true, s -> s.Count
+                        | false, _ -> 0
+                    if afterCount > beforeCount then changed <- true
+                | None -> ()
+        let closureWrites =
+            appCallables |> Seq.toList |> List.collect (fun (appId, targets, appOrder) ->
+                targets |> Set.toList |> List.choose (fun t ->
+                    match callableWrites.TryGetValue t with
+                    | true, s when not (Set.isEmpty s) -> Some(appId, s, Some t, appOrder)
+                    | _ -> None))
+        let paramWrites =
+            localLambdaCalls |> Seq.toList |> List.collect (fun (appId, targets, args, appOrder) ->
+                targets |> Set.toList |> List.collect (fun t ->
+                    match graph.Nodes.TryFind t, callableWrites.TryGetValue t with
+                    | Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _) }, (true, targetOrigins) ->
+                        parameters |> List.mapi (fun idx (_, _, formalId) ->
+                            if idx < args.Length && targetOrigins.Contains formalId then
+                                Some(appId, possibleOrigins graph setsByTarget patternScrutinees args[idx], Some t, appOrder)
+                            else None)
+                        |> List.choose id
+                    | _ -> []))
+        (writes |> Seq.map (fun (s, o, ord) -> s, o, None, ord) |> Seq.toList) @ closureWrites @ paramWrites,
+        callsInGraph |> Seq.toList,
+        appCallables |> Seq.toList,
+        callGraph
+    let allWrites, allExternalCalls, applicationCallableTargets, callableCallGraph = allReadsAndWritesInScope
+    let readOnlyRequirements, readOnlyErrors, readOnlyUses =
+        let anchorFor (ro: Declarations.DeclaredReadOnlyBuffer) (node: SemanticNode) (role: string) =
+            let addr = sprintf "%s:%d:%s:%s" ro.Contract.Binding ro.Parameter (fmtRange node.Range) role
+            "foreign_readonly_" + System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes addr)
+        let roByBinding = descriptors.ReadOnlyBuffers |> List.groupBy (fun r -> r.Declaration.Binding) |> Map.ofList
+        allExternalCalls |> List.fold (fun (enrichment, errors, uses) (site, calleeBinding, args, acquireOrder) ->
+            match roByBinding.TryFind calleeBinding with
+            | None -> enrichment, errors, uses
+            | Some roContracts ->
+                roContracts |> List.fold (fun (enrichment, errors, uses) ro ->
+                    match nativeToSourceArg.TryFind calleeBinding |> Option.bind (Map.tryFind ro.Parameter) with
+                    | None -> enrichment, (site.Id, Set.singleton site.Id, "Foreign read-only buffer parameter lacks a native-to-source ordinal mapping.") :: errors, uses
+                    | Some roSourceOrd ->
+                    match List.tryItem roSourceOrd args with
+                    | None -> enrichment, errors, uses
+                    | Some actual ->
+                        match resolveBufferAbsenceChoice graph descriptors.BufferAbsences site calleeBinding ro.Parameter roSourceOrd actual with
+                        | Error msg -> enrichment, (site.Id, Set.singleton actual, msg) :: errors, uses
+                        | Ok(_, _, true, _) -> enrichment, errors, uses
+                        | Ok(_, _, false, None) ->
+                            enrichment, (site.Id, Set.singleton actual, "CCS8424: Foreign optional read-only buffer lacks payload target.") :: errors, uses
+                        | Ok(_, absenceParticipants, false, Some inspectTarget) ->
+                            let originNode = canonicalExprOrigin graph Set.empty inspectTarget
+                            let refs = [ro.Contract.Hypothesis.Identity; ro.Contract.Hypothesis.Version; ro.Contract.Hypothesis.Source]
+                            let outcome = checked' {
+                                // Discover buffer residence & capacity
+                                let poolOpt =
+                                    graph.StaticStringPool |> Option.bind (fun pool ->
+                                        pool.Entries |> List.indexed |> List.tryPick (fun (idx, entry) ->
+                                            if List.contains originNode entry.NodeIds then Some(pool, idx, entry, originNode) else
+                                            match graph.Nodes.TryFind originNode, entry.NodeIds with
+                                            | Some { Kind = SemanticKind.Literal(NativeLiteral.String content) }, staticNode :: _ when entry.Content = content ->
+                                                Some(pool, idx, entry, staticNode)
+                                            | _ -> None))
+                                let! residence, residenceNode, extentCapacity, staticPoolInfo, runtimeByteLenOpt, literalZeroCheck, extraSupport =
+                                    match poolOpt with
+                                    | Some(pool, idx, entry, staticOrigin) ->
+                                        let hasInteriorZero =
+                                            seq { for i in entry.Offset .. entry.Offset + entry.Length - 1 -> pool.Bytes[i] }
+                                            |> Seq.exists ((=) 0uy)
+                                        let validTrailing = entry.Offset + entry.StorageLength <= pool.Bytes.Length && pool.Bytes[entry.Offset + entry.Length] = 0uy
+                                        Ok(MemoryResidence.ImmutableProgram pool.DeclarationNode, pool.DeclarationNode, bigint entry.Length, Some(pool, idx, entry, staticOrigin), Some(bigint entry.Length), hasInteriorZero || not validTrailing, Set.singleton pool.DeclarationNode)
+                                    | None ->
+                                        match memoryLazy.Value with
+                                        | Error _ -> Error "CCS8424: Foreign read-only buffer requires an established storage residence and finite extent."
+                                        | Ok memory ->
+                                            let allocOpt =
+                                                match memory.Operations.TryFind originNode with
+                                                | Some(MemoryWitnessOperation.ArrayAllocation a) -> Some a
+                                                | _ ->
+                                                    memory.Operations.Values |> Seq.tryPick (function
+                                                        | MemoryWitnessOperation.ArrayAllocation a when canonicalExprOrigin graph Set.empty a.Site = originNode -> Some a
+                                                        | _ -> None)
+                                            let viewLenOpt =
+                                                match StringViewRecipes.localLineage graph memory originNode with
+                                                | Ok(snapshots, _, _) ->
+                                                    snapshots |> List.tryHead |> Option.bind (fun s ->
+                                                        match s.Extent.Range with
+                                                        | ValueRange.Bounded(lo, hi) when lo = hi && lo >= 0I -> Some lo
+                                                        | _ -> None)
+                                                | _ -> None
+                                            let litOpt =
+                                                match memory.Operations.TryFind originNode with
+                                                | Some(MemoryWitnessOperation.ArrayLiteral l) -> Some l
+                                                | _ ->
+                                                    memory.Operations.Values |> Seq.tryPick (function
+                                                        | MemoryWitnessOperation.ArrayLiteral l when canonicalExprOrigin graph Set.empty l.Site = originNode -> Some l
+                                                        | _ -> None)
+                                            match allocOpt, litOpt with
+                                            | Some alloc, _ ->
+                                                let cap = alloc.MinimumCount * bigint alloc.ElementBytes
+                                                Ok(alloc.Residence, alloc.Site, cap, None, viewLenOpt, false, alloc.Participants)
+                                            | None, Some lit ->
+                                                let hasZero =
+                                                    lit.Initializers |> Option.exists (List.exists (function
+                                                        | NativeLiteral.Int(0L, _) | NativeLiteral.UInt(0UL, _) | NativeLiteral.Char '\000' -> true
+                                                        | _ -> false))
+                                                let cap = bigint lit.Length * bigint lit.ElementBytes
+                                                Ok(lit.Residence, lit.Site, cap, None, Some cap, hasZero, lit.Participants)
+                                            | None, None ->
+                                                Error "CCS8424: Foreign read-only buffer lacks static or memory-settled backing storage."
+                                // Determine retirements & retention mode
+                                let callScope = MemoryAccessRecipes.nearestLambda graph site.Id
+                                let! retirements, retirementOrders, retentionMode =
+                                    match ro.Contract.Retention with
+                                    | BAREWire.Descriptors.BufferRetention.DuringCall ->
+                                        let dominates =
+                                            match residence with
+                                            | MemoryResidence.ImmutableProgram _ | MemoryResidence.Program _ | MemoryResidence.Heap _ -> true
+                                            | MemoryResidence.Stack(ownerScope, _) ->
+                                                match callScope with
+                                                | Some scope ->
+                                                    let rec encloses cur =
+                                                        if cur = ownerScope then true
+                                                        else
+                                                            match graph.Nodes.TryFind cur |> Option.bind _.Parent with
+                                                            | Some p -> encloses p
+                                                            | None -> false
+                                                    encloses scope
+                                                | None -> false
+                                        if not dominates then Error "CCS8425: Read-only buffer storage does not dominate the foreign call."
+                                        else Ok([], [], BufferRetentionMode.DuringCall)
+                                    | BAREWire.Descriptors.BufferRetention.RetainedUntil(ownerParam, releases) -> checked' {
+                                        let! ownerArg = argAt calleeBinding args ownerParam |> needed "CCS8425: Retained buffer contract owner ordinal is out of range."
+                                        let ownerOrigin = immutableExprOrigin graph Set.empty ownerArg
+                                        let matchesRelease (_, callBinding, callArgs, callOrder) =
+                                            callOrder > acquireOrder &&
+                                            (releases |> Array.exists (function
+                                                | BAREWire.Descriptors.RetentionRelease.OwnerRelease rel ->
+                                                    let matchesName =
+                                                        graph.Nodes.TryFind callBinding
+                                                        |> Option.bind (Declarations.qualifiedExportName graph)
+                                                        |> Option.exists ((=) rel.Binding)
+                                                    matchesName &&
+                                                    (argAt callBinding callArgs rel.Parameter |> Option.exists (fun a -> immutableExprOrigin graph Set.empty a = ownerOrigin))
+                                                | BAREWire.Descriptors.RetentionRelease.Redefinition keys ->
+                                                    callBinding = calleeBinding &&
+                                                    (keys |> Array.forall (fun k ->
+                                                        match argAt calleeBinding args k, argAt callBinding callArgs k with
+                                                        | Some a1, Some a2 -> immutableExprOrigin graph Set.empty a1 = immutableExprOrigin graph Set.empty a2
+                                                        | _ -> false))))
+                                        let matched =
+                                            allExternalCalls
+                                            |> List.filter (fun (retSite, cBind, cArgs, cOrder) ->
+                                                matchesRelease (retSite, cBind, cArgs, cOrder) &&
+                                                dominatesOnUnconditionalSpine graph site.Id retSite.Id)
+                                            |> List.sortBy (fun (_, _, _, o) -> o)
+                                        let retNodes = matched |> List.map (fun (n, _, _, _) -> n.Id)
+                                        let retOrders = matched |> List.map (fun (_, _, _, o) -> o)
+                                        if retNodes.IsEmpty then
+                                            return! Error "CCS8425: Retained read-only buffer lacks a dominating release or redefinition retirement."
+                                        else
+                                            match residence with
+                                            | MemoryResidence.Stack(ownerScope, _) ->
+                                                let allEnclosed =
+                                                    retNodes |> List.forall (fun rn ->
+                                                        match MemoryAccessRecipes.nearestLambda graph rn with
+                                                        | Some s ->
+                                                            let rec encloses cur = if cur = ownerScope then true else match graph.Nodes.TryFind cur |> Option.bind _.Parent with Some p -> encloses p | None -> false
+                                                            encloses s
+                                                        | None -> false)
+                                                if not allEnclosed then return! Error "CCS8425: Stack-resident retained buffer escapes its defining activation before retirement."
+                                                else return (retNodes, retOrders, BufferRetentionMode.RetainedUntilOwner(ownerParam, retNodes.Length))
+                                            | _ -> return (retNodes, retOrders, BufferRetentionMode.RetainedUntilOwner(ownerParam, retNodes.Length)) }
+                                // Check exclusivity (CCS8426)
+                                let originSet =
+                                    possibleOrigins graph setsByTarget patternScrutinees inspectTarget
+                                    |> Set.add originNode
+                                let maxOrder = if retirementOrders.IsEmpty then acquireOrder else List.max retirementOrders
+                                let siteLoops = enclosingLoops graph site.Id
+                                let borrowsAcrossLoopBackEdge =
+                                    siteLoops |> Set.exists (fun l ->
+                                        retirements |> List.exists (fun retNode -> not ((enclosingLoops graph retNode).Contains l)))
+                                let sameCallWritableOverlap =
+                                    writableApplications.TryFind site.Id |> Option.exists (function
+                                        | Ok wApp ->
+                                            let wSet =
+                                                Set.union
+                                                    (possibleOrigins graph setsByTarget patternScrutinees wApp.Buffer)
+                                                    (possibleOrigins graph setsByTarget patternScrutinees wApp.Allocation)
+                                                |> Set.add wApp.Allocation
+                                            not (Set.isEmpty (Set.intersect originSet wSet))
+                                        | Error _ -> false)
+                                let mutatedWhileBorrowed =
+                                    allWrites |> List.exists (fun (wSite, wOriginSet, targetCallableOpt, wOrder) ->
+                                        wSite <> site.Id &&
+                                        (match targetCallableOpt with
+                                         | Some targetId -> not (subtreeContains graph targetId site.Id)
+                                         | None -> true) &&
+                                        not (Set.isEmpty (Set.intersect originSet wOriginSet)) &&
+                                        ((wOrder >= acquireOrder && wOrder <= maxOrder) ||
+                                         (borrowsAcrossLoopBackEdge &&
+                                          not (Set.isEmpty (Set.intersect siteLoops (enclosingLoops graph wSite))))))
+                                do! require (not sameCallWritableOverlap && not mutatedWhileBorrowed)
+                                        "CCS8426: Foreign read-only buffer aliases mutable storage or is mutated while borrowed."
+                                // Check extent and emit obligations
+                                let retentionInfo =
+                                    let model: BufferRetentionDominationModel =
+                                        { Call = site.Id; Declaration = ro.Quote; Buffer = actual; Residence = residenceNode
+                                          Mode = retentionMode; AcquireOrder = acquireOrder; RetirementOrders = retirementOrders }
+                                    let rSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList (site.Id :: actual :: residenceNode :: retirements)]
+                                    let info =
+                                        { Id = anchorFor ro site "retention"; Kind = "foreign-buffer-retention-domination"; Logic = "QF_LIA"
+                                          Statement = "The read-only buffer residence dominates the foreign call and all declared retentions until retirement."
+                                          Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.BufferRetentionDomination model }
+                                    let citizen = Ingredients.ownedObligationNode retained site enrichId info
+                                    citizen, Enrichment.combine Enrichment.empty { NewNodes = [citizen]; Annotated = []; NewEdges = [constrains (Set.toList rSupport) citizen] }
+                                let retCitizen, retEnrich = retentionInfo
+                                match ro.Contract.Extent with
+                                | BAREWire.Descriptors.ReadOnlyBufferExtent.ExplicitCount countParam ->
+                                    let! countArg = argAt calleeBinding args countParam |> needed "CCS8424: ExplicitCount parameter ordinal is out of range."
+                                    let! lo, hi =
+                                        match graph.Nodes.TryFind countArg |> Option.bind _.ValueRange with
+                                        | Some(ValueRange.Bounded(lo, hi)) when lo >= 0I && lo <= hi -> Ok(lo, hi)
+                                        | _ -> Error "CCS8424: ExplicitCount argument requires a finite nonnegative count domain."
+                                    do! require (hi <= extentCapacity)
+                                            (sprintf "CCS8424: ExplicitCount upper bound %A exceeds buffer capacity %A." hi extentCapacity)
+                                    let extentClaimId =
+                                        match retained.Obligations.TryFind (anchorFor ro site "extent") with
+                                        | Some existing -> existing
+                                        | None -> NodeId.fresh ()
+                                    let extentModel: ZeroCopyBufferExtentModel =
+                                        { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; CountParameter = countParam
+                                          Buffer = actual; Count = countArg; MinimumCount = lo; MaximumCount = hi
+                                          ExtentCapacity = extentCapacity; ElementBytes = 1; CountCoverage = extentClaimId }
+                                    let extentInfo =
+                                        { Id = anchorFor ro site "extent"; Kind = "foreign-readonly-buffer-extent"; Logic = "QF_LIA"
+                                          Statement = "The foreign explicit-count read stays within the established read-only buffer byte extent with zero copies."
+                                          Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.ZeroCopyBufferExtent extentModel }
+                                    let extentCitizen = { (Ingredients.ownedObligationNode retained site enrichId extentInfo) with Id = extentClaimId }
+                                    let eSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList [site.Id; actual; countArg]]
+                                    let combined = Enrichment.combine retEnrich { NewNodes = [extentCitizen]; Annotated = []; NewEdges = [constrains (Set.toList eSupport) extentCitizen] }
+                                    let participants =
+                                        [ { Role = ParticipantRole.ReadOnlyBufferCall; Node = site.Id; Ordinal = 0; Group = site.Id }
+                                          { Role = ParticipantRole.ReadOnlyBufferDeclaration; Node = ro.Quote; Ordinal = ro.Parameter; Group = site.Id }
+                                          { Role = ParticipantRole.ReadOnlyBufferActual; Node = actual; Ordinal = ro.Parameter; Group = site.Id }
+                                          { Role = ParticipantRole.ReadOnlyBufferResidence; Node = residenceNode; Ordinal = ro.Parameter; Group = site.Id } ] @
+                                        (retirements |> List.mapi (fun i r -> { Role = ParticipantRole.ReadOnlyBufferRetirement; Node = r; Ordinal = i; Group = site.Id }))
+                                    let row: BoundaryReadOnlyBufferUse =
+                                        { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; Buffer = actual
+                                          Residence = residenceNode; Crossing = BoundaryReadOnlyBufferCrossing.ExplicitZeroCopy(countParam, countArg, extentCapacity, extentCitizen.Id)
+                                          Copies = 0; RetentionProof = retCitizen.Id; AccessExclusivityProof = None; Retirements = retirements
+                                          Participants = ParticipantEvidence.Established participants }
+                                    return row, combined
+                                | BAREWire.Descriptors.ReadOnlyBufferExtent.UncountedNulTerminated ->
+                                    do! require (not literalZeroCheck) "CCS8424: NUL-terminated foreign buffer contains an interior NUL byte or lacks trailing NUL."
+                                    match staticPoolInfo with
+                                    | Some(_, poolIdx, entry, staticOrigin) ->
+                                        let termModel: UncountedPathTerminationModel =
+                                            { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; Source = actual
+                                              Mode = UncountedPathStagingMode.StaticImageZeroCopy poolIdx
+                                              ByteLength = bigint entry.Length; RequiresNoInteriorNul = true; RequiresTrailingNul = true }
+                                        let termInfo =
+                                            { Id = anchorFor ro site "termination"; Kind = "foreign-uncounted-path-termination"; Logic = "QF_LIA"
+                                              Statement = "The uncounted NUL-terminated path borrows an immutable static string entry with verified zero interior NULs."
+                                              Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.UncountedPathTermination termModel }
+                                        let termCitizen = Ingredients.ownedObligationNode retained site enrichId termInfo
+                                        let tSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList [site.Id; actual; staticOrigin]]
+                                        let combined = Enrichment.combine retEnrich { NewNodes = [termCitizen]; Annotated = []; NewEdges = [constrains (Set.toList tSupport) termCitizen] }
+                                        let participants =
+                                            [ { Role = ParticipantRole.ReadOnlyBufferCall; Node = site.Id; Ordinal = 0; Group = site.Id }
+                                              { Role = ParticipantRole.ReadOnlyBufferDeclaration; Node = ro.Quote; Ordinal = ro.Parameter; Group = site.Id }
+                                              { Role = ParticipantRole.ReadOnlyBufferActual; Node = actual; Ordinal = ro.Parameter; Group = site.Id }
+                                              { Role = ParticipantRole.ReadOnlyBufferResidence; Node = residenceNode; Ordinal = ro.Parameter; Group = site.Id } ] @
+                                            (retirements |> List.mapi (fun i r -> { Role = ParticipantRole.ReadOnlyBufferRetirement; Node = r; Ordinal = i; Group = site.Id }))
+                                        let row: BoundaryReadOnlyBufferUse =
+                                            { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; Buffer = actual
+                                              Residence = residenceNode
+                                              Crossing = BoundaryReadOnlyBufferCrossing.StaticImageNulBorrowed(poolIdx, staticOrigin, bigint entry.Length, termCitizen.Id)
+                                              Copies = 0; RetentionProof = retCitizen.Id; AccessExclusivityProof = None; Retirements = retirements
+                                              Participants = ParticipantEvidence.Established participants }
+                                        return row, combined
+                                    | None ->
+                                        let! byteLen = runtimeByteLenOpt |> needed "CCS8424: Runtime NUL-terminated buffer requires a known finite byte length without interior NULs."
+                                        let cap = int (byteLen + 1I)
+                                        let stagingId, stagingNodes =
+                                            if residenceNode <> actual then residenceNode, []
+                                            else
+                                                let n =
+                                                    { Id = NodeId.fresh ()
+                                                      Kind = SemanticKind.Literal NativeLiteral.Unit
+                                                      Range = site.Range
+                                                      Type = Types.unitType
+                                                      SRTPResolution = None
+                                                      ArenaAffinity = ArenaAffinity.CurrentActor
+                                                      LayoutHint = None
+                                                      Children = []
+                                                      Parent = None
+                                                      IsReachable = true
+                                                      EmissionStrategy = EmissionStrategy.Inline
+                                                      ValueRange = None
+                                                      Metadata = Map.ofList [ ("Baker.BoundaryOwned", MetadataValue.Bool true); (ElaborationMetadata.For, MetadataValue.String "BoundaryStaging"); (ElaborationMetadata.Id, MetadataValue.Int enrichId) ] }
+                                                n.Id, [n]
+                                        let termModel: UncountedPathTerminationModel =
+                                            { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; Source = actual
+                                              Mode = UncountedPathStagingMode.CallScopedStaged(stagingId, cap)
+                                              ByteLength = byteLen; RequiresNoInteriorNul = true; RequiresTrailingNul = true }
+                                        let termInfo =
+                                            { Id = anchorFor ro site "termination"; Kind = "foreign-uncounted-path-termination"; Logic = "QF_LIA"
+                                              Statement = "The uncounted NUL-terminated path uses a call-scoped [len + 1] staged NUL-terminated buffer."
+                                              Source = fmtRange site.Range; Refs = refs; Body = ObligationBody.UncountedPathTermination termModel }
+                                        let termCitizen = Ingredients.ownedObligationNode retained site enrichId termInfo
+                                        let extraNodes = termCitizen :: stagingNodes
+                                        let tSupport = Set.unionMany [extraSupport; absenceParticipants; Set.ofList [site.Id; actual; stagingId]]
+                                        let combined = Enrichment.combine retEnrich { NewNodes = extraNodes; Annotated = []; NewEdges = [constrains (Set.toList tSupport) termCitizen] }
+                                        let participants =
+                                            [ { Role = ParticipantRole.ReadOnlyBufferCall; Node = site.Id; Ordinal = 0; Group = site.Id }
+                                              { Role = ParticipantRole.ReadOnlyBufferDeclaration; Node = ro.Quote; Ordinal = ro.Parameter; Group = site.Id }
+                                              { Role = ParticipantRole.ReadOnlyBufferActual; Node = actual; Ordinal = ro.Parameter; Group = site.Id }
+                                              { Role = ParticipantRole.ReadOnlyBufferResidence; Node = residenceNode; Ordinal = ro.Parameter; Group = site.Id } ] @
+                                            (retirements |> List.mapi (fun i r -> { Role = ParticipantRole.ReadOnlyBufferRetirement; Node = r; Ordinal = i; Group = site.Id }))
+                                        let row: BoundaryReadOnlyBufferUse =
+                                            { Call = site.Id; Declaration = ro.Quote; Parameter = ro.Parameter; Buffer = actual
+                                              Residence = residenceNode
+                                              Crossing = BoundaryReadOnlyBufferCrossing.CallScopedNulStaged(stagingId, cap, byteLen, termCitizen.Id)
+                                              Copies = 0; RetentionProof = retCitizen.Id; AccessExclusivityProof = None; Retirements = retirements
+                                              Participants = ParticipantEvidence.Established participants }
+                                        return row, combined }
+                            match outcome with
+                            | Ok(row, rowEnrich) ->
+                                Enrichment.combine enrichment rowEnrich, errors, Map.add (site.Id, ro.Parameter) row uses
+                            | Error reason ->
+                                enrichment, (site.Id, Set.ofList (site.Id :: actual :: ro.Participants), reason) :: errors, uses) (enrichment, errors, uses))
+            (Enrichment.empty, [], Map.empty)
+    let borrowedViewRequirements, borrowedViewUseErrors, borrowedViewUses =
+        let bvByBinding = descriptors.BorrowedResultViews |> List.groupBy (fun b -> b.Declaration.Binding) |> Map.ofList
+        allExternalCalls |> List.fold (fun (enrichment, errors, uses) (site, calleeBinding, args, callOrder) ->
+            match bvByBinding.TryFind calleeBinding with
+            | None -> enrichment, errors, uses
+            | Some [bv] ->
+                let outcome = checked' {
+                    do! require (isOptionType site.Type) "CCS8425: Borrowed result view requires nullable-to-Option boundary representation."
+                    let! ownerArg = argAt calleeBinding args bv.OwnerParameter |> needed "Borrowed result view owner ordinal is out of range."
+                    let ownerOrigin = immutableExprOrigin graph Set.empty ownerArg
+                    let viewOrigin = canonicalExprOrigin graph Set.empty site.Id
+                    let viewDerivedNodes =
+                        let derived = System.Collections.Generic.HashSet<NodeId>()
+                        let add id = derived.Add id |> ignore
+                        add site.Id
+                        add viewOrigin
+                        let rec bindingTargets seen id =
+                            if Set.contains id seen then [] else
+                            let seen = Set.add id seen
+                            match graph.Nodes.TryFind id with
+                            | Some { Kind = SemanticKind.VarRef(_, Some t) } -> t :: bindingTargets seen t
+                            | Some { Kind = SemanticKind.CellAddress b } -> b :: bindingTargets seen b
+                            | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+                            | Some { Kind = SemanticKind.EagerExpr inner }
+                            | Some { Kind = SemanticKind.Deref inner }
+                            | Some { Kind = SemanticKind.Reborrow inner } -> bindingTargets seen inner
+                            | _ -> []
+                        let mutable changed = true
+                        while changed do
+                            changed <- false
+                            for node in graph.Nodes.Values do
+                                if node.IsReachable then
+                                    let before = derived.Count
+                                    match node.Kind with
+                                    | SemanticKind.TypeAnnotation(inner, _)
+                                    | SemanticKind.EagerExpr inner
+                                    | SemanticKind.StringByteBorrow inner
+                                    | SemanticKind.Reborrow inner
+                                    | SemanticKind.Deref inner
+                                    | SemanticKind.AddressOf(inner, _)
+                                    | SemanticKind.TupleGet(inner, _)
+                                    | SemanticKind.FieldGet(inner, _)
+                                    | SemanticKind.DUEliminate(inner, _, _, _)
+                                    | SemanticKind.UnionCase(_, _, Some inner)
+                                    | SemanticKind.DUConstruct(_, _, Some inner, _) ->
+                                        if derived.Contains inner then add node.Id
+                                    | SemanticKind.VarRef(_, Some targetId) ->
+                                        if derived.Contains targetId then add node.Id
+                                    | SemanticKind.Binding _ ->
+                                        if node.Children |> List.exists derived.Contains then add node.Id
+                                    | SemanticKind.TupleExpr elements ->
+                                        if elements |> List.exists derived.Contains then add node.Id
+                                    | SemanticKind.RecordExpr(fields, copyFrom) ->
+                                        if (fields |> List.exists (snd >> derived.Contains)) || (copyFrom |> Option.exists derived.Contains) then
+                                            add node.Id
+                                    | SemanticKind.Application(callee, [arg]) when isTupleAccessorIntrinsic graph callee ->
+                                        if derived.Contains arg then add node.Id
+                                    | SemanticKind.Set(target, rhs)
+                                    | SemanticKind.FieldSet(target, _, rhs) ->
+                                        if derived.Contains rhs then
+                                            for t in bindingTargets Set.empty target do add t
+                                    | SemanticKind.Sequential items when not items.IsEmpty ->
+                                        if derived.Contains (List.last items) then add node.Id
+                                    | SemanticKind.IfThenElse(_, t, e) ->
+                                        if derived.Contains t || (e |> Option.exists derived.Contains) then add node.Id
+                                    | SemanticKind.Match(scrutinee, cases) ->
+                                        if derived.Contains scrutinee then
+                                            for c in cases do
+                                                for pb in c.PatternBindings do add pb
+                                        if cases |> List.exists (fun c -> derived.Contains c.Body) then add node.Id
+                                    | SemanticKind.CaseElimination(scrutinee, arms) ->
+                                        if derived.Contains scrutinee then
+                                            for arm in arms do
+                                                for b in arm.Bindings do add b
+                                        if arms |> List.exists (fun a -> derived.Contains a.Body) then add node.Id
+                                    | SemanticKind.TryWith(body, handler) ->
+                                        if derived.Contains body || derived.Contains handler then add node.Id
+                                    | SemanticKind.TryFinally(body, _) ->
+                                        if derived.Contains body then add node.Id
+                                    | _ -> ()
+                                    if derived.Count > before then changed <- true
+                        Set.ofSeq derived
+                    let directReads =
+                        graph.Nodes.Values |> Seq.choose (fun n ->
+                            if not n.IsReachable || n.Id = site.Id then None else
+                            match programOrders.TryFind n.Id with
+                            | None -> invalidOp (sprintf "Reachable node %d missing from boundary programOrders." (NodeId.value n.Id))
+                            | Some order ->
+                            let touchesView =
+                                match n.Kind with
+                                | SemanticKind.VarRef(_, Some targetId) -> viewDerivedNodes.Contains targetId || viewDerivedNodes.Contains n.Id
+                                | SemanticKind.DUEliminate(subj, _, _, _)
+                                | SemanticKind.FieldGet(subj, _)
+                                | SemanticKind.IndexGet(subj, _)
+                                | SemanticKind.Deref subj
+                                | SemanticKind.Reborrow subj -> viewDerivedNodes.Contains subj
+                                | SemanticKind.Set(_, rhs)
+                                | SemanticKind.FieldSet(_, _, rhs) -> viewDerivedNodes.Contains rhs
+                                | SemanticKind.Application(_, args) -> args |> List.exists viewDerivedNodes.Contains
+                                | SemanticKind.Lambda(_, _, captures, _, _)
+                                | SemanticKind.LazyExpr(_, captures)
+                                | SemanticKind.SeqExpr(_, captures) ->
+                                    captures |> List.exists (fun c -> c.SourceNodeId |> Option.exists viewDerivedNodes.Contains)
+                                | _ -> false
+                            if touchesView then Some(n.Id, order) else None)
+                        |> Seq.toList
+                    let callableReadsView =
+                        let readers = System.Collections.Generic.HashSet<NodeId>()
+                        for rdNode, _ in directReads do
+                            match graph.Nodes.TryFind rdNode with
+                            | Some { Kind = SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _ } ->
+                                if not (subtreeContains graph rdNode site.Id) then
+                                    readers.Add rdNode |> ignore
+                            | _ ->
+                                match enclosingCallable graph rdNode with
+                                | Some cId when not (subtreeContains graph cId site.Id) ->
+                                    readers.Add cId |> ignore
+                                | _ -> ()
+                        let mutable changed = true
+                        while changed do
+                            changed <- false
+                            for KeyValue(callerId, callees) in callableCallGraph do
+                                if not (subtreeContains graph callerId site.Id) &&
+                                   not (readers.Contains callerId) &&
+                                   (callees |> Set.exists readers.Contains) then
+                                    readers.Add callerId |> ignore
+                                    changed <- true
+                        Set.ofSeq readers
+                    let closureReadCalls =
+                        applicationCallableTargets |> List.choose (fun (appId, targets, appOrder) ->
+                            if appId <> site.Id && appOrder >= callOrder && (targets |> Set.exists callableReadsView.Contains) then
+                                Some(appId, appOrder)
+                            else None)
+                    let reads =
+                        ((directReads |> List.filter (fun (_, o) -> o >= callOrder)) @ closureReadCalls)
+                        |> List.distinctBy fst
+                        |> List.sortBy snd
+                    let allInvalidations =
+                        allExternalCalls |> List.filter (fun (_, cBind, cArgs, cOrder) ->
+                            cOrder > callOrder &&
+                            (bv.Contract.InvalidatedBy |> Array.exists (function
+                                | BAREWire.Descriptors.BorrowInvalidation.AnyOwnerCall ->
+                                    cArgs |> List.exists (fun a -> immutableExprOrigin graph Set.empty a = ownerOrigin)
+                                | BAREWire.Descriptors.BorrowInvalidation.OwnerCall rel ->
+                                    let matchesName =
+                                        graph.Nodes.TryFind cBind |> Option.bind (Declarations.qualifiedExportName graph) |> Option.exists ((=) rel.Binding)
+                                    matchesName && (argAt cBind cArgs rel.Parameter |> Option.exists (fun a -> immutableExprOrigin graph Set.empty a = ownerOrigin)))))
+                        |> List.sortBy (fun (_, _, _, o) -> o)
+                    do! require (not allInvalidations.IsEmpty) "CCS8425: Borrowed result view requires a matching owner invalidation call."
+                    let invalidations =
+                        allInvalidations |> List.filter (fun (invSite, _, _, _) -> dominatesOnUnconditionalSpine graph site.Id invSite.Id)
+                    do! require (not invalidations.IsEmpty) "CCS8425: Borrowed result view owner invalidation does not dominate the borrow site."
+                    let invNodes = invalidations |> List.map (fun (n, _, _, _) -> n.Id)
+                    let invOrders = invalidations |> List.map (fun (_, _, _, o) -> o)
+                    let readNodes = reads |> List.map fst
+                    let readOrders = reads |> List.map snd
+                    let siteLoops = enclosingLoops graph site.Id
+                    let invalidatesBeforeUse (useNode: NodeId) (useOrder: int) (invSite: SemanticNode) (invOrder: int) =
+                        let sharedNonEnclosingLoop =
+                            not (Set.isEmpty (Set.difference (Set.intersect (enclosingLoops graph useNode) (enclosingLoops graph invSite.Id)) siteLoops))
+                        (useOrder >= invOrder && canPrecedeInExecution graph invSite.Id useNode) ||
+                        sharedNonEnclosingLoop
+                    let readAfterInvalidation =
+                        reads |> List.exists (fun (rdNode, rdOrder) ->
+                            allInvalidations |> List.exists (fun (invSite, _, _, invOrder) ->
+                                invalidatesBeforeUse rdNode rdOrder invSite invOrder))
+                    do! require (not readAfterInvalidation)
+                            "CCS8425: Borrowed result view read exceeds owner invalidation frontier."
+                    let! companionCall, companionArgs =
+                        match bv.Contract.Extent with
+                        | BAREWire.Descriptors.BorrowedExtent.NulTerminated -> Ok(None, [])
+                        | BAREWire.Descriptors.BorrowedExtent.CompanionCall(compBinding, argOrdinals) ->
+                            let expectedArgs = argOrdinals |> Array.toList |> List.choose (argAt calleeBinding args)
+                            let found =
+                                allExternalCalls |> List.tryFind (fun (cNode, cBind, cArgs, cOrder) ->
+                                    let nameMatches =
+                                        graph.Nodes.TryFind cBind
+                                        |> Option.bind (Declarations.qualifiedExportName graph) = Some compBinding
+                                    let actualArgOrigins =
+                                        argOrdinals |> Array.toList
+                                        |> List.map (fun i -> argAt cBind cArgs i |> Option.map (immutableExprOrigin graph Set.empty))
+                                    let expectedArgOrigins =
+                                        expectedArgs |> List.map (immutableExprOrigin graph Set.empty >> Some)
+                                    cOrder >= callOrder &&
+                                    dominatesOnUnconditionalSpine graph site.Id cNode.Id &&
+                                    not (allInvalidations |> List.exists (fun (invSite, _, _, invOrder) ->
+                                        invalidatesBeforeUse cNode.Id cOrder invSite invOrder)) &&
+                                    nameMatches &&
+                                    actualArgOrigins = expectedArgOrigins)
+                            match found with
+                            | Some(cNode, cBind, cArgs, _) ->
+                                let selectedArgs = argOrdinals |> Array.toList |> List.choose (argAt cBind cArgs)
+                                Ok(Some cNode.Id, selectedArgs)
+                            | None -> Error "CCS8424: Borrowed result view lacks its companion extent measurement before invalidation."
+                    let scopeModel: BorrowedResultViewScopeModel =
+                        { Call = site.Id; Declaration = bv.Quote; Owner = ownerArg; View = site.Id
+                          CallOrder = callOrder; InvalidationOrders = invOrders; ReadOrders = readOrders; NullToNoneBoundary = true }
+                    let addr = sprintf "%s:%s:scope" bv.Contract.Binding (fmtRange site.Range)
+                    let scopeInfo =
+                        { Id = "foreign_borrowed_view_" + System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes addr)
+                          Kind = "foreign-borrowed-view-scope"; Logic = "QF_LIA"
+                          Statement = "The borrowed result view is null-to-None bounded and read strictly before owner invalidation."
+                          Source = fmtRange site.Range; Refs = [bv.Contract.Hypothesis.Identity; bv.Contract.Hypothesis.Version; bv.Contract.Hypothesis.Source]
+                          Body = ObligationBody.BorrowedResultViewScope scopeModel }
+                    let scopeCitizen = Ingredients.ownedObligationNode retained site enrichId scopeInfo
+                    let support = Set.ofList (site.Id :: ownerArg :: invNodes @ readNodes @ bv.Participants)
+                    let participants =
+                        [ { Role = ParticipantRole.BorrowedResultViewCall; Node = site.Id; Ordinal = 0; Group = site.Id }
+                          { Role = ParticipantRole.BorrowedResultViewDeclaration; Node = bv.Quote; Ordinal = bv.OwnerParameter; Group = site.Id }
+                          { Role = ParticipantRole.BorrowedResultViewOwner; Node = ownerArg; Ordinal = bv.OwnerParameter; Group = site.Id } ] @
+                        (invNodes |> List.mapi (fun i n -> { Role = ParticipantRole.BorrowedResultViewInvalidation; Node = n; Ordinal = i; Group = site.Id })) @
+                        (readNodes |> List.mapi (fun i n -> { Role = ParticipantRole.BorrowedResultViewRead; Node = n; Ordinal = i; Group = site.Id }))
+                    let row: BoundaryBorrowedResultViewUse =
+                        { Call = site.Id; Declaration = bv.Quote; Owner = ownerArg; View = site.Id
+                          CompanionCall = companionCall; CompanionArguments = companionArgs
+                          CallOrder = callOrder; Invalidations = invNodes; InvalidationOrders = invOrders
+                          Reads = readNodes; ReadOrders = readOrders; NullToNoneBoundary = true
+                          ScopeProof = scopeCitizen.Id; Participants = ParticipantEvidence.Established participants }
+                    return row, { NewNodes = [scopeCitizen]; Annotated = []; NewEdges = [constrains (Set.toList support) scopeCitizen] } }
+                match outcome with
+                | Ok(row, rowEnrich) ->
+                    Enrichment.combine enrichment rowEnrich, errors, Map.add site.Id row uses
+                | Error reason ->
+                    enrichment, (site.Id, Set.ofList (site.Id :: bv.Participants), reason) :: errors, uses
+            | _ -> enrichment, errors, uses) (Enrichment.empty, [], Map.empty)
     // Requirements belong to the exact source application, before any native
     // adapter exists. Neither a matching release call nor an unused argument
     // establishes conversion, alias retirement or complete exit coverage.
@@ -1482,7 +2851,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                     | _ -> enrichment,errors
                 | _ -> enrichment,errors
             | _ -> enrichment,errors) (Enrichment.empty,[])
-    let initialErrors = writableRequirementErrors @ writableErrors @ resourceRequirementErrors @ resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
+    let initialErrors = writableRequirementErrors @ writableErrors @ readOnlyDeclarationErrors @ readOnlyErrors @ borrowedViewDeclarationErrors @ borrowedViewUseErrors @ resourceRequirementErrors @ resourceErrors @ intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
     let imported binding =
         checked' {
             let! library =
@@ -1503,7 +2872,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         require
                             (selected |> Option.exists (fun selected -> selected.Contract.Library = library))
                             "This C library requires its exact explicitly selected source process-link loading contract.")
-            let! import = readImport graph descriptors resourceDeclarations writableDeclarations binding library symbol
+            let! import = readImport graph descriptors resourceDeclarations writableDeclarations readOnlyDeclarations borrowedViewDeclarations binding library symbol
 
             return
                 { import with
@@ -1638,6 +3007,13 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
 
         Map.add entry.Formation entry entries
 
+    let resolveAbsence site bindingId ordinal actual _ =
+        match sourceToNativeArg.TryFind bindingId |> Option.bind (Map.tryFind ordinal) with
+        | None ->
+            Error "Foreign buffer parameter lacks an established source-to-native ordinal mapping."
+        | Some nativeOrd ->
+            resolveBufferAbsenceChoice graph descriptors.BufferAbsences site bindingId nativeOrd ordinal actual
+            |> Result.map (fun (choice, support, _, _) -> choice, support)
     let imports, calls, entries, errors =
         graph.Nodes
         |> Map.fold
@@ -1651,14 +3027,14 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         let result =
                             checked' {
                                 let! import = imported binding
-                                if (import.Result |> Option.toList) @ (import.Parameters |> List.map snd) |> List.exists (function BoundaryScalar.ResourceHandle _ -> true | _ -> false) then
+                                if resourceDeclarations.Values |> Seq.exists (fun r -> r.Acquisition = binding.Id || r.Release = binding.Id) then
                                     return import, None
                                 else
                                     let writable=
                                         import.Parameters |> List.indexed |> List.choose(fun (ordinal,(_,abi))->
                                             match abi with BoundaryScalar.WritableBytes _->Some ordinal | _->None)
                                         |> List.tryExactlyOne |> Option.bind(fun ordinal->writableUses.TryFind(node.Id,ordinal))
-                                    let! call = readCall graph node callee args path import None None writable
+                                    let! call = readCall graph node callee args path import None None writable readOnlyDeclarations readOnlyUses resourceDeclarations (resolveAbsence node import.Binding)
                                     return import, Some call
                             }
 
@@ -1707,6 +3083,10 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                 (Some source.Formation)
                                                 None
                                                 None
+                                                readOnlyDeclarations
+                                                readOnlyUses
+                                                resourceDeclarations
+                                                (resolveAbsence node import.Binding)
 
                                         return import, entry, call
                                     }
@@ -1794,7 +3174,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                             let! cleanup,accessRows,flow,root,support,releaseSites=resourceFlow graph resource conversion conversionClaim.Id cleanupClaim.Id
                             let resourceUse=BoundaryResourceUse.AcquireNullable
                                                 {Declaration=resource.Identity;Tag=tag;NoneCase=noneCase;SomeCase=someCase;Conversion=conversionClaim.Id;Cleanup=cleanupClaim.Id}
-                            let! acquisitionCall=readCall graph site callee arguments path import None (Some resourceUse) None
+                            let! acquisitionCall=readCall graph site callee arguments path import None (Some resourceUse) None readOnlyDeclarations readOnlyUses resourceDeclarations (resolveAbsence site import.Binding)
                             let! releaseCalls=releaseSites |> Map.toList |> List.map(fun (releaseSite,(_,releaseBinding))->checked' {
                                 let! releaseNode=graph.Nodes.TryFind releaseSite |> needed "The release call was withdrawn."
                                 let! releaseCallee,actuals=match releaseNode.Kind with SemanticKind.Application(callee,args)->Ok(callee,args) | _->Error "The release event is not an application."
@@ -1802,7 +3182,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                    |> function [row]->Ok row | _->Error "The explicit release lost its exact native import."
                                 let! _,releasePath=target graph releaseCallee |> needed "The explicit release lost its actual declaration transport."
                                 let resourceUse=BoundaryResourceUse.ReleaseOwned {Declaration=resource.Identity;Acquisition=site.Id;Cleanup=cleanupClaim.Id}
-                                return! readCall graph releaseNode releaseCallee actuals releasePath releaseImport None (Some resourceUse) None }) |> collect
+                                return! readCall graph releaseNode releaseCallee actuals releasePath releaseImport None (Some resourceUse) None readOnlyDeclarations readOnlyUses resourceDeclarations (resolveAbsence releaseNode releaseImport.Binding) }) |> collect
                             let support=Set.union support (Set.ofList [platform.Node;core.Node;site.Id;import.Identity])
                             let hypothesis=resource.Contract.Hypothesis
                             let refs=[sprintf "external-execution-hypothesis identity=%s version=%s source=%s" hypothesis.Identity hypothesis.Version hypothesis.Source]
@@ -1872,10 +3252,92 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                     Ok(BoundaryScalar.Integer(bits, (signed = BAREWire.Descriptors.Signedness.Signed)))
                 | _ -> Error "The closed C entry profile requires scalar integer parameters and result."
 
+            let rec extractCallbackArgTypes ty =
+                match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+                | NativeType.TApp(tc, [inner]) when tc.Name = "option" || tc.Name = "Option" -> extractCallbackArgTypes inner
+                | NativeType.TApp(tc, [inner]) when tc.Name = "FnPtr" -> extractCallbackArgTypes inner
+                | NativeType.TFun(dom, cod) -> dom :: extractCallbackArgTypes cod
+                | _ -> []
+            let! formalNode =
+                graph.Nodes.TryFind source.Formal
+                |> needed "CCS8403: A callback parameter formal is absent from the source graph."
+            let formalCallbackTypes = extractCallbackArgTypes formalNode.Type
             let! parameters =
                 source.Contract.Signature.Parameters
                 |> Array.toList
-                |> List.map (fun parameter -> integer parameter.Type)
+                |> List.mapi (fun argOrd parameter ->
+                    match parameter.Type with
+                    | BAREWire.Descriptors.TypeRef.Pointer width ->
+                        let formalArgTy = List.tryItem argOrd formalCallbackTypes
+                        let countedMatch =
+                            descriptors.CountedEntryArrays
+                            |> List.tryFind (fun a -> a.Invocation.Quote = source.Quote && a.Contract.Argument = argOrd)
+                        match countedMatch with
+                        | Some counted ->
+                            match formalArgTy with
+                            | Some ty when (match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+                                            | NativeType.TApp(tc, [_]) when tc.Name = "ReadOnlyView" -> true
+                                            | substituted -> Types.tryGetNTUKind substituted = Some NTUKind.NTUptr) ->
+                                Ok(BoundaryScalar.ReadOnlyBytes counted.Quote)
+                            | _ ->
+                                Error "CCS8403: A CountedEntryArrayDescriptor callback parameter requires a ReadOnlyView or pointer formal."
+                        | None ->
+                            let isCallbackContextDescriptorType (ty: TypeIdentity) =
+                                match ty with
+                                | TypeIdentity.Application(constructor, []) ->
+                                    (constructor.Declaration.Module = ["BAREWire"; "Descriptors"] && constructor.Declaration.Name = "CallbackContextDescriptor") ||
+                                    (constructor.Declaration.Module = ["BAREWire"] && constructor.Declaration.Name = "Descriptors.CallbackContextDescriptor")
+                                | _ -> false
+                            let quoteOwnedByBinding quoteId =
+                                import.DeclarationFacts.Values |> Seq.exists (fun fact ->
+                                    fact.Form = "binding" && List.tryLast fact.Children = Some quoteId)
+                            let hasContextContract =
+                                import.DeclarationFacts |> Map.exists (fun quoteId quote ->
+                                    quoteOwnedByBinding quoteId &&
+                                    match quote.Form, quote.References with
+                                    | "quotation", [recordId] when quote.Children = quote.References ->
+                                        match import.DeclarationFacts.TryFind recordId with
+                                        | Some recFact when recFact.Form = "record" && isCallbackContextDescriptorType recFact.SourceType && recFact.References.Length = recFact.Text.Length ->
+                                            let fields = List.zip recFact.Text recFact.References |> Map.ofList
+                                            let strMatches name (expected: string) =
+                                                fields.TryFind name
+                                                |> Option.bind import.DeclarationFacts.TryFind
+                                                |> Option.exists (fun v -> v.Form = "string" && v.References.IsEmpty && v.Children.IsEmpty && v.Text = [expected])
+                                            let intMatches name predicate =
+                                                fields.TryFind name
+                                                |> Option.bind import.DeclarationFacts.TryFind
+                                                |> Option.exists (fun v ->
+                                                    (v.Form = "integer" || v.Form = "unsigned-integer") &&
+                                                    v.References.IsEmpty && v.Children.IsEmpty &&
+                                                    match v.Numbers with [n] -> predicate n | _ -> false)
+                                            strMatches "Binding" source.Contract.Binding &&
+                                            intMatches "Parameter" ((=) (bigint source.Parameter)) &&
+                                            intMatches "Argument" ((=) (bigint argOrd)) &&
+                                            intMatches "ContextParameter" (fun cp -> cp >= 0I && cp <> bigint source.Parameter)
+                                        | _ -> false
+                                    | _ -> false)
+                            if hasContextContract then
+                                Ok(BoundaryScalar.Integer(width, false))
+                            else
+                                match formalArgTy with
+                                | Some ty when isNominalCHandleType false ty ->
+                                    let formalTypeId = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty
+                                    match resourceDeclarations.Values |> Seq.filter (fun r -> r.HandleType = formalTypeId) |> Seq.toList with
+                                    | [r] -> Ok(BoundaryScalar.ResourceHandle(r.Identity, false))
+                                    | [] -> Ok(BoundaryScalar.ResourceHandle(source.Formal, false))
+                                    | _ -> Error "CCS8403: Ambiguous resource declarations for callback CHandle parameter."
+                                | Some ty when isNominalCHandleType true ty ->
+                                    let innerId =
+                                        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+                                        | NativeType.TApp(_, [inner]) -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType inner
+                                        | _ -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty
+                                    match resourceDeclarations.Values |> Seq.filter (fun r -> r.HandleType = innerId) |> Seq.toList with
+                                    | [r] -> Ok(BoundaryScalar.ResourceHandle(r.Identity, true))
+                                    | [] -> Ok(BoundaryScalar.ResourceHandle(source.Formal, true))
+                                    | _ -> Error "CCS8403: Ambiguous resource declarations for callback CHandle parameter."
+                                | _ ->
+                                    Error "CCS8403: A callback Pointer parameter requires a nominal CHandle<'T>, CountedEntryArrayDescriptor, or CallbackContextDescriptor contract."
+                    | other -> integer other)
                 |> collect
 
             let! result =
@@ -1896,6 +3358,12 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                 | BoundaryCallbackExtent.ProcessExit _ ->
                     require (parameters.IsEmpty && result.IsNone && import.Result=Some(BoundaryScalar.Integer(32,true)))
                         "A process-exit callback requires exact zero-argument void and a signed32 registration result."
+                | BoundaryCallbackExtent.Retained(owner, releases) ->
+                    let ownerSourceIdx =
+                        nativeToSourceArg.TryFind import.Binding
+                        |> Option.bind (Map.tryFind owner)
+                    require (owner >= 0 && ownerSourceIdx.IsSome && owner <> source.Parameter && not (Array.isEmpty releases))
+                        "A retained callback requires a valid foreign owner ordinal and non-empty retirement contract."
             let participants = Set.union (Set.ofList source.Participants) activation.Participants
 
             return source, ({
@@ -1922,7 +3390,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
             do!
                 require
                     (source.Formal = operand.Formal
-                     && (call.Arguments |> List.tryItem source.Parameter) = Some operand)
+                     && (import.Parameters |> List.tryFindIndex (fst >> (=) source.Formal) |> Option.bind (fun idx -> call.Arguments |> List.tryItem idx)) = Some operand)
                     "The receiving callback actual differs from its original native formal and ordinal."
 
             let! evidence, suppliedActual =
@@ -2039,25 +3507,28 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                     "The closed callback native signature differs from its complete source formal vector."
 
             let nativeFormals = if unitParameterOmission then [] else formals
-            let! parameterCarriers = nativeFormals |> List.map currentCarrier |> collect
             let! parameterAdaptations =
-                List.zip3 nativeFormals invocation.Signature.Parameters parameterCarriers
-                |> List.map (fun (formal, abi, carrier) ->
+                List.zip nativeFormals invocation.Signature.Parameters
+                |> List.map (fun (formal, abi) ->
                     checked' {
-                        let! bits = sourceWidth graph formal abi
+                        match abi with
+                        | BoundaryScalar.ResourceHandle _ | BoundaryScalar.ReadOnlyBytes _ -> return None
+                        | _ ->
+                            let! carrier = currentCarrier formal
+                            let! bits = sourceWidth graph formal abi
 
-                        let! capacity =
-                            carrier.Representation
-                            |> Option.bind Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.RangeSources.declaredRange
-                            |> needed "A native incoming formal has no selected finite representation."
+                            let! capacity =
+                                carrier.Representation
+                                |> Option.bind Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.RangeSources.declaredRange
+                                |> needed "A native incoming formal has no selected finite representation."
 
-                        do!
-                            require
-                                (carrier.Range = scalarRange abi
-                                 && ValueRange.contains capacity (scalarRange abi))
-                                "A native incoming formal must retain its full declared ABI domain, independent of observed source callers."
+                            do!
+                                require
+                                    (carrier.Range = scalarRange abi
+                                     && ValueRange.contains capacity (scalarRange abi))
+                                    "A native incoming formal must retain its full declared ABI domain, independent of observed source callers."
 
-                        return! adaptation graph implementation formal (scalarBits abi) bits (scalarRange abi)
+                            return! adaptation graph implementation formal (scalarBits abi) bits (scalarRange abi)
                     })
                 |> collect
 
@@ -2108,7 +3579,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
 
             let! registrations =
                 match invocation.Extent with
-                | BoundaryCallbackExtent.DuringCall -> Ok Map.empty
+                | BoundaryCallbackExtent.DuringCall | BoundaryCallbackExtent.Retained _ -> Ok Map.empty
                 | BoundaryCallbackExtent.ProcessExit _ ->
                     checked' {
                         let contexts = numericProjection.ForeignResultUses |> List.filter(fun sourceUse ->
@@ -2180,36 +3651,61 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
             | _ -> true)
     let sameCode (left:BoundaryClosedEntry) (right:BoundaryClosedEntry) =
         {left with Invocation=right.Invocation;Transport=right.Transport;Participants=right.Participants;Registrations=right.Registrations}=right
-    let callbackInvocations, closedEntries, errors =
-        receivingUses |> List.fold(fun(invocations,entries,errors) (call,_,admitted) ->
+    let callbackInvocations, (closedEntries: Map<NodeId, BoundaryClosedEntry>), errors =
+        receivingUses |> List.fold(fun(invocations,entries,errors) (call,_,admitted: Result<BoundaryCallbackInvocation * BoundaryClosedEntry option, string>) ->
             match admitted with
             | Ok(invocation,None) -> Map.add invocation.Identity invocation invocations,entries,errors
-            | Ok(invocation,Some entry) ->
+            | Ok(invocation,Some (entry: BoundaryClosedEntry)) ->
                 match Map.tryFind entry.Formation entries with
-                | Some previous when previous.Invocation<>entry.Invocation ->
+                | Some (previous: BoundaryClosedEntry) when previous.Invocation<>entry.Invocation ->
                     match Map.tryFind previous.Invocation invocations with
                     | Some witness when shareable entry.Formation && previous.Registrations.IsEmpty && entry.Registrations.IsEmpty &&
                                         sameCode previous entry && sameDuringCallAbi witness invocation ->
                         // The least invocation identity is a deterministic ABI
                         // witness only; per-use claims retain their own identity.
                         let representative=if NodeId.value previous.Invocation<NodeId.value entry.Invocation then previous else entry
-                        let merged =
+                        let merged: BoundaryClosedEntry =
                             { representative with
                                 Transport=Set.union previous.Transport entry.Transport
                                 Participants=Set.union previous.Participants entry.Participants }
                         Map.add invocation.Identity invocation invocations,Map.add entry.Formation merged entries,errors
                     | _ ->
                         invocations,entries,(call.Site,call.Participants,"One closed entry formation cannot acquire different receiving invocation contracts.")::errors
-                | Some previous ->
-                    let merged =
+                | Some (previous: BoundaryClosedEntry) ->
+                    let merged: BoundaryClosedEntry =
                         { entry with
                             Transport=Set.union previous.Transport entry.Transport
                             Participants=Set.union previous.Participants entry.Participants
                             Registrations=Map.fold(fun rows key value->Map.add key value rows) previous.Registrations entry.Registrations }
                     Map.add invocation.Identity invocation invocations,Map.add entry.Formation merged entries,errors
                 | None -> Map.add invocation.Identity invocation invocations,Map.add entry.Formation entry entries,errors
-            | Error reason -> invocations,entries,(call.Site,call.Participants,reason)::errors) (Map.empty,Map.empty,errors)
+            | Error reason -> invocations,entries,(call.Site,call.Participants,reason)::errors) (Map.empty,(Map.empty: Map<NodeId, BoundaryClosedEntry>),errors)
 
+    let bufferAbsences, errors =
+        match bufferAbsenceAccounts graph descriptors imports with
+        | Ok rows ->
+            let referenced =
+                calls.Values
+                |> Seq.collect _.Arguments
+                |> Seq.choose _.BufferAbsence
+                |> Seq.collect BoundaryBufferAbsenceChoice.leaves
+                |> Seq.map _.Absence
+                |> Set.ofSeq
+            rows |> Map.filter (fun id _ -> referenced.Contains id), errors
+        | Error reason -> Map.empty, (anchor.Id, Set.singleton anchor.Id, reason) :: errors
+    let countedEntryArrays, errors =
+        descriptors.CountedEntryArrays |> List.fold (fun (rows, errors) source ->
+            match callbackInvocations.TryFind source.Invocation.Quote with
+            | Some invocation ->
+                match declarationFacts graph source.DescriptorBinding with
+                | Ok facts ->
+                    let row: BoundaryCountedEntryArray =
+                        { Identity = source.Quote; Import = invocation.Import; Parameter = invocation.Parameter
+                          Invocation = invocation.Identity; Contract = source.Contract; DeclarationFacts = facts
+                          Participants = ParticipantEvidence.Established [ { Role = ParticipantRole.CountedEntryArrayDeclaration; Node = source.Quote; Ordinal = invocation.Parameter; Group = source.Quote }; { Role = ParticipantRole.CountedEntryArrayInvocation; Node = invocation.Identity; Ordinal = invocation.Parameter; Group = source.Quote } ] }
+                    Map.add row.Identity row rows, errors
+                | Error reason -> rows, (source.Node, Set.ofList source.Participants, reason) :: errors
+            | None -> rows, errors) (Map.empty, errors)
     let callbackAbsences, errors =
         match absenceAccounts graph descriptors imports callbackInvocations with
         | Ok rows ->
@@ -2302,7 +3798,51 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         | _ -> operand::arguments,enrichment,(call.Site,call.Participants,"The optional-entry choice lost an arm requirement.")::errors)
                     ([],enrichment,errors)
             let arguments = List.rev arguments
-            let participants = arguments |> List.choose _.OptionalEntry |> List.collect BoundaryOptionalEntryChoice.leaves |> List.map _.Obligation |> Set.ofList |> Set.union call.Participants
+            let arguments, enrichment, errors =
+                arguments |> List.mapi (fun ordinal operand -> ordinal, operand)
+                |> List.fold (fun (argsOut, enrichment, errors) (ordinal, operand) ->
+                    match operand.BufferAbsence with
+                    | None -> operand :: argsOut, enrichment, errors
+                    | Some choice ->
+                        let issue (selection: BoundaryBufferAbsenceSelection) =
+                            let role = $"foreign-buffer-absence-conversion-{ordinal}"
+                            let identityRole =
+                                match choice with
+                                | BoundaryBufferAbsenceChoice.Conditional _ -> $"{role}-case-{selection.CaseOrdinal}"
+                                | BoundaryBufferAbsenceChoice.Direct _ -> role
+                            let support = Set.union (Set.ofList selection.Transport) (Set.ofList [call.Site; operand.Actual; selection.Construction; selection.Absence])
+                            match Ingredients.requirementWithIdentityRoleAndRetained retained enrichId graph.Nodes[call.Site] identityRole role
+                                    "The exact source Option<Buffer> selection converts strictly at the foreign call boundary under BufferAbsenceContract."
+                                    "BufferAbsenceContract conversion remains Pending."
+                                    (Set.toList support) with
+                            | Error reason -> Error reason
+                            | Ok requirement ->
+                                match requirement.NewNodes with
+                                | [citizen] ->
+                                    let model: BufferAbsenceArgumentConversionModel =
+                                        { Call = call.Site; Parameter = ordinal; Actual = operand.Actual; Construction = selection.Construction
+                                          SourceCase = selection.CaseOrdinal; Absence = selection.Absence
+                                          Arms =
+                                            [ { BufferAbsencePlanArm.CaseOrdinal = 0; Choice = BufferAbsencePlanChoice.AbsentNull }
+                                              { BufferAbsencePlanArm.CaseOrdinal = 1; Choice = BufferAbsencePlanChoice.RequiresNonNullBuffer } ] }
+                                    let cSupport = requirement.NewEdges |> List.find (fun edge -> edge.Role = EdgeRole.Constrains) |> _.Sources |> Set.ofList
+                                    let refined = refine citizen (ObligationBody.BufferAbsenceArgumentConversion model) cSupport [] requirement
+                                    Ok({ selection with Obligation = citizen.Id }, refined)
+                                | _ -> Error "A buffer-absence application lost its unique source-issued requirement citizen."
+                        let issued = choice |> BoundaryBufferAbsenceChoice.leaves |> List.map issue |> collect
+                        match choice, issued with
+                        | BoundaryBufferAbsenceChoice.Direct _, Ok [selected, requirement] ->
+                            { operand with BufferAbsence = Some(BoundaryBufferAbsenceChoice.Direct selected) } :: argsOut, Enrichment.combine enrichment requirement, errors
+                        | BoundaryBufferAbsenceChoice.Conditional(select, tagProjection, _, _), Ok [whenTrue, trueReq; whenFalse, falseReq] ->
+                            { operand with BufferAbsence = Some(BoundaryBufferAbsenceChoice.Conditional(select, tagProjection, whenTrue, whenFalse)) } :: argsOut,
+                            Enrichment.combine (Enrichment.combine enrichment trueReq) falseReq, errors
+                        | _, Error reason -> operand :: argsOut, enrichment, (call.Site, call.Participants, reason) :: errors
+                        | _ -> operand :: argsOut, enrichment, (call.Site, call.Participants, "The buffer-absence choice lost an arm requirement.") :: errors)
+                    ([], enrichment, errors)
+            let arguments = List.rev arguments
+            let optionalParticipants = arguments |> List.choose _.OptionalEntry |> List.collect BoundaryOptionalEntryChoice.leaves |> List.map _.Obligation
+            let absenceParticipants = arguments |> List.choose _.BufferAbsence |> List.collect BoundaryBufferAbsenceChoice.leaves |> List.map _.Obligation
+            let participants = optionalParticipants @ absenceParticipants |> Set.ofList |> Set.union call.Participants
             Map.add call.Site {call with Arguments=arguments;Participants=participants} updated,enrichment,errors)
             (Map.empty,Enrichment.empty,errors)
 
@@ -2339,13 +3879,13 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
     let proofs, errors = calls |> Map.fold (fun (enrichment, errors) _ call ->
         let argumentRanges = call.Arguments |> List.mapi (fun ordinal operand ->
             match operand.Abi with
-            | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ -> None
+            | BoundaryScalar.Entry _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.WritableBytes _ | BoundaryScalar.ReadOnlyBytes _ -> None
             | _ ->
                 let input = match operand.Abi with BoundaryScalar.Boolean -> ValueRange.boolean | _ -> graph.Nodes[operand.Actual].ValueRange |> Option.defaultValue ValueRange.Unbounded
                 Some(ordinal, operand.Actual, input, scalarRange operand.Abi)) |> List.choose id
         // Integer result narrowing belongs to Numeric's conditional foreign
         // account. The C carrier is an ABI premise, not a behavioral enclosure.
-        let resultRange = call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ | BoundaryScalar.ResourceHandle _ -> false | _ -> true) |> List.map (fun abi ->
+        let resultRange = call.Result |> Option.toList |> List.filter (function BoundaryScalar.Integer _ | BoundaryScalar.ResourceHandle _ | BoundaryScalar.BorrowedBytes _ -> false | _ -> true) |> List.map (fun abi ->
             let destination =
                 match abi with
                 | BoundaryScalar.Boolean -> ValueRange.boolean
@@ -2431,6 +3971,12 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
           ResultHypotheses = descriptors.ResultRanges |> List.map _.Hypothesis
           WritableBufferDeclarations = Map.keys writableDeclarations |> Seq.toList
           WritableBufferUses = Map.keys writableUses |> Seq.toList
+          ReadOnlyBufferDeclarations = Map.keys readOnlyDeclarations |> Seq.toList
+          ReadOnlyBufferUses = Map.keys readOnlyUses |> Seq.toList
+          BorrowedResultViewDeclarations = Map.keys borrowedViewDeclarations |> Seq.toList
+          BorrowedResultViewUses = Map.keys borrowedViewUses |> Seq.toList
+          BufferAbsences = Map.keys bufferAbsences |> Seq.toList
+          CountedEntryArrays = Map.keys countedEntryArrays |> Seq.toList
           ResourceDeclarations = Map.keys resourceDeclarations |> Seq.toList
           ResourceAccesses = Map.keys resourceAccesses |> Seq.toList
           ResourceEvaluationRoots = List.distinct resourceRoots
@@ -2462,6 +4008,9 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
           StringStorage = Bytes.storagePremise graph
           DeclarationLeaves = leaves; DeclarationOnly = declarationOnly
           Links = imports.Values |> Seq.map _.Library |> Set.ofSeq; Failures = List.rev errors }
+    let evidenceNodes = function
+        | ParticipantEvidence.Established rows -> rows |> List.map _.Node |> List.distinct
+        | ParticipantEvidence.Pending early -> early.Derived |> List.map _.Node |> List.distinct
     let sources = Map.keys domain.Premises |> Seq.toList
     let rows =
         [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 sources anchor.Id
@@ -2469,18 +4018,24 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
         @ (resourceDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
         @ (writableDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
         @ (writableUses.Values |> Seq.map(fun row->Ingredients.row (EdgeRole.BoundaryWritableBufferUse row) 0 (Set.toList row.Participants) row.Call) |> Seq.toList)
+        @ (readOnlyDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryReadOnlyBufferDeclaration row) 0 (evidenceNodes row.Participants) row.Identity) |> Seq.toList)
+        @ (readOnlyUses.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryReadOnlyBufferUse row) 0 (evidenceNodes row.Participants) row.Call) |> Seq.toList)
+        @ (borrowedViewDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryBorrowedResultViewDeclaration row) 0 (evidenceNodes row.Participants) row.Identity) |> Seq.toList)
+        @ (borrowedViewUses.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryBorrowedResultViewUse row) 0 (evidenceNodes row.Participants) row.Call) |> Seq.toList)
+        @ (bufferAbsences.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryBufferAbsence row) 0 (row.DeclarationFacts |> Map.keys |> Seq.toList) row.Quote) |> Seq.toList)
+        @ (countedEntryArrays.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryCountedEntryArray row) 0 (evidenceNodes row.Participants) row.Identity) |> Seq.toList)
         @ (resourceAccesses.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site) |> Seq.toList)
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (entries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (callbackInvocations.Values |> Seq.map (fun invocation -> Ingredients.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity) |> Seq.toList)
         @ (callbackAbsences.Values |> Seq.map(fun row -> Ingredients.row (EdgeRole.BoundaryCallbackAbsence row) 0 (row.DeclarationFacts |> Map.keys |> Seq.toList) row.Quote) |> Seq.toList)
-        @ (closedEntries.Values |> Seq.map (fun entry -> Ingredients.row (EdgeRole.BoundaryClosedEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
+        @ (closedEntries.Values |> Seq.map (fun (entry: BoundaryClosedEntry) -> Ingredients.row (EdgeRole.BoundaryClosedEntry entry) 0 (Set.toList entry.Participants) entry.Formation) |> Seq.toList)
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
-    Enrichment.combine optionalRequirements (Enrichment.combine writableRequirements (Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
+    Enrichment.combine readOnlyRequirements (Enrichment.combine borrowedViewRequirements (Enrichment.combine optionalRequirements (Enrichment.combine writableRequirements (Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
         (Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment)
-    ))
+    ))))
 
 let elaborateWithRetained (retained: Ingredients.RetainedBoundaryNodes) graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore retained graph)

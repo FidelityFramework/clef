@@ -72,6 +72,56 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         match Published.mapOptionalEntryArgumentConversionModel model |> Fidelity.PSG.OptionalEntryArgumentProof.project with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
         | Error reason -> invalidArg "body" reason
+    | ObligationBody.ZeroCopyBufferExtent model ->
+        let minC, maxC, cap = integer model.MinimumCount, integer model.MaximumCount, integer model.ExtentCapacity
+        let elem = integer (bigint model.ElementBytes)
+        [ sprintf "(assert (= %s (and (<= 0 %s) (<= %s %s) (<= %s %s) (> %s 0))))" id minC minC maxC maxC cap elem
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.BufferRetentionDomination model ->
+        let acq = integer (bigint model.AcquireOrder)
+        let modeClauses =
+            match model.Mode with
+            | BufferRetentionMode.DuringCall ->
+                [ sprintf "(= %s 0)" (integer (bigint model.RetirementOrders.Length)) ]
+            | BufferRetentionMode.RetainedUntilOwner(ownerParam, releaseCount) ->
+                let owner = integer (bigint ownerParam)
+                let count = integer (bigint releaseCount)
+                let actual = integer (bigint model.RetirementOrders.Length)
+                [ sprintf "(>= %s 0)" owner; sprintf "(> %s 0)" count; sprintf "(= %s %s)" count actual ]
+                @ (model.RetirementOrders |> List.map (fun ord -> sprintf "(< %s %s)" acq (integer (bigint ord))))
+        [ sprintf "(assert (= %s (and (>= %s 0) %s)))" id acq (String.concat " " modeClauses)
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.UncountedPathTermination model ->
+        let len = integer model.ByteLength
+        let boolLit value = if value then "true" else "false"
+        let modeClause =
+            match model.Mode with
+            | UncountedPathStagingMode.StaticImageZeroCopy poolEntry -> sprintf "(>= %s 0)" (integer (bigint poolEntry))
+            | UncountedPathStagingMode.CallScopedStaged(_, cap) -> sprintf "(= %s (+ %s 1))" (integer (bigint cap)) len
+        [ sprintf "(assert (= %s (and (>= %s 0) %s %s %s)))" id len (boolLit model.RequiresNoInteriorNul) (boolLit model.RequiresTrailingNul) modeClause
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.BorrowedResultViewScope model ->
+        let callOrd = integer (bigint model.CallOrder)
+        let boolLit value = if value then "true" else "false"
+        let invCount = integer (bigint model.InvalidationOrders.Length)
+        let invClauses = model.InvalidationOrders |> List.map (fun inv -> sprintf "(> %s %s)" (integer (bigint inv)) callOrd)
+        let readClauses =
+            model.ReadOrders |> List.collect (fun rd ->
+                let rdTerm = integer (bigint rd)
+                sprintf "(>= %s %s)" rdTerm callOrd
+                :: (model.InvalidationOrders |> List.map (fun inv -> sprintf "(< %s %s)" rdTerm (integer (bigint inv)))))
+        [ sprintf "(assert (= %s (and (>= %s 0) %s (> %s 0) %s)))" id callOrd (boolLit model.NullToNoneBoundary) invCount (String.concat " " (invClauses @ readClauses))
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.BufferAbsenceArgumentConversion model ->
+        let paramOrd = integer (bigint model.Parameter)
+        let srcCase = integer (bigint model.SourceCase)
+        let armCount = integer (bigint model.Arms.Length)
+        let validArms =
+            model.Arms = [ { CaseOrdinal = 0; Choice = BufferAbsencePlanChoice.AbsentNull }
+                           { CaseOrdinal = 1; Choice = BufferAbsencePlanChoice.RequiresNonNullBuffer } ]
+        let boolLit value = if value then "true" else "false"
+        [ sprintf "(assert (= %s (and (>= %s 0) (or (= %s 0) (= %s 1)) (= %s 2) %s)))" id paramOrd srcCase srcCase armCount (boolLit validArms)
+          sprintf "(assert (not %s))" id ]
     | ObligationBody.ResourceConversion model ->
         match Published.mapResourceConversionModel model |> Fidelity.PSG.ResourceProof.ofConversion with
         | Ok projection -> Fidelity.PSG.ResourceProof.refutation id projection
