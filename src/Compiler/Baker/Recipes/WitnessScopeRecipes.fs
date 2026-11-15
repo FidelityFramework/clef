@@ -121,7 +121,8 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
             [ rows.Boundary.ResourceDeclarations.Values |> Seq.collect (fun row -> [row.Acquisition; row.Release])
               rows.Boundary.WritableBufferDeclarations.Values |> Seq.map _.Declaration
               rows.Boundary.ReadOnlyBufferDeclarations.Values |> Seq.map _.Declaration
-              rows.Boundary.BorrowedResultViewDeclarations.Values |> Seq.map _.Declaration ]
+              rows.Boundary.BorrowedResultViewDeclarations.Values |> Seq.map _.Declaration
+              rows.Boundary.SharedBufferPlacements.Values |> Seq.map _.Declaration ]
             |> Seq.concat
             |> Set.ofSeq)
         |> Option.defaultValue Set.empty

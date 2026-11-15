@@ -138,6 +138,9 @@ let nativeOnlyRecordFields =
           "RangeContextFacts", optionOf (semanticType "RangeContextFacts")
           "RequiresCaptureReview", typeof<bool>
           "CaptureRelations", listOf (FSharpType.MakeTupleType [| semanticType "EdgeClass"; typeof<bool>; typeof<int>; listOf sourceNodeId; sourceNodeId |]) ]
+        "Clef.Compiler.PSGSaturation.SemanticGraph.Types+BoundaryDomain",
+        [ "SharedBufferPlacements", listOf (semanticType "BoundarySharedBufferPlacementDeclaration")
+          "SharedBufferViewUses", listOf (semanticType "BoundarySharedBufferViewUse") ]
     ]
 
 for sourceName in nativeOnlyRecordFields.Keys do
@@ -248,9 +251,9 @@ let unionMapper (target: Type) (source: Type) alias =
         sources |> Array.map (fun case ->
             if target.Name = "ObligationBody" && case.Name = "Pending" then
                 let fields = case.GetFields()
-                if targets.ContainsKey "Pending" || fields.Length <> 1 || fields[0].PropertyType <> typeof<string list> then
+                if fields.Length <> 1 || fields[0].PropertyType <> typeof<string list> then
                     failwith "Pending obligations must remain a native-only list of missing-premise reasons"
-                sprintf "    | %s.Pending reasons -> invalidOp (\"A pending obligation cannot be published: \" + String.concat \"; \" reasons)" (sourceName source alias)
+                sprintf "    | %s.Pending reasons -> Fidelity.PSG.ObligationBody.Pending reasons" (sourceName source alias)
             else
                 if not (targets.ContainsKey case.Name) then
                     failwithf "Union %s: CCS case %s has no published case" target.Name case.Name

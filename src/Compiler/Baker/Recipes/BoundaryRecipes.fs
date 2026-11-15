@@ -45,6 +45,7 @@ let private declarationFact (node: SemanticNode) =
     match node.Kind with
     | SemanticKind.RecordExpr(fields, copy) -> fact "record" (List.map fst fields) [] (List.map snd fields @ Option.toList copy)
     | SemanticKind.ArrayExpr values -> fact "array" [] [] values
+    | SemanticKind.ListExpr values -> fact "list" [] [] values
     | SemanticKind.TupleExpr values -> fact "tuple" [] [] values
     | SemanticKind.UnionCase(name, index, value) -> fact "case" [name] [bigint index] (Option.toList value)
     | SemanticKind.DUConstruct(name, index, value, _) -> fact "settled-case" [name] [bigint index] (Option.toList value)
@@ -887,7 +888,17 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                         | [resource, nullable] -> return formal, BoundaryScalar.ResourceHandle(resource.Identity, nullable)
                         | _ :: _ :: _ -> return! Error "CCS8403: Ambiguous resource declarations for boundary resource handle parameter."
                         | [] ->
-                            if isNominalCHandleType false formalNode.Type then
+                            let isSharedBufferStruct =
+                                match Clef.Compiler.NativeTypedTree.UnionFind.applySubst formalNode.Type with
+                                | NativeType.TApp(tycon, _) ->
+                                    let tName = tycon.Name
+                                    let shortTName = match tName.LastIndexOf '.' with -1 -> tName | idx -> tName.Substring(idx + 1)
+                                    descriptors.SharedBufferPlacements |> List.exists (fun sp ->
+                                        let sName = sp.Placement.StructLayout.Name
+                                        let shortSName = match sName.LastIndexOf '.' with -1 -> sName | idx -> sName.Substring(idx + 1)
+                                        tName = sName || shortTName = shortSName)
+                                | _ -> false
+                            if isNominalCHandleType false formalNode.Type || isSharedBufferStruct then
                                 return formal, BoundaryScalar.ResourceHandle(formal, false)
                             elif isNominalCHandleType true formalNode.Type then
                                 return formal, BoundaryScalar.ResourceHandle(formal, true)
@@ -934,13 +945,31 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         let! returnId =
             field "ReturnType" fields |> needed "The FunctionDescriptor has no ReturnType."
 
+        let isSharedBufferStructResult =
+            match Declarations.readTypeRef graph returnId, graph.Nodes.TryFind body with
+            | Ok(Declarations.DeclaredTypeRef.Pointer _), Some bn ->
+                match Clef.Compiler.NativeTypedTree.UnionFind.applySubst bn.Type with
+                | NativeType.TApp(tycon, _) ->
+                    let tName = tycon.Name
+                    let shortTName = match tName.LastIndexOf '.' with -1 -> tName | idx -> tName.Substring(idx + 1)
+                    descriptors.SharedBufferPlacements |> List.exists (fun sp ->
+                        let sName = sp.Placement.StructLayout.Name
+                        let shortSName = match sName.LastIndexOf '.' with -1 -> sName | idx -> sName.Substring(idx + 1)
+                        tName = sName || shortTName = shortSName)
+                | _ -> false
+            | _ -> false
+
         let! result =
             match resources.Values |> Seq.filter (fun row -> row.Acquisition = binding.Id && row.AcquisitionDescriptor = descriptor.Node) |> Seq.toList with
             | [resource] -> Ok(Some(BoundaryScalar.ResourceHandle(resource.Identity, true)))
             | [] ->
                 match borrowedViews.Values |> Seq.filter (fun row -> row.Declaration = binding.Id && row.Descriptor = descriptor.Node) |> Seq.toList with
                 | [view] -> Ok(Some(BoundaryScalar.BorrowedBytes view.Identity))
-                | [] -> typeRef graph returnId
+                | [] ->
+                    match Declarations.readTypeRef graph returnId with
+                    | Ok(Declarations.DeclaredTypeRef.Pointer width) when isSharedBufferStructResult ->
+                        Ok(Some(BoundaryScalar.Integer(width, false)))
+                    | _ -> typeRef graph returnId
                 | _ -> Error "The borrowed result view declaration has ambiguous binding ownership."
             | _ -> Error "The acquisition declaration has ambiguous resource ownership."
 
@@ -979,6 +1008,7 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                  | Some(BoundaryScalar.ResourceHandle(identity, true)) ->
                      resources.TryFind identity |> Option.exists (fun row -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType bodyNode.Type = row.ResultType)
                  | Some(BoundaryScalar.BorrowedBytes _) -> isOptionType bodyNode.Type
+                 | Some(BoundaryScalar.Integer(width, false)) when isSharedBufferStructResult -> width > 0
                  | Some scalar -> supportedType scalar bodyNode.Type
                  | None -> Types.tryGetNTUKind bodyNode.Type = Some NTUKind.NTUunit)
                 "The binding result's source kind disagrees with its declared boundary result."
@@ -3160,7 +3190,24 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         let result =
                             checked' {
                                 let! import = imported binding
-                                if resourceDeclarations.Values |> Seq.exists (fun r -> r.Acquisition = binding.Id || r.Release = binding.Id) then
+                                let isSharedBufferStructType (ty: NativeType) =
+                                    match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+                                    | NativeType.TApp(tycon, _) ->
+                                        let tName = tycon.Name
+                                        let shortTName = match tName.LastIndexOf '.' with -1 -> tName | idx -> tName.Substring(idx + 1)
+                                        descriptors.SharedBufferPlacements |> List.exists (fun sp ->
+                                            let sName = sp.Placement.StructLayout.Name
+                                            let shortSName = match sName.LastIndexOf '.' with -1 -> sName | idx -> sName.Substring(idx + 1)
+                                            tName = sName || shortTName = shortSName)
+                                    | _ -> false
+                                let isSharedBufferStructCall =
+                                    isSharedBufferStructType node.Type ||
+                                    (import.Parameters |> List.exists (fun (formal, abi) ->
+                                        match abi with
+                                        | BoundaryScalar.ResourceHandle(decl, false) when decl = formal && not (resourceDeclarations.ContainsKey decl) ->
+                                            graph.Nodes.TryFind formal |> Option.exists (fun fn -> isSharedBufferStructType fn.Type)
+                                        | _ -> false))
+                                if resourceDeclarations.Values |> Seq.exists (fun r -> r.Acquisition = binding.Id || r.Release = binding.Id) || isSharedBufferStructCall then
                                     return import, None
                                 else
                                     let writable=
@@ -4097,6 +4144,406 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
         match retained with
         | Ok evidence -> Some evidence,errors
         | Error reason -> None,(anchor.Id,Set.singleton anchor.Id,reason)::errors
+    let sharedBufferPlacements, sharedBufferViewUses, sharedBufferRequirements, errors =
+        if descriptors.SharedBufferPlacements.IsEmpty then
+            [], [], Enrichment.empty, errors
+        else
+            let barePlatform : BAREWire.Platform.PlatformDescription =
+                match runtime.Platform with
+                | Some p ->
+                    let coreOpt : BAREWire.Platform.TargetCore option =
+                        p.Core |> Option.map (fun c ->
+                            { Os = c.Os
+                              Arch = c.Arch
+                              WordSizeBits = c.WordSizeBits
+                              Endianness = c.Endianness
+                              Runtime = c.Runtime
+                              Triple = c.Triple
+                              CpuModel = c.CpuModel
+                              Widths = c.Widths |> List.map (fun w -> { Name = w.Name; Bits = w.Bits } : BAREWire.Platform.WidthDeclaration) |> List.toArray
+                              Representations =
+                                  c.Representations |> List.map (fun r ->
+                                      { Name = r.Representation.Name
+                                        Capability = r.Representation.Capability
+                                        Family = r.Representation.Family
+                                        Bits = r.Representation.Bits
+                                        MinMagnitude = r.Representation.MinMagnitude
+                                        MaxMagnitude = r.Representation.MaxMagnitude
+                                        Boundary = r.Representation.Boundary } : BAREWire.Platform.Representation) |> List.toArray })
+                    let emptyLifecycle : BAREWire.Platform.LifecycleFacts =
+                        { Clocks = [||]; Resets = [||]; Entry = ""; Teardown = ""; Persistence = "" }
+                    { Id = p.Id
+                      DisplayName = p.Id
+                      Substrate = ""
+                      Core = coreOpt
+                      Spaces = p.Spaces |> List.map Declarations.memorySpace |> List.toArray
+                      ProgramLifetime = None
+                      Buffers =
+                          p.Buffers |> List.map (fun b ->
+                              { Name = b.Name
+                                Schema = b.Schema
+                                Capacity = b.Capacity
+                                Framing = b.Framing
+                                Delimiter = 0
+                                TrimDelimiter = b.TrimDelimiter
+                                Space = b.Space
+                                Lifetime = ""
+                                Access = b.Access
+                                Slot = 0 } : BAREWire.Platform.BufferSchema) |> List.toArray
+                      Surfaces = [||]
+                      Transports = [||]
+                      Lifecycle = emptyLifecycle
+                      Notes = [||]
+                      Limits = [||] }
+                | None ->
+                    let emptyLifecycle : BAREWire.Platform.LifecycleFacts =
+                        { Clocks = [||]; Resets = [||]; Entry = ""; Teardown = ""; Persistence = "" }
+                    { Id = ""; DisplayName = ""; Substrate = ""; Core = None; Spaces = [||]; ProgramLifetime = None; Buffers = [||]; Surfaces = [||]; Transports = [||]; Lifecycle = emptyLifecycle; Notes = [||]; Limits = [||] }
+            let placementsArr = descriptors.SharedBufferPlacements |> List.map _.Placement |> List.toArray
+            let sharedFindings = BAREWire.Platform.Check.checkSharedBuffers barePlatform placementsArr
+            if not (Array.isEmpty sharedFindings) then
+                let findingErrors =
+                    sharedFindings
+                    |> Array.toList
+                    |> List.map (fun (f : BAREWire.Platform.Finding) ->
+                        let matched =
+                            descriptors.SharedBufferPlacements
+                            |> List.tryFind (fun sp -> sp.Placement.Name = f.Subject || sp.Placement.SpaceDescriptor.Space = f.Subject || ("shared-buffer:" + sp.Placement.Name) = f.Subject)
+                            |> Option.defaultWith (fun () -> List.head descriptors.SharedBufferPlacements)
+                        matched.DescriptorBinding, Set.ofList matched.Participants, f.Message)
+                [], [], Enrichment.empty, (List.rev findingErrors) @ errors
+            else
+                match runtime.Platform with
+                | None ->
+                    [], [], Enrichment.empty, (anchor.Id, Set.singleton anchor.Id, "SharedBufferPlacement requires a resolved source PlatformDescription.") :: errors
+                | Some platform ->
+                    let bareObs = BAREWire.Platform.Obligations.sharedBufferObligations barePlatform placementsArr
+                    let obCitizens, obEnrich =
+                        bareObs
+                        |> Array.mapi (fun idx ob ->
+                            let owners =
+                                if idx < 4 * placementsArr.Length then
+                                    [ descriptors.SharedBufferPlacements[idx / 4] ]
+                                else
+                                    descriptors.SharedBufferPlacements
+                                    |> List.filter (fun sp -> Array.contains sp.Placement.Name ob.Form.Names)
+                            let ownerSp =
+                                match owners with
+                                | head :: _ -> head
+                                | [] -> List.head descriptors.SharedBufferPlacements
+                            let ownerNode = graph.Nodes[ownerSp.DescriptorBinding]
+                            let info : ObligationInfo =
+                                { Id = ob.Id
+                                  Kind = ob.Kind
+                                  Logic = ob.Logic
+                                  Statement = ob.Statement
+                                  Source = ob.Source
+                                  Refs = Array.toList ob.Refs
+                                  Body = ObligationBody.SharedBufferPlacementObligation ob }
+                            let citizen = Ingredients.ownedObligationNode retained ownerNode enrichId info
+                            let supportNodes =
+                                owners
+                                |> List.collect (fun sp ->
+                                    let sNode = platform.Spaces |> List.tryFind (fun s -> s.Name = sp.Placement.SpaceDescriptor.Space) |> Option.map _.Node |> Option.toList
+                                    let bNode = platform.Buffers |> List.tryFind (fun b -> b.Name = sp.Placement.ViewLayout.Schema) |> Option.map _.Node |> Option.toList
+                                    sp.Identity :: sp.DescriptorBinding :: sp.SpaceDescriptorNode :: sp.StructDescriptorNode :: sp.ViewDescriptorNode :: sNode @ bNode @ sp.Participants)
+                                |> List.distinct
+                            let enrich = { NewNodes = [citizen]; Annotated = []; NewEdges = [constrains supportNodes citizen] }
+                            (idx, citizen.Id), enrich)
+                        |> Array.fold (fun (pairs, accEnrich) (pair, enrich) ->
+                            pair :: pairs, Enrichment.combine accEnrich enrich) ([], Enrichment.empty)
+                    let citizenByIdx = Map.ofList obCitizens
+                    let reachableBodyNodes =
+                        graph.Nodes.Values
+                        |> Seq.filter (fun n ->
+                            n.IsReachable &&
+                            not (declarationInventory.Contains n.Id) &&
+                            (match n.Kind with
+                             | SemanticKind.Obligation _ | SemanticKind.TypeDef _ | SemanticKind.ModuleDef _ -> false
+                             | _ -> true))
+                        |> Seq.sortBy (fun n -> programOrders.TryFind n.Id |> Option.defaultValue (NodeId.value n.Id))
+                        |> Seq.toList
+                    let orderedExternCalls =
+                        allExternalCalls
+                        |> List.sortBy (fun (_, _, _, ord) -> ord)
+                    let externLabel (cBind: NodeId) =
+                        match graph.Nodes.TryFind cBind with
+                        | Some bNode ->
+                            let sym = metadata "FidelityExtern.Symbol" bNode |> Option.defaultValue ""
+                            let bName = match bNode.Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> ""
+                            (sym + " " + bName).ToLowerInvariant()
+                        | None -> ""
+                    let fieldGetNodes =
+                        reachableBodyNodes |> List.filter (fun n -> match n.Kind with SemanticKind.FieldGet _ -> true | _ -> false)
+                    let placementsOut, viewsOut, finalUsedSites, buildErrors =
+                        descriptors.SharedBufferPlacements
+                        |> List.indexed
+                        |> List.fold (fun (pAcc, vAcc, usedSites, errAcc) (i, sp) ->
+                            let structName = sp.Placement.StructLayout.Name
+                            let shortStructName =
+                                match structName.LastIndexOf '.' with
+                                | -1 -> structName
+                                | idx -> structName.Substring(idx + 1)
+                            let matchesStructType (ty: NativeType) =
+                                match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+                                | NativeType.TApp(tycon, _) ->
+                                    let tName = tycon.Name
+                                    let shortTName =
+                                        match tName.LastIndexOf '.' with
+                                        | -1 -> tName
+                                        | idx -> tName.Substring(idx + 1)
+                                    tName = structName || shortTName = shortStructName
+                                | _ -> false
+                            let matchedFieldGets =
+                                fieldGetNodes
+                                |> List.filter (fun n ->
+                                    not (Set.contains n.Id usedSites) &&
+                                    (match n.Kind with
+                                     | SemanticKind.FieldGet(recvId, _) ->
+                                         match graph.Nodes.TryFind recvId with
+                                         | Some recvNode -> matchesStructType recvNode.Type
+                                         | None -> false
+                                     | _ -> false))
+                            let elementTypeOpt =
+                                descriptors.Layouts
+                                |> List.tryPick (fun l ->
+                                    if l.Name = structName || l.Name = shortStructName then
+                                        l.RecordType
+                                        |> Option.bind (fun nom -> RecordInstances.tryDefinition nom graph)
+                                        |> Option.map (fun defNode -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType defNode.Type)
+                                    else None)
+                            let spaceNodeOpt = platform.Spaces |> List.tryFind (fun s -> s.Name = sp.Placement.SpaceDescriptor.Space) |> Option.map _.Node
+                            let bufferSchemaNodeOpt = platform.Buffers |> List.tryFind (fun b -> b.Name = sp.Placement.ViewLayout.Schema) |> Option.map _.Node
+                            match spaceNodeOpt, bufferSchemaNodeOpt with
+                            | Some spaceNode, Some bufferSchemaNode ->
+                                let roots =
+                                    (sp.DescriptorBinding :: sp.Identity :: spaceNode :: bufferSchemaNode :: sp.SpaceDescriptorNode :: sp.StructDescriptorNode :: sp.ViewDescriptorNode :: sp.Participants)
+                                    |> List.distinct
+                                let rawFactsRes =
+                                    roots |> List.fold (fun state root ->
+                                        state |> Result.bind (fun facts ->
+                                            declarationFacts graph root |> Result.map (fun current ->
+                                                Map.fold (fun all id fact -> Map.add id fact all) facts current))) (Ok Map.empty)
+                                match rawFactsRes with
+                                | Error reason ->
+                                    pAcc, vAcc, usedSites, (sp.DescriptorBinding, Set.ofList sp.Participants, reason) :: errAcc
+                                | Ok rawFacts ->
+                                    let declParent = graph.Nodes.TryFind sp.DescriptorBinding |> Option.bind _.Parent
+                                    let normalizedFacts =
+                                        rawFacts
+                                        |> Map.map (fun id fact ->
+                                            if id = sp.DescriptorBinding then fact
+                                            else
+                                                match fact.Parent with
+                                                | Some p when Map.containsKey p rawFacts || Some p = declParent -> fact
+                                                | _ -> { fact with Parent = None })
+                                    let extentObId = citizenByIdx[4 * i + 0]
+                                    let layoutObId = citizenByIdx[4 * i + 1]
+                                    let lifetimeObId = citizenByIdx[4 * i + 2]
+                                    let exclusivityObId = citizenByIdx[4 * i + 3]
+                                    let spaceExtentIdx =
+                                        [ 4 * placementsArr.Length .. bareObs.Length - 1 ]
+                                        |> List.find (fun idx -> Array.contains sp.Placement.Name bareObs[idx].Form.Names)
+                                    let spaceExtentObId = citizenByIdx[spaceExtentIdx]
+                                    let placementObligations = [ layoutObId; extentObId; spaceExtentObId; lifetimeObId; exclusivityObId ]
+                                    let requiredPlacementNodes =
+                                        [ sp.Identity; sp.DescriptorBinding; spaceNode; bufferSchemaNode
+                                          sp.SpaceDescriptorNode; sp.StructDescriptorNode; sp.ViewDescriptorNode ]
+                                        |> List.distinct
+                                    let placementParticipants =
+                                        ParticipantEvidence.Established (
+                                            requiredPlacementNodes
+                                            |> List.mapi (fun ord n ->
+                                                { Role = ParticipantRole.ReadOnlyBufferDeclaration
+                                                  Node = n
+                                                  Ordinal = ord
+                                                  Group = sp.Identity }))
+                                    let placementRow : BoundarySharedBufferPlacementDeclaration =
+                                        { Identity = sp.Identity
+                                          Declaration = sp.DescriptorBinding
+                                          SpaceNode = spaceNode
+                                          BufferSchemaNode = bufferSchemaNode
+                                          SpaceDescriptorNode = sp.SpaceDescriptorNode
+                                          StructDescriptorNode = sp.StructDescriptorNode
+                                          ViewDescriptorNode = sp.ViewDescriptorNode
+                                          Placement = sp.Placement
+                                          Obligations = placementObligations
+                                          DeclarationFacts = normalizedFacts
+                                          Participants = placementParticipants }
+                                    if matchedFieldGets.IsEmpty then
+                                        placementRow :: pAcc, vAcc, usedSites, errAcc
+                                    else
+                                        let orderOf nid = programOrders.TryFind nid |> Option.defaultValue (NodeId.value nid)
+                                        let candidateAcquireCalls =
+                                            orderedExternCalls
+                                            |> List.filter (fun (cNode, cBind, _, _) ->
+                                                not (Set.contains cNode.Id usedSites) &&
+                                                matchesStructType cNode.Type &&
+                                                (let lbl = externLabel cBind
+                                                 not (lbl.Contains "unmap") && not (lbl.Contains "release") && not (lbl.Contains "sync") && not (lbl.Contains "flush")))
+                                        let isExclusiveOrigin (cNodeId: NodeId) (origins: Set<NodeId>) =
+                                            origins.Contains cNodeId &&
+                                            origins |> Set.forall (fun oid ->
+                                                if oid = cNodeId then true
+                                                else
+                                                    match graph.Nodes.TryFind oid with
+                                                    | Some { Kind = SemanticKind.RecordExpr _ } -> false
+                                                    | Some ({ Kind = SemanticKind.Application _ } as oNode) when matchesStructType oNode.Type -> false
+                                                    | Some ({ Kind = SemanticKind.PatternBinding _ } as oNode)
+                                                        when oNode.Children.IsEmpty && DirectCaptures.sourceDefinition graph oid = oid && not (patternScrutinees.ContainsKey oid) -> false
+                                                    | _ ->
+                                                        not (orderedExternCalls |> List.exists (fun (otherNode, _, _, _) -> otherNode.Id = oid)))
+                                        match elementTypeOpt with
+                                        | None ->
+                                            let siteNode = List.head matchedFieldGets
+                                            placementRow :: pAcc, vAcc, usedSites, (siteNode.Id, Set.ofList (siteNode.Id :: sp.Participants), "FS9220: SharedBufferPlacement StructLayout lacks a resolved record type definition.") :: errAcc
+                                        | Some elementType ->
+                                            let fgWithAcquire =
+                                                matchedFieldGets
+                                                |> List.map (fun fg ->
+                                                    let origins =
+                                                        match fg.Kind with
+                                                        | SemanticKind.FieldGet(recvId, _) -> possibleOrigins graph setsByTarget patternScrutinees recvId
+                                                        | _ -> Set.empty
+                                                    let acqOpt =
+                                                        candidateAcquireCalls
+                                                        |> List.tryFind (fun (cNode, _, _, _) -> isExclusiveOrigin cNode.Id origins)
+                                                    fg, acqOpt)
+                                            match fgWithAcquire |> List.tryFind (fun (_, acqOpt) -> acqOpt.IsNone) with
+                                            | Some (badFg, _) ->
+                                                placementRow :: pAcc, vAcc, usedSites, (badFg.Id, Set.ofList (badFg.Id :: sp.Participants), "FS9222: SharedBufferViewUse projection must originate from a reachable [<FidelityExtern>] region acquisition call.") :: errAcc
+                                            | None ->
+                                                let groupedByAcquire =
+                                                    fgWithAcquire
+                                                    |> List.choose (fun (fg, acqOpt) -> acqOpt |> Option.map (fun acq -> acq, fg))
+                                                    |> List.groupBy (fun ((cNode, _, _, _), _) -> cNode.Id)
+                                                    |> List.map (fun (_, items) -> fst (List.head items), items |> List.map snd)
+                                                let vAccNext, usedSitesNext, errAccNext =
+                                                    groupedByAcquire
+                                                    |> List.fold (fun (vAccG, usedG, errG) ((acquireCallNode, _, _, acquireOrder), groupFieldGets) ->
+                                                        let siteNode = List.head groupFieldGets
+                                                        let fgOrders = groupFieldGets |> List.map (fun fg -> orderOf fg.Id)
+                                                        let minFgOrder = List.min fgOrders
+                                                        let maxFgOrder = List.max fgOrders
+                                                        let hasAmbiguousAcquiredRegion (cArgs: NodeId list) =
+                                                            cArgs |> List.exists (fun a ->
+                                                                let origins = possibleOrigins graph setsByTarget patternScrutinees a
+                                                                origins.Contains acquireCallNode.Id && not (isExclusiveOrigin acquireCallNode.Id origins))
+                                                        let consumesAcquiredRegion (cArgs: NodeId list) =
+                                                            not (hasAmbiguousAcquiredRegion cArgs) &&
+                                                            (cArgs |> List.exists (fun a ->
+                                                                isExclusiveOrigin acquireCallNode.Id (possibleOrigins graph setsByTarget patternScrutinees a)))
+                                                        let ambiguousExterns =
+                                                            orderedExternCalls
+                                                            |> List.filter (fun (cNode, cBind, cArgs, _) ->
+                                                                not (Set.contains cNode.Id usedG) &&
+                                                                hasAmbiguousAcquiredRegion cArgs &&
+                                                                (let lbl = externLabel cBind
+                                                                 lbl.Contains "unmap" || lbl.Contains "release" || lbl.Contains "sync" || lbl.Contains "flush"))
+                                                        let releaseExterns =
+                                                            orderedExternCalls
+                                                            |> List.filter (fun (cNode, cBind, cArgs, _) ->
+                                                                not (Set.contains cNode.Id usedG) &&
+                                                                consumesAcquiredRegion cArgs &&
+                                                                (let lbl = externLabel cBind
+                                                                 lbl.Contains "unmap" || lbl.Contains "release"))
+                                                        let releaseExternOpt = List.tryHead releaseExterns
+                                                        let syncExterns =
+                                                            orderedExternCalls
+                                                            |> List.filter (fun (cNode, cBind, cArgs, _) ->
+                                                                not (Set.contains cNode.Id usedG) &&
+                                                                consumesAcquiredRegion cArgs &&
+                                                                (let lbl = externLabel cBind
+                                                                 lbl.Contains "sync" || lbl.Contains "flush"))
+                                                        let groupUsed =
+                                                            Set.ofList (
+                                                                siteNode.Id :: acquireCallNode.Id ::
+                                                                (releaseExterns |> List.map (fun (n, _, _, _) -> n.Id)) @
+                                                                (syncExterns |> List.map (fun (n, _, _, _) -> n.Id)) @
+                                                                (ambiguousExterns |> List.map (fun (n, _, _, _) -> n.Id)) @
+                                                                (groupFieldGets |> List.map _.Id))
+                                                        if not ambiguousExterns.IsEmpty then
+                                                            let ambIds = ambiguousExterns |> List.map (fun (n, _, _, _) -> n.Id)
+                                                            vAccG, Set.union usedG groupUsed, (siteNode.Id, Set.ofList (siteNode.Id :: acquireCallNode.Id :: ambIds @ sp.Participants), "FS9222: SharedBufferViewUse release or sync call has ambiguous region provenance.") :: errG
+                                                        elif minFgOrder <= acquireOrder then
+                                                            vAccG, Set.union usedG groupUsed, (siteNode.Id, Set.ofList (siteNode.Id :: acquireCallNode.Id :: sp.Participants), "FS9222: SharedBufferViewUse projection precedes [<FidelityExtern>] region acquisition call.") :: errG
+                                                        elif not sp.Placement.LeakedAtExit && releaseExternOpt.IsNone then
+                                                            vAccG, Set.union usedG groupUsed, (siteNode.Id, Set.ofList (siteNode.Id :: acquireCallNode.Id :: sp.Participants), "FS9222: SharedBufferViewUse with LeakedAtExit = false requires a reachable [<FidelityExtern>] region release call.") :: errG
+                                                        elif (match releaseExternOpt with Some (_, _, _, relOrder) -> maxFgOrder >= relOrder || relOrder <= acquireOrder | None -> false) then
+                                                            let relIds = releaseExternOpt |> Option.map (fun (n, _, _, _) -> n.Id) |> Option.toList
+                                                            vAccG, Set.union usedG groupUsed, (siteNode.Id, Set.ofList (siteNode.Id :: acquireCallNode.Id :: relIds @ sp.Participants), "FS9222: SharedBufferViewUse projection occurs after [<FidelityExtern>] region release call.") :: errG
+                                                        elif releaseExterns.Length > 1 then
+                                                            let relIds = releaseExterns |> List.map (fun (n, _, _, _) -> n.Id)
+                                                            vAccG, Set.union usedG groupUsed, (siteNode.Id, Set.ofList (siteNode.Id :: acquireCallNode.Id :: relIds @ sp.Participants), "FS9222: SharedBufferViewUse region has multiple reachable [<FidelityExtern>] release calls.") :: errG
+                                                        else
+                                                            let acquireCallId = acquireCallNode.Id
+                                                            let releaseCallOpt = releaseExternOpt |> Option.map (fun (n, _, _, _) -> n.Id)
+                                                            let syncCallIds =
+                                                                syncExterns
+                                                                |> List.filter (fun (_, _, _, sOrd) ->
+                                                                    sOrd > acquireOrder &&
+                                                                    (match releaseExternOpt with Some (_, _, _, rOrd) -> sOrd < rOrd | None -> true))
+                                                                |> List.map (fun (n, _, _, _) -> n.Id)
+                                                            let viewProjIds = groupFieldGets |> List.map _.Id
+                                                            let requiredUseNodes =
+                                                                (siteNode.Id :: sp.Identity :: acquireCallId :: (Option.toList releaseCallOpt) @ syncCallIds @ viewProjIds)
+                                                                |> List.distinct
+                                                            let useParticipants =
+                                                                ParticipantEvidence.Established (
+                                                                    requiredUseNodes
+                                                                    |> List.mapi (fun ord n ->
+                                                                        let role =
+                                                                            if n = sp.Identity then ParticipantRole.ReadOnlyBufferDeclaration
+                                                                            elif n = acquireCallId then ParticipantRole.ReadOnlyBufferCall
+                                                                            elif Some n = releaseCallOpt then ParticipantRole.ReadOnlyBufferRetirement
+                                                                            elif List.contains n viewProjIds then ParticipantRole.Source
+                                                                            else ParticipantRole.Site
+                                                                        { Role = role; Node = n; Ordinal = ord; Group = siteNode.Id }))
+                                                            let viewRow : BoundarySharedBufferViewUse =
+                                                                { Site = siteNode.Id
+                                                                  PlacementDeclaration = sp.Identity
+                                                                  RegionAcquisitionCall = acquireCallId
+                                                                  RegionReleaseCall = releaseCallOpt
+                                                                  SyncCalls = syncCallIds
+                                                                  ViewProjections = viewProjIds
+                                                                  ElementType = elementType
+                                                                  ElementSlot = SettledSlot.InlineBytes(sp.Placement.MeasuredElementSize, sp.Placement.LayoutAlignment)
+                                                                  Copies = 0
+                                                                  ExtentObligation = extentObId
+                                                                  LayoutObligation = layoutObId
+                                                                  LifetimeObligation = lifetimeObId
+                                                                  ExclusivityObligation = exclusivityObId
+                                                                  SpaceExtentObligation = Some spaceExtentObId
+                                                                  Participants = useParticipants }
+                                                            let newlyUsed = Set.ofList (siteNode.Id :: acquireCallId :: (Option.toList releaseCallOpt) @ syncCallIds @ viewProjIds)
+                                                            viewRow :: vAccG, Set.union usedG newlyUsed, errG)
+                                                        (vAcc, usedSites, errAcc)
+                                                placementRow :: pAcc, vAccNext, usedSitesNext, errAccNext
+                            | _ ->
+                                pAcc, vAcc, usedSites, (sp.DescriptorBinding, Set.ofList sp.Participants, "SharedBufferPlacement lacks a resolved space or buffer schema.") :: errAcc)
+                            ([], [], Set.empty, errors)
+                    let isSharedBufferStructType (ty: NativeType) =
+                        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+                        | NativeType.TApp(tycon, _) ->
+                            let tName = tycon.Name
+                            let shortTName = match tName.LastIndexOf '.' with -1 -> tName | idx -> tName.Substring(idx + 1)
+                            descriptors.SharedBufferPlacements |> List.exists (fun sp ->
+                                let sName = sp.Placement.StructLayout.Name
+                                let shortSName = match sName.LastIndexOf '.' with -1 -> sName | idx -> sName.Substring(idx + 1)
+                                tName = sName || shortTName = shortSName)
+                        | _ -> false
+                    let unconsumedCallErrors =
+                        orderedExternCalls
+                        |> List.choose (fun (cNode, cBind, cArgs, _) ->
+                            if Set.contains cNode.Id finalUsedSites then None
+                            else
+                                let takesSharedBufferStruct =
+                                    cArgs |> List.exists (fun a ->
+                                        graph.Nodes.TryFind a |> Option.exists (fun an -> isSharedBufferStructType an.Type))
+                                if isSharedBufferStructType cNode.Type || takesSharedBufferStruct then
+                                    Some (cNode.Id, Set.ofList (cNode.Id :: cBind :: cArgs), "FS9222: SharedBufferPlacement [<FidelityExtern>] call must participate in a settled SharedBufferViewUse.")
+                                else None)
+                    List.rev placementsOut, List.rev viewsOut, obEnrich, unconsumedCallErrors @ buildErrors
     let domain =
         { ResourceEvidence = resourceEvidence
           Premises = boundaryPremises; Platform = Ingredients.platformPremise graph.Platform; Meets = graph.Codata.Value.Meets
@@ -4110,6 +4557,8 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
           BorrowedResultViewUses = Map.keys borrowedViewUses |> Seq.toList
           BufferAbsences = Map.keys bufferAbsences |> Seq.toList
           CountedEntryArrays = Map.keys countedEntryArrays |> Seq.toList
+          SharedBufferPlacements = sharedBufferPlacements
+          SharedBufferViewUses = sharedBufferViewUses
           ResourceDeclarations = Map.keys resourceDeclarations |> Seq.toList
           ResourceAccesses = Map.keys resourceAccesses |> Seq.toList
           ResourceEvaluationRoots = List.distinct resourceRoots
@@ -4166,9 +4615,9 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
-    Enrichment.combine readOnlyRequirements (Enrichment.combine borrowedViewRequirements (Enrichment.combine optionalRequirements (Enrichment.combine writableRequirements (Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
+    Enrichment.combine sharedBufferRequirements (Enrichment.combine readOnlyRequirements (Enrichment.combine borrowedViewRequirements (Enrichment.combine optionalRequirements (Enrichment.combine writableRequirements (Enrichment.combine (Enrichment.combine resourceRequirements resourceEvaluation)
         (Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment)
-    ))))
+    )))))
 
 let elaborateWithRetained (retained: Ingredients.RetainedBoundaryNodes) graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore retained graph)

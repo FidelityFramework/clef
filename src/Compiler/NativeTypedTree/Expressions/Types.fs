@@ -137,6 +137,11 @@ module DiagnosticCodes =
     let CCS8425_ForeignBufferRetentionViolation = "CCS8425"
     let CCS8426_ForeignBufferAccessExclusivity = "CCS8426"
     let CCS8427_ForeignBufferAbsenceUncontracted = "CCS8427"
+    // M10 BAREWire zero-copy shared-buffer placement and view layout/extent/lifetime/exclusivity obligations (Farscape #205).
+    let FS9220_SharedBufferLayoutInvalid = "FS9220"
+    let FS9221_SharedBufferExtentInvalid = "FS9221"
+    let FS9222_SharedBufferLifetimeInvalid = "FS9222"
+    let FS9223_SharedBufferConflictingAccess = "FS9223"
     // An own-project source function has no incoming reference in an executable.
     let CCS8500_UnusedBinding = "CCS8500"
     // Record field label resolution (CCS8701-CCS8705, inference-name-resolution.md)

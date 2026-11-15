@@ -758,6 +758,8 @@ type ObligationBody =
     | UncountedPathTermination of UncountedPathTerminationModel
     | BorrowedResultViewScope of BorrowedResultViewScopeModel
     | BufferAbsenceArgumentConversion of BufferAbsenceArgumentConversionModel
+    /// Settled M10 BAREWire zero-copy shared-buffer placement obligation (FS9220-FS9223).
+    | SharedBufferPlacementObligation of obligation: BAREWire.Platform.Obligation
     /// One dynamic snapshot count is shared by the write, complete copy and
     /// allocation. Exact source incidence is replayed separately from bounds.
     | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint * elementBytes: bigint * allocationCapacity: bigint
@@ -1557,6 +1559,40 @@ type BoundaryCountedEntryArray = {
     Invocation: NodeId
     Contract: BAREWire.Descriptors.CountedEntryArrayDescriptor
     DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: ParticipantEvidence
+}
+
+/// Settled representation of a declared M10 BAREWire zero-copy shared-buffer placement (Farscape #205).
+type BoundarySharedBufferPlacementDeclaration = {
+    Identity: NodeId
+    Declaration: NodeId
+    SpaceNode: NodeId
+    BufferSchemaNode: NodeId
+    SpaceDescriptorNode: NodeId
+    StructDescriptorNode: NodeId
+    ViewDescriptorNode: NodeId
+    Placement: BAREWire.Platform.SharedBufferPlacement
+    Obligations: NodeId list
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+    Participants: ParticipantEvidence
+}
+
+/// Settled representation of a mapped zero-copy region and typed StructDescriptor view use (Farscape #205).
+type BoundarySharedBufferViewUse = {
+    Site: NodeId
+    PlacementDeclaration: NodeId
+    RegionAcquisitionCall: NodeId
+    RegionReleaseCall: NodeId option
+    SyncCalls: NodeId list
+    ViewProjections: NodeId list
+    ElementType: TypeIdentity
+    ElementSlot: SettledSlot
+    Copies: int
+    ExtentObligation: NodeId
+    LayoutObligation: NodeId
+    LifetimeObligation: NodeId
+    ExclusivityObligation: NodeId
+    SpaceExtentObligation: NodeId option
     Participants: ParticipantEvidence
 }
 
@@ -2378,6 +2414,8 @@ type BoundaryDomain = {
     BorrowedResultViewUses: NodeId list
     BufferAbsences: NodeId list
     CountedEntryArrays: NodeId list
+    SharedBufferPlacements: BoundarySharedBufferPlacementDeclaration list
+    SharedBufferViewUses: BoundarySharedBufferViewUse list
     ResourceDeclarations: NodeId list
     ResourceAccesses: NodeId list
     ResourceEvaluationRoots: (NodeId * NodeId * NodeId) list
@@ -4008,6 +4046,10 @@ type WitnessProjectionFailureKind =
     | ForeignBufferRetention
     | ForeignBufferExclusivity
     | ForeignBufferAbsence
+    | SharedBufferLayoutInvalid
+    | SharedBufferExtentInvalid
+    | SharedBufferLifetimeInvalid
+    | SharedBufferConflictingAccess
 
 type WitnessProjectionFailure = {
     Kind: WitnessProjectionFailureKind
@@ -4268,6 +4310,8 @@ type BoundaryEmissionProjection = {
     BorrowedResultViewUses: Map<NodeId, BoundaryBorrowedResultViewUse>
     BufferAbsences: Map<NodeId, BoundaryBufferAbsence>
     CountedEntryArrays: Map<NodeId, BoundaryCountedEntryArray>
+    SharedBufferPlacements: Map<NodeId, BoundarySharedBufferPlacementDeclaration>
+    SharedBufferViewUses: Map<NodeId, BoundarySharedBufferViewUse>
     ResourceDeclarations: Map<NodeId, BoundaryResourceDeclaration>
     ResourceAccesses: Map<NodeId, BoundaryResourceAccess>
     Imports: Map<NodeId, BoundaryImport>

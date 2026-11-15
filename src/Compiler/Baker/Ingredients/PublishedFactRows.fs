@@ -291,6 +291,8 @@ and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fideli
         BorrowedResultViewUses = (value.BorrowedResultViewUses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryBorrowedResultViewUse v) |> Map.ofSeq)
         BufferAbsences = (value.BufferAbsences |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryBufferAbsence v) |> Map.ofSeq)
         CountedEntryArrays = (value.CountedEntryArrays |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryCountedEntryArray v) |> Map.ofSeq)
+        SharedBufferPlacements = (value.SharedBufferPlacements |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySharedBufferPlacementDeclaration v) |> Map.ofSeq)
+        SharedBufferViewUses = (value.SharedBufferViewUses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySharedBufferViewUse v) |> Map.ofSeq)
         ResourceEvidence = (value.ResourceEvidence |> Option.map (fun x -> mapBoundaryResourceEvidence x))
         ResourceDeclarations = (value.ResourceDeclarations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceDeclaration v) |> Map.ofSeq)
         ResourceAccesses = (value.ResourceAccesses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryResourceAccess v) |> Map.ofSeq)
@@ -505,6 +507,40 @@ and mapBoundaryCountedEntryArray (value: S.BoundaryCountedEntryArray) : Fidelity
         DeclarationFacts = value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq
         Participants = mapParticipantEvidence value.Participants
     } : Fidelity.PSG.BoundaryCountedEntryArray)
+
+and mapBoundarySharedBufferPlacementDeclaration (value: S.BoundarySharedBufferPlacementDeclaration) : Fidelity.PSG.BoundarySharedBufferPlacementDeclaration =
+    ({
+        Identity = nodeId value.Identity
+        Declaration = nodeId value.Declaration
+        SpaceNode = nodeId value.SpaceNode
+        BufferSchemaNode = nodeId value.BufferSchemaNode
+        SpaceDescriptorNode = nodeId value.SpaceDescriptorNode
+        StructDescriptorNode = nodeId value.StructDescriptorNode
+        ViewDescriptorNode = nodeId value.ViewDescriptorNode
+        Placement = value.Placement
+        Obligations = List.map nodeId value.Obligations
+        DeclarationFacts = value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq
+        Participants = mapParticipantEvidence value.Participants
+    } : Fidelity.PSG.BoundarySharedBufferPlacementDeclaration)
+
+and mapBoundarySharedBufferViewUse (value: S.BoundarySharedBufferViewUse) : Fidelity.PSG.BoundarySharedBufferViewUse =
+    ({
+        Site = nodeId value.Site
+        PlacementDeclaration = nodeId value.PlacementDeclaration
+        RegionAcquisitionCall = nodeId value.RegionAcquisitionCall
+        RegionReleaseCall = Option.map nodeId value.RegionReleaseCall
+        SyncCalls = List.map nodeId value.SyncCalls
+        ViewProjections = List.map nodeId value.ViewProjections
+        ElementType = mapTypeIdentity value.ElementType
+        ElementSlot = mapSettledSlot value.ElementSlot
+        Copies = value.Copies
+        ExtentObligation = nodeId value.ExtentObligation
+        LayoutObligation = nodeId value.LayoutObligation
+        LifetimeObligation = nodeId value.LifetimeObligation
+        ExclusivityObligation = nodeId value.ExclusivityObligation
+        SpaceExtentObligation = Option.map nodeId value.SpaceExtentObligation
+        Participants = mapParticipantEvidence value.Participants
+    } : Fidelity.PSG.BoundarySharedBufferViewUse)
 
 and mapBoundaryOperand (value: S.BoundaryOperand) : Fidelity.PSG.BoundaryOperand =
     ({
@@ -2534,6 +2570,7 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.UncountedPathTermination model -> Fidelity.PSG.ObligationBody.UncountedPathTermination(mapUncountedPathTerminationModel model)
     | S.ObligationBody.BorrowedResultViewScope model -> Fidelity.PSG.ObligationBody.BorrowedResultViewScope(mapBorrowedResultViewScopeModel model)
     | S.ObligationBody.BufferAbsenceArgumentConversion model -> Fidelity.PSG.ObligationBody.BufferAbsenceArgumentConversion(mapBufferAbsenceArgumentConversionModel model)
+    | S.ObligationBody.SharedBufferPlacementObligation obligation -> Fidelity.PSG.ObligationBody.SharedBufferPlacementObligation obligation
     | S.ObligationBody.ProgramInitializationOrder(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ProgramInitializationOrder(a0, a1, a2)
     | S.ObligationBody.FiniteLoopTrip(a0) -> Fidelity.PSG.ObligationBody.FiniteLoopTrip(mapFiniteLoopTripModel a0)
     | S.ObligationBody.FiniteSequencePull(a0) -> Fidelity.PSG.ObligationBody.FiniteSequencePull(mapFiniteSequencePullModel a0)

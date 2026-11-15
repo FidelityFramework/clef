@@ -323,6 +323,10 @@ let diagnostics (graph: SemanticGraph) (failures: WitnessProjectionFailure list)
             | WitnessProjectionFailureKind.ForeignBufferRetention -> Codes.CCS8425_ForeignBufferRetentionViolation
             | WitnessProjectionFailureKind.ForeignBufferExclusivity -> Codes.CCS8426_ForeignBufferAccessExclusivity
             | WitnessProjectionFailureKind.ForeignBufferAbsence -> Codes.CCS8427_ForeignBufferAbsenceUncontracted
+            | WitnessProjectionFailureKind.SharedBufferLayoutInvalid -> Codes.FS9220_SharedBufferLayoutInvalid
+            | WitnessProjectionFailureKind.SharedBufferExtentInvalid -> Codes.FS9221_SharedBufferExtentInvalid
+            | WitnessProjectionFailureKind.SharedBufferLifetimeInvalid -> Codes.FS9222_SharedBufferLifetimeInvalid
+            | WitnessProjectionFailureKind.SharedBufferConflictingAccess -> Codes.FS9223_SharedBufferConflictingAccess
         ({ Severity = Diagnostics.NativeDiagnosticSeverity.Error; Code = code
            Message = "Source settlement is required before witnessing: " + failure.Reason
            Range = failure.Occurrence |> Option.bind graph.Nodes.TryFind |> Option.map _.Range |> Option.defaultValue Clef.Compiler.NativeTypedTree.NativeTypes.dummyRange

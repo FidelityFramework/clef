@@ -20,10 +20,14 @@ let private failure occurrence participants reason =
 
 let private domainFailure occurrence participants (reason: string) =
     let kind =
-        if reason.StartsWith("CCS8424:") then WitnessProjectionFailureKind.ForeignBufferExtent
-        elif reason.StartsWith("CCS8425:") then WitnessProjectionFailureKind.ForeignBufferRetention
-        elif reason.StartsWith("CCS8426:") then WitnessProjectionFailureKind.ForeignBufferExclusivity
-        elif reason.StartsWith("CCS8427:") then WitnessProjectionFailureKind.ForeignBufferAbsence
+        if reason.StartsWith("CCS8424:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.ForeignBufferExtent
+        elif reason.StartsWith("CCS8425:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.ForeignBufferRetention
+        elif reason.StartsWith("CCS8426:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.ForeignBufferExclusivity
+        elif reason.StartsWith("CCS8427:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.ForeignBufferAbsence
+        elif reason.StartsWith("FS9220:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.SharedBufferLayoutInvalid
+        elif reason.StartsWith("FS9221:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.SharedBufferExtentInvalid
+        elif reason.StartsWith("FS9222:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.SharedBufferLifetimeInvalid
+        elif reason.StartsWith("FS9223:", System.StringComparison.Ordinal) then WitnessProjectionFailureKind.SharedBufferConflictingAccess
         else WitnessProjectionFailureKind.Settlement
     {
         Kind = kind
@@ -423,7 +427,9 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                 let borrowedViewClaims = borrowedViewUses |> List.map _.ScopeProof |> Set.ofList
                 let bufferAbsenceClaims =
                     calls |> List.collect (fun call -> call.Arguments |> List.choose _.BufferAbsence |> List.collect BoundaryBufferAbsenceChoice.leaves |> List.map _.Obligation) |> Set.ofList
-                let newBufferClaims = Set.unionMany [readOnlyClaims; borrowedViewClaims; bufferAbsenceClaims]
+                let sharedBufferClaims =
+                    domain.SharedBufferPlacements |> List.collect _.Obligations |> Set.ofList
+                let newBufferClaims = Set.unionMany [readOnlyClaims; borrowedViewClaims; bufferAbsenceClaims; sharedBufferClaims]
                 let ownedTargets = Set.add domainRow.Target ((coverages |> List.map _.Obligation) @ (domain.IntrinsicProofs |> List.map _.Obligation) |> Set.ofList)
                 let expected=expected @ (graph.Edges |> List.filter(fun edge->resourceClaims.Contains edge.Target && (edge.Role=EdgeRole.Constrains || edge.Role=EdgeRole.EnrichedWith)))
                 let ownedTargets=Set.unionMany [ownedTargets;resourceClaims;writableClaims;newBufferClaims;Set.ofList optionalClaims]
@@ -494,6 +500,8 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                          BorrowedResultViewUses = borrowedViewUses |> List.map (fun row -> row.Call, row) |> Map.ofList
                          BufferAbsences = bufferAbsences |> List.map (fun row -> row.Quote, row) |> Map.ofList
                          CountedEntryArrays = countedEntryArrays |> List.map (fun row -> row.Identity, row) |> Map.ofList
+                         SharedBufferPlacements = domain.SharedBufferPlacements |> List.map (fun row -> row.Identity, row) |> Map.ofList
+                         SharedBufferViewUses = domain.SharedBufferViewUses |> List.map (fun row -> row.Site, row) |> Map.ofList
                          ResourceDeclarations = resourceDeclarations |> List.map (fun row -> row.Identity,row) |> Map.ofList
                          ResourceAccesses = resourceAccesses |> List.map(fun row->row.Site,row) |> Map.ofList
                          Imports = imports; Loading = domain.Loading; Entries = entries |> List.map (fun entry -> entry.Formation, entry) |> Map.ofList

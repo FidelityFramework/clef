@@ -197,6 +197,19 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
             | ParticipantEvidence.Pending early -> participants early.Derived
             account.Claims |> List.iter (snd >> add))
         selected before emission.Boundary.IntrinsicWrites |> Map.iter (fun _ row -> add row.Import; add row.Callee; add row.Fd; add row.Buffer; add row.Count)
+        selected before emission.Boundary.SharedBufferViewUses |> Map.iter (fun _ row ->
+            add row.Site; add row.RegionAcquisitionCall; addOptional row.RegionReleaseCall
+            addMany row.SyncCalls; addMany row.ViewProjections
+            for callId in row.RegionAcquisitionCall :: (Option.toList row.RegionReleaseCall) @ row.SyncCalls do
+                match graph.Nodes.TryFind callId with
+                | Some { Kind = SemanticKind.Application(callee, _) } ->
+                    match BoundaryDeclarations.target graph callee with
+                    | Some(bNode, _) ->
+                        emission.Boundary.Imports.Values
+                        |> Seq.filter (fun imp -> imp.Binding = bNode.Id)
+                        |> Seq.iter (fun imp -> add imp.Identity)
+                    | None -> ()
+                | _ -> ())
         selected before emission.Numeric.Operations |> Map.iter (fun _ row -> add row.Callee; row.Operands |> List.iter (fun value -> add value.Actual))
         selected before emission.Numeric.IndexTransports |> Map.iter (fun _ row -> add row.Operand)
         selected before emission.Numeric.OccurrenceRepresentations |> Map.iter (fun _ row ->
@@ -333,6 +346,7 @@ let private closeTypes (graph: SemanticGraph) ids valueIds (emission: WitnessEmi
                 for row in account.Slots do yield row.AggregateType; yield row.SourceType
                 for row in account.Sources do yield row.Type
             }))
+        |> Seq.append (selected ids emission.Boundary.SharedBufferViewUses |> Map.values |> Seq.map _.ElementType)
     Seq.fold visit Set.empty identities
 
 let private emissionRows ids valueIds types metadata (value: WitnessEmissionProjection) : WitnessEmissionProjection =
@@ -409,6 +423,8 @@ let private emissionRows ids valueIds types metadata (value: WitnessEmissionProj
                    BorrowedResultViewDeclarations = boundary.BorrowedResultViewDeclarations; BorrowedResultViewUses = boundary.BorrowedResultViewUses |> Map.filter(fun site _->ids.Contains site)
                    BufferAbsences = boundary.BufferAbsences |> Map.filter(fun _ row->imports.ContainsKey row.Import)
                    CountedEntryArrays = boundary.CountedEntryArrays |> Map.filter(fun _ row->imports.ContainsKey row.Import)
+                   SharedBufferPlacements = boundary.SharedBufferPlacements
+                   SharedBufferViewUses = boundary.SharedBufferViewUses |> Map.filter(fun site _->ids.Contains site)
                    ResourceEvidence = boundary.ResourceEvidence; ResourceDeclarations = boundary.ResourceDeclarations; ResourceAccesses = rows boundary.ResourceAccesses; Imports = imports; Loading = loading
                    Entries = rows boundary.Entries; CallbackInvocations = rows boundary.CallbackInvocations; CallbackAbsences = boundary.CallbackAbsences |> Map.filter(fun _ row->imports.ContainsKey row.Import); ClosedEntries = rows boundary.ClosedEntries; ResultHypotheses = resultHypotheses
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)

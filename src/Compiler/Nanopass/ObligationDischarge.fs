@@ -520,6 +520,18 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
           sprintf "(assert (<= r %d))" cap
           sprintf "(assert (= %s (<= (- r 1) %d)))" id bound
           sprintf "(assert (not %s))" id ]
+    | ObligationBody.SharedBufferPlacementObligation ob ->
+        let declareId = sprintf "(declare-const %s Bool)" id
+        (BAREWire.Platform.Obligations.smtLib { ob with Id = id }).Split('\n')
+        |> Array.toList
+        |> List.map (fun line -> line.TrimEnd('\r'))
+        |> List.filter (fun line ->
+            line <> "" &&
+            not (line.StartsWith(";", System.StringComparison.Ordinal)) &&
+            not (line.StartsWith("(set-logic ", System.StringComparison.Ordinal)) &&
+            line <> declareId &&
+            line <> "(check-sat)" &&
+            line <> "(reset)")
 
 /// The solver-ready artifact: one scope per obligation; `unsat` on every
 /// (check-sat) supplies the refutation result. Conditional premises must also
@@ -779,29 +791,72 @@ let private resourceProjectionWithOverride (overrideProjection: ObligationInfo -
 type private ConditionalLaw =
     | Foreign of Fidelity.PSG.ForeignResultCoverage.Projection
     | Resource of Fidelity.PSG.ResourceProof.Projection
+    | SharedBuffer of BAREWire.Platform.Obligation
 
 let private conditionalLaw (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (ob: ObligationInfo) : Result<ConditionalLaw, string> option =
     match ob.Body with
     | ObligationBody.ForeignResultCoverage model when (overrideProjection ob).IsNone ->
         Some (foreignProjection model |> Result.map Foreign)
+    | ObligationBody.SharedBufferPlacementObligation bareOb when (overrideProjection ob).IsNone ->
+        Some (Ok (SharedBuffer bareOb))
     | _ ->
         resourceProjectionWithOverride overrideProjection ob |> Option.map (Result.map Resource)
 
 let private participantsOf = function
     | Foreign p -> Fidelity.PSG.ForeignResultCoverage.participantVariables p
     | Resource p -> Fidelity.PSG.ResourceProof.participantVariables p
+    | SharedBuffer ob ->
+        if ob.Form.Kind = BAREWire.Platform.FormKind.SharedBufferSpaceExtent then
+            "space_cap" :: ([ 0 .. ob.Form.Names.Length - 1 ] |> List.collect (fun i -> [ $"off_{i}"; $"len_{i}" ]))
+        else
+            Array.toList ob.Form.Names
 
 let private ignoredOf = function
     | Foreign p -> Fidelity.PSG.ForeignResultCoverage.missingParticipantVariables p
     | Resource p -> Fidelity.PSG.ResourceProof.missingParticipantVariables p
+    | SharedBuffer ob ->
+        let id = if System.String.IsNullOrWhiteSpace ob.Id then "shared_buffer_ob" else ob.Id
+        let full = BAREWire.Platform.Obligations.smtLib { ob with Id = id }
+        let defPrefix = $"(assert (= {id} "
+        let conclusionLine =
+            full.Split('\n')
+            |> Array.tryFind (fun (l: string) -> l.StartsWith(defPrefix, System.StringComparison.Ordinal))
+            |> Option.defaultValue ""
+        participantsOf (SharedBuffer ob)
+        |> List.filter (fun v ->
+            not (conclusionLine.Contains($" {v} ", System.StringComparison.Ordinal) ||
+                 conclusionLine.Contains($" {v})", System.StringComparison.Ordinal) ||
+                 conclusionLine.Contains($"({v} ", System.StringComparison.Ordinal)))
 
 let private clausesOf (id: string) = function
     | Foreign p -> Fidelity.PSG.ForeignResultCoverage.anchoredNonVacuityQueries id p
     | Resource p -> Fidelity.PSG.ResourceProof.anchoredNonVacuityQueries id p
+    | SharedBuffer ob ->
+        let full = BAREWire.Platform.Obligations.smtLib { ob with Id = id }
+        let defPrefix = $"(assert (= {id} "
+        let lines = full.Split('\n')
+        let clauseText =
+            lines
+            |> Array.tryFind (fun (l: string) -> l.StartsWith(defPrefix, System.StringComparison.Ordinal))
+            |> Option.defaultValue ob.Statement
+        let query =
+            lines
+            |> Array.filter (fun (l: string) ->
+                not (l.StartsWith("(assert (= ", System.StringComparison.Ordinal) && not (l.StartsWith(defPrefix, System.StringComparison.Ordinal))))
+            |> String.concat "\n"
+        [ (0, clauseText, query) ]
 
 let private premiseQueriesOf (id: string) = function
     | Foreign p -> [ Fidelity.PSG.ForeignResultCoverage.anchoredPremisesQuery id p ]
     | Resource p -> Fidelity.PSG.ResourceProof.anchoredPremisesQueries id p
+    | SharedBuffer ob ->
+        let full = BAREWire.Platform.Obligations.smtLib { ob with Id = id }
+        let negLine = $"(assert (not {id}))"
+        let query =
+            full.Split('\n')
+            |> Array.filter (fun (l: string) -> l <> negLine)
+            |> String.concat "\n"
+        [ query ]
 
 let private clauseReceipt (ob: ObligationInfo) participants (clauseIndex, clause, query) verdict =
     { Stage = "psg-nonvacuity"; ObligationId = ob.Id; ClauseIndex = Some clauseIndex; Clause = Some clause
