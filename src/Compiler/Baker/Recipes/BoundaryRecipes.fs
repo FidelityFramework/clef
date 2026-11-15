@@ -1895,7 +1895,9 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
         match Declarations.runtimeModel core with
         | Some RuntimeModel.Libc -> return ()
         | Some RuntimeModel.Win32 when library <> "c" -> return ()
-        | _ -> return! Error "A reachable C import requires source TargetCore.Runtime libc; startup or project defaults do not establish library availability." }
+        | Some RuntimeModel.Win32 ->
+            return! Error "The Win32 runtime does not provide implicit libc ('c'); declare an explicit Windows host library."
+        | _ -> return! Error "A reachable C import requires a declared source TargetCore.Runtime (libc or win32); startup or project defaults do not establish library availability." }
     // Declaration accounts are source observations, not resource/conversion proofs.
     let resourceDeclarations, resourceErrors =
         descriptors.Resources |> List.fold (fun (rows, errors) resource ->
