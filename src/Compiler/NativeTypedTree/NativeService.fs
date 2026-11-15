@@ -135,7 +135,8 @@ let private implFileToInput (fileName: string) (implFile: ParsedImplFile) : Pars
 
     // Create qualified name from file name
     let baseName =
-        match System.IO.Path.GetFileNameWithoutExtension(fileName) with
+        let path: string | null = fileName
+        match System.IO.Path.GetFileNameWithoutExtension path with
         | null -> failwith $"Cannot extract base name from file: {fileName}"
         | name -> name
     let qualifiedName = QualifiedNameOfFile(Ident(baseName, Range.range0))

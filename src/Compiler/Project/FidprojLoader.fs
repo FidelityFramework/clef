@@ -342,7 +342,8 @@ module FidprojLoader =
 
                 // Package section
                 let defaultName =
-                    match Path.GetFileNameWithoutExtension absPath with
+                    let path: string | null = absPath
+                    match Path.GetFileNameWithoutExtension path with
                     | null -> "unnamed"
                     | n -> n
                 let name = Toml.getString "package.name" doc |> Option.defaultValue defaultName
