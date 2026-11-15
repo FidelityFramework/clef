@@ -390,36 +390,38 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
           | Ok liveScope ->
             let preparedRows = PreparedRows.project graph
             let segmentation = WitnessSegmentation.project graph projection liveScope
-            let liveRows = LiveRows.project graph projection liveScope preparedRows segmentation
-            let publication =
-                match unionLayoutFailures graph liveScope @ DeviceAccess.checkSelected graph liveRows.Codata.Mmio with
-                | [] -> PublishedRows.project graph liveScope liveRows dispatch
-                | failures -> Error failures
-            match publication with
+            match LiveRows.project graph projection liveScope preparedRows segmentation with
             | Error failures -> Error failures
-            | Ok publishedRows ->
-              let facts = {
-                  graph.Codata.Value with OrdinaryDemand = projection.Ordinary
-                                          WitnessEmission = Some projection
-                                          WitnessSegmentation = Some segmentation
-                                          WitnessLiveScope = Some liveScope
-                                          WitnessPreparedRows = Some preparedRows
-                                          WitnessLiveRows = Some liveRows
-                                          WitnessPublishedRows = Some publishedRows
-                                          ProofDispatch = Some dispatch }
-              // Force semantic lazy computations under their source owner. A consumer
-              // must not execute a deferred layout/index/classification computation.
-              let settled = {
-                  graph with
-                      Types = materialized graph.Types.Value
-                      ModuleClassifications = materialized graph.ModuleClassifications.Value
-                      FieldRanges = materialized graph.FieldRanges.Value
-                      ElementRanges = materialized graph.ElementRanges.Value
-                      Layouts = materialized graph.Layouts.Value
-                      Escaping = materialized graph.Escaping.Value
-                      Codata = materialized facts
-                      WitnessProvenance = None }
-              Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
+            | Ok liveRows ->
+                let publication =
+                    match unionLayoutFailures graph liveScope @ DeviceAccess.checkSelected graph liveRows.Codata.Mmio with
+                    | [] -> PublishedRows.project graph liveScope liveRows dispatch
+                    | failures -> Error failures
+                match publication with
+                | Error failures -> Error failures
+                | Ok publishedRows ->
+                  let facts = {
+                      graph.Codata.Value with OrdinaryDemand = projection.Ordinary
+                                              WitnessEmission = Some projection
+                                              WitnessSegmentation = Some segmentation
+                                              WitnessLiveScope = Some liveScope
+                                              WitnessPreparedRows = Some preparedRows
+                                              WitnessLiveRows = Some liveRows
+                                              WitnessPublishedRows = Some publishedRows
+                                              ProofDispatch = Some dispatch }
+                  // Force semantic lazy computations under their source owner. A consumer
+                  // must not execute a deferred layout/index/classification computation.
+                  let settled = {
+                      graph with
+                          Types = materialized graph.Types.Value
+                          ModuleClassifications = materialized graph.ModuleClassifications.Value
+                          FieldRanges = materialized graph.FieldRanges.Value
+                          ElementRanges = materialized graph.ElementRanges.Value
+                          Layouts = materialized graph.Layouts.Value
+                          Escaping = materialized graph.Escaping.Value
+                          Codata = materialized facts
+                          WitnessProvenance = None }
+                  Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
 
 /// The complete identity policy for prepared input roots. Keeping names next
 /// to typed accessors lets the maintenance test check this policy against the
@@ -522,7 +524,9 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
         elif
             (match facts.WitnessLiveScope, facts.WitnessPreparedRows, facts.WitnessSegmentation, facts.WitnessLiveRows with
              | Some scope, Some prepared, Some segmentation, Some held ->
-                 LiveRows.matches held (LiveRows.project graph projection scope prepared segmentation)
+                 match LiveRows.project graph projection scope prepared segmentation with
+                 | Ok current -> LiveRows.matches held current
+                 | Error _ -> false
              | _ -> false) |> not then
             Error [{ Kind = WitnessProjectionFailureKind.Settlement; Occurrence = None; Participants = Set.empty
                      Reason = "Baker-selected live fact rows differ from the current source snapshot." }]

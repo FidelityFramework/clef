@@ -3628,22 +3628,26 @@ let main _ =
             f.Reason.Contains "CCS8424:" && f.Reason.Contains "single-byte element representation")
 
     [<Fact>]
-    member _.``M10 SharedBufferPlacement and zero-copy view use publish Schema 54 rows, discharge obligations, and refuse FS9220-FS9223``() =
+    member _.``M10 SharedBufferPlacement and zero-copy view use publish Schema 55 rows, discharge obligations, and refuse FS9220-FS9223``() =
         let authoritySource =
             SourcePlatformFixture.authority
                 .Replace("type TargetCore = { Arch: string; Os: string; Runtime: string; Triple: string; Widths: WidthDeclaration array; Representations: Representation array }",
                          "type TargetCore = { Arch: string; Os: string; Runtime: string; Triple: string; Endianness: string; WordSizeBits: int; Widths: WidthDeclaration array; Representations: Representation array }")
+                .Replace("type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }",
+                         "type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option; Notes: string; MapKind: string; Since: string; Until: string }")
+                .Replace("let rodata = { Name = \"rodata\"; Kind = \"rodata\"; Capacity = 4096; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"r\"; Base = None }",
+                         "let rodata = { Name = \"rodata\"; Kind = \"rodata\"; Capacity = 4096; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"r\"; Base = None; Notes = \"\"; MapKind = \"\"; Since = \"\"; Until = \"\" }")
                 .Replace("Runtime = \"freestanding\"; Triple = \"x86_64-unknown-linux-gnu\"",
                          "Runtime = \"libc\"; Triple = \"x86_64-unknown-linux-gnu\"; Endianness = \"little\"; WordSizeBits = 64")
                 .Replace(
                     "type BoundarySurface = { Endpoints: Endpoint array }\n",
-                    "type BoundarySurface = { Endpoints: Endpoint array }\ntype BufferSchema = { Name: string; Schema: string; Capacity: int; Framing: string; TrimDelimiter: bool; Space: string; Access: string }\n")
+                    "type BoundarySurface = { Endpoints: Endpoint array }\ntype BufferSchema = { Name: string; Schema: string; Capacity: int; Framing: string; Delimiter: int; TrimDelimiter: bool; Space: string; Lifetime: string; Access: string; Slot: int }\n")
                 .Replace(
                     "type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option; Surfaces: BoundarySurface array }",
                     "type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option; Surfaces: BoundarySurface array; Buffers: BufferSchema array }")
                 .Replace(
                     "Spaces = [| rodata |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = None }; Surfaces = [| { Endpoints = [| write |] } |]",
-                    "Spaces = [| rodata; { Name = \"shared_mmap\"; Kind = \"view-backed\"; Capacity = 65536; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"rw\"; Base = None } |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = None }; Surfaces = [| { Endpoints = [| write |] } |]; Buffers = [| { Name = \"ring_schema\"; Schema = \"RingSlot\"; Capacity = 4096; Framing = \"fixed\"; TrimDelimiter = false; Space = \"shared_mmap\"; Access = \"rw\" } |]")
+                    "Spaces = [| rodata; { Name = \"shared_mmap\"; Kind = \"view-backed\"; Capacity = 65536; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"rw\"; Base = None; Notes = \"\"; MapKind = \"\"; Since = \"\"; Until = \"\" } |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = None }; Surfaces = [| { Endpoints = [| write |] } |]; Buffers = [| { Name = \"ring_schema\"; Schema = \"RingSlot\"; Capacity = 4096; Framing = \"fixed\"; Delimiter = -1; TrimDelimiter = false; Space = \"shared_mmap\"; Lifetime = \"scope\"; Access = \"rw\"; Slot = 0 } |]")
         let mkSharedSource (placementOverrides: string -> string) =
             let basePlacement =
                 """module SharedBufferFixture
@@ -3694,6 +3698,13 @@ type SharedBufferPlacement = {
     LibraryMutatesBuffer: bool
     OverlappingMutableShare: bool
     MaxAccessedElementIndex: int
+}
+type SharedBufferRegionDescriptor = {
+    Placement: string
+    Acquire: string
+    Release: string option
+    Sync: string array
+    ForeignUses: string array
 }
 
 type RingSlot = { Seq: int; Payload: int }
@@ -3763,6 +3774,14 @@ let ringPlacementDescriptor: Expr<SharedBufferPlacement> = <@ {
     MaxAccessedElementIndex = 15
 } @>
 
+let ringRegionDescriptor: Expr<SharedBufferRegionDescriptor> = <@ {
+    Placement = "ring_slot"
+    Acquire = "SharedBufferFixture.mmapRing"
+    Release = Some "SharedBufferFixture.munmapRing"
+    Sync = [| "SharedBufferFixture.msyncRing" |]
+    ForeignUses = [| "SharedBufferFixture.ringKick" |]
+} @>
+
 [<FidelityExtern("c", "mmap_ring")>]
 let mmapRing (fd: int) : RingSlot = NativeDefault.zeroed ()
 let mmapRingDescriptor: Expr<FunctionDescriptor> = <@ {
@@ -3774,6 +3793,13 @@ let mmapRingDescriptor: Expr<FunctionDescriptor> = <@ {
 let msyncRing (slot: RingSlot) : unit = NativeDefault.zeroed ()
 let msyncRingDescriptor: Expr<FunctionDescriptor> = <@ {
     CName = "msync_ring"
+    Parameters = [| { Name = "slot"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "ring_kick")>]
+let ringKick (slot: RingSlot) : unit = NativeDefault.zeroed ()
+let ringKickDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "ring_kick"
     Parameters = [| { Name = "slot"; Type = Pointer 64; PassBy = Value } |]
     ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
 
@@ -3793,32 +3819,45 @@ let main _ =
     if projected = 0 then 0 else 1
 """
             placementOverrides basePlacement
+        let runCaseWithAuthority (auth: string) (placementOverrides: string -> string) =
+            SourcePlatformFixture.checkProjectWithMemoryPolicy "stack_only" [] auth (mkSharedSource placementOverrides)
         let runCase (placementOverrides: string -> string) =
-            SourcePlatformFixture.checkProjectWithMemoryPolicy "stack_only" [] authoritySource (mkSharedSource placementOverrides)
+            runCaseWithAuthority authoritySource placementOverrides
 
         let okRes = runCase id
         DimensionalCases.noErrors okRes
         let okProj = BoundaryEmissionFixture.project okRes.Graph
         let placementDecl = Assert.Single okProj.SharedBufferPlacements.Values
         Assert.Equal("ring_slot", placementDecl.Placement.Name)
+        Assert.Equal("ring_slot", placementDecl.RegionDescriptor.Placement)
+        Assert.Equal("SharedBufferFixture.mmapRing", placementDecl.RegionDescriptor.Acquire)
         Assert.Equal(5, placementDecl.Obligations.Length)
         let viewUse = Assert.Single okProj.SharedBufferViewUses.Values
         Assert.Equal(0, viewUse.Copies)
         Assert.Equal(SettledSlot.InlineBytes(8, 4), viewUse.ElementSlot)
         Assert.Equal(placementDecl.Identity, viewUse.PlacementDeclaration)
+        Assert.NotEqual(viewUse.ExtentObligation, viewUse.SpaceExtentObligation)
         Assert.True(viewUse.RegionReleaseCall.IsSome)
         Assert.Single(viewUse.SyncCalls) |> ignore
+        Assert.True(okProj.Calls.ContainsKey viewUse.RegionAcquisitionCall)
+        match viewUse.RegionReleaseCall with
+        | Some rel -> Assert.True(okProj.Calls.ContainsKey rel)
+        | None -> Assert.Fail("Expected RegionReleaseCall")
+        Assert.All(viewUse.SyncCalls, fun sc -> Assert.True(okProj.Calls.ContainsKey sc))
         let okRevRes = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish okRes.Graph
         Assert.True(Result.isOk okRevRes)
         match okRevRes with
         | Ok okRev ->
+            Assert.Equal(55, okRev.Header.Schema)
             Assert.Empty(Fidelity.PSG.Integrity.check okRev)
             let revPlacement = Assert.Single okRev.Emission.Boundary.SharedBufferPlacements.Values
             Assert.Equal(5, revPlacement.Obligations.Length)
             let revViewUse = Assert.Single okRev.Emission.Boundary.SharedBufferViewUses.Values
             Assert.Equal(0, revViewUse.Copies)
             Assert.Equal(Fidelity.PSG.SettledSlot.InlineBytes(8, 4), revViewUse.ElementSlot)
+            Assert.NotEqual(revViewUse.ExtentObligation, revViewUse.SpaceExtentObligation)
             Assert.Single(revViewUse.SyncCalls) |> ignore
+            Assert.True(okRev.Emission.Boundary.Calls.ContainsKey revViewUse.RegionAcquisitionCall)
         | Error failures ->
             Assert.Empty(failures)
         let sharedClaims =
@@ -3834,7 +3873,8 @@ let main _ =
         | Ok receipt ->
             Assert.Equal(5, receipt.Premises.Length)
             Assert.All(receipt.Premises, fun pr -> Assert.Equal("sat", pr.Verdict))
-            Assert.Equal(5, receipt.NonVacuity.Length)
+            Assert.Equal(84, receipt.NonVacuity.Length)
+            Assert.DoesNotContain(receipt.NonVacuity, fun nv -> nv.Clause |> Option.exists (fun c -> c.StartsWith("clause_")))
             Assert.All(receipt.NonVacuity, fun nv -> Assert.Equal("sat", nv.Verdict))
             Assert.Equal(5, receipt.Evidence.Length)
             Assert.All(receipt.Evidence, fun ev -> Assert.Equal("unsat", ev.Verdict))
@@ -3845,7 +3885,8 @@ let main _ =
         let unusedRes =
             runCase (fun s ->
                 let idx = s.IndexOf("[<EntryPoint>]")
-                s.Substring(0, idx) + "[<EntryPoint>]\nlet main _ = 0\n")
+                let prefix = if idx >= 0 then s.Substring(0, idx) else s
+                prefix + "[<EntryPoint>]\nlet main _ = 0\n")
         DimensionalCases.noErrors unusedRes
         let unusedProj = BoundaryEmissionFixture.project unusedRes.Graph
         Assert.Single(unusedProj.SharedBufferPlacements.Values) |> ignore
@@ -3860,30 +3901,302 @@ let main _ =
         | Error failures ->
             Assert.Empty(failures)
 
-        // Negative 1: FS9220 (SharedBufferLayoutInvalid - Repr.Pointer field + RegionAlignment < LayoutAlignment)
+        // Cross-module unused placement check (GA-C4-R4-1): RingSlot + ringPlacementDescriptor in a library module, ConsumerApp with main _ = 0
+        let libPlacementSource =
+            let baseSrc = mkSharedSource id
+            let idx = baseSrc.IndexOf("[<EntryPoint>]")
+            if idx >= 0 then baseSrc.Substring(0, idx) else baseSrc
+        let crossModuleUnusedRes =
+            SourcePlatformFixture.checkProjectWithMemoryPolicy "stack_only" [ ("SharedBufferFixture.clef", libPlacementSource) ] authoritySource "module ConsumerApp\n\n[<EntryPoint>]\nlet main _ = 0\n"
+        DimensionalCases.noErrors crossModuleUnusedRes
+        let crossModuleUnusedProj = BoundaryEmissionFixture.project crossModuleUnusedRes.Graph
+        Assert.Single(crossModuleUnusedProj.SharedBufferPlacements.Values) |> ignore
+        Assert.True(crossModuleUnusedProj.SharedBufferViewUses.IsEmpty)
+        let crossModuleUnusedRevRes = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish crossModuleUnusedRes.Graph
+        Assert.True(Result.isOk crossModuleUnusedRevRes)
+        match crossModuleUnusedRevRes with
+        | Ok crossUnusedRev ->
+            Assert.Empty(Fidelity.PSG.Integrity.check crossUnusedRev)
+            Assert.Single(crossUnusedRev.Emission.Boundary.SharedBufferPlacements.Values) |> ignore
+            Assert.True(crossUnusedRev.Emission.Boundary.SharedBufferViewUses.IsEmpty)
+        | Error failures ->
+            Assert.Empty(failures)
+
+        // Positive multi-placement sharing the same RingSlot record type (F3)
+        let multiPlacementRes =
+            runCase (fun s ->
+                let idx = s.IndexOf("[<EntryPoint>]")
+                let auxDecls =
+                    """
+let ringPlacementAuxDescriptor: Expr<SharedBufferPlacement> = <@ {
+    Name = "ring_slot_aux"
+    SpaceDescriptor = {
+        Space = "shared_mmap"
+        MemoryRegion = "dma"
+        Access = "ExclusiveMutable"
+        ByteOrder = "little"
+        ElementSize = 8
+        ElementCount = 16
+        RegionByteExtent = 128
+        RegionAlignment = 16
+        RegionLifetimeDepth = 2
+        LibraryRetentionDepth = 3
+    }
+    SpaceOffset = 128
+    StructLayout = {
+        Name = "RingSlot"
+        Layout = {
+            Size = 8
+            Alignment = 4
+            Fields = [|
+                { Name = "Seq"; Offset = 0; Repr = "i32"; Count = 1; Access = "rw"; BitFields = [||]; Documentation = None }
+                { Name = "Payload"; Offset = 4; Repr = "i32"; Count = 1; Access = "rw"; BitFields = [||]; Documentation = None }
+            |]
+        }
+        MayAlias = false
+        Documentation = None
+    }
+    ViewLayout = {
+        Schema = "ring_schema"
+        Element = "i32"
+        Alignment = 4
+        Access = "rw"
+    }
+    MeasuredElementSize = 8
+    LayoutAlignment = 4
+    LayoutByteOrder = "little"
+    HasRawPointerFields = false
+    HasVerifiedExports = true
+    MappedDepth = 1
+    FirstUseDepth = 2
+    LastUseDepth = 3
+    LibraryRetentionEndDepth = 4
+    UnmapDepth = 5
+    LeakedAtExit = false
+    ConcurrentClefMutation = false
+    LibraryMutatesBuffer = false
+    OverlappingMutableShare = false
+    MaxAccessedElementIndex = 15
+} @>
+
+let ringRegionAuxDescriptor: Expr<SharedBufferRegionDescriptor> = <@ {
+    Placement = "ring_slot_aux"
+    Acquire = "SharedBufferFixture.mmapRingAux"
+    Release = Some "SharedBufferFixture.munmapRingAux"
+    Sync = [| "SharedBufferFixture.msyncRingAux" |]
+    ForeignUses = [||]
+} @>
+
+[<FidelityExtern("c", "mmap_ring_aux")>]
+let mmapRingAux (fd: int) : RingSlot = NativeDefault.zeroed ()
+let mmapRingAuxDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "mmap_ring_aux"
+    Parameters = [| { Name = "fd"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "msync_ring_aux")>]
+let msyncRingAux (slot: RingSlot) : unit = NativeDefault.zeroed ()
+let msyncRingAuxDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "msync_ring_aux"
+    Parameters = [| { Name = "slot"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "munmap_ring_aux")>]
+let munmapRingAux (slot: RingSlot) : unit = NativeDefault.zeroed ()
+let munmapRingAuxDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "munmap_ring_aux"
+    Parameters = [| { Name = "slot"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<EntryPoint>]
+let main _ =
+    let slotA = mmapRing 3
+    let slotB = mmapRingAux 4
+    let vA = slotA.Seq
+    let vB = slotB.Payload
+    msyncRing slotA
+    msyncRingAux slotB
+    munmapRing slotA
+    munmapRingAux slotB
+    if vA + vB = 0 then 0 else 1
+"""
+                let prefix = if idx >= 0 then s.Substring(0, idx) else s
+                prefix + auxDecls)
+        DimensionalCases.noErrors multiPlacementRes
+        let multiProj = BoundaryEmissionFixture.project multiPlacementRes.Graph
+        Assert.Equal(2, multiProj.SharedBufferPlacements.Count)
+        Assert.Equal(2, multiProj.SharedBufferViewUses.Count)
+        let multiPlacementByName =
+            multiProj.SharedBufferPlacements.Values
+            |> Seq.map (fun p -> p.Placement.Name, p)
+            |> Map.ofSeq
+        let viewUsesByPlacement =
+            multiProj.SharedBufferViewUses.Values
+            |> Seq.map (fun vu -> vu.PlacementDeclaration, vu)
+            |> Map.ofSeq
+        match Map.tryFind "ring_slot" multiPlacementByName, Map.tryFind "ring_slot_aux" multiPlacementByName with
+        | Some pPrimary, Some pAux ->
+            Assert.Equal("SharedBufferFixture.mmapRing", pPrimary.RegionDescriptor.Acquire)
+            Assert.Equal("SharedBufferFixture.mmapRingAux", pAux.RegionDescriptor.Acquire)
+            match Map.tryFind pPrimary.Identity viewUsesByPlacement, Map.tryFind pAux.Identity viewUsesByPlacement with
+            | Some vuPrimary, Some vuAux ->
+                Assert.Equal(pPrimary.Identity, vuPrimary.PlacementDeclaration)
+                Assert.Equal(pAux.Identity, vuAux.PlacementDeclaration)
+                Assert.NotEqual(vuPrimary.RegionAcquisitionCall, vuAux.RegionAcquisitionCall)
+                match multiProj.Calls.TryFind vuPrimary.RegionAcquisitionCall |> Option.bind (fun c -> multiProj.Imports.TryFind c.Import),
+                      multiProj.Calls.TryFind vuAux.RegionAcquisitionCall |> Option.bind (fun c -> multiProj.Imports.TryFind c.Import) with
+                | Some impPrimary, Some impAux ->
+                    Assert.Equal("mmap_ring", impPrimary.Symbol)
+                    Assert.Equal("mmap_ring_aux", impAux.Symbol)
+                    Assert.Equal((BoundaryEmissionFixture.binding "mmapRing" multiPlacementRes.Graph).Id, impPrimary.Binding)
+                    Assert.Equal((BoundaryEmissionFixture.binding "mmapRingAux" multiPlacementRes.Graph).Id, impAux.Binding)
+                | _ -> Assert.Fail("Expected both RegionAcquisitionCall nodes to resolve through multiProj.Calls and multiProj.Imports.")
+            | _ -> Assert.Fail("Expected one SharedBufferViewUse row per placement identity.")
+        | _ -> Assert.Fail("Expected both 'ring_slot' and 'ring_slot_aux' placement declarations.")
+
+        let barePlat : BAREWire.Platform.PlatformDescription =
+            { Id = "linux_x86_64"
+              DisplayName = "linux_x86_64"
+              Substrate = ""
+              Core =
+                  Some
+                      { Os = "linux"
+                        Arch = "x86_64"
+                        WordSizeBits = 64
+                        Endianness = placementDecl.PlatformEndianness
+                        Runtime = "libc"
+                        Triple = "x86_64-unknown-linux-gnu"
+                        CpuModel = ""
+                        Widths = [||]
+                        Representations = [||] }
+              Spaces = [| placementDecl.Space |]
+              ProgramLifetime = None
+              Buffers = [| placementDecl.BufferSchema |]
+              Surfaces = [||]
+              Transports = [||]
+              Lifecycle = { Clocks = [||]; Resets = [||]; Entry = ""; Teardown = ""; Persistence = "" }
+              Notes = [||]
+              Limits = [||] }
+        let dischargeMutatedPlacement (mutate: BAREWire.Platform.SharedBufferPlacement -> BAREWire.Platform.SharedBufferPlacement) =
+            let mutatedPlacement = mutate placementDecl.Placement
+            let mutatedClaims =
+                BAREWire.Platform.Obligations.sharedBufferObligations barePlat [| mutatedPlacement |]
+                |> Array.toList
+                |> List.map (fun ob ->
+                    { Clef.Compiler.PSGSaturation.SemanticGraph.Types.ObligationInfo.Id = ob.Id
+                      Kind = ob.Kind
+                      Logic = ob.Logic
+                      Statement = ob.Statement
+                      Source = ob.Source
+                      Refs = Array.toList ob.Refs
+                      Body = ObligationBody.SharedBufferPlacementObligation ob })
+            Clef.Compiler.Nanopass.ObligationDischarge.discharge mutatedClaims
+
+        // Negative 1a: FS9220 (SharedBufferLayoutInvalid - single-rule mutant: HasRawPointerFields = true)
         let fs9220Res =
             runCase (fun s ->
-                s.Replace("{ Name = \"Seq\"; Offset = 0; Repr = \"i32\"", "{ Name = \"Seq\"; Offset = 0; Repr = \"pointer\"")
-                 .Replace("RegionAlignment = 16", "RegionAlignment = 2")
-                 .Replace("HasRawPointerFields = false", "HasRawPointerFields = true"))
+                s.Replace("HasRawPointerFields = false", "HasRawPointerFields = true"))
         Assert.Contains(BoundaryEmissionFixture.rejected fs9220Res.Graph, fun f -> f.Reason.Contains "FS9220:")
         Assert.Contains(fs9220Res.Diagnostics, fun d -> d.Code = "FS9220")
+        let fs9220DischargeRes = dischargeMutatedPlacement (fun p -> { p with HasRawPointerFields = true })
+        Assert.True(Result.isError fs9220DischargeRes)
+        match fs9220DischargeRes with
+        | Error reason ->
+            Assert.Contains("fs9220_layout_ring_slot", reason)
+            Assert.Contains("solver returned 'sat'", reason)
+        | Ok _ -> Assert.Fail("Expected cvc5 to refute HasRawPointerFields = true mutant.")
 
-        // Negative 2: FS9221 (SharedBufferExtentInvalid - ElementCount * ElementSize > RegionByteExtent + MaxAccessedElementIndex out of bounds)
+        // Negative 1b: FS9220 (Record layout mismatch against StructDescriptor)
+        let fs9220RecordMismatchRes =
+            runCase (fun s ->
+                let pIdx = s.IndexOf("let ringPlacementDescriptor")
+                let prefix, suffixSrc =
+                    if pIdx >= 0 then s.Substring(0, pIdx), s.Substring(pIdx)
+                    else "", s
+                let suffix =
+                    suffixSrc
+                     .Replace("ElementSize = 8", "ElementSize = 16")
+                     .Replace("RegionByteExtent = 128", "RegionByteExtent = 256")
+                     .Replace("Size = 8", "Size = 16")
+                     .Replace("Alignment = 4", "Alignment = 8")
+                     .Replace("{ Name = \"Payload\"; Offset = 4; Repr = \"i32\"", "{ Name = \"Payload\"; Offset = 8; Repr = \"i64\"")
+                     .Replace("MeasuredElementSize = 8", "MeasuredElementSize = 16")
+                     .Replace("LayoutAlignment = 4", "LayoutAlignment = 8")
+                prefix + suffix)
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9220RecordMismatchRes.Graph, fun f -> f.Reason.Contains "FS9220:")
+        Assert.Contains(fs9220RecordMismatchRes.Diagnostics, fun d -> d.Code = "FS9220")
+
+        // Negative 1c: FS9220 (Unused placement record width mismatch with hasActiveUse = false)
+        let fs9220UnusedRecordMismatchRes =
+            runCase (fun s ->
+                let pIdx = s.IndexOf("let ringPlacementDescriptor")
+                let prefix, suffixSrc =
+                    if pIdx >= 0 then s.Substring(0, pIdx), s.Substring(pIdx)
+                    else "", s
+                let suffix =
+                    suffixSrc
+                     .Replace("ElementSize = 8", "ElementSize = 16")
+                     .Replace("RegionByteExtent = 128", "RegionByteExtent = 256")
+                     .Replace("Size = 8", "Size = 16")
+                     .Replace("Alignment = 4", "Alignment = 8")
+                     .Replace("{ Name = \"Payload\"; Offset = 4; Repr = \"i32\"", "{ Name = \"Payload\"; Offset = 8; Repr = \"i64\"")
+                     .Replace("MeasuredElementSize = 8", "MeasuredElementSize = 16")
+                     .Replace("LayoutAlignment = 4", "LayoutAlignment = 8")
+                let combined = prefix + suffix
+                let mIdx = combined.IndexOf("[<EntryPoint>]")
+                let mPrefix = if mIdx >= 0 then combined.Substring(0, mIdx) else combined
+                mPrefix + "[<EntryPoint>]\nlet main _ = 0\n")
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9220UnusedRecordMismatchRes.Graph, fun f -> f.Reason.Contains "FS9220:")
+        Assert.Contains(fs9220UnusedRecordMismatchRes.Diagnostics, fun d -> d.Code = "FS9220")
+
+        // Negative 2a: FS9221 (SharedBufferExtentInvalid - single-rule mutant: MaxAccessedElementIndex out of bounds while RegionByteExtent = 128 remains valid)
         let fs9221Res =
             runCase (fun s ->
-                s.Replace("RegionByteExtent = 128", "RegionByteExtent = 64")
-                 .Replace("MaxAccessedElementIndex = 15", "MaxAccessedElementIndex = 16"))
+                s.Replace("MaxAccessedElementIndex = 15", "MaxAccessedElementIndex = 16"))
         Assert.Contains(BoundaryEmissionFixture.rejected fs9221Res.Graph, fun f -> f.Reason.Contains "FS9221:")
         Assert.Contains(fs9221Res.Diagnostics, fun d -> d.Code = "FS9221")
+        let fs9221DischargeRes = dischargeMutatedPlacement (fun p -> { p with MaxAccessedElementIndex = 16 })
+        Assert.True(Result.isError fs9221DischargeRes)
+        match fs9221DischargeRes with
+        | Error reason ->
+            Assert.Contains("fs9221_extent_ring_slot", reason)
+            Assert.Contains("solver returned 'sat'", reason)
+        | Ok _ -> Assert.Fail("Expected cvc5 to refute MaxAccessedElementIndex = 16 mutant.")
 
-        // Negative 3: FS9222 (SharedBufferLifetimeInvalid - UnmapDepth = LibraryRetentionEndDepth + region leaked at exit, and view projection after munmap)
+        // Negative 2b: FS9221 (Dynamic IndexGet on shared-buffer view: both non-literal bounded out-of-range and unbounded ValueRange)
+        let fs9221DynamicBoundedIndexRes =
+            runCase (fun s ->
+                s.Replace("let mmapRing (fd: int) : RingSlot", "let mmapRing (fd: int) : RingSlot array")
+                 .Replace("let msyncRing (slot: RingSlot)", "let msyncRing (slot: RingSlot array)")
+                 .Replace("let ringKick (slot: RingSlot)", "let ringKick (slot: RingSlot array)")
+                 .Replace("let munmapRing (slot: RingSlot)", "let munmapRing (slot: RingSlot array)")
+                 .Replace("let projected = slot.Seq", "let first = slot.[0].Seq\n    let dynIdx = if first = 0 then 2 else 16\n    let projected = slot.[dynIdx].Seq"))
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9221DynamicBoundedIndexRes.Graph, fun f -> f.Reason.Contains "FS9221:")
+        Assert.Contains(fs9221DynamicBoundedIndexRes.Diagnostics, fun d -> d.Code = "FS9221")
+
+        let fs9221UnboundedIndexRes =
+            runCase (fun s ->
+                s.Replace("let mmapRing (fd: int) : RingSlot", "let mmapRing (fd: int) : RingSlot array")
+                 .Replace("let msyncRing (slot: RingSlot)", "let msyncRing (slot: RingSlot array)")
+                 .Replace("let ringKick (slot: RingSlot)", "let ringKick (slot: RingSlot array)")
+                 .Replace("let munmapRing (slot: RingSlot)", "let munmapRing (slot: RingSlot array)")
+                 .Replace("[<EntryPoint>]\nlet main _ =\n    let slot = mmapRing 3\n    let projected = slot.Seq", "let readAt (idx: int) =\n    let slot = mmapRing 3\n    let projected = slot.[idx].Seq\n    msyncRing slot\n    munmapRing slot\n    projected\n\n[<EntryPoint>]\nlet main (argv: string array) =\n    let projected = readAt argv.Length")
+                 .Replace("    msyncRing slot\n    munmapRing slot\n    if projected = 0 then 0 else 1", "    if projected = 0 then 0 else 1"))
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9221UnboundedIndexRes.Graph, fun f -> f.Reason.Contains "FS9221:")
+
+        // Negative 3a: FS9222 (SharedBufferLifetimeInvalid - single-rule mutant: UnmapDepth = LibraryRetentionEndDepth)
         let fs9222Res =
             runCase (fun s ->
-                s.Replace("UnmapDepth = 5", "UnmapDepth = 4")
-                 .Replace("LeakedAtExit = false", "LeakedAtExit = true"))
+                s.Replace("UnmapDepth = 5", "UnmapDepth = 4"))
         Assert.Contains(BoundaryEmissionFixture.rejected fs9222Res.Graph, fun f -> f.Reason.Contains "FS9222:")
         Assert.Contains(fs9222Res.Diagnostics, fun d -> d.Code = "FS9222")
+        let fs9222DischargeRes = dischargeMutatedPlacement (fun p -> { p with UnmapDepth = 4 })
+        Assert.True(Result.isError fs9222DischargeRes)
+        match fs9222DischargeRes with
+        | Error reason ->
+            Assert.Contains("fs9222_lifetime_ring_slot", reason)
+            Assert.Contains("solver returned 'sat'", reason)
+        | Ok _ -> Assert.Fail("Expected cvc5 to refute UnmapDepth = 4 mutant.")
 
         let fs9222MissingAcquireRes =
             runCase (fun s ->
@@ -3897,11 +4210,59 @@ let main _ =
         Assert.Contains(BoundaryEmissionFixture.rejected fs9222UseAfterUnmapRes.Graph, fun f -> f.Reason.Contains "FS9222:")
         Assert.Contains(fs9222UseAfterUnmapRes.Diagnostics, fun d -> d.Code = "FS9222")
 
-        // Negative 4: FS9223 (SharedBufferConflictingAccess - ReadOnly space with rw ViewLayout.Access and LibraryMutatesBuffer = true)
+        // Negative 3b: FS9222 (Branch-only release while acquisition is in outer scope)
+        let fs9222BranchReleaseRes =
+            runCase (fun s ->
+                s.Replace("    msyncRing slot\n    munmapRing slot", "    msyncRing slot\n    if projected = 0 then munmapRing slot"))
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9222BranchReleaseRes.Graph, fun f -> f.Reason.Contains "FS9222:")
+        Assert.Contains(fs9222BranchReleaseRes.Diagnostics, fun d -> d.Code = "FS9222")
+
+        // Negative 3c: FS9222 (Unbracketed foreign use before Clef projection without intervening sync)
+        let fs9222UnbracketedForeignRes =
+            runCase (fun s ->
+                s.Replace("    let projected = slot.Seq\n    msyncRing slot", "    ringKick slot\n    let projected = slot.Seq\n    msyncRing slot"))
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9222UnbracketedForeignRes.Graph, fun f -> f.Reason.Contains "FS9222:")
+        Assert.Contains(fs9222UnbracketedForeignRes.Diagnostics, fun d -> d.Code = "FS9222")
+
+        // Negative 4a: FS9223 (SharedBufferConflictingAccess - single-rule mutant: OverlappingMutableShare = true)
         let fs9223Res =
             runCase (fun s ->
-                s.Replace("Access = \"ExclusiveMutable\"", "Access = \"ReadOnly\"")
-                 .Replace("LibraryMutatesBuffer = false", "LibraryMutatesBuffer = true")
-                 .Replace("ConcurrentClefMutation = false", "ConcurrentClefMutation = true"))
+                s.Replace("OverlappingMutableShare = false", "OverlappingMutableShare = true"))
         Assert.Contains(BoundaryEmissionFixture.rejected fs9223Res.Graph, fun f -> f.Reason.Contains "FS9223:")
         Assert.Contains(fs9223Res.Diagnostics, fun d -> d.Code = "FS9223")
+        let fs9223DischargeRes = dischargeMutatedPlacement (fun p -> { p with OverlappingMutableShare = true })
+        Assert.True(Result.isError fs9223DischargeRes)
+        match fs9223DischargeRes with
+        | Error reason ->
+            Assert.Contains("fs9223_exclusivity_ring_slot", reason)
+            Assert.Contains("solver returned 'sat'", reason)
+        | Ok _ -> Assert.Fail("Expected cvc5 to refute OverlappingMutableShare = true mutant.")
+
+        // Negative 4b: FS9223 (Write projection on a ReadOnly placement)
+        let roAuthority =
+            authoritySource.Replace("Access = \"rw\"", "Access = \"r\"")
+        let fs9223ReadOnlyWriteRes =
+            runCaseWithAuthority roAuthority (fun s ->
+                s.Replace("type RingSlot = { Seq: int; Payload: int }", "type RingSlot = { mutable Seq: int; Payload: int }")
+                 .Replace("Access = \"ExclusiveMutable\"", "Access = \"ReadOnly\"")
+                 .Replace("Access = \"rw\"", "Access = \"ro\"")
+                 .Replace("let projected = slot.Seq", "slot.Seq <- 1\n    let projected = slot.Seq"))
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9223ReadOnlyWriteRes.Graph, fun f -> f.Reason.Contains "FS9223:")
+        Assert.Contains(fs9223ReadOnlyWriteRes.Diagnostics, fun d -> d.Code = "FS9223")
+
+        // Negative 4c: FS9223 (Clef write projection when Access = "ReadWrite", LibraryMutatesBuffer = true, and ConcurrentClefMutation = false)
+        let fs9223LibraryMutatesConflictRes =
+            runCase (fun s ->
+                s.Replace("type RingSlot = { Seq: int; Payload: int }", "type RingSlot = { mutable Seq: int; Payload: int }")
+                 .Replace("Access = \"ExclusiveMutable\"", "Access = \"ReadWrite\"")
+                 .Replace("LibraryMutatesBuffer = false", "LibraryMutatesBuffer = true")
+                 .Replace("let projected = slot.Seq", "slot.Seq <- 1\n    let projected = slot.Seq"))
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9223LibraryMutatesConflictRes.Graph, fun f -> f.Reason.Contains "FS9223:")
+        Assert.Contains(fs9223LibraryMutatesConflictRes.Diagnostics, fun d -> d.Code = "FS9223")
+
+        // Negative 4d: FS9223 (Access = "ExclusiveMutable" with LibraryMutatesBuffer = true, read-only Clef projection so only the ExclusiveMutable && LibraryMutatesBuffer branch fires)
+        let fs9223ExclusiveLibraryMutatesRes =
+            runCase (fun s ->
+                s.Replace("LibraryMutatesBuffer = false", "LibraryMutatesBuffer = true"))
+        Assert.Contains(BoundaryEmissionFixture.rejected fs9223ExclusiveLibraryMutatesRes.Graph, fun f -> f.Reason.Contains "FS9223:")
+        Assert.Contains(fs9223ExclusiveLibraryMutatesRes.Diagnostics, fun d -> d.Code = "FS9223")

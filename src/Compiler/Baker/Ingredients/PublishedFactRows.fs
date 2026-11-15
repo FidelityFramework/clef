@@ -517,6 +517,11 @@ and mapBoundarySharedBufferPlacementDeclaration (value: S.BoundarySharedBufferPl
         SpaceDescriptorNode = nodeId value.SpaceDescriptorNode
         StructDescriptorNode = nodeId value.StructDescriptorNode
         ViewDescriptorNode = nodeId value.ViewDescriptorNode
+        RegionDescriptorNode = nodeId value.RegionDescriptorNode
+        PlatformEndianness = value.PlatformEndianness
+        Space = value.Space
+        BufferSchema = value.BufferSchema
+        RegionDescriptor = value.RegionDescriptor
         Placement = value.Placement
         Obligations = List.map nodeId value.Obligations
         DeclarationFacts = value.DeclarationFacts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundaryDeclarationFact v) |> Map.ofSeq
@@ -530,7 +535,15 @@ and mapBoundarySharedBufferViewUse (value: S.BoundarySharedBufferViewUse) : Fide
         RegionAcquisitionCall = nodeId value.RegionAcquisitionCall
         RegionReleaseCall = Option.map nodeId value.RegionReleaseCall
         SyncCalls = List.map nodeId value.SyncCalls
+        ForeignUseCalls = List.map nodeId value.ForeignUseCalls
         ViewProjections = List.map nodeId value.ViewProjections
+        WriteProjections = List.map nodeId value.WriteProjections
+        AcquisitionOrder = value.AcquisitionOrder
+        ReleaseOrder = value.ReleaseOrder
+        SyncOrders = value.SyncOrders
+        ForeignUseOrders = value.ForeignUseOrders
+        ProjectionOrders = value.ProjectionOrders
+        WriteProjectionOrders = value.WriteProjectionOrders
         ElementType = mapTypeIdentity value.ElementType
         ElementSlot = mapSettledSlot value.ElementSlot
         Copies = value.Copies
@@ -538,7 +551,7 @@ and mapBoundarySharedBufferViewUse (value: S.BoundarySharedBufferViewUse) : Fide
         LayoutObligation = nodeId value.LayoutObligation
         LifetimeObligation = nodeId value.LifetimeObligation
         ExclusivityObligation = nodeId value.ExclusivityObligation
-        SpaceExtentObligation = Option.map nodeId value.SpaceExtentObligation
+        SpaceExtentObligation = nodeId value.SpaceExtentObligation
         Participants = mapParticipantEvidence value.Participants
     } : Fidelity.PSG.BoundarySharedBufferViewUse)
 
@@ -566,6 +579,10 @@ and mapBoundaryPlatformPremise (value: S.BoundaryPlatformPremise) : Fidelity.PSG
         Dimensions = value.Dimensions
         Representations = (value.Representations |> Map.map (fun _ x -> mapNumericRepresentation x))
         EndpointReturns = (value.EndpointReturns |> Map.map (fun _ x -> mapReturnBound x))
+        Endianness = value.Endianness
+        Spaces = value.Spaces
+        Buffers = value.Buffers
+        SharedBufferRegions = value.SharedBufferRegions
     } : Fidelity.PSG.BoundaryPlatformPremise)
 
 and mapBoundaryProofOutcome (value: S.BoundaryProofOutcome) : Fidelity.PSG.BoundaryProofOutcome =

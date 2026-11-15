@@ -53,6 +53,19 @@ let private unionValues ty (value: obj) =
 
 let internal hash (text: string) = Encoding.UTF8.GetBytes text |> SHA256.HashData |> Convert.ToHexString
 
+let internal hashStream (write: (string -> unit) -> unit) : string =
+    use hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256)
+    let append (text: string) =
+        if not (String.IsNullOrEmpty text) then
+            hasher.AppendData(Encoding.UTF8.GetBytes text)
+    write append
+    hasher.GetHashAndReset() |> Convert.ToHexString
+
+let private appendJoined (sep: string) (append: string -> unit) (items: seq<string>) =
+    items |> Seq.iteri (fun i item ->
+        if i > 0 then append sep
+        append item)
+
 /// Canonicalize declaration/site incarnation stamps ("decl_<epochGuid>_<birth>_<hexPath>[/0/1]")
 /// so fresh workspace epochs or incarnation numbers do not perturb canonical digests,
 /// while preserving the exact length-prefixed source-unit + lexical declaration path.
@@ -150,17 +163,10 @@ let private encoderWithMissing (identities: Map<NodeId, string>) missing =
             let kind, logic, source, refs, body = normalizeObligationInfo info
             atom "ObligationInfo" + "{" + encode (box (kind, logic, source, refs, body)) + "}"
         | :? BoundarySourcePremise as premise ->
-            let normalized =
-                (premise.Shape,
-                 premise.EmbeddedTypes,
-                 premise.ConstructorFacts,
-                 premise.Reachable,
-                 premise.Range,
-                 premise.ExternLibrary,
-                 premise.ExternSymbol,
-                 premise.HasExtern,
-                 normalizePremiseMetadata premise.Metadata)
-            atom "BoundarySourcePremise" + "{" + encode (box normalized) + "}"
+            match box { premise with Metadata = normalizePremiseMetadata premise.Metadata } with
+            | null -> "null;"
+            | normalized ->
+                atom "BoundarySourcePremise" + "{" + (recordValues normalized |> Array.map (fun field -> encode field) |> String.concat "") + "}"
         | :? Map<string, MetadataValue> as metadata ->
             let normalized = normalizeMetadata metadata
             let ty = metadata.GetType()
@@ -1026,7 +1032,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
     let current label value =
         try complete value
         with :? InvalidOperationException as error -> invalidOp ("Common witness input " + label + ": " + error.Message)
-    let executableNodes =
+    let executableNodes () =
         graph.Nodes.Values
         |> Seq.filter (fun node -> match node.Kind with SemanticKind.Obligation _ -> false | _ -> true)
         |> Seq.map (fun node ->
@@ -1034,8 +1040,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
             current (sprintf "Nodes[%A]" node.Id) (nodeInput node) +
             current (sprintf "Metadata[%A]" node.Id) (box (normalizeMetadata node.Metadata)))
         |> Seq.sort
-        |> String.concat "|"
-    let obligationNodes =
+    let obligationNodes () =
         graph.Nodes.Values
         |> Seq.choose (fun node ->
             match node.Kind with
@@ -1043,7 +1048,6 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                 Some(resolveProofAddress node.Id + ":" + current (sprintf "Obligation[%A]" node.Id) (box info))
             | _ -> None)
         |> Seq.sort
-        |> String.concat "|"
     let contractInterfacesAll =
         emission.Callable.Contracts |> Map.map (fun _ contract ->
             { contract with
@@ -1064,39 +1068,54 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
         |> hash
         |> fun h -> CallableInterfaceDigest(CallableInterfaceDigest.DomainPrefix + h)
     let commonRealizationDigest =
-        [ "semantic-realization-common-v1"
-          commonInterfaceDigest.Value
-          executableNodes
-          current "WitnessInputs" (box { witnessInputs with Callable = { witnessInputs.Callable with Contracts = contractInterfacesAll } })
-          current "LocalCodata" (box { localCodata with CallableContracts = contractInterfacesAll })
-          current "Platform" (box graph.Platform)
-          current "StaticStringPool" (box graph.StaticStringPool)
-          current "LiteralStorage" (box graph.LiteralStorage) ]
-        |> String.concat "\n"
-        |> hash
+        hashStream (fun append ->
+            append "semantic-realization-common-v1\n"
+            append commonInterfaceDigest.Value
+            append "\n"
+            appendJoined "|" append (executableNodes ())
+            append "\n"
+            append (current "WitnessInputs" (box { witnessInputs with Callable = { witnessInputs.Callable with Contracts = contractInterfacesAll } }))
+            append "\n"
+            append (current "LocalCodata" (box { localCodata with CallableContracts = contractInterfacesAll }))
+            append "\n"
+            append (current "Platform" (box graph.Platform))
+            append "\n"
+            append (current "StaticStringPool" (box graph.StaticStringPool))
+            append "\n"
+            append (current "LiteralStorage" (box graph.LiteralStorage)))
         |> fun h -> SemanticRealizationDigest(SemanticRealizationDigest.DomainPrefix + h)
-    let encodedAllEdges =
+    let encodedAllEdges () =
         graph.Edges
         |> Seq.map (fun edge -> current "Edge" (box edge))
         |> Seq.sort
-        |> String.concat "|"
     let commonProofDigest =
-        [ "proof-support-common-v1"
-          obligationNodes
-          encodedAllEdges
-          current "CallableContracts" (box emission.Callable.Contracts)
-          current "CallableSupports" (box emission.Callable.Supports)
-          current "CallableBranches" (box emission.Callable.Branches)
-          current "NumericValues" (box emission.Numeric.Values)
-          current "NumericOperations" (box emission.Numeric.Operations)
-          current "MemoryOperations" (box emission.Memory.Operations)
-          current "Spatial" (box emission.Spatial)
-          current "Boundary" (box emission.Boundary)
-          current "ProgramStorage" (box codata.ProgramStorage)
-          current "Platform" (box graph.Platform)
-          current "PlatformCensuses" (box (platformLayoutCensus graph.Platform @ platformSpaceCensus graph)) ]
-        |> String.concat "\n"
-        |> hash
+        hashStream (fun append ->
+            append "proof-support-common-v1\n"
+            appendJoined "|" append (obligationNodes ())
+            append "\n"
+            appendJoined "|" append (encodedAllEdges ())
+            append "\n"
+            append (current "CallableContracts" (box emission.Callable.Contracts))
+            append "\n"
+            append (current "CallableSupports" (box emission.Callable.Supports))
+            append "\n"
+            append (current "CallableBranches" (box emission.Callable.Branches))
+            append "\n"
+            append (current "NumericValues" (box emission.Numeric.Values))
+            append "\n"
+            append (current "NumericOperations" (box emission.Numeric.Operations))
+            append "\n"
+            append (current "MemoryOperations" (box emission.Memory.Operations))
+            append "\n"
+            append (current "Spatial" (box emission.Spatial))
+            append "\n"
+            append (current "Boundary" (box emission.Boundary))
+            append "\n"
+            append (current "ProgramStorage" (box codata.ProgramStorage))
+            append "\n"
+            append (current "Platform" (box graph.Platform))
+            append "\n"
+            append (current "PlatformCensuses" (box (platformLayoutCensus graph.Platform @ platformSpaceCensus graph))))
         |> fun h -> CanonicalProofSupportDigest(CanonicalProofSupportDigest.DomainPrefix + h)
     let commonSupportSet =
         let ownerLabel =

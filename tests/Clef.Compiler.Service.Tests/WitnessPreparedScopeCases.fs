@@ -100,6 +100,7 @@ module private PreparedScopeFixture =
         let facts = graph.Codata.Value
         SelectedRows.project graph facts.WitnessEmission.Value facts.WitnessLiveScope.Value
             facts.WitnessPreparedRows.Value facts.WitnessSegmentation.Value
+        |> Result.defaultWith (fun f -> failwith (String.concat "; " (f |> List.map _.Reason)))
 
     let withMmio id row (graph: SemanticGraph) =
         { graph with Codata = lazy { graph.Codata.Value with Mmio = graph.Codata.Value.Mmio.Add(id, row) } }

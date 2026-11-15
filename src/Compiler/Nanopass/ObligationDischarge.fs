@@ -807,7 +807,9 @@ let private participantsOf = function
     | Resource p -> Fidelity.PSG.ResourceProof.participantVariables p
     | SharedBuffer ob ->
         if ob.Form.Kind = BAREWire.Platform.FormKind.SharedBufferSpaceExtent then
-            "space_cap" :: ([ 0 .. ob.Form.Names.Length - 1 ] |> List.collect (fun i -> [ $"off_{i}"; $"len_{i}" ]))
+            "space_cap" :: (
+                [ 0 .. ob.Form.Names.Length - 1 ]
+                |> List.collect (fun i -> [ $"off_{i}"; $"len_{i}" ]))
         else
             Array.toList ob.Form.Names
 
@@ -828,35 +830,38 @@ let private ignoredOf = function
                  conclusionLine.Contains($" {v})", System.StringComparison.Ordinal) ||
                  conclusionLine.Contains($"({v} ", System.StringComparison.Ordinal)))
 
-let private clausesOf (id: string) = function
-    | Foreign p -> Fidelity.PSG.ForeignResultCoverage.anchoredNonVacuityQueries id p
-    | Resource p -> Fidelity.PSG.ResourceProof.anchoredNonVacuityQueries id p
+let private clausesOf (id: string) : ConditionalLaw -> Result<(int * string * string) list, string> = function
+    | Foreign p -> Ok (Fidelity.PSG.ForeignResultCoverage.anchoredNonVacuityQueries id p)
+    | Resource p -> Ok (Fidelity.PSG.ResourceProof.anchoredNonVacuityQueries id p)
     | SharedBuffer ob ->
-        let full = BAREWire.Platform.Obligations.smtLib { ob with Id = id }
         let defPrefix = $"(assert (= {id} "
-        let lines = full.Split('\n')
-        let clauseText =
-            lines
-            |> Array.tryFind (fun (l: string) -> l.StartsWith(defPrefix, System.StringComparison.Ordinal))
-            |> Option.defaultValue ob.Statement
-        let query =
-            lines
-            |> Array.filter (fun (l: string) ->
-                not (l.StartsWith("(assert (= ", System.StringComparison.Ordinal) && not (l.StartsWith(defPrefix, System.StringComparison.Ordinal))))
-            |> String.concat "\n"
-        [ (0, clauseText, query) ]
+        let queries = BAREWire.Platform.Obligations.smtLibClauseNonVacuity { ob with Id = id }
+        if Array.isEmpty queries then
+            Error $"Obligation '{id}' produced zero non-vacuity clauses."
+        else
+            queries
+            |> Array.mapi (fun idx q ->
+                let clauseExprOpt =
+                    q.Split('\n')
+                    |> Array.tryPick (fun l ->
+                        let trimmed = l.TrimEnd()
+                        if trimmed.StartsWith(defPrefix, System.StringComparison.Ordinal) && trimmed.EndsWith("))", System.StringComparison.Ordinal) then
+                            Some (trimmed.Substring(defPrefix.Length, trimmed.Length - defPrefix.Length - 2))
+                        else None)
+                match clauseExprOpt with
+                | Some clauseExpr -> Ok (idx, clauseExpr, q)
+                | None -> Error $"SharedBuffer obligation '{id}' non-vacuity query at index {idx} lacks an anchored '(assert (= {id} ...))' clause definition.")
+            |> Array.fold (fun state item ->
+                match state, item with
+                | Ok acc, Ok row -> Ok (row :: acc)
+                | Error err, _ | _, Error err -> Error err) (Ok [])
+            |> Result.map List.rev
 
 let private premiseQueriesOf (id: string) = function
     | Foreign p -> [ Fidelity.PSG.ForeignResultCoverage.anchoredPremisesQuery id p ]
     | Resource p -> Fidelity.PSG.ResourceProof.anchoredPremisesQueries id p
     | SharedBuffer ob ->
-        let full = BAREWire.Platform.Obligations.smtLib { ob with Id = id }
-        let negLine = $"(assert (not {id}))"
-        let query =
-            full.Split('\n')
-            |> Array.filter (fun (l: string) -> l <> negLine)
-            |> String.concat "\n"
-        [ query ]
+        [ BAREWire.Platform.Obligations.smtLibPremises { ob with Id = id } ]
 
 let private clauseReceipt (ob: ObligationInfo) participants (clauseIndex, clause, query) verdict =
     { Stage = "psg-nonvacuity"; ObligationId = ob.Id; ClauseIndex = Some clauseIndex; Clause = Some clause
@@ -906,7 +911,11 @@ let private readinessWith solve overrideProjection (ob: ObligationInfo) : Readin
                     | Ok verdicts ->
                         stop (Undecided "psg-nonvacuity") [ Reason.clauseAnswer ob clauseIndex verdicts ]
                             { shaped with NonVacuity = List.rev (clauseReceipt ob participants row (String.concat ", " verdicts) :: acc) }
-            clauses [] (clausesOf ob.Id law)
+            match clausesOf ob.Id law with
+            | Error reason ->
+                stop (Undecided "psg-nonvacuity") [ reason ] shaped
+            | Ok clauseRows ->
+                clauses [] clauseRows
 
 let private unavailableOf (readiness: Readiness list) : UnavailableObligation list =
     readiness |> List.choose (fun r ->
@@ -960,7 +969,9 @@ let checkForeignNonVacuity (obligation: ObligationInfo) (projection: Fidelity.PS
             match checkNonVacuityClause obligation clauseIndex clause participants query with
             | Ok receipt -> loop (receipt :: acc) rest
             | Error reason -> Error reason
-    loop [] (clausesOf obligation.Id law)
+    match clausesOf obligation.Id law with
+    | Error reason -> Error reason
+    | Ok rows -> loop [] rows
 
 let conditionalPremisesWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<(ObligationInfo * string) list, string> =
     let rec loop acc = function
@@ -988,8 +999,11 @@ let conditionalNonVacuityWithOverride (overrideProjection: ObligationInfo -> Fid
             | Some (Ok law) ->
                 let participants = participantsOf law
                 let missing = ignoredOf law
-                let clauses = clausesOf ob.Id law |> List.map (fun (idx, text, query) -> ob, idx, text, participants, missing, query)
-                loop (List.rev clauses @ acc) rest
+                match clausesOf ob.Id law with
+                | Error reason -> Error reason
+                | Ok rows ->
+                    let clauses = rows |> List.map (fun (idx, text, query) -> ob, idx, text, participants, missing, query)
+                    loop (List.rev clauses @ acc) rest
             | Some (Error reason) ->
                 match ob.Body with
                 | ObligationBody.ForeignResultCoverage _ when (overrideProjection ob).IsNone ->
@@ -1178,7 +1192,8 @@ let ledgerJson (obligations: ObligationInfo list) : string =
         |> List.exists (fun obligation ->
             match obligation.Body with
             | ObligationBody.ForeignResultCoverage _ | ObligationBody.ResourceConversion _ | ObligationBody.ResourceCleanup _
-            | ObligationBody.SnapshotBorrowBound _ | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ | ObligationBody.BufferAbsenceArgumentConversion _ -> true
+            | ObligationBody.SnapshotBorrowBound _ | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ | ObligationBody.BufferAbsenceArgumentConversion _
+            | ObligationBody.SharedBufferPlacementObligation _ -> true
             | _ -> false)
 
     let rows =

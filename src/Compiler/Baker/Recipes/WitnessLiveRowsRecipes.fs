@@ -199,8 +199,8 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         selected before emission.Boundary.IntrinsicWrites |> Map.iter (fun _ row -> add row.Import; add row.Callee; add row.Fd; add row.Buffer; add row.Count)
         selected before emission.Boundary.SharedBufferViewUses |> Map.iter (fun _ row ->
             add row.Site; add row.RegionAcquisitionCall; addOptional row.RegionReleaseCall
-            addMany row.SyncCalls; addMany row.ViewProjections
-            for callId in row.RegionAcquisitionCall :: (Option.toList row.RegionReleaseCall) @ row.SyncCalls do
+            addMany row.SyncCalls; addMany row.ForeignUseCalls; addMany row.ViewProjections; addMany row.WriteProjections
+            for callId in row.RegionAcquisitionCall :: (Option.toList row.RegionReleaseCall) @ row.SyncCalls @ row.ForeignUseCalls do
                 match graph.Nodes.TryFind callId with
                 | Some { Kind = SemanticKind.Application(callee, _) } ->
                     match BoundaryDeclarations.target graph callee with
@@ -446,7 +446,7 @@ let private emissionRows ids valueIds types metadata (value: WitnessEmissionProj
                   CodeRoots = values value.Spatial.CodeRoots } }
 
 let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope: WitnessLiveScopePlan)
-            (prepared: WitnessPreparedRows) (segmentation: WitnessSegmentation) : WitnessLiveRows =
+            (prepared: WitnessPreparedRows) (segmentation: WitnessSegmentation) : Result<WitnessLiveRows, WitnessProjectionFailure list> =
     let ids = closeFacts graph emission scope
     let valueIds = valueFacts graph emission scope ids
     let ids = Set.union ids valueIds
@@ -494,25 +494,127 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope:
         Pins = if selectedEmission.Spatial.Hardware.IsEmpty then None else facts.Pins
         DeclarationRootLambdas = rows facts.DeclarationRootLambdas; FunctionPointers = rows facts.FunctionPointers
         Mmio = rows facts.Mmio; ProgramStorage = programStorage ids facts.ProgramStorage }
-    { FactIdentities = ids; TypeIdentities = types; Codata = codata; Emission = selectedEmission
-      Foreign = { BorrowedViews = rows prepared.Foreign.BorrowedViews; Mmio = rows prepared.Foreign.Mmio; MappedCalls = values prepared.Foreign.MappedCalls }
-      // Explicit eager demand belongs only to a live marker occurrence. A
-      // declaration's retained identity does not activate its old demand edge.
-      Demand = { Operands = selected eager prepared.Demand.Operands; Relations = selected eager prepared.Demand.Relations }
-      // PHG emission reads saturated facts, not the owner's analytical F.
-      // Complete relations remain in prepared.Edges for Baker revalidation.
-      Edges = []
-      DeclarationRoots = graph.DeclarationRoots |> List.filter (fun (id, _) -> live.Contains id)
-      ModuleClassifications =
-        graph.ModuleClassifications.Value
-        |> Map.filter (fun id _ -> scope.ContextHeaders.ContainsKey id || live.Contains id)
-        |> Map.map (fun _ row ->
-            { row with ModuleInit = List.filter live.Contains row.ModuleInit
-                       Definitions = List.filter live.Contains row.Definitions
-                       DeclarationRoot = row.DeclarationRoot |> Option.filter (fst >> live.Contains) })
-      StaticStringPool = graph.StaticStringPool |> Option.map (fun pool ->
-        { pool with Entries = pool.Entries |> List.map (fun entry -> { entry with NodeIds = List.filter live.Contains entry.NodeIds }) })
-      LiteralStorage = selected live graph.LiteralStorage }
+    let edgesResult =
+        if selectedEmission.Boundary.SharedBufferPlacements.IsEmpty then Ok []
+        else
+            let declRootModuleParent (id: NodeId) : NodeId option =
+                match graph.Nodes.TryFind id |> Option.bind _.Parent with
+                | Some _ as parentOpt -> parentOpt
+                | None ->
+                    graph.Edges
+                    |> List.tryPick (fun e ->
+                        match e.Role, e.Sources with
+                        | EdgeRole.ProgramInitialization, entryId :: sourceId :: _ when entryId = id ->
+                            graph.Nodes.TryFind sourceId |> Option.bind _.Parent
+                        | _ -> None)
+            let targetOpt =
+                selectedEmission.Boundary.SharedBufferViewUses.Values
+                |> Seq.tryPick (fun vu ->
+                    if live.Contains vu.RegionAcquisitionCall then Some vu.RegionAcquisitionCall
+                    elif live.Contains vu.Site then Some vu.Site
+                    else None)
+                |> Option.orElseWith (fun () ->
+                    selectedEmission.Boundary.SharedBufferPlacements.Values
+                    |> Seq.tryPick (fun p ->
+                        if live.Contains p.Declaration then Some p.Declaration
+                        else
+                            let pParent = graph.Nodes.TryFind p.Declaration |> Option.bind _.Parent
+                            graph.DeclarationRoots
+                            |> List.tryPick (fun (id, _) ->
+                                if live.Contains id && pParent.IsSome && declRootModuleParent id = pParent then
+                                    Some id
+                                else None)))
+                |> Option.orElseWith (fun () ->
+                    graph.DeclarationRoots
+                    |> List.tryPick (fun (id, kind) -> if live.Contains id && kind = DeclRoot.EntryPoint then Some id else None))
+                |> Option.orElseWith (fun () ->
+                    graph.DeclarationRoots
+                    |> List.tryPick (fun (id, _) -> if live.Contains id then Some id else None))
+            match targetOpt, Clef.Compiler.Baker.Ingredients.Boundaries.boundaryPlatformPremise graph with
+            | Some targetId, (Some _ as platformPremise) ->
+                let boundaryDomain : BoundaryDomain =
+                    { ResourceEvidence = None
+                      Premises = Map.empty
+                      Platform = platformPremise
+                      Meets = Map.empty
+                      Declarations = []
+                      ResultHypotheses = selectedEmission.Boundary.ResultHypotheses
+                      WritableBufferDeclarations = []
+                      WritableBufferUses = []
+                      ReadOnlyBufferDeclarations = []
+                      ReadOnlyBufferUses = []
+                      BorrowedResultViewDeclarations = []
+                      BorrowedResultViewUses = []
+                      BufferAbsences = []
+                      CountedEntryArrays = []
+                      SharedBufferPlacements = []
+                      SharedBufferViewUses = []
+                      ResourceDeclarations = []
+                      ResourceAccesses = []
+                      ResourceEvaluationRoots = []
+                      ResourceEvaluationRelations = []
+                      Imports = []
+                      Calls = []
+                      Loading = None
+                      Entries = []
+                      CallbackInvocations = []
+                      CallbackAbsences = []
+                      ClosedEntries = []
+                      ByteViews = []
+                      StringExtents = []
+                      IntrinsicDeclarations = []
+                      IntrinsicImports = []
+                      IntrinsicCalls = []
+                      IntrinsicProofs = []
+                      StringOriginRelations = None
+                      StringOriginRoots = None
+                      StringComparisons = []
+                      StringLengthComparisons = []
+                      StringComparisonReads = []
+                      StringBorrowSnapshots = []
+                      StringBorrowCopies = []
+                      StringBorrowAllocations = []
+                      StringStorage = None
+                      DeclarationLeaves = Set.empty
+                      DeclarationOnly = Set.empty
+                      Links = Set.empty
+                      Failures = [] }
+                Ok
+                    [ { Class = EdgeClass.Boundary
+                        Role = EdgeRole.BoundaryDomain boundaryDomain
+                        Sources = []
+                        Target = targetId
+                        Ordinal = 0 } ]
+            | _ ->
+                Error
+                    [ { Kind = WitnessProjectionFailureKind.Settlement
+                        Occurrence = None
+                        Participants = Set.empty
+                        Reason = "WitnessLiveRowsRecipes: SharedBufferPlacements require a settled BoundaryPlatformPremise and live declaration root." } ]
+    edgesResult
+    |> Result.map (fun edges ->
+        { FactIdentities = ids; TypeIdentities = types; Codata = codata; Emission = selectedEmission
+          Foreign = { BorrowedViews = rows prepared.Foreign.BorrowedViews; Mmio = rows prepared.Foreign.Mmio; MappedCalls = values prepared.Foreign.MappedCalls }
+          // Explicit eager demand belongs only to a live marker occurrence. A
+          // declaration's retained identity does not activate its old demand edge.
+          Demand = { Operands = selected eager prepared.Demand.Operands; Relations = selected eager prepared.Demand.Relations }
+          // PHG emission reads saturated facts, not the owner's analytical F.
+          // Complete relations remain in prepared.Edges for Baker revalidation.
+          // When shared-buffer placements are published, retain a BoundaryDomain
+          // edge carrying the platform premise so Fidelity.PSG.Integrity can
+          // cross-check Endianness, Spaces, Buffers and SharedBufferRegions.
+          Edges = edges
+          DeclarationRoots = graph.DeclarationRoots |> List.filter (fun (id, _) -> live.Contains id)
+          ModuleClassifications =
+            graph.ModuleClassifications.Value
+            |> Map.filter (fun id _ -> scope.ContextHeaders.ContainsKey id || live.Contains id)
+            |> Map.map (fun _ row ->
+                { row with ModuleInit = List.filter live.Contains row.ModuleInit
+                           Definitions = List.filter live.Contains row.Definitions
+                           DeclarationRoot = row.DeclarationRoot |> Option.filter (fst >> live.Contains) })
+          StaticStringPool = graph.StaticStringPool |> Option.map (fun pool ->
+            { pool with Entries = pool.Entries |> List.map (fun entry -> { entry with NodeIds = List.filter live.Contains entry.NodeIds }) })
+          LiteralStorage = selected live graph.LiteralStorage })
 
 let matches (held: WitnessLiveRows) (current: WitnessLiveRows) =
     let edge (row: Hyperedge) = row.Class, row.Role, row.Sources, row.Target, row.Ordinal

@@ -53,6 +53,10 @@ type DeclaredSpace = {
     Growth: string
     Base: int64 option
     Access: string
+    Notes: string
+    MapKind: string
+    Since: string
+    Until: string
 }
 
 /// A role reference and the unique memory-space declaration it resolves to.
@@ -70,11 +74,11 @@ type DeclaredProgramLifetime = {
 }
 
 /// The physical-layout projection shared by device-access checking and image
-/// layout. Availability/version/map metadata are outside this projection.
+/// layout.
 let memorySpace (s: DeclaredSpace) : BAREWire.Platform.MemorySpace = {
     Name = s.Name; Kind = s.Kind; Base = s.Base; Capacity = s.Capacity
     Alignment = s.Alignment; Granularity = s.Granularity; Growth = s.Growth; Access = s.Access
-    Notes = ""; MapKind = ""; Since = ""; Until = ""
+    Notes = s.Notes; MapKind = s.MapKind; Since = s.Since; Until = s.Until
 }
 
 /// A declared buffer schema. Mirrors BAREWire.Platform.BufferSchema.
@@ -84,9 +88,18 @@ type DeclaredBuffer = {
     Capacity: int64
     Space: string
     Framing: string
+    Delimiter: int
     TrimDelimiter: bool
     Schema: string
     Access: string
+    Lifetime: string
+    Slot: int
+}
+
+let bufferSchema (b: DeclaredBuffer) : BAREWire.Platform.BufferSchema = {
+    Name = b.Name; Capacity = b.Capacity; Space = b.Space; Framing = b.Framing
+    Delimiter = b.Delimiter; TrimDelimiter = b.TrimDelimiter; Schema = b.Schema
+    Access = b.Access; Lifetime = b.Lifetime; Slot = b.Slot
 }
 
 /// A declared width dimension: the node that declares it, its name and its
@@ -371,17 +384,24 @@ let private readSpace (graph: SemanticGraph) (id: NodeId) : Result<DeclaredSpace
     match recordOf graph id with
     | Some (node, fields) when typeName node = Some "MemorySpace" ->
         let str n = field n fields |> Option.bind (stringOf graph)
+        let optStr n =
+            match field n fields with
+            | None -> Some ""
+            | Some fid -> stringOf graph fid
         let i64 n = field n fields |> Option.bind (int64Of graph)
         let baseValue =
             field "Base" fields |> Option.bind (optionOf graph) |> Option.bind (function
                 | None -> Some None
                 | Some value -> int64Of graph value |> Option.map Some)
-        match str "Name", str "Kind", i64 "Capacity", i64 "Alignment", i64 "Granularity", str "Growth", str "Access", baseValue with
-        | Some name, Some kind, Some capacity, Some align, Some granularity, Some growth, Some access, Some baseValue
+        match str "Name", str "Kind", i64 "Capacity", i64 "Alignment", i64 "Granularity", str "Growth", str "Access", baseValue,
+              optStr "Notes", optStr "MapKind", optStr "Since", optStr "Until" with
+        | Some name, Some kind, Some capacity, Some align, Some granularity, Some growth, Some access, Some baseValue,
+          Some notes, Some mapKind, Some since, Some until
             when align >= 0L && align <= int64 System.Int32.MaxValue && granularity >= 0L && granularity <= int64 System.Int32.MaxValue ->
             Ok { Node = node.Id; Name = name; Kind = kind; Capacity = capacity; Alignment = int align
-                 Granularity = int granularity; Growth = growth; Base = baseValue; Access = access }
-        | _ -> Error (findingAt node DeclarationDefect.Malformed "a MemorySpace requires literal Name, Kind, Growth and Access, integer Capacity, bounded Alignment and Granularity, and Base = None or Some integer")
+                 Granularity = int granularity; Growth = growth; Base = baseValue; Access = access
+                 Notes = notes; MapKind = mapKind; Since = since; Until = until }
+        | _ -> Error (findingAt node DeclarationDefect.Malformed "a MemorySpace requires literal Name, Kind, Growth, Access, Notes, MapKind, Since and Until, integer Capacity, bounded Alignment and Granularity, and Base = None or Some integer")
     | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Spaces is not a MemorySpace record")
 
 let private readBuffer (graph: SemanticGraph) (id: NodeId) : Result<DeclaredBuffer, DeclarationFinding> =
@@ -390,11 +410,22 @@ let private readBuffer (graph: SemanticGraph) (id: NodeId) : Result<DeclaredBuff
         let str n = field n fields |> Option.bind (stringOf graph)
         let i64 n = field n fields |> Option.bind (int64Of graph)
         let bl n = field n fields |> Option.bind (boolOf graph)
-        let optStr n = str n |> Option.defaultValue ""
-        match str "Name", i64 "Capacity", str "Space", str "Framing", bl "TrimDelimiter" with
-        | Some name, Some capacity, Some space, Some framing, Some trim ->
-            Ok { Node = node.Id; Name = name; Capacity = capacity; Space = space; Framing = framing; TrimDelimiter = trim; Schema = optStr "Schema"; Access = optStr "Access" }
-        | _ -> Error (findingAt node DeclarationDefect.Malformed "a BufferSchema's Name, Space and Framing must be string literals, its Capacity an integer literal and its TrimDelimiter a boolean literal")
+        let optStr n =
+            match field n fields with
+            | None -> Some ""
+            | Some fid -> stringOf graph fid
+        let optI32 n =
+            match field n fields with
+            | None -> Some 0
+            | Some fid ->
+                int64Of graph fid
+                |> Option.bind (fun v -> if v >= int64 System.Int32.MinValue && v <= int64 System.Int32.MaxValue then Some (int v) else None)
+        match str "Name", i64 "Capacity", str "Space", str "Framing", bl "TrimDelimiter",
+              optI32 "Delimiter", optStr "Schema", optStr "Access", optStr "Lifetime", optI32 "Slot" with
+        | Some name, Some capacity, Some space, Some framing, Some trim,
+          Some delimiter, Some schema, Some access, Some lifetime, Some slot ->
+            Ok { Node = node.Id; Name = name; Capacity = capacity; Space = space; Framing = framing; Delimiter = delimiter; TrimDelimiter = trim; Schema = schema; Access = access; Lifetime = lifetime; Slot = slot }
+        | _ -> Error (findingAt node DeclarationDefect.Malformed "a BufferSchema's Name, Space, Framing, Schema, Access and Lifetime must be string literals, its Capacity, Delimiter and Slot integer literals and its TrimDelimiter a boolean literal")
     | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Buffers is not a BufferSchema record")
 
 let private readWidth (graph: SemanticGraph) (id: NodeId) : Result<DeclaredWidth, DeclarationFinding> =
@@ -1291,6 +1322,15 @@ type DeclaredSharedBufferPlacement = {
     Participants: NodeId list
 }
 
+type DeclaredSharedBufferRegion = {
+    Identity: NodeId
+    Node: NodeId
+    DescriptorBinding: NodeId
+    Quote: NodeId
+    Descriptor: BAREWire.Descriptors.SharedBufferRegionDescriptor
+    Participants: NodeId list
+}
+
 type Descriptors = {
     Layouts: DeclaredLayout list
     Functions: DeclaredFunction list
@@ -1304,6 +1344,7 @@ type Descriptors = {
     BorrowedResultViews: DeclaredBorrowedResultView list
     CountedEntryArrays: DeclaredCountedEntryArray list
     SharedBufferPlacements: DeclaredSharedBufferPlacement list
+    SharedBufferRegions: DeclaredSharedBufferRegion list
     Findings: DeclarationFinding list
 }
 
@@ -1831,11 +1872,10 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
     let readOnlyBufferDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
     let borrowedViewDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
     let countedEntryArrayDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
-    let sharedBufferPlacementDeclarations = ResizeArray<SemanticNode * SemanticNode * (string * NodeId) list * NodeId list>()
-    let layouts, functionDeclarations, resultDeclarations, invocationDeclarations, resourceDeclarations, writableDeclarations, externs, findings =
+    let layouts, functionDeclarations, resultDeclarations, invocationDeclarations, resourceDeclarations, writableDeclarations, sharedBufferPlacementDeclarations, sharedBufferRegionDeclarations, externs, findings =
         graph.Nodes
         |> Map.toList
-        |> List.fold (fun (layouts, functions, ranges, invocations, resources, writable, externs, findings) (_, node) ->
+        |> List.fold (fun (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings) (_, node) ->
             let externs =
                 if node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol" then
                     qualifiedExportName graph node |> Option.map (fun name -> (name, node.Id) :: externs) |> Option.defaultValue externs
@@ -1849,48 +1889,49 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                     match typeName record with
                     | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
                         let layout, more = readLayout graph record fields
-                        (Option.toList layout @ layouts, functions, ranges, invocations, resources, writable, externs, findings @ more)
+                        (Option.toList layout @ layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings @ more)
                     | Some "FunctionDescriptor" ->
                         let target, (f, more) = readFunction graph node name record fields
-                        (layouts, (f |> Option.map (fun f -> target, f, node.Id) |> Option.toList) @ functions, ranges, invocations, resources, writable, externs, findings @ more)
+                        (layouts, (f |> Option.map (fun f -> target, f, node.Id) |> Option.toList) @ functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings @ more)
                     | Some "ResultRangeDescriptor" ->
-                        (layouts, functions, (node, record, fields, path) :: ranges, invocations, resources, writable, externs, findings)
+                        (layouts, functions, (node, record, fields, path) :: ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings)
                     | Some "ResourceDescriptor" ->
-                        (layouts, functions, ranges, invocations, (node, record, fields, path) :: resources, writable, externs, findings)
+                        (layouts, functions, ranges, invocations, (node, record, fields, path) :: resources, writable, sharedPlacements, sharedRegions, externs, findings)
                     | Some "WritableBufferDescriptor" ->
-                        (layouts, functions, ranges, invocations, resources, (node, record, fields, path) :: writable, externs, findings)
+                        (layouts, functions, ranges, invocations, resources, (node, record, fields, path) :: writable, sharedPlacements, sharedRegions, externs, findings)
                     | Some "ReadOnlyBufferDescriptor" ->
                         readOnlyBufferDeclarations.Add(node, record, fields, path)
-                        (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                        (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings)
                     | Some "BorrowedResultViewDescriptor" ->
                         borrowedViewDeclarations.Add(node, record, fields, path)
-                        (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                        (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings)
                     | Some "CountedEntryArrayDescriptor" ->
                         countedEntryArrayDeclarations.Add(node, record, fields, path)
-                        (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                        (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings)
                     | Some "SharedBufferPlacement" ->
-                        sharedBufferPlacementDeclarations.Add(node, record, fields, path)
-                        (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                        (layouts, functions, ranges, invocations, resources, writable, (node, record, fields, path) :: sharedPlacements, sharedRegions, externs, findings)
+                    | Some "SharedBufferRegionDescriptor" ->
+                        (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, (node, record, fields, path) :: sharedRegions, externs, findings)
                     | Some "CallbackInvocationContract" ->
-                        (layouts, functions, ranges, (node, record, fields, path) :: invocations, resources, writable, externs, findings)
-                    | _ -> (layouts, functions, ranges, invocations, resources, writable, externs, findings)
+                        (layouts, functions, ranges, (node, record, fields, path) :: invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings)
+                    | _ -> (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings)
                 | Some (value, _) when exactDescriptor "CallbackAbsenceContract" value ->
-                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed "A CallbackAbsenceContract must retain its exact immutable quoted record."])
+                    (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings @ [findingAt value DeclarationDefect.Malformed "A CallbackAbsenceContract must retain its exact immutable quoted record."])
                 | Some (value, _) when exactDescriptor "BufferAbsenceContract" value ->
-                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed "A BufferAbsenceContract must retain its exact immutable quoted record."])
-                | Some (value, _) when List.contains (typeName value) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"; Some "SharedBufferPlacement"] ->
+                    (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings @ [findingAt value DeclarationDefect.Malformed "A BufferAbsenceContract must retain its exact immutable quoted record."])
+                | Some (value, _) when List.contains (typeName value) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"; Some "SharedBufferPlacement"; Some "SharedBufferRegionDescriptor"] ->
                     let name=typeName value |> Option.defaultValue "ResultRangeDescriptor"
-                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ [findingAt value DeclarationDefect.Malformed ($"a {name} must retain its quoted record declaration")])
+                    (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings @ [findingAt value DeclarationDefect.Malformed ($"a {name} must retain its quoted record declaration")])
                 | _ ->
                     let declared =
                         match node.Type with
-                        | NativeType.TApp(tc, [inner]) when tc.Name <> "array" && tc.Name <> "Array" -> List.contains (typeName { node with Type = inner }) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BufferAbsenceContract"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"; Some "SharedBufferPlacement"]
-                        | _ -> List.contains (typeName node) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BufferAbsenceContract"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"; Some "SharedBufferPlacement"]
+                        | NativeType.TApp(tc, [inner]) when tc.Name <> "array" && tc.Name <> "Array" -> List.contains (typeName { node with Type = inner }) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BufferAbsenceContract"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"; Some "SharedBufferPlacement"; Some "SharedBufferRegionDescriptor"]
+                        | _ -> List.contains (typeName node) [Some "ResultRangeDescriptor"; Some "WritableBufferDescriptor"; Some "ReadOnlyBufferDescriptor"; Some "BufferAbsenceContract"; Some "BorrowedResultViewDescriptor"; Some "CountedEntryArrayDescriptor"; Some "SharedBufferPlacement"; Some "SharedBufferRegionDescriptor"]
                     let name=match node.Type with NativeType.TApp(_, [inner]) -> typeName {node with Type=inner} | _ -> typeName node
                     let descriptorName=name |> Option.defaultValue "ResultRangeDescriptor"
                     let more = if declared then [findingAt node DeclarationDefect.Malformed ($"a {descriptorName} must retain its quoted record declaration")] else []
-                    (layouts, functions, ranges, invocations, resources, writable, externs, findings @ more)
-            | _ -> (layouts, functions, ranges, invocations, resources, writable, externs, findings)) ([], [], [], [], [], [], [], [])
+                    (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings @ more)
+            | _ -> (layouts, functions, ranges, invocations, resources, writable, sharedPlacements, sharedRegions, externs, findings)) ([], [], [], [], [], [], [], [], [], [])
     // Preserve the exact descriptor binding already visited by this census.
     // This private incidence is not reconstructed from symbols or source names.
     let functions = functionDeclarations |> List.map (fun (target, abi, _) -> target, abi)
@@ -2722,7 +2763,7 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
     let countedEntryArrays = countedEntryArrayResults |> List.choose (function Ok value -> Some value | _ -> None)
     let countedEntryArrayDuplicates = duplicates "counted entry array contract" (fun (value: DeclaredCountedEntryArray) -> string value.Invocation.Declaration.Binding + ":" + string value.Contract.Parameter + ":" + string value.Contract.Argument) _.Node graph countedEntryArrays
     let sharedBufferPlacementResults =
-        sharedBufferPlacementDeclarations |> Seq.toList |> List.map (fun (binding, node, fields, path) ->
+        List.rev sharedBufferPlacementDeclarations |> List.map (fun (binding, node, fields, path) ->
             let str flds name = field name flds |> Option.bind (stringOf graph)
             let i64 flds name = field name flds |> Option.bind (int64Of graph)
             let i32 flds name =
@@ -2862,30 +2903,111 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                       LibraryMutatesBuffer = libMut
                       OverlappingMutableShare = overlapMut
                       MaxAccessedElementIndex = maxElemIdx }
-                let quoteOpt =
-                    path |> List.tryPick (fun id ->
+                let quotes =
+                    path |> List.choose (fun id ->
                         match graph.Nodes.TryFind id |> Option.map _.Kind with
                         | Some (SemanticKind.Quote _) -> Some id
                         | _ -> None)
-                let identity = quoteOpt |> Option.defaultValue (List.tryHead path |> Option.defaultValue node.Id)
-                let participants = (binding.Id :: identity :: node.Id :: path @ sdPaths @ stPaths @ vwPaths) |> List.distinct
-                Ok { Identity = identity
-                     Node = node.Id
-                     DescriptorBinding = binding.Id
-                     SpaceDescriptorNode = sdNodeId
-                     StructDescriptorNode = stNodeId
-                     ViewDescriptorNode = vwNodeId
-                     Placement = placement
-                     Participants = participants }
+                let immutable ids =
+                    ids |> List.forall (fun id ->
+                        match graph.Nodes.TryFind id |> Option.map _.Kind with
+                        | Some (SemanticKind.Binding(_, true, _, _)) -> false
+                        | _ -> true)
+                let fieldPaths =
+                    fields |> List.collect (fun (_, id) ->
+                        match valuePath graph id with
+                        | Some (_, p) -> p
+                        | None -> [id])
+                match quotes with
+                | [] ->
+                    Error (findingAt node DeclarationDefect.Malformed "a SharedBufferPlacement must retain its quoted record declaration")
+                | identity :: _ ->
+                    let participants = (binding.Id :: identity :: node.Id :: path @ fieldPaths @ sdPaths @ stPaths @ vwPaths) |> List.distinct
+                    if not (immutable participants) then
+                        Error (findingAt node DeclarationDefect.Invalid "a SharedBufferPlacement requires immutable binding and field inputs")
+                    else
+                        Ok { Identity = identity
+                             Node = node.Id
+                             DescriptorBinding = binding.Id
+                             SpaceDescriptorNode = sdNodeId
+                             StructDescriptorNode = stNodeId
+                             ViewDescriptorNode = vwNodeId
+                             Placement = placement
+                             Participants = participants }
             | _ ->
                 Error (findingAt node DeclarationDefect.Malformed "a SharedBufferPlacement requires literal descriptor and depth fields"))
     let sharedBufferPlacements = sharedBufferPlacementResults |> List.choose (function Ok value -> Some value | _ -> None)
     let sharedBufferPlacementDuplicates =
         duplicates "SharedBufferPlacement" (fun (sp: DeclaredSharedBufferPlacement) -> sp.Placement.Name) (fun sp -> sp.Node) graph sharedBufferPlacements
+    let sharedBufferRegionResults =
+        List.rev sharedBufferRegionDeclarations |> List.map (fun (binding, node, fields, path) ->
+            let str flds name = field name flds |> Option.bind (stringOf graph)
+            let optStr flds name =
+                match field name flds |> Option.bind (optionOf graph) with
+                | Some None -> Some (None, [])
+                | Some (Some innerId) ->
+                    match valuePath graph innerId with
+                    | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String s) }, p) -> Some (Some s, p)
+                    | _ -> None
+                | None -> None
+            let strArray flds name =
+                match field name flds |> Option.bind (elementsOf graph) with
+                | None -> None
+                | Some elements ->
+                    let parsed =
+                        elements |> List.map (fun elId ->
+                            match valuePath graph elId with
+                            | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String s) }, p) -> Some (s, p)
+                            | _ -> None)
+                    if parsed |> List.forall Option.isSome then
+                        let items = parsed |> List.choose id
+                        Some (items |> List.map fst |> List.toArray, items |> List.collect snd)
+                    else None
+            let quotes =
+                path |> List.choose (fun id ->
+                    match graph.Nodes.TryFind id |> Option.map _.Kind with
+                    | Some (SemanticKind.Quote _) -> Some id
+                    | _ -> None)
+            let immutable ids =
+                ids |> List.forall (fun id ->
+                    match graph.Nodes.TryFind id |> Option.map _.Kind with
+                    | Some (SemanticKind.Binding(_, true, _, _)) -> false
+                    | _ -> true)
+            let fieldPaths =
+                fields |> List.collect (fun (_, id) ->
+                    match valuePath graph id with
+                    | Some (_, p) -> p
+                    | None -> [id])
+            match quotes, str fields "Placement", str fields "Acquire", optStr fields "Release", strArray fields "Sync", strArray fields "ForeignUses" with
+            | quote :: _, Some placement, Some acquire, Some (releaseOpt, relPaths), Some (syncArr, syncPaths), Some (foreignUsesArr, fuPaths) ->
+                let participants = (binding.Id :: quote :: node.Id :: path @ fieldPaths @ relPaths @ syncPaths @ fuPaths) |> List.distinct
+                if not (immutable participants) then
+                    Error (findingAt node DeclarationDefect.Invalid "a SharedBufferRegionDescriptor requires immutable binding and field inputs")
+                else
+                    let desc : BAREWire.Descriptors.SharedBufferRegionDescriptor =
+                        { Placement = placement
+                          Acquire = acquire
+                          Release = releaseOpt
+                          Sync = syncArr
+                          ForeignUses = foreignUsesArr }
+                    Ok { Identity = quote
+                         Node = node.Id
+                         DescriptorBinding = binding.Id
+                         Quote = quote
+                         Descriptor = desc
+                         Participants = participants }
+            | [], _, _, _, _, _ ->
+                Error (findingAt node DeclarationDefect.Malformed "a SharedBufferRegionDescriptor must retain its quoted record declaration")
+            | _ ->
+                Error (findingAt node DeclarationDefect.Malformed "a SharedBufferRegionDescriptor requires literal Placement, Acquire, Release, Sync and ForeignUses fields"))
+    let sharedBufferRegions = sharedBufferRegionResults |> List.choose (function Ok value -> Some value | _ -> None)
+    let sharedBufferRegionDuplicates =
+        duplicates "SharedBufferRegionDescriptor" (fun (sr: DeclaredSharedBufferRegion) -> sr.Descriptor.Placement) (fun sr -> sr.Node) graph sharedBufferRegions
     { Layouts = List.rev layouts; Functions = List.rev functions |> List.map snd; ResultRanges = ranges
       CallbackInvocations = invocations; CallbackAbsences = absences; Resources = resources; WritableBuffers = writable
       ReadOnlyBuffers = readOnlyBuffers; BufferAbsences = bufferAbsences; BorrowedResultViews = borrowedViews; CountedEntryArrays = countedEntryArrays
       SharedBufferPlacements = sharedBufferPlacements
+      SharedBufferRegions = sharedBufferRegions
       Findings = findings @ (results |> List.choose (function Error finding -> Some finding | _ -> None)) @ duplicateFindings
                  @ (invocationResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ invocationDuplicates
                  @ (absenceResults |> List.choose(function Error finding->Some finding | _->None)) @ absenceDuplicates
@@ -2895,7 +3017,73 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
                  @ (bufferAbsenceResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ bufferAbsenceDuplicates
                  @ (borrowedViewResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ borrowedViewDuplicates
                  @ (countedEntryArrayResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ countedEntryArrayDuplicates
-                 @ (sharedBufferPlacementResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ sharedBufferPlacementDuplicates }
+                 @ (sharedBufferPlacementResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ sharedBufferPlacementDuplicates
+                 @ (sharedBufferRegionResults |> List.choose (function Error finding -> Some finding | _ -> None)) @ sharedBufferRegionDuplicates }
+
+/// Read only SharedBufferRegionDescriptor bindings without running readLayout on all struct/peripheral declarations.
+let readSharedBufferRegions (graph: SemanticGraph) : BAREWire.Descriptors.SharedBufferRegionDescriptor list =
+    let isModuleLevel (node: SemanticNode) =
+        match node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) with
+        | Some { Kind = SemanticKind.ModuleDef _ } -> true
+        | _ -> false
+    let str flds name = field name flds |> Option.bind (stringOf graph)
+    let optStr flds name =
+        match field name flds |> Option.bind (optionOf graph) with
+        | Some None -> Some (None, [])
+        | Some (Some innerId) ->
+            match valuePath graph innerId with
+            | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String s) }, p) -> Some (Some s, p)
+            | _ -> None
+        | None -> None
+    let strArray flds name =
+        match field name flds |> Option.bind (elementsOf graph) with
+        | None -> None
+        | Some elements ->
+            let parsed =
+                elements |> List.map (fun elId ->
+                    match valuePath graph elId with
+                    | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String s) }, p) -> Some (s, p)
+                    | _ -> None)
+            if parsed |> List.forall Option.isSome then
+                let items = parsed |> List.choose id
+                Some (items |> List.map fst |> List.toArray, items |> List.collect snd)
+            else None
+    let immutable ids =
+        ids |> List.forall (fun id ->
+            match graph.Nodes.TryFind id |> Option.map _.Kind with
+            | Some (SemanticKind.Binding(_, true, _, _)) -> false
+            | _ -> true)
+    graph.Nodes
+    |> Map.toList
+    |> List.choose (fun (_, node) ->
+        match node.Kind with
+        | SemanticKind.Binding (_, _, _, _) when isModuleLevel node && not (List.isEmpty node.Children) ->
+            match valuePath graph (List.last node.Children) with
+            | Some (({ Kind = SemanticKind.RecordExpr(fields, _) } as record), path) when typeName record = Some "SharedBufferRegionDescriptor" ->
+                let quotes =
+                    path |> List.choose (fun id ->
+                        match graph.Nodes.TryFind id |> Option.map _.Kind with
+                        | Some (SemanticKind.Quote _) -> Some id
+                        | _ -> None)
+                let fieldPaths =
+                    fields |> List.collect (fun (_, id) ->
+                        match valuePath graph id with
+                        | Some (_, p) -> p
+                        | None -> [id])
+                match quotes, str fields "Placement", str fields "Acquire", optStr fields "Release", strArray fields "Sync", strArray fields "ForeignUses" with
+                | quote :: _, Some placement, Some acquire, Some (releaseOpt, relPaths), Some (syncArr, syncPaths), Some (foreignUsesArr, fuPaths) ->
+                    let participants = (node.Id :: quote :: record.Id :: path @ fieldPaths @ relPaths @ syncPaths @ fuPaths) |> List.distinct
+                    if immutable participants then
+                        Some
+                            { Placement = placement
+                              Acquire = acquire
+                              Release = releaseOpt
+                              Sync = syncArr
+                              ForeignUses = foreignUsesArr }
+                    else None
+                | _ -> None
+            | _ -> None
+        | _ -> None)
 
 /// The bounded scalar references a call passes, paired with its actual arrays.
 /// The descriptor supplies the element ABI; the lowering must retain an extent

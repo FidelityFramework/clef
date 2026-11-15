@@ -121,7 +121,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                   stale "A local string borrow lost its exact source-published guarded read, snapshot copy or lifetime correspondence." ]
             |> List.collect (function Error failures -> failures | Ok _ -> [])
         if not optionalClaimErrors.IsEmpty then Error optionalClaimErrors
-        elif not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.platformPremise graph.Platform || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
+        elif not anchorValid || domain.Premises <> Ingredients.premises graph || domain.Platform <> Ingredients.boundaryPlatformPremise graph || domain.Meets <> graph.Codata.Value.Meets || domain.StringStorage <> Bytes.storagePremise graph then
             stale "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph."
         elif not domain.Failures.IsEmpty then
             Error (domain.Failures |> List.map (fun (site, participants, reason) -> domainFailure (Some site) participants reason))
@@ -270,7 +270,12 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     | _->false
                 if valid then None else Some(failure (Some access.Site) access.Participants "A resource read lost its exact original Option case, payload or immutable alias incidence."))
             let foreignResultErrors =
-                let integerCalls = calls |> List.filter (fun call -> match call.Result with Some(BoundaryScalar.Integer _) -> true | _ -> false)
+                let sharedBufferAcquireSites =
+                    domain.SharedBufferViewUses |> List.map _.RegionAcquisitionCall |> Set.ofList
+                let integerCalls =
+                    calls |> List.filter (fun call ->
+                        not (sharedBufferAcquireSites.Contains call.Site) &&
+                        match call.Result with Some(BoundaryScalar.Integer _) -> true | _ -> false)
                 if integerCalls.IsEmpty then [] else
                 match NumericPublication.project graph with
                 | Error failures -> failures

@@ -58,9 +58,32 @@ let ownedObligationNode (retained: RetainedBoundaryNodes) (subject: SemanticNode
 let platformPremise (platform: PlatformContext option) =
     platform |> Option.map (fun platform ->
         { Id = platform.PlatformId; Description = platform.PlatformDescription; Loading = platform.PlatformLoading; LibraryPath = platform.PlatformLibraryPath
-          SourcePaths = platform.PlatformSourcePaths; Architecture = platform.PlatformArchitecture; OS = platform.PlatformOS
+          SourcePaths = platform.PlatformSourcePaths; Architecture = platform.PlatformArchitecture; OS = platform.PlatformOS; Endianness = None
           RuntimeClaim = platform.RuntimeModel; Substrate = platform.SubstrateKind; Dimensions = platform.Dimensions
-          Representations = platform.Representations; EndpointReturns = platform.EndpointReturns })
+          Representations = platform.Representations; EndpointReturns = platform.EndpointReturns
+          Spaces = []; Buffers = []; SharedBufferRegions = [] })
+
+let boundaryPlatformPremise (graph: SemanticGraph) =
+    let reading = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read graph
+    let regions = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.readSharedBufferRegions graph
+    let endianness =
+        reading.Platform
+        |> Option.bind _.Core
+        |> Option.map _.Endianness
+    let spaces =
+        reading.Platform
+        |> Option.map (fun p -> p.Spaces |> List.map Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.memorySpace)
+        |> Option.defaultValue []
+    let buffers =
+        reading.Platform
+        |> Option.map (fun p -> p.Buffers |> List.map Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.bufferSchema)
+        |> Option.defaultValue []
+    graph.Platform |> Option.map (fun platform ->
+        { Id = platform.PlatformId; Description = platform.PlatformDescription; Loading = platform.PlatformLoading; LibraryPath = platform.PlatformLibraryPath
+          SourcePaths = platform.PlatformSourcePaths; Architecture = platform.PlatformArchitecture; OS = platform.PlatformOS; Endianness = endianness
+          RuntimeClaim = platform.RuntimeModel; Substrate = platform.SubstrateKind; Dimensions = platform.Dimensions
+          Representations = platform.Representations; EndpointReturns = platform.EndpointReturns
+          Spaces = spaces; Buffers = buffers; SharedBufferRegions = regions })
 
 // Union metadata is fixed by this compiled type, independent of graph revisions.
 let private kindName =
