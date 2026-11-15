@@ -222,7 +222,11 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                              | _->false) && casesCurrent cleanup &&
                             exactSupport call.Site account.Conversion resource cleanup && exactSupport call.Site account.Cleanup resource cleanup &&
                             (imports |> List.exists(fun row->row.Identity=call.Import && row.Binding=resource.Acquisition)) &&
-                            (graph.Nodes.TryFind call.Site |> Option.exists(fun node->node.Children=call.Callee::(call.Arguments |> List.map _.Actual)))
+                            (graph.Nodes.TryFind call.Site |> Option.exists(fun node->
+                                match call.Arguments, node.Children with
+                                | [], [callee; unitArg] when callee = call.Callee ->
+                                    graph.Nodes.TryFind unitArg |> Option.exists (fun arg -> Types.tryGetNTUKind arg.Type = Some NTUKind.NTUunit)
+                                | _, children -> children = call.Callee :: (call.Arguments |> List.map _.Actual)))
                         | _ -> false
                     | Some(BoundaryResourceUse.ReleaseOwned account) ->
                         match cleanupAt account.Acquisition account.Cleanup with

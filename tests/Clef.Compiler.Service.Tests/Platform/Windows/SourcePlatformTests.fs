@@ -116,3 +116,65 @@ type SourcePlatformTests() =
                 [parse authority "write-authority.clef"; parse "module App\nlet main () =\n    let s = \"hi\"\n    let _ = Sys.write 1 s.Bytes s.Length\n    0\n" "app.clef"]
                 (Some { SourcePlatformFixture.platform with RuntimeModel = Some RuntimeModel.Win32 })
         Assert.True(hasErrors result)
+
+    [<Fact>]
+    member _.``Windows Console profile settles kernel32 foreign imports and native entry slots while refusing implicit libc``() =
+        let profile = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../../../../Fidelity.Platform/Profiles/Windows_x86_64_Console/Fidelity.Platform.fidproj"))
+        let bareWire = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../../../../BAREWire/src/BAREWire.BindingMetadata.fidproj"))
+        Assert.True(System.IO.File.Exists profile)
+        Assert.True(System.IO.File.Exists bareWire)
+        let scratch = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "clef-win-boundary-" + System.Guid.NewGuid().ToString("N"))
+        System.IO.Directory.CreateDirectory scratch |> ignore
+        try
+            let source = System.IO.Path.Combine(scratch, "Program.clef")
+            let project = System.IO.Path.Combine(scratch, "Program.fidproj")
+            let escapedProfile = profile.Replace("\\", "\\\\")
+            let escapedBareWire = bareWire.Replace("\\", "\\\\")
+            System.IO.File.WriteAllText(project, sprintf "[package]\nname=\"WindowsBoundaryTest\"\nversion=\"0.1.0\"\n[compilation]\ntarget=\"cpu\"\n[dependencies]\nplatform={path=\"%s\"}\nbarewire={path=\"%s\"}\n[build]\nsources=[\"Program.clef\"]\noutput_kind=\"console\"\n[link]\nlibraries=[\"kernel32\"]\n" escapedProfile escapedBareWire)
+            let validCode =
+                [ "module WindowsBoundaryTest"
+                  "open BAREWire.Descriptors"
+                  "type CleanupGroup = private | OpaqueCleanupGroup"
+                  "[<FidelityExtern(\"kernel32\", \"GetCurrentProcessId\")>]"
+                  "let GetCurrentProcessId () : int = NativeDefault.zeroed ()"
+                  "let GetCurrentProcessIdDescriptor : Expr<FunctionDescriptor> ="
+                  "    <@ { CName = \"GetCurrentProcessId\"; Parameters = [||]; ReturnType = Integer(Unsigned, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>"
+                  "[<FidelityExtern(\"kernel32\", \"CreateThreadpoolCleanupGroup\")>]"
+                  "let CreateThreadpoolCleanupGroup () : option<CHandle<CleanupGroup>> = NativeDefault.zeroed ()"
+                  "let CreateThreadpoolCleanupGroupDescriptor : Expr<FunctionDescriptor> ="
+                  "    <@ { CName = \"CreateThreadpoolCleanupGroup\"; Parameters = [||]; ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>"
+                  "let CreateThreadpoolCleanupGroupResourceDescriptor : Expr<ResourceDescriptor> ="
+                  "    <@ { Resource = OwnedNullableReturn { Binding = \"WindowsBoundaryTest.CloseThreadpoolCleanupGroup\"; Parameter = 0 }"
+                  "         Hypothesis = { Identity = \"win32.tp.cleanup\"; Version = \"1\"; Source = \"test\" } } @>"
+                  "[<FidelityExtern(\"kernel32\", \"CloseThreadpoolCleanupGroup\")>]"
+                  "let CloseThreadpoolCleanupGroup (g: CHandle<CleanupGroup>) : unit = NativeDefault.zeroed ()"
+                  "let CloseThreadpoolCleanupGroupDescriptor : Expr<FunctionDescriptor> ="
+                  "    <@ { CName = \"CloseThreadpoolCleanupGroup\"; Parameters = [| { Name = \"g\"; Type = Pointer 64; PassBy = Value } |]; ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>"
+                  "let private pidSlot = FnPtr.ofExtern GetCurrentProcessId"
+                  "let private checkResource () ="
+                  "    match CreateThreadpoolCleanupGroup () with"
+                  "    | None -> 9"
+                  "    | Some g ->"
+                  "        CloseThreadpoolCleanupGroup g"
+                  "        37"
+                  "let main () ="
+                  "    let a = GetCurrentProcessId ()"
+                  "    let b = FnPtr.invoke pidSlot ()"
+                  "    let r = checkResource ()"
+                  "    if a = b && a <> 0 && r = 37 then 37 else 1" ]
+                |> String.concat "\n"
+            System.IO.File.WriteAllText(source, validCode)
+            let checkedValid = Clef.Compiler.Project.ProjectChecker.checkProject project |> Result.defaultWith (failwithf "%A")
+            Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors checkedValid, System.String.Join("\n", Clef.Compiler.Project.ProjectChecker.getErrorMessages checkedValid))
+            let revision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish checkedValid.CheckResult.Graph |> Result.defaultWith (failwithf "%A")
+            Assert.Equal(3, revision.Emission.Boundary.Imports.Count)
+            Assert.All(revision.Emission.Boundary.Imports.Values, fun imported -> Assert.Equal("kernel32", imported.Library))
+            Assert.Single(revision.Emission.Boundary.Entries.Values) |> ignore
+            Assert.Single(revision.Emission.Boundary.ResourceDeclarations.Values) |> ignore
+
+            let libcCode = validCode.Replace("[<FidelityExtern(\"kernel32\", \"GetCurrentProcessId\")>]", "[<FidelityExtern(\"c\", \"GetCurrentProcessId\")>]")
+            System.IO.File.WriteAllText(source, libcCode)
+            let checkedLibc = Clef.Compiler.Project.ProjectChecker.checkProject project |> Result.defaultWith (failwithf "%A")
+            Assert.True(Clef.Compiler.Project.ProjectChecker.hasErrors checkedLibc)
+        finally
+            System.IO.Directory.Delete(scratch, true)

@@ -1888,12 +1888,14 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
         { intrinsic with Errors = lengthErrors @ localErrors @ errors }
     let descriptors = Declarations.readDescriptors graph
     let runtime = Declarations.read graph
-    let runtimeContract = checked' {
+    let runtimeContract (library: string) = checked' {
         do! require runtime.Findings.IsEmpty "The selected source platform runtime has unresolved declaration or project consistency findings."
         let! platform = runtime.Platform |> needed "A reachable C import requires a resolved source PlatformDescription."
         let! core = platform.Core |> needed "A reachable C import requires a declared TargetCore.Runtime."
-        do! require (Declarations.runtimeModel core = Some RuntimeModel.Libc) "A reachable C import requires source TargetCore.Runtime libc; startup or project defaults do not establish library availability."
-        return () }
+        match Declarations.runtimeModel core with
+        | Some RuntimeModel.Libc -> return ()
+        | Some RuntimeModel.Win32 when library <> "c" -> return ()
+        | _ -> return! Error "A reachable C import requires source TargetCore.Runtime libc; startup or project defaults do not establish library availability." }
     // Declaration accounts are source observations, not resource/conversion proofs.
     let resourceDeclarations, resourceErrors =
         descriptors.Resources |> List.fold (fun (rows, errors) resource ->
@@ -3026,7 +3028,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                 |> needed "FidelityExtern.Symbol is missing."
 
             do! require (not (System.String.IsNullOrWhiteSpace symbol)) "FidelityExtern.Symbol must name an external declaration."
-            do! runtimeContract
+            do! runtimeContract library
             do!
                 if library = "c" then Ok() else
                     Declarations.readLoading graph
