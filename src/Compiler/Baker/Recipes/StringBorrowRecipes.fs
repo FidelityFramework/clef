@@ -107,7 +107,7 @@ let private plan enrichId (graph: SemanticGraph) =
         let reading = PlatformResolution.read graph
         match reading.Findings, reading.Platform, representation with
         | [], Some platform, Some(rep, representationNode) ->
-            match platform.Core, PlatformResolution.syscall graph platform "write", platform.Returns |> List.filter (fun value -> value.Endpoint = "write" && value.AtMost = "count") with
+            match platform.Core, PlatformResolution.writeEndpoint graph platform "write", platform.Returns |> List.filter (fun value -> value.Endpoint = "write" && value.AtMost = "count") with
             | Some core, Some endpoint, [result] ->
                 match core.Widths |> List.filter (fun width -> width.Name = "Register") with
                 | [width] when width.Bits > 0 ->
@@ -132,7 +132,7 @@ let private plan enrichId (graph: SemanticGraph) =
             let identity = imports[scope]
             let import = { Identity = identity; Scope = scope; Symbol = $"__clef_sys_write_{NodeId.value identity}"
                            Fd = BoundaryScalar.Integer(width.Bits, true); Count = BoundaryScalar.Integer(width.Bits, false); Result = BoundaryScalar.Integer(width.Bits, true)
-                           ByteRepresentation = rep; Core = core.Node; ReturnContract = result.Node; Endpoint = endpoint.Node; Surface = endpoint.Surface; SyscallNumber = endpoint.Number
+                           ByteRepresentation = rep; Core = core.Node; ReturnContract = result.Node; Endpoint = endpoint.Node; Surface = endpoint.Surface; Target = endpoint.Target
                            Participants = Set.unionMany [participants; paths[scope]; Set.ofList [identity; scope]] }
             Bytes.abiRow site import))
     { views with NewEdges = rows @ views.NewEdges }, List.rev failures

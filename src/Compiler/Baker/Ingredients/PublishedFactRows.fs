@@ -1760,6 +1760,11 @@ and mapIntrinsicWriteCall (value: S.IntrinsicWriteCall) : Fidelity.PSG.Intrinsic
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.IntrinsicWriteCall)
 
+and mapIntrinsicWriteEndpoint (value: S.IntrinsicWriteEndpoint) : Fidelity.PSG.IntrinsicWriteEndpoint =
+    match value with
+    | S.IntrinsicWriteEndpoint.SyscallNumber x -> Fidelity.PSG.IntrinsicWriteEndpoint.SyscallNumber x
+    | S.IntrinsicWriteEndpoint.HostApiSymbol x -> Fidelity.PSG.IntrinsicWriteEndpoint.HostApiSymbol x
+
 and mapIntrinsicWriteImport (value: S.IntrinsicWriteImport) : Fidelity.PSG.IntrinsicWriteImport =
     ({
         Identity = nodeId value.Identity
@@ -1773,7 +1778,7 @@ and mapIntrinsicWriteImport (value: S.IntrinsicWriteImport) : Fidelity.PSG.Intri
         ReturnContract = nodeId value.ReturnContract
         Endpoint = nodeId value.Endpoint
         Surface = nodeId value.Surface
-        SyscallNumber = value.SyscallNumber
+        Target = mapIntrinsicWriteEndpoint value.Target
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.IntrinsicWriteImport)
 

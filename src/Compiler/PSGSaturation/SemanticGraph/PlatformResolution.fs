@@ -1332,27 +1332,44 @@ let caseOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * string * NodeId
     | Some (({ Kind = SemanticKind.DUConstruct (name, _, payload, _) } : SemanticNode) as node) -> Some (node, name, payload)
     | _ -> None
 
+type DeclaredWriteEndpoint = { Node: NodeId; Surface: NodeId; Target: Types.IntrinsicWriteEndpoint }
 type DeclaredSyscall = { Node: NodeId; Surface: NodeId; Number: bigint }
 
 /// Capability is an endpoint in the selected description, never a runtime default.
-let syscall (graph: SemanticGraph) (platform: DeclaredPlatform) name =
+let writeEndpoint (graph: SemanticGraph) (platform: DeclaredPlatform) name =
     let endpoints =
         recordOf graph platform.Node |> Option.toList |> List.collect (fun (_, fields) ->
             field "Surfaces" fields |> Option.bind (elementsOf graph) |> Option.defaultValue []
             |> List.collect (fun surface ->
-                recordOf graph surface |> Option.toList |> List.collect (fun (owner, fields) ->
-                    field "Endpoints" fields |> Option.bind (elementsOf graph) |> Option.defaultValue []
+                recordOf graph surface |> Option.toList |> List.collect (fun (owner, surfaceFields) ->
+                    field "Endpoints" surfaceFields |> Option.bind (elementsOf graph) |> Option.defaultValue []
                     |> List.choose (fun endpoint ->
                         recordOf graph endpoint |> Option.bind (fun (node, fields) ->
-                            if field "Name" fields |> Option.bind (stringOf graph) = Some name then Some(owner.Id, node, fields) else None)))))
+                            if field "Name" fields |> Option.bind (stringOf graph) = Some name then Some(owner.Id, surfaceFields, node, fields) else None)))))
+    let isAsciiIdentifier (value: string) =
+        value.Length > 0
+        && (System.Char.IsAsciiLetter value[0] || value[0] = '_')
+        && (value |> Seq.forall (fun ch -> System.Char.IsAsciiLetterOrDigit ch || ch = '_'))
     match endpoints with
-    | [surface, node, fields] ->
+    | [surface, surfaceFields, node, fields] ->
         match field "Location" fields |> Option.bind (stringOf graph), field "Address" fields |> Option.bind (stringOf graph) with
         | Some location, Some address when location = BAREWire.Platform.EndpointKind.SyscallNumber ->
             match System.Numerics.BigInteger.TryParse address with
-            | true, number when number >= 0I -> Some { Node = node.Id; Surface = surface; Number = number }
+            | true, number when number >= 0I ->
+                Some { Node = node.Id; Surface = surface; Target = Types.IntrinsicWriteEndpoint.SyscallNumber number }
             | _ -> None
+        | Some location, Some address when location = BAREWire.Platform.EndpointKind.Symbol ->
+            if field "Kind" surfaceFields |> Option.bind (stringOf graph) = Some BAREWire.Platform.SurfaceKind.HostApi
+               && isAsciiIdentifier address then
+                Some { Node = node.Id; Surface = surface; Target = Types.IntrinsicWriteEndpoint.HostApiSymbol address }
+            else None
         | _ -> None
+    | _ -> None
+
+let syscall (graph: SemanticGraph) (platform: DeclaredPlatform) name =
+    match writeEndpoint graph platform name with
+    | Some { Node = node; Surface = surface; Target = Types.IntrinsicWriteEndpoint.SyscallNumber number } ->
+        Some { Node = node; Surface = surface; Number = number }
     | _ -> None
 
 /// The two elements of a pair payload (`Integer (Signed, 32)`).

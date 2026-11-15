@@ -1653,6 +1653,11 @@ type BoundaryStringExtent = {
     Participants: ParticipantEvidence
 }
 
+[<RequireQualifiedAccess>]
+type IntrinsicWriteEndpoint =
+    | SyscallNumber of bigint
+    | HostApiSymbol of string
+
 type IntrinsicWriteImport = {
     Identity: NodeId
     Scope: NodeId
@@ -1665,7 +1670,7 @@ type IntrinsicWriteImport = {
     ReturnContract: NodeId
     Endpoint: NodeId
     Surface: NodeId
-    SyscallNumber: bigint
+    Target: IntrinsicWriteEndpoint
     Participants: Set<NodeId>
 }
 

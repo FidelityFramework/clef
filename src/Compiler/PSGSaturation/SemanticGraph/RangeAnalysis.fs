@@ -1995,6 +1995,15 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                             List.zip parameters args
                             |> List.map (fun ((_, _, paramId), arg) ->
                                 arg, Map.tryFind paramId referenceParameters, Set.contains paramId readOnlyBufferFormals)
+                        | Some (Callee.Intrinsic { Module = IntrinsicModule.Sys; Operation = "write" }, args) ->
+                            args
+                            |> List.mapi (fun ordinal arg ->
+                                let isReadOnlyBorrow =
+                                    ordinal = 1
+                                    && (match Map.tryFind arg reachableNodes with
+                                        | Some { Kind = SemanticKind.StringByteBorrow _ } -> true
+                                        | _ -> false)
+                                arg, None, isReadOnlyBorrow)
                         | _ -> node.Children |> List.map (fun arg -> arg, None, false)
                     supplied
                     |> List.fold (fun (s: Map<TypeIdentity, ValueRange>) (argId, declared, isReadOnlyParam) ->
