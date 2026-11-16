@@ -419,6 +419,7 @@
     <Compile Include="Nanopass\ProgramInitializationOrder.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
     <Compile Include="Nanopass\CallableApplications.fs" />
+    <Compile Include="Nanopass\RegionReleaseConstruction.fs" />
     <Compile Include="Nanopass\ClosureElaboration.fs" />
     <Compile Include="Nanopass\ClosureEnvironmentElaboration.fs" />
     <Compile Include="Nanopass\CallableDispatchElaboration.fs" />
@@ -481,6 +482,7 @@
     <Compile Include="Nanopass\EnvironmentFactoryResults.fs" />
     <Compile Include="Nanopass\ClosureEnvironmentSettlement.fs" />
     <Compile Include="Nanopass\LazyRuntime.fs" />
+    <Compile Include="Nanopass\AsyncAndRegionSettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ProgramStorage.fs" />
     <Compile Include="Baker\Recipes\CallableBranchRecipes.fs" />
     <Compile Include="Nanopass\CallableBranchSettlement.fs" />

@@ -1207,6 +1207,147 @@ and mapContinuationRegion (value: S.ContinuationRegion) : Fidelity.PSG.Continuat
         Alignment = value.Alignment
     } : Fidelity.PSG.ContinuationRegion)
 
+and mapAsyncActivation (value: S.AsyncActivation) : Fidelity.PSG.AsyncActivation =
+    ({
+        Site = nodeId value.Site
+        Formation = nodeId value.Formation
+        ResultTarget = nodeId value.ResultTarget
+        CompletionTarget = nodeId value.CompletionTarget
+        Obligations = (value.Obligations |> List.map (fun x -> nodeId x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.AsyncActivation)
+
+and mapAsyncFormation (value: S.AsyncFormation) : Fidelity.PSG.AsyncFormation =
+    ({
+        Formation = nodeId value.Formation
+        Callable = nodeId value.Callable
+        Body = nodeId value.Body
+        CapturedBindings = (value.CapturedBindings |> List.map (fun x -> nodeId x))
+        ResultType = freeze value.ResultType
+        ResultStorage = nodeId value.ResultStorage
+        Frame = nodeId value.Frame
+        LifetimeScope = nodeId value.LifetimeScope
+        CompletionProtocol = nodeId value.CompletionProtocol
+        Obligations = (value.Obligations |> List.map (fun x -> nodeId x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.AsyncFormation)
+
+and mapAsyncOrchestration (value: S.AsyncOrchestration) : Fidelity.PSG.AsyncOrchestration =
+    ({
+        Site = nodeId value.Site
+        Mode = mapAsyncOrchestrationMode value.Mode
+        Children = (value.Children |> List.map (fun x -> nodeId x))
+        WorkDependencies = (value.WorkDependencies |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, nodeId t1))))
+        ResultOrdering = (value.ResultOrdering |> List.map (fun x -> (let (t0, t1) = x in (t0, nodeId t1))))
+        JoinCondition = nodeId value.JoinCondition
+        ResultStorage = nodeId value.ResultStorage
+        ResultCapacity = value.ResultCapacity
+        ElementStride = value.ElementStride
+        LifetimeScope = nodeId value.LifetimeScope
+        SynchronizationObligations = (value.SynchronizationObligations |> List.map (fun x -> nodeId x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.AsyncOrchestration)
+
+and mapAsyncOrchestrationMode (value: S.AsyncOrchestrationMode) : Fidelity.PSG.AsyncOrchestrationMode =
+    match value with
+    | S.AsyncOrchestrationMode.Parallel -> Fidelity.PSG.AsyncOrchestrationMode.Parallel
+    | S.AsyncOrchestrationMode.Sequential -> Fidelity.PSG.AsyncOrchestrationMode.Sequential
+
+and mapAsyncSuspension (value: S.AsyncSuspension) : Fidelity.PSG.AsyncSuspension =
+    ({
+        Site = nodeId value.Site
+        Formation = nodeId value.Formation
+        Frame = nodeId value.Frame
+        StateOrdinal = value.StateOrdinal
+        Delimiter = nodeId value.Delimiter
+        Continuation = nodeId value.Continuation
+        AwaitedSource = nodeId value.AwaitedSource
+        LiveSlots = (value.LiveSlots |> List.map (fun x -> nodeId x))
+        InitializedSlots = (value.InitializedSlots |> Set.map (fun x -> nodeId x))
+        BindResumeTarget = nodeId value.BindResumeTarget
+        CompletionTarget = nodeId value.CompletionTarget
+        CleanupTarget = nodeId value.CleanupTarget
+        SpanningRetentions = (value.SpanningRetentions |> List.map (fun x -> mapAsyncSuspensionSpanningRetention x))
+        Obligations = (value.Obligations |> List.map (fun x -> nodeId x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.AsyncSuspension)
+
+and mapAsyncSuspensionSpanningRetention (value: S.AsyncSuspensionSpanningRetention) : Fidelity.PSG.AsyncSuspensionSpanningRetention =
+    ({
+        Binding = nodeId value.Binding
+        BackingRegion = nodeId value.BackingRegion
+        RetainedUntil = nodeId value.RetainedUntil
+        InvalidatedBy = (value.InvalidatedBy |> List.map (fun x -> nodeId x))
+        RetirementCheck = nodeId value.RetirementCheck
+    } : Fidelity.PSG.AsyncSuspensionSpanningRetention)
+
+and mapRegionAllocation (value: S.RegionAllocation) : Fidelity.PSG.RegionAllocation =
+    ({
+        Region = nodeId value.Region
+        SpacePlacement = nodeId value.SpacePlacement
+        ByteExtent = value.ByteExtent
+        Capacity = value.Capacity
+        Alignment = value.Alignment
+        LifetimeScope = nodeId value.LifetimeScope
+        LifetimeDepth = value.LifetimeDepth
+        AllocatedValues = (value.AllocatedValues |> List.map (fun x -> nodeId x))
+        ScopeExitPaths = (value.ScopeExitPaths |> List.map (fun x -> nodeId x))
+        ScopeExitReleases = (value.ScopeExitReleases |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, nodeId t1))))
+        Obligations = (value.Obligations |> List.map (fun x -> nodeId x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.RegionAllocation)
+
+and mapRegionCallPassing (value: S.RegionCallPassing) : Fidelity.PSG.RegionCallPassing =
+    ({
+        Site = nodeId value.Site
+        Call = nodeId value.Call
+        ParameterOrdinal = value.ParameterOrdinal
+        Region = nodeId value.Region
+        Mode = mapRegionOwnershipMode value.Mode
+        AllocationProvenance = nodeId value.AllocationProvenance
+        CallerLifetimeScope = nodeId value.CallerLifetimeScope
+        CallerLifetimeDepth = value.CallerLifetimeDepth
+        CalleeLifetimeScope = nodeId value.CalleeLifetimeScope
+        CalleeLifetimeDepth = value.CalleeLifetimeDepth
+        PermitCalleeRelease = value.PermitCalleeRelease
+        CalleeReleases = (value.CalleeReleases |> List.map (fun x -> nodeId x))
+        Obligations = (value.Obligations |> List.map (fun x -> nodeId x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.RegionCallPassing)
+
+and mapRegionCopyEndpoint (value: S.RegionCopyEndpoint) : Fidelity.PSG.RegionCopyEndpoint =
+    ({
+        Site = nodeId value.Site
+        Kind = mapRegionCopyKind value.Kind
+        EscapingValue = nodeId value.EscapingValue
+        SourceRegion = nodeId value.SourceRegion
+        SourceView = nodeId value.SourceView
+        SourceByteExtent = value.SourceByteExtent
+        SourceCapacity = value.SourceCapacity
+        SourceAlignment = value.SourceAlignment
+        SourceLifetimeScope = nodeId value.SourceLifetimeScope
+        SourceLifetimeDepth = value.SourceLifetimeDepth
+        DestinationRegion = (value.DestinationRegion |> Option.map (fun x -> nodeId x))
+        DestinationStorage = nodeId value.DestinationStorage
+        DestinationByteExtent = value.DestinationByteExtent
+        DestinationCapacity = value.DestinationCapacity
+        DestinationAlignment = value.DestinationAlignment
+        DestinationLifetimeScope = nodeId value.DestinationLifetimeScope
+        DestinationLifetimeDepth = value.DestinationLifetimeDepth
+        EscapeDischargeObligation = nodeId value.EscapeDischargeObligation
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.RegionCopyEndpoint)
+
+and mapRegionCopyKind (value: S.RegionCopyKind) : Fidelity.PSG.RegionCopyKind =
+    match value with
+    | S.RegionCopyKind.CopyOut -> Fidelity.PSG.RegionCopyKind.CopyOut
+    | S.RegionCopyKind.CopyTo -> Fidelity.PSG.RegionCopyKind.CopyTo
+
+and mapRegionOwnershipMode (value: S.RegionOwnershipMode) : Fidelity.PSG.RegionOwnershipMode =
+    match value with
+    | S.RegionOwnershipMode.Owned -> Fidelity.PSG.RegionOwnershipMode.Owned
+    | S.RegionOwnershipMode.Borrowed -> Fidelity.PSG.RegionOwnershipMode.Borrowed
+
 and mapContinuationSlot (value: S.ContinuationSlot) : Fidelity.PSG.ContinuationSlot =
     ({
         Source = nodeId value.Source

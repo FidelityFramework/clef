@@ -3899,6 +3899,151 @@ type ContinuationFrame = {
     Obligations: NodeId list
 }
 
+/// Settled deferred async formation (A-01). The formation is a coexponential
+/// carrier: captures, frame, result storage, lifetime and completion protocol
+/// are settled here, apart from any activation of the computation.
+type AsyncFormation = {
+    Formation: NodeId
+    Callable: NodeId
+    Body: NodeId
+    CapturedBindings: NodeId list
+    ResultType: NativeType
+    ResultStorage: NodeId
+    Frame: NodeId
+    LifetimeScope: NodeId
+    CompletionProtocol: NodeId
+    Obligations: NodeId list
+    Participants: Participant list
+}
+
+/// Settled async activation site (A-01) referencing a distinct formation.
+type AsyncActivation = {
+    Site: NodeId
+    Formation: NodeId
+    ResultTarget: NodeId
+    CompletionTarget: NodeId
+    Obligations: NodeId list
+    Participants: Participant list
+}
+
+/// Retention premise for a borrowed binding live across a suspension cut
+/// (A-02, Farscape #220 CCS8424 RetainedUntil / CCS8425 InvalidatedBy).
+type AsyncSuspensionSpanningRetention = {
+    Binding: NodeId
+    BackingRegion: NodeId
+    RetainedUntil: NodeId
+    InvalidatedBy: NodeId list
+    RetirementCheck: NodeId
+}
+
+/// Settled let!/do! suspension cut (A-02): state ordinal, delimiter,
+/// continuation, frame liveness and bind/resume/completion/cleanup targets.
+type AsyncSuspension = {
+    Site: NodeId
+    Formation: NodeId
+    Frame: NodeId
+    StateOrdinal: int
+    Delimiter: NodeId
+    Continuation: NodeId
+    AwaitedSource: NodeId
+    LiveSlots: NodeId list
+    InitializedSlots: Set<NodeId>
+    BindResumeTarget: NodeId
+    CompletionTarget: NodeId
+    CleanupTarget: NodeId
+    SpanningRetentions: AsyncSuspensionSpanningRetention list
+    Obligations: NodeId list
+    Participants: Participant list
+}
+
+[<RequireQualifiedAccess>]
+type AsyncOrchestrationMode =
+    | Parallel
+    | Sequential
+
+/// Settled Async.Parallel / Async.Sequential orchestration (A-03).
+type AsyncOrchestration = {
+    Site: NodeId
+    Mode: AsyncOrchestrationMode
+    Children: NodeId list
+    WorkDependencies: (NodeId * NodeId) list
+    ResultOrdering: (int * NodeId) list
+    JoinCondition: NodeId
+    ResultStorage: NodeId
+    ResultCapacity: int
+    ElementStride: int
+    LifetimeScope: NodeId
+    SynchronizationObligations: NodeId list
+    Participants: Participant list
+}
+
+/// Settled region allocation authority and scope-exit releases (A-04).
+type RegionAllocation = {
+    Region: NodeId
+    SpacePlacement: NodeId
+    ByteExtent: int64
+    Capacity: int64
+    Alignment: int
+    LifetimeScope: NodeId
+    LifetimeDepth: int
+    AllocatedValues: NodeId list
+    ScopeExitPaths: NodeId list
+    ScopeExitReleases: (NodeId * NodeId) list
+    Obligations: NodeId list
+    Participants: Participant list
+}
+
+[<RequireQualifiedAccess>]
+type RegionOwnershipMode =
+    | Owned
+    | Borrowed
+
+/// Settled per-call region ownership and borrowing provenance (A-05).
+type RegionCallPassing = {
+    Site: NodeId
+    Call: NodeId
+    ParameterOrdinal: int
+    Region: NodeId
+    Mode: RegionOwnershipMode
+    AllocationProvenance: NodeId
+    CallerLifetimeScope: NodeId
+    CallerLifetimeDepth: int
+    CalleeLifetimeScope: NodeId
+    CalleeLifetimeDepth: int
+    PermitCalleeRelease: bool
+    CalleeReleases: NodeId list
+    Obligations: NodeId list
+    Participants: Participant list
+}
+
+[<RequireQualifiedAccess>]
+type RegionCopyKind =
+    | CopyOut
+    | CopyTo
+
+/// Settled region escape copyOut/copyTo transfer endpoint (A-06).
+type RegionCopyEndpoint = {
+    Site: NodeId
+    Kind: RegionCopyKind
+    EscapingValue: NodeId
+    SourceRegion: NodeId
+    SourceView: NodeId
+    SourceByteExtent: int64
+    SourceCapacity: int64
+    SourceAlignment: int
+    SourceLifetimeScope: NodeId
+    SourceLifetimeDepth: int
+    DestinationRegion: NodeId option
+    DestinationStorage: NodeId
+    DestinationByteExtent: int64
+    DestinationCapacity: int64
+    DestinationAlignment: int
+    DestinationLifetimeScope: NodeId
+    DestinationLifetimeDepth: int
+    EscapeDischargeObligation: NodeId
+    Participants: Participant list
+}
+
 /// Complete source alternatives at one sequence value occurrence. This is
 /// flow evidence, not permission to substitute an environment instance or an
 /// admitted common physical carrier. Unknown alternatives prevent elision.
@@ -4722,6 +4867,13 @@ type WitnessLiveCodata = {
     SequenceTemplateCopies: Map<NodeId, SequenceTemplateCopy>
     ContinuationStorage: Map<NodeId, NodeId>
     ContinuationRegions: Map<NodeId, ContinuationRegion>
+    AsyncFormations: Map<NodeId, AsyncFormation>
+    AsyncActivations: Map<NodeId, AsyncActivation>
+    AsyncSuspensions: Map<NodeId, AsyncSuspension>
+    AsyncOrchestrations: Map<NodeId, AsyncOrchestration>
+    RegionAllocations: Map<NodeId, RegionAllocation>
+    RegionCallPassings: Map<NodeId, RegionCallPassing>
+    RegionCopyEndpoints: Map<NodeId, RegionCopyEndpoint>
     SequenceInitializers: Map<NodeId, (NodeId * NodeId) list>
     SequenceDestinations: Map<NodeId, NodeId>
     SequenceCurrentReads: Set<NodeId>
@@ -4831,6 +4983,14 @@ type Codata = {
     ContinuationStorage: Map<NodeId, NodeId>
     /// Exact allocation occurrence -> owned byte region within a parent frame.
     ContinuationRegions: Map<NodeId, ContinuationRegion>
+    /// Settled A-01..A-06 async continuation and region ownership rows.
+    AsyncFormations: Map<NodeId, AsyncFormation>
+    AsyncActivations: Map<NodeId, AsyncActivation>
+    AsyncSuspensions: Map<NodeId, AsyncSuspension>
+    AsyncOrchestrations: Map<NodeId, AsyncOrchestration>
+    RegionAllocations: Map<NodeId, RegionAllocation>
+    RegionCallPassings: Map<NodeId, RegionCallPassing>
+    RegionCopyEndpoints: Map<NodeId, RegionCopyEndpoint>
     SequenceInitializers: Map<NodeId, (NodeId * NodeId) list>
     /// Caller-owned destination for a known sequence factory constructor.
     SequenceDestinations: Map<NodeId, NodeId>
@@ -4897,6 +5057,13 @@ module Codata =
         SequenceTemplateCopies = Map.empty
         ContinuationStorage = Map.empty
         ContinuationRegions = Map.empty
+        AsyncFormations = Map.empty
+        AsyncActivations = Map.empty
+        AsyncSuspensions = Map.empty
+        AsyncOrchestrations = Map.empty
+        RegionAllocations = Map.empty
+        RegionCallPassings = Map.empty
+        RegionCopyEndpoints = Map.empty
         SequenceInitializers = Map.empty
         SequenceDestinations = Map.empty
         SequenceCurrentReads = Set.empty

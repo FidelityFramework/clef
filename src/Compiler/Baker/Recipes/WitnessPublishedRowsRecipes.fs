@@ -84,6 +84,13 @@ let private freezeCodata claim (facts: WitnessLiveCodata) : Fidelity.PSG.Codata 
       SequenceTemplateCopies = rows mapSequenceTemplateCopy facts.SequenceTemplateCopies
       ContinuationStorage = ids facts.ContinuationStorage
       ContinuationRegions = rows mapContinuationRegion facts.ContinuationRegions
+      AsyncFormations = rows mapAsyncFormation facts.AsyncFormations
+      AsyncActivations = rows mapAsyncActivation facts.AsyncActivations
+      AsyncSuspensions = rows mapAsyncSuspension facts.AsyncSuspensions
+      AsyncOrchestrations = rows mapAsyncOrchestration facts.AsyncOrchestrations
+      RegionAllocations = rows mapRegionAllocation facts.RegionAllocations
+      RegionCallPassings = rows mapRegionCallPassing facts.RegionCallPassings
+      RegionCopyEndpoints = rows mapRegionCopyEndpoint facts.RegionCopyEndpoints
       SequenceInitializers = rows (List.map (fun (slot, value) -> nodeId slot, nodeId value)) facts.SequenceInitializers
       SequenceDestinations = ids facts.SequenceDestinations
       SequenceCurrentReads = Set.map nodeId facts.SequenceCurrentReads

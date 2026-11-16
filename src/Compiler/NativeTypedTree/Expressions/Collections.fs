@@ -650,7 +650,7 @@ let checkLazy
     (innerExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
-    let innerNode = checkExpr { env with EnclosingSeqExpr = None } builder innerExpr
+    let innerNode = checkExpr { env with EnclosingSeqExpr = None; EnclosingAsyncExpr = None } builder innerExpr
     let lazyType = NativeTypes.Types.mkLazyType innerNode.Type
 
     // The ignored thunk formal is not a source binder. The body was checked
@@ -707,7 +707,7 @@ let checkSeq
     let seqType = NativeTypes.Types.mkSeqType elementType
     let owner = builder.Create(
         SemanticKind.SeqExpr(NodeId -1, []), seqType, range, children = [])
-    let bodyEnv = { env with EnclosingSeqExpr = Some owner.Id }
+    let bodyEnv = { env with EnclosingSeqExpr = Some owner.Id; EnclosingAsyncExpr = None }
     let bodyNode = checkExpr bodyEnv builder bodyExpr
 
     // Capture analysis: find VarRefs in body that are NOT local to the seq
@@ -809,3 +809,210 @@ let checkYieldBang
             Types.unitType,
             range,
             children = [seqNode.Id])
+
+//-------------------------------------------------------------------------
+// Async Computation Expressions (A-01, A-02)
+//-------------------------------------------------------------------------
+
+/// Check async expression: async { ... }
+let checkAsync
+    (checkExpr: CheckExprFn)
+    (computeCaptures: NodeBuilder -> TypeEnv -> NodeId -> Set<string> -> CaptureInfo list)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (bodyExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let elementType = freshTypeVar range
+    let asyncType = NativeTypes.Types.mkAsyncType elementType
+    let owner =
+        builder.Create(
+            SemanticKind.Sequential [],
+            asyncType,
+            range,
+            children = [])
+    let bodyEnv = { env with EnclosingAsyncExpr = Some(owner.Id, elementType); EnclosingSeqExpr = None }
+    let bodyNode = checkExpr bodyEnv builder bodyExpr
+    addConstraint (Constraint.Equals(elementType, bodyNode.Type, range)) env
+    builder.SetType(owner.Id, NativeTypes.Types.mkAsyncType (applySubst bodyNode.Type))
+
+    let captures = computeCaptures builder env bodyNode.Id Set.empty
+
+    // The formation is deferred: the body is the body of a genuine callable.
+    // Forming the computation evaluates no part of the body; an activation
+    // (Async.RunSynchronously / Start / StartImmediate) or a bind applies it.
+    let formalNode =
+        builder.Create(
+            SemanticKind.PatternBinding "_async_unit", Types.unitType,
+            { range with End = range.Start }, arena = env.CurrentArena)
+    let callableNode =
+        builder.Create(
+            SemanticKind.Lambda([("_async_unit", Types.unitType, formalNode.Id)], bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.RegularClosure),
+            NativeType.TFun(Types.unitType, elementType),
+            range,
+            children = [formalNode.Id; bodyNode.Id])
+    builder.SetParent(formalNode.Id, callableNode.Id)
+    builder.SetParent(bodyNode.Id, callableNode.Id)
+    builder.SetMetadata(callableNode.Id, ClosureMetadata.LambdaExpression, MetadataValue.Bool true) |> ignore
+    builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
+
+    // Protocol anchors owned by the formation; their identities are the
+    // result-storage, lifetime, completion, frame, state and current-state
+    // participants of the published AsyncFormation and ContinuationFrame rows.
+    let resultStorageNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+    let lifetimeScopeNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+    let completionProtocolNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+    let frameNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+    let stateNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+    let currentNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+
+    let ownerChildren =
+        [ resultStorageNode.Id
+          lifetimeScopeNode.Id
+          completionProtocolNode.Id
+          frameNode.Id
+          stateNode.Id
+          currentNode.Id
+          callableNode.Id ]
+    for childId in ownerChildren do
+        builder.SetParent(childId, owner.Id)
+
+    builder.CompleteNode(owner.Id, SemanticKind.Sequential ownerChildren, ownerChildren) |> ignore
+    builder.SetMetadata(owner.Id, "Async.Formation", MetadataValue.Bool true) |> ignore
+    builder.SetMetadata(owner.Id, "Async.HasCaptures", MetadataValue.Bool (not captures.IsEmpty)) |> ignore
+    builder.Nodes[owner.Id]
+
+let private rejectAsyncOwner (env: TypeEnv) (builder: NodeBuilder) (range: SourceRange) operation =
+    let message = $"The '{operation}' form has no admitted native computation owner"
+    addDiagnostic {
+        Severity = NativeDiagnosticSeverity.Error
+        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+        Message = message
+        Range = range
+        RelatedNodes = []
+        Reachability = ReachabilityContext.Unknown
+    } env
+    builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+
+/// Check return: return value
+let checkReturn
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    match env.EnclosingAsyncExpr with
+    | None ->
+        rejectAsyncOwner env builder range "return"
+    | Some (_, elementType) ->
+        let valueNode = checkExpr env builder valueExpr
+        addConstraint (Constraint.Equals(elementType, valueNode.Type, range)) env
+        valueNode
+
+/// Check return!: return! computation
+let checkReturnBang
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (compExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    match env.EnclosingAsyncExpr with
+    | None ->
+        rejectAsyncOwner env builder range "return!"
+    | Some (_, elementType) ->
+        let rhsNode = checkExpr env builder compExpr
+        addConstraint (Constraint.Equals(rhsNode.Type, NativeTypes.Types.mkAsyncType elementType, range)) env
+        let delimiterNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let bindResumeTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let completionTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let cleanupTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let contPlaceholderNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let awaitInfo : IntrinsicInfo =
+            { Module = IntrinsicModule.Lazy
+              Operation = "Await"
+              Category = IntrinsicCategory.Pure
+              FullName = "Async.Await" }
+        let anchorChildren =
+            [ delimiterNode.Id
+              bindResumeTargetNode.Id
+              completionTargetNode.Id
+              cleanupTargetNode.Id
+              contPlaceholderNode.Id ]
+        let awaitIntrinsic =
+            builder.Create(
+                SemanticKind.Intrinsic awaitInfo,
+                NativeType.TFun(rhsNode.Type, elementType),
+                range,
+                children = anchorChildren)
+        for childId in anchorChildren do
+            builder.SetParent(childId, awaitIntrinsic.Id)
+        let awaitChildren = [ awaitIntrinsic.Id; rhsNode.Id ]
+        let awaitSite =
+            builder.Create(
+                SemanticKind.Application(awaitIntrinsic.Id, [rhsNode.Id]),
+                elementType,
+                range,
+                children = awaitChildren)
+        for childId in awaitChildren do
+            builder.SetParent(childId, awaitSite.Id)
+        builder.Nodes[awaitSite.Id]
+
+/// Check do!: do! computation
+let checkDoBang
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (compExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    match env.EnclosingAsyncExpr with
+    | None ->
+        let message = "The 'do!' form has no admitted native bind or suspension semantics"
+        addDiagnostic {
+            Severity = NativeDiagnosticSeverity.Error
+            Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+            Message = message
+            Range = range
+            RelatedNodes = []
+            Reachability = ReachabilityContext.Unknown
+        } env
+        builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+    | Some _ ->
+        let rhsNode = checkExpr env builder compExpr
+        addConstraint (Constraint.Equals(rhsNode.Type, NativeTypes.Types.mkAsyncType Types.unitType, range)) env
+        let delimiterNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let bindResumeTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let completionTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let cleanupTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let contPlaceholderNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range)
+        let awaitInfo : IntrinsicInfo =
+            { Module = IntrinsicModule.Lazy
+              Operation = "Await"
+              Category = IntrinsicCategory.Pure
+              FullName = "Async.Await" }
+        let anchorChildren =
+            [ delimiterNode.Id
+              bindResumeTargetNode.Id
+              completionTargetNode.Id
+              cleanupTargetNode.Id
+              contPlaceholderNode.Id ]
+        let awaitIntrinsic =
+            builder.Create(
+                SemanticKind.Intrinsic awaitInfo,
+                NativeType.TFun(rhsNode.Type, Types.unitType),
+                range,
+                children = anchorChildren)
+        for childId in anchorChildren do
+            builder.SetParent(childId, awaitIntrinsic.Id)
+        let awaitChildren = [ awaitIntrinsic.Id; rhsNode.Id ]
+        let awaitSite =
+            builder.Create(
+                SemanticKind.Application(awaitIntrinsic.Id, [rhsNode.Id]),
+                Types.unitType,
+                range,
+                children = awaitChildren)
+        for childId in awaitChildren do
+            builder.SetParent(childId, awaitSite.Id)
+        builder.Nodes[awaitSite.Id]

@@ -608,7 +608,7 @@ let private checkBindingInScope
         
         // PRD-13: Set this function as the enclosing function for nested bindings
         // This enables qualified names like "factorialTail_loop" for nested functions
-        let bodyEnv = { bodyEnvWithParams with EnclosingFunction = Some name; EnclosingSeqExpr = None }
+        let bodyEnv = { bodyEnvWithParams with EnclosingFunction = Some name; EnclosingSeqExpr = None; EnclosingAsyncExpr = None }
 
         // Check body with extended environment
         // For [<FidelityExtern>] bindings, the body is a placeholder (Unchecked.defaultof<T>)
@@ -853,12 +853,91 @@ let checkLetOrUse
     (range: SourceRange)
     : SemanticNode =
 
-    if letOrUse.IsBang || letOrUse.IsUse then
-        let message =
-            if letOrUse.IsBang then
-                let form = if letOrUse.IsUse then "use!" else "let!/and!"
-                $"The '{form}' form has no admitted native bind or suspension semantics"
-            else "Resource-use bindings require an admitted native resource lifecycle"
+    if letOrUse.IsBang && not letOrUse.IsUse then
+        match env.EnclosingAsyncExpr, letOrUse.Bindings with
+        | Some _, [binding] ->
+            let (SynBinding(_, _, _, _, _, _, _, headPat, returnInfo, rhsExpr, bindingRange, _, _)) = binding
+            let bindSourceRange = rangeToSourceRange bindingRange
+            let rhsNode = checkExpr env builder rhsExpr
+            let elemType =
+                match returnInfo with
+                | Some (SynBindingReturnInfo(typeName = synType)) -> resolveSynType env synType
+                | None ->
+                    let rec extractPatType (p: SynPat) =
+                        match p with
+                        | SynPat.Typed(_, synType, _) -> Some (resolveSynType env synType)
+                        | SynPat.Paren(inner, _) -> extractPatType inner
+                        | _ -> None
+                    match extractPatType headPat with
+                    | Some ty -> ty
+                    | None ->
+                        match applySubst rhsNode.Type with
+                        | NativeType.TApp(tc, [actualElem]) when Types.isAsyncTypeCon tc -> actualElem
+                        | _ -> freshTypeVar bindSourceRange
+            addConstraint (Constraint.Equals(rhsNode.Type, Types.mkAsyncType elemType, bindSourceRange)) env
+            let delimiterNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, bindSourceRange)
+            let bindResumeTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, bindSourceRange)
+            let completionTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, bindSourceRange)
+            let cleanupTargetNode = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, bindSourceRange)
+            let awaitInfo : IntrinsicInfo =
+                { Module = IntrinsicModule.Lazy
+                  Operation = "Await"
+                  Category = IntrinsicCategory.Pure
+                  FullName = "Async.Await" }
+            let anchorChildren =
+                [ delimiterNode.Id
+                  bindResumeTargetNode.Id
+                  completionTargetNode.Id
+                  cleanupTargetNode.Id ]
+            let awaitIntrinsic =
+                builder.Create(
+                    SemanticKind.Intrinsic awaitInfo,
+                    NativeType.TFun(rhsNode.Type, elemType),
+                    bindSourceRange,
+                    children = anchorChildren)
+            for childId in anchorChildren do
+                builder.SetParent(childId, awaitIntrinsic.Id)
+            let awaitChildren = [ awaitIntrinsic.Id; rhsNode.Id ]
+            let awaitSite =
+                builder.Create(
+                    SemanticKind.Application(awaitIntrinsic.Id, [rhsNode.Id]),
+                    elemType,
+                    bindSourceRange,
+                    children = awaitChildren)
+            for childId in awaitChildren do
+                builder.SetParent(childId, awaitSite.Id)
+            let bindName =
+                match getBindingHead env binding with
+                | BindingHead.Named name -> name
+                | BindingHead.Discard | BindingHead.Tuple -> "_"
+            let bindingNode =
+                builder.Create(
+                    SemanticKind.Binding(bindName, false, false, None),
+                    elemType,
+                    bindSourceRange,
+                    children = [awaitSite.Id])
+            builder.SetParent(awaitSite.Id, bindingNode.Id)
+            if letOrUse.IsFromSource then
+                recordSourceBinding true builder binding bindingNode false
+            let extendedEnv =
+                if bindName = "_" then env
+                else addBinding bindName elemType false (Some bindingNode.Id) false env
+            let contNode = checkExpr extendedEnv builder letOrUse.Body
+            let seqNode =
+                builder.Create(
+                    SemanticKind.Sequential [bindingNode.Id; contNode.Id],
+                    contNode.Type,
+                    range,
+                    children = [bindingNode.Id; contNode.Id])
+            builder.SetParent(bindingNode.Id, seqNode.Id)
+            builder.SetParent(contNode.Id, seqNode.Id)
+            seqNode
+        | _ ->
+            let message = "The 'let!/and!' form has no admitted native bind or suspension semantics"
+            addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct letOrUse.Range message env
+            builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+    elif letOrUse.IsUse then
+        let message = "Resource-use bindings require an admitted native resource lifecycle"
         addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct letOrUse.Range message env
         builder.Create(SemanticKind.Error message, NativeType.TError message, range)
     else

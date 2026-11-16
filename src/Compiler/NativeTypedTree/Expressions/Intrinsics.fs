@@ -278,8 +278,8 @@ let private resolveParseOp (op: string) (_range: SourceRange) : IntrinsicResolut
     | unknown ->
         UnknownOperation $"Unknown Parse intrinsic: Parse.{unknown}. Available: int, int64, float"
 
-/// Resolve Format.* operations (numeric → string)
-let private resolveFormatOp (op: string) (_range: SourceRange) : IntrinsicResolution =
+/// Resolve Format.* operations (numeric -> string)
+let resolveFormatOp (op: string) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Format." + op
     // The formatters the native library provides; the source type is read from the one spelling
     // table (sequence CS-5).
@@ -461,6 +461,66 @@ let private resolveLazyOp (op: string) (range: SourceRange) : IntrinsicResolutio
         Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
     | unknown ->
         UnknownOperation $"Unknown Lazy intrinsic: Lazy.{unknown}. Available: create, force, isValueCreated"
+
+/// Resolve Console.* operations when not shadowed by an explicit Console binding.
+let resolveConsoleOp (op: string) (_range: SourceRange) : IntrinsicResolution =
+    let fullName = "Console." + op
+    match op with
+    | "write" | "writeln" ->
+        let ty = NativeType.TFun(Types.stringType, Types.unitType)
+        Resolved (mkIntrinsic IntrinsicModule.Format op IntrinsicCategory.Pure fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown Console intrinsic: Console.{unknown}. Available: write, writeln"
+
+/// Resolve Async.* operations (A-01..A-03: delimited-continuation activation and orchestration).
+let resolveAsyncOp (op: string) (range: SourceRange) : IntrinsicResolution =
+    let fullName = "Async." + op
+    let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
+    let tyParam = NativeType.TVar tyParamSpec
+    let asyncType = Types.mkAsyncType tyParam
+    match op with
+    | "RunSynchronously" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(asyncType, tyParam))
+        Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
+    | "Start" | "StartImmediate" ->
+        let ty = NativeType.TFun(Types.mkAsyncType Types.unitType, Types.unitType)
+        Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
+    | "Parallel" | "Sequential" ->
+        let arrayOfAsync = NativeType.TApp(Types.arrayTyCon, [asyncType])
+        let arrayOfResult = NativeType.TApp(Types.arrayTyCon, [tyParam])
+        let resultAsync = Types.mkAsyncType arrayOfResult
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(arrayOfAsync, resultAsync))
+        Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
+    | "Sleep" ->
+        let ty = NativeType.TFun(Types.intType, Types.mkAsyncType Types.unitType)
+        Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown Async operation: Async.{unknown}. Available: RunSynchronously, Start, StartImmediate, Parallel, Sequential, Sleep"
+
+/// Resolve Region.* operations (A-04..A-06: deterministic region allocation, release, and copyOut/copyTo).
+let resolveRegionOp (op: string) (range: SourceRange) : IntrinsicResolution =
+    let fullName = "Region." + op
+    let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
+    let tyParam = NativeType.TVar tyParamSpec
+    let arrayType = NativeType.TApp(Types.arrayTyCon, [tyParam])
+    match op with
+    | "create" ->
+        let ty = NativeType.TFun(Types.intType, Types.regionType)
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "alloc" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(Types.regionType, NativeType.TFun(Types.intType, arrayType)))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "release" ->
+        let ty = NativeType.TFun(Types.regionType, Types.unitType)
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "copyOut" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(arrayType, NativeType.TFun(Types.intType, arrayType)))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "copyTo" ->
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(arrayType, NativeType.TFun(Types.regionType, NativeType.TFun(Types.intType, arrayType))))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown Region operation: Region.{unknown}. Available: create, alloc, release, copyOut, copyTo"
 
 /// Resolve Seq.* operations (PRD-15: Sequence generation and consumption)
 let private resolveSeqOp (op: string) (range: SourceRange) : IntrinsicResolution =
@@ -1454,7 +1514,14 @@ module RangeSources =
               "blit"; "fill"; "get"; "length"; "isEmpty"; "contains"; "exists"; "forall"; "iter"; "iteri"
               "fold"; "sum"; "max"; "min"; "tryFind"; "find"; "tryFindIndex"; "findIndex"; "head"; "last"
               "ofArray"; "slice" ]
-        info.Module = IntrinsicModule.Array && List.contains info.Operation sameKeyOperations
+        (info.Module = IntrinsicModule.Array && List.contains info.Operation sameKeyOperations)
+        || info.FullName = "Region.alloc"
+        || info.FullName = "Region.copyOut"
+        || info.FullName = "Region.copyTo"
+        || info.FullName = "Async.RunSynchronously"
+        || info.FullName = "Async.Await"
+        || info.FullName = "Async.Parallel"
+        || info.FullName = "Async.Sequential"
 
     /// The array intrinsics whose elements are a function value's results, with the position
     /// of that function among the arguments.

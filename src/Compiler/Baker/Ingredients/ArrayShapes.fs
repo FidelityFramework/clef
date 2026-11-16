@@ -152,6 +152,40 @@ let reader (graph:SemanticGraph) =
         | Some {Kind=SemanticKind.Application _} ->
             match intrinsicApplication graph id with
             | Some({Module=IntrinsicModule.Array;Operation=("zeroCreate"|"create"|"init")},value::_,_) -> count value
+            | Some({FullName="Region.alloc"},[_region;value],_) -> count value
+            | Some({FullName="Region.copyOut"},[source;_count],_) -> follow seen source |> add
+            | Some({FullName="Region.copyTo"},[source;_dstRegion;_count],_) -> follow seen source |> add
+            | Some({FullName=("Async.Parallel"|"Async.Sequential")},[source],_) -> follow seen source |> add
+            | Some({FullName=("Async.RunSynchronously"|"Async.Await")},comp::_,_) ->
+                let rec followAsync (seenAsync: Set<NodeId>) aid =
+                    if seenAsync.Contains aid then None else
+                    let seenAsync = seenAsync.Add aid
+                    match graph.Nodes.TryFind aid with
+                    | Some n when n.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+                        let rec bodyOf depth (cid: NodeId) =
+                            if depth > 4 then None
+                            else
+                                match graph.Nodes.TryFind cid with
+                                | Some { Kind = SemanticKind.Lambda(_, body, _, _, _) } -> Some body
+                                | Some { Kind = SemanticKind.ClosureValue(implementation, _) } -> bodyOf (depth + 1) implementation
+                                | Some { Kind = SemanticKind.VarRef(_, Some definition) } -> bodyOf (depth + 1) definition
+                                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [ value ] } -> bodyOf (depth + 1) value
+                                | _ -> None
+                        List.tryLast n.Children |> Option.bind (bodyOf 0) |> Option.bind (follow seen)
+                    | Some { Kind = SemanticKind.VarRef(_, Some defId) } -> followAsync seenAsync defId
+                    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [rhs] } -> followAsync seenAsync rhs
+                    | Some { Kind = SemanticKind.Application _ } ->
+                        match intrinsicApplication graph aid with
+                        | Some({FullName=("Async.Parallel"|"Async.Sequential")},[source],_) ->
+                            follow seen source |> Option.map (fun extent -> { extent with Participants = extent.Participants.Add aid })
+                        | _ ->
+                            match flow.Calls.TryFind aid with
+                            | Some {Complete=true;Unknown=false;Targets=targets} when not targets.IsEmpty ->
+                                targets |> List.map(fun target -> followAsync seenAsync target.Body |> Option.map(fun extent ->
+                                    {extent with Participants=Set.union extent.Participants (Set.ofList(target.Lambda::target.Body::target.Arguments))})) |> combine
+                            | _ -> None
+                    | _ -> None
+                followAsync Set.empty comp |> add
             | Some({Module=IntrinsicModule.Array;Operation=("sub" | "slice")},[_;_;value],_) -> count value
             | Some({Module=IntrinsicModule.Array;Operation=("ofArray" | "ofString")},[source],_) ->
                 follow seen source |> add

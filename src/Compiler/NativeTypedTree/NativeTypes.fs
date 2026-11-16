@@ -2181,6 +2181,32 @@ module Types =
     // Layout: fat pointer (ptr to memory region + remaining size)
     let arenaTyCon = { mkTypeConRef "Arena" 1 TypeLayout.FatPointer with ParamKinds = [ TypeParamKind.Measure ] }
 
+    // Coexponential async computation carrier (`Async<'T>`, A-01..A-03).
+    let asyncTyCon = mkNTUTypeConRefWithArity "Async" NTUKind.NTUptr 1 TypeLayout.PlatformWord
+    let mkAsyncType (elemType: NativeType) = NativeType.TApp(asyncTyCon, [elemType])
+    let isAsyncTypeCon (tc: TypeConRef) : bool =
+        tc.Name = asyncTyCon.Name && tc.Module = asyncTyCon.Module && tc.ParamKinds = asyncTyCon.ParamKinds
+    let tryGetAsyncElement (ty: NativeType) : NativeType option =
+        match ty with
+        | NativeType.TApp(tc, [elem]) when isAsyncTypeCon tc -> Some elem
+        | _ -> None
+
+    // Deterministic memory region handle (`Region`, A-04..A-06).
+    let regionTyCon = mkNTUTypeConRefWithArity "Region" NTUKind.NTUptr 0 TypeLayout.PlatformWord
+    let regionType = NativeType.TApp(regionTyCon, [])
+    let isRegionTypeCon (tc: TypeConRef) : bool =
+        tc.Name = regionTyCon.Name && tc.Module = regionTyCon.Module && tc.ParamKinds = regionTyCon.ParamKinds
+
+    // Settled interior region-allocated pointer/buffer handle (`Ptr<'T, 'Region, 'Access>`).
+    let ptrTyCon = mkNTUTypeConRefWithArity "Ptr" NTUKind.NTUarray 1 TypeLayout.FatPointer
+    let mkPtrType (elemType: NativeType) = NativeType.TApp(ptrTyCon, [elemType])
+    let isPtrTypeCon (tc: TypeConRef) : bool =
+        tc.Name = ptrTyCon.Name && tc.Module = ptrTyCon.Module
+    let tryGetPtrElement (ty: NativeType) : NativeType option =
+        match ty with
+        | NativeType.TApp(tc, elem :: _) when isPtrTypeCon tc -> Some elem
+        | _ -> None
+
     // Expr type constructor (arity 1 - for quoted expressions)
     // Usage: NativeType.TApp(Types.exprTyCon, [innerType])
     let exprTyCon = mkTypeConRef "Expr" 1 (TypeLayout.Inline(-1, -1))

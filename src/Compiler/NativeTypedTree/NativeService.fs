@@ -1100,6 +1100,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Ordinary local snapshots read at a source-proved first demand. The
     // complete family rewrite precedes capture conversion and range analysis.
     let finalGraph = Clef.Compiler.Nanopass.BindingDemand.normalize finalGraph
+    // A scoped region without a source release receives a constructed release
+    // on every exit path of its owning scope before capture and range settlement.
+    let finalGraph = Clef.Compiler.Nanopass.RegionReleaseConstruction.normalize finalGraph
     // Known non-escaping named functions carry admitted immutable captures as
     // explicit parameters. Mutable capture storage remains a separate contract.
     let finalGraph = Clef.Compiler.Nanopass.ClosureElaboration.normalize finalGraph
@@ -1313,6 +1316,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph, premiseDiagnostics = Clef.Compiler.Nanopass.PremiseEstablishment.normalize finalGraph
     let finalGraph, lazies =
         Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted physicalAdmitted finalGraph
+    let finalGraph, asyncAndRegions =
+        Clef.Compiler.Nanopass.AsyncAndRegionSettlement.settleWhenSourceAdmitted physicalAdmitted finalGraph
     let finalGraph, initializationOrderDiagnostics, programInitializationOrders =
         Clef.Compiler.Nanopass.ProgramInitializationOrder.settleWithAccounts finalGraph
     let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
@@ -1374,6 +1379,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Escape.analyze finalGraph
         |> fun facts -> environments.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
         |> fun facts -> sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
+        |> fun facts -> asyncAndRegions.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
         |> fun facts -> lazies.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
         |> fun facts ->
             Escape.mutableCellResidences finalGraph mutableCallables.Storage
@@ -1428,13 +1434,22 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 WitnessPublishedRows = None
                 ProofDispatch = None
                 SSAAssignment = None
-                ContinuationFrames = sequences.Frames
+                ContinuationFrames =
+                    asyncAndRegions.Frames
+                    |> Map.fold (fun acc k v -> Map.add k v acc) sequences.Frames
                 SequenceOrigins = sequences.Origins
                 SequenceFlows = sequences.Flows
                 SequenceFamilies = sequences.Families
                 SequenceTemplateCopies = sequences.TemplateCopies
                 ContinuationStorage = sequences.Storage
                 ContinuationRegions = sequences.Regions
+                AsyncFormations = asyncAndRegions.Formations
+                AsyncActivations = asyncAndRegions.Activations
+                AsyncSuspensions = asyncAndRegions.Suspensions
+                AsyncOrchestrations = asyncAndRegions.Orchestrations
+                RegionAllocations = asyncAndRegions.RegionAllocations
+                RegionCallPassings = asyncAndRegions.RegionCallPassings
+                RegionCopyEndpoints = asyncAndRegions.RegionCopyEndpoints
                 SequenceInitializers = sequences.Initializers
                 SequenceDestinations = sequences.Destinations
                 SequenceCurrentReads = sequences.CurrentReads
@@ -1546,7 +1561,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ mutableCellResidenceDiagnostics @ aggregateDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ asyncAndRegions.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ mutableCellResidenceDiagnostics @ aggregateDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 
@@ -1635,11 +1650,14 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
         Collections.checkDotlessIndexGet checkExpr env builder objExpr indexExpr range
 
     //---------------------------------------------------------------------
-    // Sequence expression: seq { ... }
+    // Sequence expression: seq { ... } and Async expression: async { ... }
     //---------------------------------------------------------------------
     | SynExpr.App(_, _, SynExpr.Ident(ident), SynExpr.ComputationExpr(_, compExpr, _), _)
         when ident.idText = "seq" && (tryLookupBinding ident.idText env).IsNone ->
         Collections.checkSeq checkExpr Applications.computeCaptures env builder compExpr range
+    | SynExpr.App(_, _, SynExpr.Ident(ident), SynExpr.ComputationExpr(_, compExpr, _), _)
+        when ident.idText = "async" && (tryLookupBinding ident.idText env).IsNone ->
+        Collections.checkAsync checkExpr Applications.computeCaptures env builder compExpr range
 
     //---------------------------------------------------------------------
     // Function application
@@ -1913,7 +1931,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
         if isYield then
             Collections.checkYield checkExpr env builder expr range
         else
-            unsupported "The 'return' form has no admitted native computation owner"
+            Collections.checkReturn checkExpr env builder expr range
 
     //---------------------------------------------------------------------
     // YieldOrReturnFrom: yield! expr or return! expr
@@ -1922,13 +1940,13 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
         if isYield then
             Collections.checkYieldBang checkExpr env builder expr range
         else
-            unsupported "The 'return!' form has no admitted native computation owner"
+            Collections.checkReturnBang checkExpr env builder expr range
 
     //---------------------------------------------------------------------
     // DoBang: do! expr
     //---------------------------------------------------------------------
-    | SynExpr.DoBang _ ->
-        unsupported "The 'do!' form has no admitted native bind or suspension semantics"
+    | SynExpr.DoBang(expr, _, _trivia) ->
+        Collections.checkDoBang checkExpr env builder expr range
 
     //---------------------------------------------------------------------
     // MatchBang: match! expr with ...

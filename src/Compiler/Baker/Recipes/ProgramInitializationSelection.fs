@@ -99,6 +99,9 @@ let private selectUsing (ownedFiles: Set<string> option) (graph: SemanticGraph) 
         | Some ({ Kind = SemanticKind.Lambda(_, _, [], _, LambdaContext.RegularClosure) } as node) ->
             [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
             |> List.forall (fun key -> node.Metadata.TryFind key <> Some (MetadataValue.Bool true))
+        | Some ({ Kind = SemanticKind.Sequential _ } as node)
+            when node.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+            node.Metadata.TryFind "Async.HasCaptures" <> Some (MetadataValue.Bool true)
         | _ -> false
     let code = ordered |> List.filter (ordinaryCode Set.empty)
     let codeSet = sourceMembers |> Set.filter (ordinaryCode Set.empty)
@@ -116,10 +119,12 @@ let private selectUsing (ownedFiles: Set<string> option) (graph: SemanticGraph) 
         if Set.contains id seen then true else
         let seen = Set.add id seen
         match graph.Nodes.TryFind id with
-        | Some { Kind = SemanticKind.Intrinsic _; Type = NativeType.TFun _; Children = [] } -> false
+        | Some { Kind = SemanticKind.Intrinsic _; Type = NativeType.TFun _ } -> false
         | Some { Kind = SemanticKind.Literal _ | SemanticKind.VarRef _ | SemanticKind.PatternBinding _
                       | SemanticKind.TypeDef _ | SemanticKind.Quote _
                       | SemanticKind.Lambda _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ } -> false
+        | Some ({ Kind = SemanticKind.Sequential _ } as node)
+            when node.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) -> false
         | Some ({ Kind = SemanticKind.Binding _ | SemanticKind.TypeAnnotation _ | SemanticKind.RecordExpr _
                        | SemanticKind.TupleExpr _ | SemanticKind.ArrayExpr _ | SemanticKind.ListExpr _
                        | SemanticKind.UnionCase _ | SemanticKind.DUConstruct _ | SemanticKind.Sequential _

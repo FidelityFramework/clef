@@ -402,19 +402,181 @@ let checkForEach
             } env
             builder.Create(SemanticKind.Error message, NativeType.TError message, range)
         | _, Some (varName, variableRange) ->
-            let varType = freshTypeVar variableRange
-            addConstraint (Constraint.Equals(enumNode.Type, Types.mkSeqType varType, range)) env
-            // The declaration exists before the body is checked. Baker later
-            // initializes this same immutable identity from each pulled value.
-            let formal = builder.Create(SemanticKind.PatternBinding varName, varType, variableRange, arena = env.CurrentArena)
-            let loopEnv = if varName = "_" then env else addBinding varName varType false (Some formal.Id) false env
-            let bodyNode = checkExpr loopEnv builder bodyExpr
-            addConstraint (Constraint.Equals(bodyNode.Type, Types.unitType, range)) env
-            let loop = builder.Create(
-                SemanticKind.ForEach(varName, formal.Id, enumNode.Id, bodyNode.Id),
-                Types.unitType, range, children = [enumNode.Id; formal.Id; bodyNode.Id])
-            for child in loop.Children do builder.SetParent(child, loop.Id)
-            loop
+            match applySubst enumNode.Type with
+            | NativeType.TApp(tc, [elemType]) as arrayType when tc.Name = "array" ->
+                // An array iteration is a counted loop over every element:
+                //   let __arr = <enum>              (evaluated once)
+                //   let __len = Array.length __arr
+                //   let mutable __i = 0
+                //   while __i < __len do
+                //       let x = __arr.[__i]
+                //       <body>
+                //       __i <- __i + 1
+                let suffix = NodeId.value (NodeId.fresh())
+                let arrName = sprintf "__foreach_arr_%d" suffix
+                let lenName = sprintf "__foreach_len_%d" suffix
+                let counterName = sprintf "__foreach_i_%d" suffix
+                let arrBinding =
+                    builder.Create(
+                        SemanticKind.Binding(arrName, false, false, None),
+                        arrayType,
+                        range,
+                        children = [enumNode.Id])
+                builder.SetParent(enumNode.Id, arrBinding.Id)
+                let mkRef (name: string) (defId: NodeId) (ty: NativeType) =
+                    builder.Create(SemanticKind.VarRef(name, Some defId), ty, range, arena = env.CurrentArena)
+                let lengthInfo : IntrinsicInfo =
+                    { Module = IntrinsicModule.Array
+                      Operation = "length"
+                      Category = IntrinsicCategory.Pure
+                      FullName = "Array.length" }
+                let lengthFn =
+                    builder.Create(
+                        SemanticKind.Intrinsic lengthInfo,
+                        NativeType.TFun(arrayType, Types.intType),
+                        range,
+                        arena = env.CurrentArena)
+                let lengthArg = mkRef arrName arrBinding.Id arrayType
+                let lengthApp =
+                    builder.Create(
+                        SemanticKind.Application(lengthFn.Id, [lengthArg.Id]),
+                        Types.intType,
+                        range,
+                        children = [lengthFn.Id; lengthArg.Id])
+                for cid in lengthApp.Children do builder.SetParent(cid, lengthApp.Id)
+                let lenBinding =
+                    builder.Create(
+                        SemanticKind.Binding(lenName, false, false, None),
+                        Types.intType,
+                        range,
+                        children = [lengthApp.Id])
+                builder.SetParent(lengthApp.Id, lenBinding.Id)
+                let zeroNode =
+                    builder.Create(
+                        SemanticKind.Literal (NativeLiteral.Int(0L, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))),
+                        Types.intType,
+                        range)
+                let counterBinding =
+                    builder.Create(
+                        SemanticKind.Binding(counterName, true, false, None),
+                        Types.intType,
+                        range,
+                        children = [zeroNode.Id])
+                builder.SetParent(zeroNode.Id, counterBinding.Id)
+
+                let mkOperator (opName: string) (resultTy: NativeType) =
+                    match Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.tryResolveOperator opName range with
+                    | Some (info, opTy) ->
+                        addConstraint (Constraint.Equals(opTy, NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, resultTy)), range)) env
+                        builder.Create(SemanticKind.Intrinsic info, opTy, range, arena = env.CurrentArena)
+                    | None ->
+                        let message =
+                            "CCS source checking did not settle the intrinsic '" + opName + "' for this array iteration's desugaring: the operator table does not hold it."
+                        addDiagnostic {
+                            Severity = NativeDiagnosticSeverity.Error
+                            Code = DiagnosticCodes.CCS8090_InternalInvariant
+                            Message = message
+                            Range = range
+                            RelatedNodes = []
+                            Reachability = ReachabilityContext.Unknown
+                        } env
+                        builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+
+                // Guard: __i < __len
+                let cmpNode = mkOperator "op_LessThan" Types.boolType
+                let guardCounter = mkRef counterName counterBinding.Id Types.intType
+                let guardLen = mkRef lenName lenBinding.Id Types.intType
+                let guardNode =
+                    builder.Create(
+                        SemanticKind.Application(cmpNode.Id, [guardCounter.Id; guardLen.Id]),
+                        Types.boolType,
+                        range,
+                        children = [cmpNode.Id; guardCounter.Id; guardLen.Id])
+                for cid in guardNode.Children do builder.SetParent(cid, guardNode.Id)
+
+                // Element: let x = __arr.[__i]
+                let elemArr = mkRef arrName arrBinding.Id arrayType
+                let elemIndex = mkRef counterName counterBinding.Id Types.intType
+                let elemGet =
+                    builder.Create(
+                        SemanticKind.IndexGet(elemArr.Id, elemIndex.Id),
+                        elemType,
+                        variableRange,
+                        children = [elemArr.Id; elemIndex.Id])
+                builder.SetParent(elemArr.Id, elemGet.Id)
+                builder.SetParent(elemIndex.Id, elemGet.Id)
+                let formal =
+                    builder.Create(
+                        SemanticKind.Binding(varName, false, false, None),
+                        elemType,
+                        variableRange,
+                        children = [elemGet.Id],
+                        arena = env.CurrentArena)
+                builder.SetParent(elemGet.Id, formal.Id)
+                let loopEnv = if varName = "_" then env else addBinding varName elemType false (Some formal.Id) false env
+                let bodyNode = checkExpr loopEnv builder bodyExpr
+                addConstraint (Constraint.Equals(bodyNode.Type, Types.unitType, range)) env
+
+                // Step: __i <- __i + 1
+                let stepOp = mkOperator "op_Addition" Types.intType
+                let stepCounter = mkRef counterName counterBinding.Id Types.intType
+                let oneNode =
+                    builder.Create(
+                        SemanticKind.Literal (NativeLiteral.Int(1L, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))),
+                        Types.intType,
+                        range)
+                let stepValue =
+                    builder.Create(
+                        SemanticKind.Application(stepOp.Id, [stepCounter.Id; oneNode.Id]),
+                        Types.intType,
+                        range,
+                        children = [stepOp.Id; stepCounter.Id; oneNode.Id])
+                for cid in stepValue.Children do builder.SetParent(cid, stepValue.Id)
+                let setTarget = mkRef counterName counterBinding.Id Types.intType
+                let setNode =
+                    builder.Create(
+                        SemanticKind.Set(setTarget.Id, stepValue.Id),
+                        Types.unitType,
+                        range,
+                        children = [setTarget.Id; stepValue.Id])
+                for cid in setNode.Children do builder.SetParent(cid, setNode.Id)
+
+                let loopBody =
+                    builder.Create(
+                        SemanticKind.Sequential [formal.Id; bodyNode.Id; setNode.Id],
+                        Types.unitType,
+                        range,
+                        children = [formal.Id; bodyNode.Id; setNode.Id])
+                for cid in loopBody.Children do builder.SetParent(cid, loopBody.Id)
+                let whileNode =
+                    builder.Create(
+                        SemanticKind.WhileLoop(guardNode.Id, loopBody.Id),
+                        Types.unitType,
+                        range,
+                        children = [guardNode.Id; loopBody.Id])
+                for cid in whileNode.Children do builder.SetParent(cid, whileNode.Id)
+                let result =
+                    builder.Create(
+                        SemanticKind.Sequential [arrBinding.Id; lenBinding.Id; counterBinding.Id; whileNode.Id],
+                        Types.unitType,
+                        range,
+                        children = [arrBinding.Id; lenBinding.Id; counterBinding.Id; whileNode.Id])
+                for cid in result.Children do builder.SetParent(cid, result.Id)
+                result
+            | _ ->
+                let varType = freshTypeVar variableRange
+                addConstraint (Constraint.Equals(enumNode.Type, Types.mkSeqType varType, range)) env
+                // The declaration exists before the body is checked. Baker later
+                // initializes this same immutable identity from each pulled value.
+                let formal = builder.Create(SemanticKind.PatternBinding varName, varType, variableRange, arena = env.CurrentArena)
+                let loopEnv = if varName = "_" then env else addBinding varName varType false (Some formal.Id) false env
+                let bodyNode = checkExpr loopEnv builder bodyExpr
+                addConstraint (Constraint.Equals(bodyNode.Type, Types.unitType, range)) env
+                let loop = builder.Create(
+                    SemanticKind.ForEach(varName, formal.Id, enumNode.Id, bodyNode.Id),
+                    Types.unitType, range, children = [enumNode.Id; formal.Id; bodyNode.Id])
+                for child in loop.Children do builder.SetParent(child, loop.Id)
+                loop
 
 
 //-------------------------------------------------------------------------

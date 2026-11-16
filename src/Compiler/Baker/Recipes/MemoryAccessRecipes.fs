@@ -53,9 +53,20 @@ let private mapResult (fn: 'T -> Result<'U, 'E>) (items: 'T list) : Result<'U li
 
 type Expansion = { Structure: Result; Edges: Hyperedge list }
 
+let rec private sourceIntrinsic (graph: SemanticGraph) id arguments =
+    match graph.Nodes.TryFind id with
+    | Some { Kind = SemanticKind.Intrinsic info } -> Some(info, arguments)
+    | Some { Kind = SemanticKind.Application(callee, actuals) } -> sourceIntrinsic graph callee (actuals @ arguments)
+    | _ -> None
+
+/// An array of async computations is an orchestration operand, never
+/// element storage; every other array keeps its ordinary bounds and residence.
 let private isArray (graph: SemanticGraph) id =
     match graph.Nodes.TryFind id |> Option.map (fun node -> applySubst node.Type) with
-    | Some(NativeType.TApp(tc, [_])) -> tc.NTUKind = Some NTUKind.NTUarray
+    | Some(NativeType.TApp(tc, [elemTy])) when tc.NTUKind = Some NTUKind.NTUarray ->
+        match applySubst elemTy with
+        | NativeType.TApp(etc, _) -> not (Types.isAsyncTypeCon etc)
+        | _ -> true
     | _ -> false
 
 let private isReadOnlyView (graph: SemanticGraph) id =
@@ -65,12 +76,6 @@ let private isReadOnlyView (graph: SemanticGraph) id =
 
 let private isReadableBuffer (graph: SemanticGraph) id =
     isArray graph id || isReadOnlyView graph id
-
-let rec private sourceIntrinsic (graph: SemanticGraph) id arguments =
-    match graph.Nodes.TryFind id with
-    | Some { Kind = SemanticKind.Intrinsic info } -> Some(info, arguments)
-    | Some { Kind = SemanticKind.Application(callee, actuals) } -> sourceIntrinsic graph callee (actuals @ arguments)
-    | _ -> None
 
 [<RequireQualifiedAccess>]
 type private ReadOnlyViewConversion =
@@ -506,7 +511,7 @@ let arrayUses (graph: SemanticGraph) site =
                     | SemanticKind.DUEliminate(value,1,"ValueSome",_), _ -> aliases.Contains value
                     | SemanticKind.CaseElimination(value,arms), _ when aliases.Contains value && checkedOption value ->
                         arms |> List.exists(fun arm -> aliases.Contains arm.Body)
-                    | SemanticKind.PatternBinding _, _ when Types.tryGetReadOnlyViewElement node.Type |> Option.isSome ->
+                    | SemanticKind.PatternBinding _, _ when (Types.tryGetReadOnlyViewElement node.Type |> Option.isSome) || isArray graph node.Id ->
                         nodes |> List.exists (fun callNode ->
                             match callNode.Kind with
                             | SemanticKind.Application(callee, actuals) ->
@@ -1100,7 +1105,8 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
         if node.IsReachable && not (excluded.Contains node.Id) then
             let needs =
                 match node.Kind with
-                | SemanticKind.ArrayExpr _ | SemanticKind.AddressOf _ | SemanticKind.CellAddress _
+                | SemanticKind.ArrayExpr _ -> isArray graph node.Id
+                | SemanticKind.AddressOf _ | SemanticKind.CellAddress _
                 | SemanticKind.ElementAddress _ | SemanticKind.FieldAddress _ | SemanticKind.Reborrow _ -> true
                 | SemanticKind.DUConstruct _ when (checkedCase node.Id).IsSome -> true
                 | SemanticKind.IndexGet(buffer,_) | SemanticKind.IndexSet(buffer,_,_) -> isReadableBuffer graph buffer

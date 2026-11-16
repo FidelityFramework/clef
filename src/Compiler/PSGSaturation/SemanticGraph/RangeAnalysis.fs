@@ -282,6 +282,23 @@ let private arrayElementType (ty: NativeType) : NativeType option =
 let private readOnlyViewElementType (ty: NativeType) : NativeType option =
     Types.tryGetReadOnlyViewElement (applySubst ty) |> Option.map applySubst
 
+/// The body of an async formation's deferred callable: the formation's final
+/// structural child is the callable (a Lambda, or its closure value after
+/// closure conversion), whose body computes the formation's result.
+let private asyncFormationBody (nodes: Map<NodeId, SemanticNode>) (n: SemanticNode) : NodeId option =
+    if n.Metadata.TryFind "Async.Formation" <> Some (MetadataValue.Bool true) then None
+    else
+        let rec bodyOf depth (id: NodeId) =
+            if depth > 4 then None
+            else
+                match Map.tryFind id nodes with
+                | Some { Kind = SemanticKind.Lambda(_, body, _, _, _) } -> Some body
+                | Some { Kind = SemanticKind.ClosureValue(implementation, _) } -> bodyOf (depth + 1) implementation
+                | Some { Kind = SemanticKind.VarRef(_, Some definition) } -> bodyOf (depth + 1) definition
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [ value ] } -> bodyOf (depth + 1) value
+                | _ -> None
+        List.tryLast n.Children |> Option.bind (bodyOf 0)
+
 /// The key of `ElementRanges`: the element type's rendered form.
 let private elementKey (elem: NativeType) : TypeIdentity = ofType elem
 
@@ -567,6 +584,37 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                 if args.Length < candidate.Parameters.Length - candidate.Offset then accEffect, accDeps
                 elif program.ForeignEffectBodies.Contains candidate.Body then joinWrites accEffect unknownWrites, accDeps
                 else accEffect, candidate.Body :: accDeps) (initial, [])
+        | Callee.Intrinsic info
+            when info.FullName = "Async.RunSynchronously" || info.FullName = "Async.Start"
+                 || info.FullName = "Async.StartImmediate" || info.FullName = "Async.Await" ->
+            // An activation or bind runs the deferred bodies it reaches; their
+            // write effects are this occurrence's effects. An unresolved
+            // computation keeps the conservative unknown effect.
+            let rec bodies (visited: Set<NodeId>) (id: NodeId) : NodeId list option =
+                if Set.contains id visited then Some [] else
+                let visited = Set.add id visited
+                match Map.tryFind id program.Reachable with
+                | Some node when node.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+                    asyncFormationBody program.Graph.Nodes node |> Option.map List.singleton
+                | Some { Kind = SemanticKind.VarRef(_, Some definition) } -> bodies visited definition
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [ value ] } -> bodies visited value
+                | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> bodies visited inner
+                | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> bodies visited (List.last items)
+                | Some { Kind = SemanticKind.ArrayExpr elements } ->
+                    let all = elements |> List.map (bodies visited)
+                    if all |> List.exists Option.isNone then None else Some (all |> List.collect Option.get)
+                | Some { Kind = SemanticKind.Application _ } ->
+                    match Map.tryFind id program.Callees with
+                    | Some (Callee.Direct(_, body), _) -> bodies visited body
+                    | Some (Callee.Value(candidates, false), _) when not candidates.IsEmpty ->
+                        let all = candidates |> List.map (fun candidate -> bodies visited candidate.Body)
+                        if all |> List.exists Option.isNone then None else Some (all |> List.collect Option.get)
+                    | Some (Callee.Intrinsic { FullName = ("Async.Parallel" | "Async.Sequential") }, [ tasks ]) -> bodies visited tasks
+                    | _ -> None
+                | _ -> None
+            let resolved = args |> List.map (bodies Set.empty)
+            if resolved |> List.exists Option.isNone then unknownWrites, []
+            else noWrites, resolved |> List.collect Option.get
         | Callee.Intrinsic info ->
             // The emission category is not a callback-effect declaration. Read
             // the existing callback table, and keep delayed/foreign operations
@@ -582,7 +630,7 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                         match applySubst n.Type with NativeType.TFun _ -> true | _ -> false)))
             let initial =
                 match info.Category with
-                | _ when info.Module = IntrinsicModule.Mmio -> noWrites
+                | _ when info.Module = IntrinsicModule.Mmio || info.FullName.StartsWith("Async.", System.StringComparison.Ordinal) || info.FullName.StartsWith("Region.", System.StringComparison.Ordinal) -> noWrites
                 | IntrinsicCategory.Platform | IntrinsicCategory.Reactive -> unknownWrites
                 | IntrinsicCategory.Memory when List.isEmpty callbacks -> unknownWrites
                 | _ when delayed || unmodelledCallback -> unknownWrites
@@ -2038,6 +2086,37 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                         let key = elementKey elem
                         (stores, Map.add key (ValueRange.join (Map.tryFind key seeds |> Option.defaultValue ValueRange.Empty) (ValueRange.point bigint.Zero)) seeds)
                     | _ -> (stores, seeds)
+                | Some (Callee.Intrinsic { FullName = "Region.alloc" }, _) ->
+                    match arrayElementType node.Type with
+                    | Some elem when Types.isIntegerType elem || Types.tryGetNTUKind elem = Some NTUKind.NTUbool || Types.tryGetNTUKind elem = Some NTUKind.NTUchar ->
+                        let key = elementKey elem
+                        (stores, Map.add key (ValueRange.join (Map.tryFind key seeds |> Option.defaultValue ValueRange.Empty) (ValueRange.point bigint.Zero)) seeds)
+                    | _ -> (stores, seeds)
+                | Some (Callee.Intrinsic { FullName = ("Async.Parallel" | "Async.Sequential") }, [ tasksId ]) ->
+                    match Types.tryGetAsyncElement (applySubst node.Type) |> Option.bind arrayElementType with
+                    | Some elem ->
+                        let rec findTaskBodies (tid: NodeId) (visited: Set<NodeId>) =
+                            if visited.Contains tid then [] else
+                            let visited = visited.Add tid
+                            match Map.tryFind tid reachableNodes with
+                            | Some n when n.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+                                asyncFormationBody graph.Nodes n |> Option.toList
+                            | Some { Kind = SemanticKind.ArrayExpr elements } ->
+                                elements |> List.collect (fun eid -> findTaskBodies eid visited)
+                            | Some { Kind = SemanticKind.VarRef(_, Some defId) } -> findTaskBodies defId visited
+                            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [rhs] } -> findTaskBodies rhs visited
+                            | Some { Kind = SemanticKind.Application _ } ->
+                                match Map.tryFind tid callees with
+                                | Some (Callee.Direct(_, body), _) -> findTaskBodies body visited
+                                | Some (Callee.Value(candidates, _), _) ->
+                                    candidates |> List.collect (fun c -> findTaskBodies c.Body visited)
+                                | _ -> []
+                            | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty ->
+                                findTaskBodies (List.last items) visited
+                            | _ -> []
+                        let bodies = findTaskBodies tasksId Set.empty
+                        (bodies |> List.fold (fun s b -> store (elementKey elem) node.Id b s) stores, seeds)
+                    | None -> (stores, seeds)
                 | Some (Callee.Intrinsic { Module = IntrinsicModule.String; Operation = "toBytes" }, _) ->
                     match arrayElementType node.Type, StringByteStorage.element graph node.Id with
                     | Some elem, Some(SettledSlot.Integer(8, _)) ->
@@ -2516,6 +2595,31 @@ let private foreignRange (program: Program) value call =
             | ValueRange.Bounded(lo, _), ValueRange.Bounded(_, hi) -> ValueRange.bounded lo hi
             | _ -> ValueRange.Unbounded
 
+let private asyncResultTargets (program: Program) (compId: NodeId) : Choice<NodeId, NodeId> list =
+    let rec loop (id: NodeId) (visited: Set<NodeId>) =
+        if visited.Contains id then [] else
+        let visited = visited.Add id
+        match Map.tryFind id program.Reachable with
+        | Some n when n.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+            asyncFormationBody program.Graph.Nodes n |> Option.map Choice2Of2 |> Option.toList
+        | Some { Kind = SemanticKind.VarRef(_, Some defId) } -> loop defId visited
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [rhs] } -> loop rhs visited
+        | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> loop (List.last items) visited
+        | Some { Kind = SemanticKind.IfThenElse(_, tBranch, Some eBranch) } ->
+            loop tBranch visited @ loop eBranch visited
+        | Some { Kind = SemanticKind.Application _ } when program.Applications.ContainsKey id ->
+            [Choice1Of2 id]
+        | Some { Kind = SemanticKind.Application _ } ->
+            match Map.tryFind id program.Callees with
+            | Some (Callee.Direct(_, body), _) -> loop body visited
+            | Some (Callee.Value(candidates, _), _) ->
+                candidates |> List.collect (fun c -> loop c.Body visited)
+            | Some (Callee.Intrinsic { FullName = ("Async.Parallel" | "Async.Sequential") }, _) ->
+                [Choice2Of2 id]
+            | _ -> []
+        | _ -> []
+    loop compId Set.empty
+
 /// The range an application computes: the table's fact for an intrinsic (`RangeSources`), the
 /// element range for an element read, or every complete target's contextual
 /// body fact. Other established calls retain shared body
@@ -2532,6 +2636,23 @@ let private applicationRange (program: Program) (shared: Reading) (value: Readin
         | Some (actual, payloads) when actual = iterator ->
             payloads |> List.fold (fun range (writer, payload) -> ValueRange.join range (read program shared writer payload)) ValueRange.Empty
         | _ -> fallback
+    | Some (Callee.Intrinsic { FullName = ("Async.RunSynchronously" | "Async.Await") }, comp :: _) ->
+        match asyncResultTargets program comp with
+        | [] ->
+            match Types.tryGetNTUKind node.Type with
+            | Some NTUKind.NTUunit -> ValueRange.Empty
+            | _ -> fallback
+        | targets ->
+            targets |> List.fold (fun range target ->
+                let tRange =
+                    match target with
+                    | Choice1Of2 callId ->
+                        match application callId with
+                        | Some r -> r
+                        | None -> fallback
+                    | Choice2Of2 bodyId ->
+                        read program value node.Id bodyId
+                ValueRange.join range tRange) ValueRange.Empty
     | Some (Callee.Intrinsic info, args) ->
         let arguments =
             args
@@ -2776,6 +2897,7 @@ let private contextualNode (program: Program) (node: SemanticNode) =
         | SemanticKind.Application _ when program.Applications.ContainsKey node.Id -> true
         | SemanticKind.Application _ ->
             match program.Callees.TryFind node.Id with
+            | Some(Callee.Intrinsic { FullName = ("Async.RunSynchronously" | "Async.Await") }, _) -> true
             | Some(Callee.Intrinsic info, arguments) ->
                 let arguments = arguments |> List.map (fun id ->
                     match program.Reachable.TryFind id with
@@ -2981,8 +3103,26 @@ let private evaluate (program: Program) (contexts: ContextProgram) (state: Conte
     let shared id = get (RangeContext.Shared, id)
     let reading context id = contextReading contexts get context id
     let application context call =
-        contexts.Calls.TryFind (context, call) |> Option.map (fun rows ->
-            rows |> List.fold (fun range row -> ValueRange.join range (reading row.Context row.Body)) ValueRange.Empty)
+        let rowsOpt =
+            match contexts.Calls.TryFind (context, call) with
+            | Some rows -> Some rows
+            | None when context = RangeContext.Shared ->
+                let allRows =
+                    contexts.Calls
+                    |> Seq.choose (fun kvp -> if snd kvp.Key = call then Some kvp.Value else None)
+                    |> List.concat
+                if allRows.IsEmpty then None else Some allRows
+            | None -> None
+        rowsOpt |> Option.map (fun rows ->
+            rows |> List.fold (fun range row ->
+                let bodyRange =
+                    match program.Reachable.TryFind row.Body with
+                    | Some n when n.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+                        match asyncFormationBody program.Graph.Nodes n with
+                        | Some bodyId -> reading row.Context bodyId
+                        | None -> ValueRange.Unbounded
+                    | _ -> reading row.Context row.Body
+                ValueRange.join range bodyRange) ValueRange.Empty)
     let computed =
         match context with
         | RangeContext.Shared when program.Applications.ContainsKey node.Id ->
@@ -3191,14 +3331,33 @@ let private fixpoint (program: Program) (contexts: ContextProgram) : State * Ran
             struct(ctxId, keyId, node))
         |> List.toArray
     let tempCalls = ResizeArray<int * int[]>()
+    let sharedCallsAcc = System.Collections.Generic.Dictionary<NodeId, ResizeArray<int>>()
     for kvp in contexts.Calls do
         let callerCtx, callId = kvp.Key
         let callKeyId = getOrAddKey (getOrAddCtx callerCtx) callId
         let rowKeyIds =
             kvp.Value
-            |> List.map (fun row -> resolveKeyInCtx (getOrAddCtx row.Context) row.Body)
+            |> List.choose (fun row ->
+                let bodyIdOpt =
+                    match program.Reachable.TryFind row.Body with
+                    | Some n when n.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+                        asyncFormationBody program.Graph.Nodes n
+                    | _ -> Some row.Body
+                bodyIdOpt |> Option.map (fun bodyId -> resolveKeyInCtx (getOrAddCtx row.Context) bodyId))
             |> List.toArray
         tempCalls.Add(callKeyId, rowKeyIds)
+        let list =
+            match sharedCallsAcc.TryGetValue(callId) with
+            | true, l -> l
+            | false, _ ->
+                let l = ResizeArray<int>()
+                sharedCallsAcc[callId] <- l
+                l
+        for rk in rowKeyIds do
+            if not ( list.Contains(rk) ) then list.Add(rk)
+    for kvp in sharedCallsAcc do
+        let sharedCallKeyId = getOrAddKey 0 kvp.Key
+        tempCalls.Add(sharedCallKeyId, kvp.Value.ToArray())
     let tempParams = ResizeArray<int * (int * NodeId * NodeId)[]>()
     for kvp in contexts.Parameters do
         let ctx, paramId = kvp.Key
@@ -3710,6 +3869,8 @@ let private fixpoint (program: Program) (contexts: ContextProgram) : State * Ran
                         | Some (Callee.Value(candidates, _), _) when candidates |> List.exists (fun candidate -> program.ForeignEffectBodies.Contains candidate.Body) ->
                             NodeTransferPlan.Constant (applyCarrier carrier fallback)
                         | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [_]) ->
+                            NodeTransferPlan.General node
+                        | Some (Callee.Intrinsic { FullName = ("Async.RunSynchronously" | "Async.Await") }, _ :: _) ->
                             NodeTransferPlan.General node
                         | Some (Callee.Intrinsic info, args) ->
                             let argPlans =

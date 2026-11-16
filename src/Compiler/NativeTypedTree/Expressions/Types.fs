@@ -262,6 +262,8 @@ type TypeEnv = {
     /// Enclosing seq expression (for yield checking)
     /// PRD-15: Used to track which sequence a yield belongs to
     EnclosingSeqExpr: NodeId option
+    /// Enclosing async expression (owner id and element type for return/let!/do! checking)
+    EnclosingAsyncExpr: (NodeId * NativeType) option
 }
 
 //-------------------------------------------------------------------------
@@ -343,6 +345,7 @@ let createTypeEnv () : TypeEnv =
         ExpectedRecordType = None
         EnclosingFunction = None
         EnclosingSeqExpr = None
+        EnclosingAsyncExpr = None
     }
     // Inline registration: mirrors addUnionCaseBinding without forward-reference.
     let mkDU name ty caseIndex env =
@@ -864,7 +867,7 @@ let tryGetArrayElementType (ty: NativeType) : NativeType option =
 /// Resolve the element type for index operations (array, string, or via constraint)
 let resolveIndexElementType (objType: NativeType) (env: TypeEnv) (range: SourceRange) : NativeType =
     match objType with
-    | NativeType.TApp(tc, [elemType]) when tc.Name = "array" -> elemType
+    | NativeType.TApp(tc, [elemType]) when tc.Name = "array" || Types.isReadOnlyViewTypeCon tc -> elemType
     | _ when isStringType objType -> Types.charType
     | NativeType.TVar _ ->
         // An indexed receiver of unknown type is not taken to be an array.
@@ -1244,6 +1247,9 @@ let private tryResolveBuiltinTypeConstructor env range (name: string) (args: Nat
     | "Mmio32", [] -> Some (NativeType.TApp(Types.mmio32TyCon, []))
     | "BorrowedView", [schema] -> Some (NativeType.TApp(Types.borrowedViewTyCon, [schema]))
     | "ReadOnlyView", [elem] -> Some (NativeType.TApp(Types.readOnlyViewTyCon, [elem]))
+    | "Async", [elem] -> Some (NativeTypes.Types.mkAsyncType elem)
+    | "Region", [] -> Some NativeTypes.Types.regionType
+    | "Ptr", elem :: _ -> Some (NativeType.TApp(NativeTypes.Types.arrayTyCon, [elem]))
     // Built-in discriminated union type constructors
     | "option",  [elem]      -> Some (NativeType.TApp(optionTycon,  [elem]))
     | "voption", [elem]      -> Some (NativeType.TApp(voptionTycon, [elem]))
@@ -1287,6 +1293,7 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
             | "Mmio8" -> Some (NativeType.TApp(Types.mmio8TyCon, []))
             | "Mmio16" -> Some (NativeType.TApp(Types.mmio16TyCon, []))
             | "Mmio32" -> Some (NativeType.TApp(Types.mmio32TyCon, []))
+            | "Region" -> Some NativeTypes.Types.regionType
             | "bool" -> Some NativeTypes.Types.boolType
             | "char" -> Some NativeTypes.Types.charType
             | "string" -> Some NativeTypes.Types.stringType

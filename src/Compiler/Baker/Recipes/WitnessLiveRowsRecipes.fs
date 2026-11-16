@@ -218,7 +218,50 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         selected before facts.KnownCallables |> Map.iter (fun _ row -> add row.Implementation; add row.EnvironmentOwner)
         selected before facts.ContinuationFrames |> Map.iter (fun _ row ->
             add row.Owner; add row.Generator; add row.Formal; add row.State; add row.Current
-            slots row.Slots; slots row.ScratchSlots; pairs row.Initializers)
+            slots row.Slots; slots row.ScratchSlots; pairs row.Initializers; addMany row.Obligations)
+        facts.AsyncFormations.Values |> Seq.iter (fun row ->
+            if before.Contains row.Formation || before.Contains row.Callable || before.Contains row.Body || before.Contains row.Frame then
+                add row.Formation)
+        selected before facts.AsyncFormations |> Map.iter (fun _ row ->
+            add row.Formation; add row.Callable; add row.Body; addMany row.CapturedBindings
+            add row.ResultStorage; add row.Frame; add row.LifetimeScope; add row.CompletionProtocol
+            addMany row.Obligations; participants row.Participants
+            facts.AsyncSuspensions.Values |> Seq.iter (fun s ->
+                if s.Formation = row.Formation || s.Frame = row.Frame then add s.Site))
+        selected before facts.AsyncActivations |> Map.iter (fun _ row ->
+            add row.Site; add row.Formation; add row.ResultTarget; add row.CompletionTarget
+            addMany row.Obligations; participants row.Participants)
+        selected before facts.AsyncSuspensions |> Map.iter (fun _ row ->
+            add row.Site; add row.Formation; add row.Frame; add row.Delimiter; add row.Continuation
+            add row.AwaitedSource; addMany row.LiveSlots; addMany row.InitializedSlots
+            add row.BindResumeTarget; add row.CompletionTarget; add row.CleanupTarget
+            row.SpanningRetentions |> List.iter (fun ret ->
+                add ret.Binding; add ret.BackingRegion; add ret.RetainedUntil
+                addMany ret.InvalidatedBy; add ret.RetirementCheck)
+            addMany row.Obligations; participants row.Participants)
+        selected before facts.AsyncOrchestrations |> Map.iter (fun _ row ->
+            add row.Site; addMany row.Children; pairs row.WorkDependencies
+            row.ResultOrdering |> List.iter (snd >> add)
+            add row.JoinCondition; add row.ResultStorage; add row.LifetimeScope
+            addMany row.SynchronizationObligations; participants row.Participants)
+        facts.RegionAllocations.Values |> Seq.iter (fun row ->
+            if before.Contains row.Region || before.Contains row.LifetimeScope || (row.AllocatedValues |> List.exists before.Contains) then
+                add row.Region)
+        selected before facts.RegionAllocations |> Map.iter (fun _ row ->
+            add row.Region; add row.SpacePlacement; add row.LifetimeScope; addMany row.AllocatedValues
+            addMany row.ScopeExitPaths; pairs row.ScopeExitReleases; addMany row.Obligations; participants row.Participants)
+        facts.RegionCallPassings.Values |> Seq.iter (fun row ->
+            if before.Contains row.Site || before.Contains row.Call then add row.Site)
+        selected before facts.RegionCallPassings |> Map.iter (fun _ row ->
+            add row.Site; add row.Call; add row.Region; add row.AllocationProvenance
+            add row.CallerLifetimeScope; add row.CalleeLifetimeScope; addMany row.CalleeReleases
+            addMany row.Obligations; participants row.Participants)
+        facts.RegionCopyEndpoints.Values |> Seq.iter (fun row ->
+            if before.Contains row.Site || before.Contains row.EscapingValue || before.Contains row.SourceRegion then add row.Site)
+        selected before facts.RegionCopyEndpoints |> Map.iter (fun _ row ->
+            add row.Site; add row.EscapingValue; add row.SourceRegion; add row.SourceView
+            add row.SourceLifetimeScope; addOptional row.DestinationRegion; add row.DestinationStorage
+            add row.DestinationLifetimeScope; add row.EscapeDischargeObligation; participants row.Participants)
         selected before facts.SequenceFamilies |> Map.iter (fun _ row -> family row)
         [facts.EnvironmentDestinations; facts.EnvironmentOrigins; facts.LazyOrigins; facts.LazyDestinations
          facts.SequenceOrigins; facts.ContinuationStorage; facts.SequenceDestinations]
@@ -347,6 +390,7 @@ let private closeTypes (graph: SemanticGraph) ids valueIds (emission: WitnessEmi
                 for row in account.Sources do yield row.Type
             }))
         |> Seq.append (selected ids emission.Boundary.SharedBufferViewUses |> Map.values |> Seq.map _.ElementType)
+        |> Seq.append (selected ids graph.Codata.Value.AsyncFormations |> Map.values |> Seq.map (fun row -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType row.ResultType))
     Seq.fold visit Set.empty identities
 
 let private emissionRows ids valueIds types metadata (value: WitnessEmissionProjection) : WitnessEmissionProjection =
@@ -490,6 +534,10 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope:
         SequenceFlows = rows facts.SequenceFlows; SequenceFamilies = rows facts.SequenceFamilies
         SequenceTemplateCopies = rows facts.SequenceTemplateCopies; ContinuationStorage = rows facts.ContinuationStorage
         ContinuationRegions = rows facts.ContinuationRegions; SequenceInitializers = rows facts.SequenceInitializers
+        AsyncFormations = rows facts.AsyncFormations; AsyncActivations = rows facts.AsyncActivations
+        AsyncSuspensions = rows facts.AsyncSuspensions; AsyncOrchestrations = rows facts.AsyncOrchestrations
+        RegionAllocations = rows facts.RegionAllocations; RegionCallPassings = rows facts.RegionCallPassings
+        RegionCopyEndpoints = rows facts.RegionCopyEndpoints
         SequenceDestinations = rows facts.SequenceDestinations; SequenceCurrentReads = values facts.SequenceCurrentReads
         Pins = if selectedEmission.Spatial.Hardware.IsEmpty then None else facts.Pins
         DeclarationRootLambdas = rows facts.DeclarationRootLambdas; FunctionPointers = rows facts.FunctionPointers

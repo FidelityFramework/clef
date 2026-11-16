@@ -113,6 +113,30 @@ let rec private resolveIdentifierCore
             | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
             | UnavailableSourceOperation msg -> RejectedSourceIntrinsic msg
             | NotAnIntrinsic -> resolveBinding parts fullName env range
+        elif parts.Head = "Async" && (tryLookupBinding fullName env).IsNone && (tryLookupBinding parts.Head env).IsNone then
+            match resolveAsyncOp parts.[1] range with
+            | Resolved (info, ty) -> IntrinsicNode (info, ty)
+            | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
+            | UnavailableSourceOperation msg -> RejectedSourceIntrinsic msg
+            | NotAnIntrinsic -> resolveBinding parts fullName env range
+        elif parts.Head = "Region" && (tryLookupBinding fullName env).IsNone && (tryLookupBinding parts.Head env).IsNone then
+            match resolveRegionOp parts.[1] range with
+            | Resolved (info, ty) -> IntrinsicNode (info, ty)
+            | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
+            | UnavailableSourceOperation msg -> RejectedSourceIntrinsic msg
+            | NotAnIntrinsic -> resolveBinding parts fullName env range
+        elif parts.Head = "Console" && (tryLookupBinding fullName env).IsNone && (tryLookupBinding parts.Head env).IsNone then
+            match resolveConsoleOp parts.[1] range with
+            | Resolved (info, ty) -> IntrinsicNode (info, ty)
+            | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
+            | UnavailableSourceOperation msg -> RejectedSourceIntrinsic msg
+            | NotAnIntrinsic -> resolveBinding parts fullName env range
+        elif parts.Head = "Format" && (tryLookupBinding fullName env).IsNone && (tryLookupBinding parts.Head env).IsNone then
+            match resolveFormatOp parts.[1] range with
+            | Resolved (info, ty) -> IntrinsicNode (info, ty)
+            | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
+            | UnavailableSourceOperation msg -> RejectedSourceIntrinsic msg
+            | NotAnIntrinsic -> resolveBinding parts fullName env range
         else
         // 3a. Try module-qualified intrinsic
         match tryParseModuleQualified fullName with
@@ -223,13 +247,29 @@ let resolveIdentifier
         // participates in the surrounding constraints; the declared scheme remains
         // in the intrinsic resolver for explicit type application.
         let occurrenceType =
-            if info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq then instantiateTForall ty range
+            if info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq ||
+               info.FullName.StartsWith("Async.", System.StringComparison.Ordinal) ||
+               info.FullName.StartsWith("Region.", System.StringComparison.Ordinal) then
+                instantiateTForall ty range
             else ty
-        builder.Create(
-            SemanticKind.Intrinsic info,
-            occurrenceType,
-            range,
-            arena = env.CurrentArena)
+        let anchorChildren =
+            if info.FullName.StartsWith("Async.", System.StringComparison.Ordinal) ||
+               info.FullName.StartsWith("Region.", System.StringComparison.Ordinal) then
+                let a0 = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range, arena = env.CurrentArena)
+                let a1 = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range, arena = env.CurrentArena)
+                let a2 = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, range, arena = env.CurrentArena)
+                [ a0.Id; a1.Id; a2.Id ]
+            else []
+        let intrinsicNode =
+            builder.Create(
+                SemanticKind.Intrinsic info,
+                occurrenceType,
+                range,
+                children = anchorChildren,
+                arena = env.CurrentArena)
+        for childId in anchorChildren do
+            builder.SetParent(childId, intrinsicNode.Id)
+        intrinsicNode
 
     | BindingNode (name, ty, nodeId, instance) ->
         let node = builder.Create(

@@ -608,6 +608,14 @@ let checkTypeApp
                 match Intrinsics.resolveModuleIntrinsic info.Module info.Operation range with
                 | Intrinsics.Resolved (_, scheme) -> scheme
                 | _ -> funcNode.Type
+            | SemanticKind.Intrinsic info when info.FullName.StartsWith("Region.", System.StringComparison.Ordinal) ->
+                match Intrinsics.resolveRegionOp info.Operation range with
+                | Intrinsics.Resolved (_, scheme) -> scheme
+                | _ -> funcNode.Type
+            | SemanticKind.Intrinsic info when info.FullName.StartsWith("Async.", System.StringComparison.Ordinal) ->
+                match Intrinsics.resolveAsyncOp info.Operation range with
+                | Intrinsics.Resolved (_, scheme) -> scheme
+                | _ -> funcNode.Type
             | _ -> funcNode.Type
     let parameters = match funcType with NativeType.TForall(parameters, _) -> parameters | _ -> []
     let typeArgTypes = typeArgs |> List.mapi (fun index syntax ->
@@ -742,7 +750,7 @@ let checkLambda
         ) ([], env)
 
     let lambdaParams = List.rev (fst paramNodesAndEnv)
-    let bodyEnv = { snd paramNodesAndEnv with EnclosingSeqExpr = None }
+    let bodyEnv = { snd paramNodesAndEnv with EnclosingSeqExpr = None; EnclosingAsyncExpr = None }
     let paramNames = lambdaParams |> List.map (fun (name, _, _) -> name) |> Set.ofList
 
     // Check body
