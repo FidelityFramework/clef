@@ -107,6 +107,22 @@ let exported (first: int) (second: int) (entry: Entry) (arg: CHandle<unit>) : in
         Assert.Empty(BoundaryEmission.exportedInterfaceFailures positive.Graph)
         Assert.DoesNotContain(positive.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8416")
 
+        let forwarded = "let exported (first: int) (second: int) (entry: Entry) (arg: CHandle<unit>) : int = native first second entry.Invoke arg"
+        let aliases = "let private alias = native\nlet exported : int -> int -> FnPtr<option<CHandle<unit>> -> option<CHandle<unit>>> -> CHandle<unit> -> int = alias"
+        let reexported = BoundaryValuesFixture.library (declarations + wrapper.Replace(forwarded, aliases)) false
+        DimensionalCases.noErrors reexported
+        Assert.Empty(BoundaryEmission.exportedInterfaceFailures reexported.Graph)
+        let original = reexported.Graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Binding(name = "native") -> true | _ -> false) |> Assert.Single
+        let exported = BoundaryValuesFixture.exported "exported" reexported.Graph
+        let target, _ = Clef.Compiler.Baker.Recipes.BoundaryDeclarations.target reexported.Graph exported.Id |> Option.get
+        Assert.Equal(original.Id, target.Id)
+        let missing = (declarations + wrapper.Replace(forwarded, aliases)).Replace("let nativeDescriptor", "let unrelatedDescriptor")
+        let missingResult = BoundaryValuesFixture.library missing false
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures missingResult.Graph)
+        let materialized = BoundaryValuesFixture.library (declarations + wrapper.Replace(forwarded, "let exported = FnPtr.ofExtern native")) false
+        Assert.NotEmpty(BoundaryEmission.exportedInterfaceFailures materialized.Graph)
+
         let pthreadPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../../../Fidelity.Platform/Environments/Linux/x86_64/Fidelity.Pthread.fidproj"))
         let pthreadResult = Clef.Compiler.Project.ProjectChecker.checkProject pthreadPath
         Assert.True(Result.isOk pthreadResult)

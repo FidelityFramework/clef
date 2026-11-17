@@ -915,6 +915,22 @@ type private Fold =
 let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (regions: RegionState)
         : Map<NodeId, ContinuationFrame> * Map<NodeId, AsyncFormation> * Map<NodeId, AsyncSuspension> * Map<NodeId, AsyncActivation> * Map<NodeId, AsyncOrchestration> * Realization list * Fold list * Accrual =
     let platform = graph.Platform
+    let borrowedViewValues = lazy (
+        let declarations = (Platform.readDescriptors graph).BorrowedResultViews |> List.map (fun view -> view.Declaration.Binding) |> Set.ofList
+        let target = Clef.Compiler.Baker.Recipes.BoundaryDeclarations.target graph
+        let isTupleAccessor callee =
+            match target callee with
+            | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Operators; Operation = ("fst" | "snd") } }, _) -> true
+            | _ -> false
+        let sources =
+            reachable |> List.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Application(callee, _) ->
+                    match target callee with
+                    | Some(binding, _) when declarations.Contains binding.Id -> Some node.Id
+                    | _ -> None
+                | _ -> None)
+        Clef.Compiler.Baker.Ingredients.SourceStorageBorrows.derivedValues graph isTupleAccessor sources)
     let owners = reachable |> List.filter isFormation |> List.sortBy (fun node -> NodeId.value node.Id)
     let ownerSpanByFormation =
         owners
@@ -1066,6 +1082,11 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                         regions.Settled |> List.tryFind (fun allocation -> allocation.Binding = Some binding || allocation.Site.Id = origin graph binding Set.empty)
                     let ownedRegion region = bodyNodes.Contains region
                     match isView, isRegionHandle, allocation with
+                    | true, _, _ when
+                        let source = Clef.Compiler.PSGSaturation.SemanticGraph.DirectCaptures.sourceDefinition graph binding
+                        borrowedViewValues.Value.Contains source || borrowedViewValues.Value.Contains binding ->
+                        None, refusal "CCS8425" cut.Site.Range [ cut.Site.Id; binding ]
+                            "Borrowed result view read crosses an async suspension frontier."
                     | true, _, _ ->
                         None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding ]
                             "Borrowed region or view handle cannot be retained across an async suspension point without a dominating buffer retention or lifetime scope proof."

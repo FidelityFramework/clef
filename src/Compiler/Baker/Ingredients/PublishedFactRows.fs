@@ -352,6 +352,11 @@ and mapBoundaryImport (value: S.BoundaryImport) : Fidelity.PSG.BoundaryImport =
         CallingConvention = value.CallingConvention
         DeclarationPath = (value.DeclarationPath |> List.map (fun x -> nodeId x))
         Parameters = (value.Parameters |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapBoundaryScalar t1))))
+        FixedSentinels = value.FixedSentinels |> List.map (fun (ordinal, name, constant, nativeType) ->
+            ordinal, name, constant,
+            match nativeType with
+            | S.BoundaryFixedType.EntryPointer bits -> Fidelity.PSG.BoundaryFixedType.EntryPointer bits
+            | S.BoundaryFixedType.Integer(bits, signed) -> Fidelity.PSG.BoundaryFixedType.Integer(bits, signed))
         Result = (value.Result |> Option.map (fun x -> mapBoundaryScalar x))
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
         SourceTypes = (value.SourceTypes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapTypeIdentity v) |> Map.ofSeq)

@@ -1230,6 +1230,11 @@ type BoundaryWritableBufferUse = {
     Participants: Set<NodeId>
 }
 
+[<RequireQualifiedAccess>]
+type BoundaryFixedType =
+    | EntryPointer of bits: int
+    | Integer of bits: int * signed: bool
+
 type BoundaryImport = {
     Identity: NodeId
     Binding: NodeId
@@ -1239,6 +1244,7 @@ type BoundaryImport = {
     CallingConvention: string
     DeclarationPath: NodeId list
     Parameters: (NodeId * BoundaryScalar) list
+    FixedSentinels: (int * string * int * BoundaryFixedType) list
     Result: BoundaryScalar option
     Participants: Set<NodeId>
     SourceTypes: Map<NodeId, TypeIdentity>

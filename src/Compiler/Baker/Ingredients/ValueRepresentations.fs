@@ -23,7 +23,6 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
     let descriptors = PlatformResolution.readDescriptors graph
     let resources = descriptors.Resources
     let resourceHandles = (resources |> List.map _.HandleType) @ (PlatformResolution.callbackHandleTypes graph descriptors) |> Set.ofList
-    let resourceOptions = resources |> List.map (fun row -> row.ResultType, row.HandleType) |> Map.ofList
     let mutable types = Map.empty<TypeIdentity, Result<ValueRepresentation, string>>
     let rec represent (visiting: Set<TypeIdentity>) (ty: NativeType) = representAt visiting (Identity.ofType ty) [] ty
     and representAt (visiting: Set<TypeIdentity>) (aggregateIdentity: TypeIdentity) (path: CallableAggregatePathStep list) (ty: NativeType) =
@@ -72,12 +71,13 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
             let union () =
                 match graph.Layouts.Value.TryFind key with
                 | Some(SettledLayout.Union(cases, payloadOffset, Some size, Some alignment)) when size > 0 && alignment > 0 ->
-                    if resourceOptions.ContainsKey key then
-                        let handleType = resourceOptions[key]
+                    let handleOption = AggregateValues.handleOption ty |> Option.map Identity.ofType
+                    if handleOption.IsSome then
+                        let handleType = handleOption.Value
                         match cases, payloadOffset, Placement.handleSlot graph handleType with
                         | [("None", None);("Some", Some actual)], Some offset, Ok slot when actual = slot ->
                             Ok(ValueRepresentation.Union(["None", []; "Some", [ValueRepresentation.Scalar slot]], Some(offset, size, alignment)))
-                        | _ -> Error "A resource Option requires its exact source cases, opaque handle slot and complete union placement."
+                        | _ -> Error "A handle Option requires its exact source cases, opaque handle slot and complete union placement."
                     elif fabric && (cases |> List.forall (snd >> Option.isNone)) then Ok(ValueRepresentation.Tag cases.Length)
                     elif fabric then Error "A payload union requires an admitted fabric representation."
                     else
@@ -103,7 +103,7 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
                 | _ -> Error "Union has no complete source-settled representation."
             let nominal (tc: TypeConRef) args =
                 if Types.isRegionTypeCon tc then Ok(ValueRepresentation.Buffer(None, byte))
-                elif resourceHandles.Contains key then Placement.handleSlot graph key |> Result.bind scalar
+                elif resourceHandles.Contains key || AggregateValues.isOpaqueHandle ty then Placement.handleSlot graph key |> Result.bind scalar
                 else
                     match tc.NTUKind with
                     | Some NTUKind.NTUunit -> scalar SettledSlot.Unit

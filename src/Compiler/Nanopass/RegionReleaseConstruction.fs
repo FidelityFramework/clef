@@ -68,6 +68,8 @@ let rec private owningScope (graph: SemanticGraph) (seen: Set<NodeId>) (id: Node
 /// both arms of every branch.
 let rec exitTails (graph: SemanticGraph) (id: NodeId) : NodeId list =
     match graph.Nodes.TryFind id with
+    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
+    | Some { Kind = SemanticKind.EagerExpr inner } -> exitTails graph inner
     | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> exitTails graph (List.last items)
     | Some { Kind = SemanticKind.IfThenElse(_, yes, Some no) } -> exitTails graph yes @ exitTails graph no
     | Some { Kind = SemanticKind.Match(_, cases) } when not cases.IsEmpty -> cases |> List.collect (fun case -> exitTails graph case.Body)

@@ -7,6 +7,18 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
+/// Opaque native handles retain their nominal identity when copied as values.
+/// Recognizing their representation grants no ownership or lifetime authority.
+let isOpaqueHandle ty =
+    match applySubst ty with
+    | NativeType.TApp(constructor, [_]) -> constructor = Types.cHandleTyCon
+    | _ -> false
+
+let handleOption ty =
+    match applySubst ty with
+    | NativeType.TApp(constructor, [inner]) when constructor = Types.optionTyCon && isOpaqueHandle inner -> Some inner
+    | _ -> None
+
 let private scalarPayload ty slot =
     match Types.tryGetNTUKind ty, slot with
     | Some (NTUKind.NTUint _ | NTUKind.NTUuint _), SettledSlot.Integer _
@@ -14,6 +26,8 @@ let private scalarPayload ty slot =
     | Some NTUKind.NTUbool, SettledSlot.Bool
     | Some NTUKind.NTUchar, SettledSlot.Char
     | Some NTUKind.NTUunit, SettledSlot.Unit -> true
+    | Some NTUKind.NTUptr, SettledSlot.CHandle(identity, bits, alignment) ->
+        isOpaqueHandle ty && identity = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty && bits > 0 && alignment > 0
     | _ -> false
 
 /// Only a concrete Option with one scalar payload can be copied by the current

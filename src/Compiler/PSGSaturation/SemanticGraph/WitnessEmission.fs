@@ -266,8 +266,25 @@ let exportedInterfaceFailures (graph: SemanticGraph) : WitnessProjectionFailure 
             ]
         | Some node ->
             let authorized = authorizedPaths node
+            // An immutable declaration alias is the same source import, not a
+            // native entry formation or an additional exported activation.
+            // Retain the original declaration's descriptor validation; this
+            // grants no authority to export an ofExtern/closure value.
+            let declarationAlias =
+                match Clef.Compiler.Baker.Recipes.BoundaryDeclarations.target graph id with
+                | Some (target, _) when target.Id <> id &&
+                                       Clef.Compiler.Baker.Recipes.BoundaryDeclarations.isExternal target &&
+                                       TypeIdentity.ofType (applySubst target.Type) = TypeIdentity.ofType (applySubst node.Type) ->
+                    descriptors.Functions |> List.exists (fun descriptor ->
+                        match PlatformResolution.lambdaOfBinding graph target.Id, PlatformResolution.recordOf graph descriptor.Node with
+                        | Some (formals, body), Some (record, fields) when descriptor.Body = Some body &&
+                                (descriptor.Parameters |> List.map fst) = (formals |> List.map (fun (_, _, formal) -> formal)) ->
+                            let _, findings = PlatformResolution.readFunctionForBinding graph target "" record fields
+                            findings.IsEmpty
+                        | _ -> false)
+                | _ -> false
             exposed Set.empty (Set.singleton id) [ "public interface" ] node.Type
-            |> List.filter (fun (path, _) -> not (Set.contains path authorized))
+            |> List.filter (fun (path, _) -> not declarationAlias && not (Set.contains path authorized))
             |> List.map (fun (path, participants) ->
                 let location = String.concat "." path
 
@@ -365,7 +382,7 @@ let internal unionLayoutFailures (graph: SemanticGraph) (scope: WitnessLiveScope
                 let reason =
                     if Placement.tryUnionTagBits graph ty |> Option.isNone then
                         Some "A live union operation requires a complete, representable source placement."
-                    elif isTag && not (resourceOptions.Contains(TypeIdentity.ofType ty)) &&
+                    elif isTag && not (resourceOptions.Contains(TypeIdentity.ofType ty) || (AggregateValues.handleOption ty |> Option.isSome)) &&
                          (node.ValueRange |> Option.exists ValueRange.isNonNegative |> not) then
                         Some "A live union tag read requires its nonnegative source range."
                     else None

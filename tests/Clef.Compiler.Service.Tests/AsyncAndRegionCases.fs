@@ -1235,8 +1235,10 @@ let main _ =
         Assert.True(loops >= 2, "Each array iteration must be a loop over every element.")
         AsyncAndRegionFixture.wellFormed revision
 
-    [<Fact>]
-    member _.``A-04 (20_BasicRegion): constructs one release on every exit path and refuses missing or excessive premises``() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``A-04 (20_BasicRegion): constructs one release on every exit path and refuses missing or excessive premises``(annotated: bool) =
         let source = """
 module BasicRegionSample
 
@@ -1261,6 +1263,11 @@ let main _ =
     Console.writeln (Format.int (pick true))
     0
 """
+        let source =
+            if annotated then
+                source.Replace("let processInRegion () =", "let processInRegion () : int =")
+                    .Replace("let pick (flag: bool) =", "let pick (flag: bool) : int =")
+            else source
         let graph = AsyncAndRegionFixture.check "20_BasicRegion" source
         let revision = AsyncAndRegionFixture.publish graph
         AsyncAndRegionFixture.regionMemory revision

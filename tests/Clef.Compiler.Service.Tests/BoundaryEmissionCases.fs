@@ -688,7 +688,7 @@ let main _ =
                 Assert.True argument.Adaptation.IsNone
 
     [<Fact>]
-    member _.``Foreign alias rewrite retains its exact import call and callable origin``() =
+    member _.``Direct foreign alias retains its exact import without a wrapper activation``() =
         let graph = BoundaryEmissionFixture.checkedGraph
                         (BoundaryEmissionFixture.booleanDeclaration + "\nlet alias = toggle\n" +
                          BoundaryEmissionFixture.booleanEntry.Replace("toggle true", "alias true"))
@@ -704,21 +704,11 @@ let main _ =
         match graph.Nodes[call.Callee].Kind with
         | SemanticKind.VarRef("toggle", Some binding) -> Assert.Equal(declaration.Id, binding)
         | other -> failwithf "The rewritten foreign call lost its exact declaration reference: %A" other
-        // Baker reifies the value-position alias through a capture-free
-        // wrapper. The retained origin belongs to that rewrite; the boundary
-        // call's current direct callee belongs to the original declaration.
-        let origin = graph.Edges |> List.filter (fun edge ->
-            edge.Role = EdgeRole.CallableReferenceOrigin &&
-            (match edge.Sources with [source; _] -> source = alias.Id | _ -> false)) |> Assert.Single
-        let implementation = List.item 1 origin.Sources
-        match graph.Nodes[origin.Target].Kind with
-        | SemanticKind.VarRef("alias", Some target) -> Assert.Equal(implementation, target)
-        | other -> failwithf "The alias rewrite lost its exact callable reference: %A" other
-        let wrapperParameters, wrapperBody = BoundaryDeclarations.lambdaOfBinding graph implementation |> Option.get
-        Assert.Equal(call.Site, wrapperBody)
-        let wrapperLambda = Assert.Single graph.Nodes[implementation].Children
-        let omitted = graph.Codata.Value.OrdinaryDemand.Parameters.TryFind wrapperLambda |> Option.defaultValue Set.empty
-        for _, _, formal in wrapperParameters do Assert.DoesNotContain(formal, omitted)
+        let aliasValue = Assert.Single alias.Children
+        match graph.Nodes[aliasValue].Kind with
+        | SemanticKind.VarRef("toggle", Some binding) -> Assert.Equal(declaration.Id, binding)
+        | _ -> failwith "A direct native re-export introduced another activation."
+        Assert.NotEqual(aliasValue, call.Site)
 
     [<Theory>]
     [<InlineData("missing")>]
@@ -1376,6 +1366,9 @@ let main _ =
         DimensionalCases.noErrors result
         let projection = BoundaryEmissionFixture.project result.Graph
         let roDecl = Assert.Single projection.ReadOnlyBufferDeclarations.Values
+        let imported = Assert.Single projection.Imports.Values
+        Assert.Equal<(int * string * int * BoundaryFixedType) list>(
+            [3, "SQLITE_TRANSIENT", -1, BoundaryFixedType.EntryPointer 64], imported.FixedSentinels)
         Assert.Equal(1, roDecl.Parameter)
         Assert.Equal(Some 2, roDecl.CountParameter)
         let roUse = Assert.Single projection.ReadOnlyBufferUses.Values
@@ -1781,6 +1774,14 @@ let main (argv: string[]) =
             |> Result.defaultWith (sprintf "%A" >> failwith)
         Assert.Empty(Fidelity.PSG.Integrity.check revision)
         let badRes = BoundaryEmissionCases.B1bCheck("b1b-bv-bad.clef", mkSource true)
+        let aliasSource =
+            (mkSource false)
+                .Replace("[<EntryPoint>]", "let colTextAlias : CHandle<StmtHandle> -> int -> option<CHandle<unit>> = colText\n\n[<EntryPoint>]")
+                .Replace("let v = colText s col", "let v = colTextAlias s col")
+        let aliasResult = BoundaryEmissionCases.B1bCheck("b1b-bv-alias.clef", aliasSource)
+        DimensionalCases.noErrors aliasResult
+        let aliasProjection = BoundaryEmissionFixture.project aliasResult.Graph
+        Assert.Equal(proj.BorrowedResultViewUses.Count, aliasProjection.BorrowedResultViewUses.Count)
         let badFailures = BoundaryEmissionFixture.rejected badRes.Graph
         let mutSource =
             (mkSource false).Replace(
@@ -1798,6 +1799,14 @@ let main (argv: string[]) =
         let condFailures = BoundaryEmissionFixture.rejected condRes.Graph
         Assert.Contains(condFailures, fun f -> f.Reason.Contains "CCS8424:")
         Assert.Contains(condRes.Diagnostics, fun d -> d.Code = "CCS8424")
+        let earlyReadSource =
+            (mkSource false).Replace(
+                "        let n = colBytes s col\n        let r = readView v n",
+                "        let r = readView v 0\n        let n = colBytes s col")
+        let earlyRead = BoundaryEmissionCases.B1bCheck("b1b-bv-before-extent.clef", earlyReadSource)
+        Assert.Contains(earlyRead.Diagnostics, fun d -> d.Code = "CCS8424")
+        Assert.Contains(BoundaryEmissionFixture.rejected earlyRead.Graph, fun f ->
+            f.Reason.Contains "companion extent measurement before invalidation")
         Assert.Contains(badFailures, fun f -> f.Reason.Contains "CCS8425:")
 
     [<Fact>]
@@ -3628,7 +3637,7 @@ let main _ =
             f.Reason.Contains "CCS8424:" && f.Reason.Contains "single-byte element representation")
 
     [<Fact>]
-    member _.``M10 SharedBufferPlacement and zero-copy view use publish Schema 55 rows, discharge obligations, and refuse FS9220-FS9223``() =
+    member _.``M10 SharedBufferPlacement and zero-copy view use publish current schema rows, discharge obligations, and refuse FS9220-FS9223``() =
         let authoritySource =
             SourcePlatformFixture.authority
                 .Replace("type TargetCore = { Arch: string; Os: string; Runtime: string; Triple: string; Widths: WidthDeclaration array; Representations: Representation array }",
@@ -3848,7 +3857,7 @@ let main _ =
         Assert.True(Result.isOk okRevRes)
         match okRevRes with
         | Ok okRev ->
-            Assert.Equal(55, okRev.Header.Schema)
+            Assert.Equal(Fidelity.PSG.Revision.Schema, okRev.Header.Schema)
             Assert.Empty(Fidelity.PSG.Integrity.check okRev)
             let revPlacement = Assert.Single okRev.Emission.Boundary.SharedBufferPlacements.Values
             Assert.Equal(5, revPlacement.Obligations.Length)

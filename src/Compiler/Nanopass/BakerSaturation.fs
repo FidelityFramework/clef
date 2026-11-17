@@ -48,6 +48,27 @@ let private isNativeCallbackArgument (graph: SemanticGraph) (node: SemanticNode)
         | _ -> false
     node.Parent |> Option.exists (parentUse node.Id)
 
+/// An immutable re-export used only as a callee keeps its foreign declaration
+/// identity. Reifying it would move the boundary application into a synthetic
+/// activation, separating buffer actuals from their source lifetime scope.
+let private isDirectNativeAlias (graph: SemanticGraph) (node: SemanticNode) =
+    let rec directUse seen (value: SemanticNode) =
+        if Set.contains value.Id seen then false else
+        let seen = Set.add value.Id seen
+        match value.Parent |> Option.bind (fun id -> graph.Nodes.TryFind id) with
+        | Some { Kind = SemanticKind.Application(callee, _) } -> callee = value.Id
+        | Some ({ Kind = SemanticKind.TypeAnnotation(inner, _); Children = [child] } as parent)
+            when inner = value.Id && child = value.Id -> directUse seen parent
+        | Some ({ Kind = SemanticKind.Binding(_, false, _, _); Children = [child] } as binding) when child = value.Id ->
+            graph.Nodes.Values |> Seq.forall (fun use' ->
+                match use'.Kind with
+                | SemanticKind.VarRef(_, Some id) when id = binding.Id && use'.IsReachable -> directUse seen use'
+                | _ -> true)
+        | _ -> isNativeCallbackArgument graph value
+    match Clef.Compiler.Baker.Recipes.BoundaryDeclarations.target graph node.Id with
+    | Some(declaration, _) when Clef.Compiler.Baker.Recipes.BoundaryDeclarations.isExternal declaration -> directUse Set.empty node
+    | _ -> false
+
 //-------------------------------------------------------------------------
 // Checked Higher-Order Operand Types
 //-------------------------------------------------------------------------
@@ -621,14 +642,25 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             | NativeType.TFun(domain, result) ->
                 signature (count - 1) result |> Option.map (fun (domains, remaining) -> domain :: domains, remaining)
             | _ -> None
-        match definitionArity with
-        | None ->
+        let nativeTarget = Clef.Compiler.Baker.Recipes.BoundaryDeclarations.target graph node.Id
+        match nativeTarget, definitionArity with
+        | Some(declaration, _), _ when inCallPosition && declaration.Id <> defId &&
+                                      Clef.Compiler.Baker.Recipes.BoundaryDeclarations.isExternal declaration ->
+            let ctx = mkContext node.Range node.Type graph.Platform "NativeDeclarationAlias" node.Id
+            let declarationName = match declaration.Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> name
+            let reference =
+                { node with Id = NodeId.fresh(); Kind = SemanticKind.VarRef(declarationName, Some declaration.Id)
+                            Parent = None; Children = []; ValueRange = None }
+                |> markBaker "NativeDeclarationAlias" ctx.ExpansionId
+            let result = mkResultNoShadow [reference] reference.Id []
+            RecipeCreated(toRecipe node.Id "NativeDeclarationAlias" result)
+        | _, None ->
             NotApplicable "Reference is not to a capture-free named function"
-        | Some _ when inCallPosition || isNativeCallbackArgument graph node ->
+        | _, Some _ when inCallPosition || isNativeCallbackArgument graph node || isDirectNativeAlias graph node ->
             NotApplicable "Function reference in call position"
-        | Some _ when node.Parent |> Option.map inSpatialModuleDeclaration |> Option.defaultValue false ->
+        | _, Some _ when node.Parent |> Option.map inSpatialModuleDeclaration |> Option.defaultValue false ->
             NotApplicable "Declaration field of a spatial module design"
-        | Some arity ->
+        | _, Some arity ->
             match resolved node.Type, signature arity node.Type with
             | (NativeType.TFun _ as funcType), Some(domains, resultType) ->
                 let ctx = mkContext node.Range funcType graph.Platform "FunctionValue" node.Id

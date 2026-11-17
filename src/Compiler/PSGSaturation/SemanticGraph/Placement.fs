@@ -171,7 +171,7 @@ let private slotOfKind (p: Placer) (range: ValueRange) (kind: NTUKind) : Settled
 /// The slot of a value of the given type; `range` is the settled range of the field or position.
 let rec private slotOf (p: Placer) (range: ValueRange) (ty: NativeType) : SettledSlot =
     let ty = applySubst ty
-    if p.ResourceHandles.Contains(keyOf ty) then
+    if p.ResourceHandles.Contains(keyOf ty) || AggregateValues.isOpaqueHandle ty then
         match p.PointerBytes with
         | Some bytes when bytes > 0 -> SettledSlot.CHandle(keyOf ty, bytes * 8, bytes)
         | _ -> SettledSlot.Opaque "A resource handle has no selected interior word-storage layout."
@@ -758,7 +758,7 @@ let private placeContinuationFields (graph: SemanticGraph)
         else
             let settled slot alignmentKind =
                 extent node.Id slot alignmentKind |> Result.map (fun size -> slot, size)
-            if placer.ResourceHandles.Contains(keyOf ty) then
+            if placer.ResourceHandles.Contains(keyOf ty) || AggregateValues.isOpaqueHandle ty then
                 settled (SettledSlot.CHandle(keyOf ty, bits, bits / 8)) NTUKind.NTUptr
             else
             match Types.tryGetNTUKind ty with
