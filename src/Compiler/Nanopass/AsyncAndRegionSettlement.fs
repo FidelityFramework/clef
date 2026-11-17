@@ -378,6 +378,37 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
             | None -> []
     let regionsOf = regionsOf Set.empty
 
+    // A fixed reservation is valid only once during this region's lifetime.
+    // Follow the existing actual/formal call census, stopping at the owning
+    // lexical scope; repeated calls and loops require a separate source cursor.
+    let onceWithin region site =
+        match scopes.TryFind region with
+        | None -> false
+        | Some scope ->
+            let rec visit seen id =
+                if id=scope.Scope then true
+                elif Set.contains id seen then false
+                else
+                    let seen=Set.add id seen
+                    match graph.Nodes.TryFind id with
+                    | Some {Kind=SemanticKind.WhileLoop _} | Some {Kind=SemanticKind.ForLoop _} -> false
+                    | Some {Kind=SemanticKind.Lambda(parameters,_,_,_,_)} ->
+                        let directUsesOnly =
+                            reachable |> List.forall (fun node ->
+                                match node.Kind with
+                                | SemanticKind.VarRef _ when origin graph node.Id Set.empty=id ->
+                                    node.Parent |> Option.bind graph.Nodes.TryFind |> Option.exists (fun parent ->
+                                        match parent.Kind with
+                                        | SemanticKind.Application(callee,_) -> callee=node.Id
+                                        | _ -> false)
+                                | _ -> true)
+                        match callsOf.TryFind id with
+                        | Some [(call,arguments)] when directUsesOnly && arguments.Length=parameters.Length -> visit seen call.Id
+                        | _ -> false
+                    | Some node -> node.Parent |> Option.exists (visit seen)
+                    | None -> false
+            visit Set.empty site
+
     let space =
         Platform.resolve graph
         |> Option.map (fun declared -> declared.Spaces |> List.filter (fun space -> space.Kind = "region"))
@@ -436,7 +467,10 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
                     None, refusal "CCS8403" node.Range [ node.Id; region ] "Region.alloc does not draw from a settled region creation."
                 | Some (elementBytes, alignment), Some (_, upper), regions ->
                     let bytes = upper * bigint elementBytes
-                    if bytes > maxBytes then
+                    if not (regions |> List.forall (fun region -> onceWithin region node.Id)) then
+                        None, refusal "CCS8405" node.Range [node.Id;region]
+                            "Region allocation can execute repeatedly within its owning region lifetime; a fixed reservation requires one source occurrence per activation."
+                    elif bytes > maxBytes then
                         None, refusal "CCS8405" node.Range [ node.Id; count ] "Region.alloc byte extent exceeds the finite layout model."
                     else
                         Some { Site = node; Binding = bindingOfValue node; Regions = regions; Bytes = int64 bytes; Alignment = alignment }, none
@@ -567,10 +601,11 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
                     None, refusal "CCS8405" node.Range ([ node.Id ] @ uncovered)
                             "The region is not released on every exit path of its owning scope, and no release can be constructed where the exit value reads region storage."
                 else
-                    match intrinsic.Children with
-                    | [] ->
+                    match intrinsic.Children,space with
+                    | [],_ ->
                         None, refusal "CCS8403" node.Range [ node.Id ] "Region.create lacks its placement anchor."
-                    | placement :: _ ->
+                    | _ :: _,Some [selectedSpace] ->
+                        let placement=selectedSpace.Node
                         let paths = pairs |> List.map fst |> List.distinct
                         let releases = pairs |> List.map snd
                         let depth = lexicalScopeDepth graph scope.Binding Set.empty |> max 2
@@ -591,7 +626,8 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
                               ScopeExitReleases = pairs
                               Obligations = [ obligation.Id ]
                               Participants = participants sources }
-                        Some (node.Id, row), accrued)
+                        Some (node.Id, row), accrued
+                    | _ -> None,refusal "CCS8403" node.Range [node.Id] "Region storage lost its unique selected platform space.")
         |> List.unzip
     let regionRows = regionRows |> List.choose id |> Map.ofList
     let releasesByRegion =
@@ -720,7 +756,20 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
                 | Some sourceRow when bytes <= allocation.Bytes ->
                     match Map.tryFind sourceRow.Region scopes with
                     | Some regionScope ->
-                        let dstScope = regionScope.Scope
+                        let returned =
+                            match node.Metadata.TryFind "Region.CopyLifetime",node.Metadata.TryFind "Region.CopyUses",
+                                  graph.Platform |> Option.bind _.ProjectMemoryPolicy with
+                            | Some(MetadataValue.NodeIdList[application;implementation;caller;binding;space]),
+                              Some(MetadataValue.NodeIdList uses),Some(path,version,model,true) ->
+                                let retirements=reachable |> List.choose(fun candidate ->
+                                    match candidate.Metadata.TryFind "Region.CopyOwner",candidate.Metadata.TryFind Release.ScopeExitPath with
+                                    | Some(MetadataValue.NodeId owner),Some(MetadataValue.NodeId tail) when owner=node.Id -> Some(tail,candidate.Id)
+                                    | _ -> None)
+                                Some {Application=application;Implementation=implementation;Caller=caller;Binding=binding
+                                      Uses=Set.ofList uses;Retirements=retirements;Space=space
+                                      Policy={ProjectPath=path;SourceVersion=version;Model=model}}
+                            | _ -> None
+                        let dstScope = match returned with Some life -> life.Caller | None -> regionScope.Scope
                         let dstDepth = min (sourceRow.LifetimeDepth - 1) (lexicalScopeDepth graph dstScope Set.empty) |> max 1
                         let sources = [ node.Id; allocation.Site.Id; sourceRow.Region; source ]
                         let obligation, accrued =
@@ -744,6 +793,7 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
                               DestinationCapacity = bytes
                               DestinationAlignment = max alignment sourceRow.Alignment
                               EscapeDischargeObligation = obligation.Id
+                              Returned = returned
                               Participants = participants (sources @ [ sourceRow.LifetimeScope; dstScope ]) }
                         Some (node.Id, row), accrued
                     | None ->
@@ -761,6 +811,9 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
             match allocationOf source, regionsOf destination, copyBytes node count with
             | Some allocation, [ destinationRegion ], Some (bytes, alignment) ->
                 match allocation.Regions |> List.tryExactlyOne |> Option.bind (fun region -> Map.tryFind region regionRows), Map.tryFind destinationRegion regionRows with
+                | Some _, Some _ when not (onceWithin destinationRegion node.Id) ->
+                    None, refusal "CCS8405" node.Range [node.Id;destination]
+                        "Region.copyTo can execute repeatedly within its destination region lifetime; its reservation requires one source occurrence per activation."
                 | Some sourceRow, Some destinationRow when destinationRegion = sourceRow.Region || destinationRow.LifetimeDepth >= sourceRow.LifetimeDepth ->
                     None, refusal "CCS8406" node.Range [ node.Id; source; destination ] "Region.copyTo requires a distinct destination region whose lifetime outlives the source region."
                 | Some sourceRow, Some destinationRow when bytes <= allocation.Bytes && bytes <= destinationRow.Capacity ->
@@ -786,6 +839,7 @@ let private settleRegions (graph: SemanticGraph) (reachable: SemanticNode list) 
                           DestinationCapacity = destinationRow.Capacity
                           DestinationAlignment = max alignment destinationRow.Alignment
                           EscapeDischargeObligation = obligation.Id
+                          Returned = None
                           Participants = participants (sources @ [ sourceRow.LifetimeScope; destinationRow.LifetimeScope ]) }
                     Some (node.Id, row), accrued
                 | Some _, Some _ ->

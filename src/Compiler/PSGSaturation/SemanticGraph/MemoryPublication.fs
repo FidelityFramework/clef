@@ -41,6 +41,21 @@ let private projectWith (graph: SemanticGraph) excluded : Result<MemoryWitnessPr
                         Reason = "MemoryPublication: " + reason
                     })
             )
+        elif domain.Operations |> List.exists(fun (_,operation) ->
+            match operation with
+            | MemoryWitnessOperation.Region row -> row.Declarations |> Map.exists(fun id fact ->
+                match graph.Nodes.TryFind id with
+                | Some node -> Clef.Compiler.Baker.Ingredients.Boundaries.declarationFact node<>Ok fact
+                | None -> true)
+            | _ -> false) then
+            reject (Some anchor) participants "The region storage declaration premises changed."
+        elif domain.Operations |> List.exists(fun (_,operation) ->
+            match operation with
+            | MemoryWitnessOperation.Region row ->
+                row.CopyOwner |> Option.bind graph.Codata.Value.RegionCopyEndpoints.TryFind |> Option.bind _.Returned
+                |> Option.exists(fun life -> (graph.Platform |> Option.bind _.ProjectMemoryPolicy)<>Some(life.Policy.ProjectPath,life.Policy.SourceVersion,life.Policy.Model,true))
+            | _ -> false) then
+            reject (Some anchor) participants "The independent region copy allocation permission or captured project policy changed."
         elif domain.StringRelations |> List.exists(fun row ->
             match row.Premise with
             | MemoryStringPremise.Checked {Returned=Some life} ->

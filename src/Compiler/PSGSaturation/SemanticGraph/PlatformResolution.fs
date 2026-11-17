@@ -1331,6 +1331,42 @@ type DeclaredSharedBufferRegion = {
     Participants: NodeId list
 }
 
+type DeclaredRegionMemory = {
+    Node: NodeId
+    Binding: NodeId
+    Descriptor: BAREWire.Descriptors.RegionMemoryDescriptor
+    Participants: Set<NodeId>
+}
+
+/// Read the immutable quoted storage contract; generated FunctionDescriptors
+/// independently retain native ABI authority.
+let readRegionMemory (graph: SemanticGraph) : Result<DeclaredRegionMemory list,string> =
+    graph.Nodes.Values |> Seq.choose (fun binding ->
+        match binding.Kind,binding.Children with
+        | SemanticKind.Binding(_,false,_,_),[value] ->
+            match valuePath graph value with
+            | Some({Kind=SemanticKind.RecordExpr(fields,None)} as record,path) when typeName record=Some "RegionMemoryDescriptor" ->
+                let str name = field name fields |> Option.bind (stringOf graph)
+                let number name = field name fields |> Option.bind (int64Of graph)
+                let strings = ["Space";"EscapeSpace";"Acquire";"Release";"FailureAction"] |> List.map str
+                let numbers = ["Address";"Protection";"Flags";"FileDescriptor";"Offset";"FailureValue";"ReleaseSuccess"] |> List.map number
+                let support = binding.Id::record.Id::path @ (fields |> List.collect(fun (_,id) ->
+                    match valuePath graph id with Some(_,path) -> path | None -> [id])) |> Set.ofList
+                let immutable = support |> Set.forall(fun id ->
+                    match graph.Nodes.TryFind id with Some {Kind=SemanticKind.Binding(_,true,_,_)} -> false | _ -> true)
+                let quoted = path |> List.exists(fun id -> match graph.Nodes[id].Kind with SemanticKind.Quote _ -> true | _ -> false)
+                Some(match strings,numbers with
+                     | [Some space;Some escape;Some acquire;Some release;Some failure],
+                       [Some address;Some protection;Some flags;Some fd;Some offset;Some sentinel;Some success] when immutable && quoted ->
+                         Ok {Node=record.Id;Binding=binding.Id;Participants=support
+                             Descriptor={Space=space;EscapeSpace=escape;Acquire=acquire;Release=release;Address=address
+                                         Protection=protection;Flags=flags;FileDescriptor=fd;Offset=offset
+                                         FailureValue=sentinel;ReleaseSuccess=success;FailureAction=failure}}
+                     | _ -> Error(sprintf "RegionMemoryDescriptor %d requires complete immutable quoted fields." (NodeId.value record.Id)))
+            | _ -> None
+        | _ -> None)
+    |> Seq.fold(fun state value -> Result.bind(fun rows -> Result.map(fun row -> row::rows) value) state) (Ok [])
+
 type Descriptors = {
     Layouts: DeclaredLayout list
     Functions: DeclaredFunction list

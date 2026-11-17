@@ -122,7 +122,10 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
               rows.Boundary.WritableBufferDeclarations.Values |> Seq.map _.Declaration
               rows.Boundary.ReadOnlyBufferDeclarations.Values |> Seq.map _.Declaration
               rows.Boundary.BorrowedResultViewDeclarations.Values |> Seq.map _.Declaration
-              rows.Boundary.SharedBufferPlacements.Values |> Seq.map _.Declaration ]
+              rows.Boundary.SharedBufferPlacements.Values |> Seq.map _.Declaration
+              rows.Memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Region row -> row.Runtime | _ -> None)
+                  |> Seq.collect(fun runtime -> [runtime.Acquire;runtime.Release])
+                  |> Seq.choose(fun id -> rows.Boundary.Imports.TryFind id |> Option.map _.Binding) ]
             |> Seq.concat
             |> Set.ofSeq)
         |> Option.defaultValue Set.empty

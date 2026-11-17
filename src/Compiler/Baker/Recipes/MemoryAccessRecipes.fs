@@ -56,6 +56,7 @@ type Expansion = { Structure: Result; Edges: Hyperedge list }
 let rec private sourceIntrinsic (graph: SemanticGraph) id arguments =
     match graph.Nodes.TryFind id with
     | Some { Kind = SemanticKind.Intrinsic info } -> Some(info, arguments)
+    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> sourceIntrinsic graph inner arguments
     | Some { Kind = SemanticKind.Application(callee, actuals) } -> sourceIntrinsic graph callee (actuals @ arguments)
     | _ -> None
 
@@ -636,6 +637,66 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
     let mutable required = Set.empty
     let excluded = Memory.excluded graph
     let getPlatform () = Platform.resolve graph |> needed "A memory residence requires the selected source platform declaration."
+    let regionOperation (node: SemanticNode) =
+        match sourceIntrinsic graph node.Id [] with
+        | Some(info, arguments) when info.FullName.StartsWith("Region.", System.StringComparison.Ordinal) ->
+            Some(info.FullName, arguments)
+        | _ -> None
+    let regionAt site =
+        graph.Codata.Value.RegionAllocations.Values
+        |> Seq.filter (fun row -> row.Region=site || List.contains site row.AllocatedValues
+                                 || row.ScopeExitReleases |> List.exists (fun (_,release) -> release=site))
+        |> Seq.toList
+        |> function [row] -> Ok row | _ -> Result.Error "Region memory requires one settled owning region."
+    let exactCount id = result {
+        let! count = carrier numeric id
+        match count.Range with
+        | ValueRange.Bounded(lo,hi) when lo=hi && lo>0I && hi<=bigint System.Int32.MaxValue -> return int lo
+        | _ -> return! Result.Error "Region storage requires a positive exact source allocation count."
+    }
+    let regionRuntime (owner:RegionAllocation) = result {
+        let! contracts=Platform.readRegionMemory graph
+        let! declared=getPlatform ()
+        let! space=declared.Spaces |> List.tryFind(fun space -> space.Node=owner.SpacePlacement)
+                   |> needed "The region storage space was withdrawn."
+        match contracts |> List.filter(fun contract -> contract.Descriptor.Space=space.Name) with
+        | [] -> return None
+        | [contract] ->
+            let imports=graph.Edges |> List.choose(function {Role=EdgeRole.BoundaryImport imported} -> Some imported | _ -> None)
+                          |> List.distinctBy _.Identity
+            let imported name =
+                imports |> List.filter(fun imported -> graph.Nodes.TryFind imported.Binding |> Option.bind (Platform.qualifiedExportName graph)=Some name)
+                |> function [imported] -> Ok imported | _ -> Result.Error("Region memory lacks its exact generated import: " + name)
+            let! acquire=imported contract.Descriptor.Acquire
+            let! release=imported contract.Descriptor.Release
+            return Some {Declaration=contract.Node;Acquire=acquire.Identity;Release=release.Identity;Contract=contract.Descriptor
+                         Participants=Set.unionMany[contract.Participants;acquire.Participants;release.Participants]}
+        | _ -> return! Result.Error "Region memory has ambiguous runtime declarations."
+    }
+    let reservedBytes site = result {
+        let! value = live graph site
+        let! count =
+            match regionOperation value with
+            | Some("Region.alloc",[_;count]) | Some("Region.copyTo",[_;_;count]) -> exactCount count
+            | _ -> Result.Error "Region reservation is not an allocation or copyTo occurrence."
+        let! slot = viewElementSlot graph numeric value
+        let! bytes,alignment = size graph slot
+        return int64 count * int64 bytes,alignment
+    }
+    let regionOffset (row: RegionAllocation) site = result {
+        let allocations =
+            row.AllocatedValues |> List.filter (fun id ->
+                match graph.Nodes.TryFind id |> Option.bind regionOperation with
+                | Some("Region.alloc",_) | Some("Region.copyTo",_) -> true
+                | _ -> false) |> List.distinct |> List.sort
+        let! reservations = allocations |> mapResult (fun id -> reservedBytes id |> Result.map (fun (bytes,align) -> id,bytes,align))
+        let placed,_ = reservations |> List.mapFold (fun offset (id,bytes,alignment) ->
+            let align = int64 alignment
+            let start = ((offset+align-1L)/align)*align
+            (id,start),start+bytes) 0L
+        return! placed |> List.tryPick (fun (id,offset) -> if id=site then Some offset else None)
+                |> needed "Region allocation has no source-owned reservation."
+    }
     let checkedCase site =
         graph.Edges |> List.choose(fun edge ->
             match edge.Role with
@@ -664,6 +725,105 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
         result {
             let! operation =
                 match node.Kind with
+                | SemanticKind.Application _ when (regionOperation node).IsSome ->
+                    result {
+                        let name,arguments = regionOperation node |> Option.get
+                        let facts=graph.Codata.Value
+                        let! kind,row,operand,source,count =
+                            match name,arguments with
+                            | "Region.create",[_] -> regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Create,row,None,None,None)
+                            | "Region.alloc",[region;count] -> regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Allocate,row,Some region,None,Some count)
+                            | "Region.release",[region] -> regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Release,row,Some region,None,None)
+                            | "Region.copyOut",[source;count] ->
+                                facts.RegionCopyEndpoints.TryFind node.Id |> needed "copyOut lacks its source escape contract."
+                                |> Result.bind (fun copy -> facts.RegionAllocations.TryFind copy.SourceRegion |> needed "copyOut source region is absent.")
+                                |> Result.map (fun row -> MemoryRegionKind.CopyOut,row,None,Some source,Some count)
+                            | "Region.copyTo",[source;region;count] ->
+                                facts.RegionCopyEndpoints.TryFind node.Id |> needed "copyTo lacks its source escape contract."
+                                |> Result.bind (fun copy -> copy.DestinationRegion |> Option.bind facts.RegionAllocations.TryFind |> needed "copyTo destination region is absent.")
+                                |> Result.map (fun row -> MemoryRegionKind.CopyTo,row,Some region,Some source,Some count)
+                            | "Region.retireCopy",[value] ->
+                                result {
+                                    let copies =
+                                        facts.RegionCopyEndpoints.Values |> Seq.filter(fun copy ->
+                                            copy.Returned |> Option.exists(fun life -> life.Retirements |> List.exists(fun (_,site) -> site=node.Id)))
+                                        |> Seq.toList
+                                    let! copy =
+                                        match copies with
+                                        | [copy] -> Ok copy
+                                        | _ -> Result.Error "Independent-copy retirement has no unique source lifetime."
+                                    let! owner=facts.RegionAllocations.TryFind copy.SourceRegion |> needed "The copy source region is absent."
+                                    let! count=
+                                        match graph.Nodes.TryFind copy.Site |> Option.bind regionOperation with
+                                        | Some("Region.copyOut",[_;count]) -> Ok count
+                                        | _ -> Result.Error "Copy retirement lost its original copy count."
+                                    return MemoryRegionKind.RetireCopy,owner,Some value,None,Some count
+                                }
+                            | _ -> Result.Error "Unsupported region memory occurrence."
+                        let! slot,bytes,alignment,length =
+                            match count with
+                            | None ->
+                                demand (row.Capacity<=int64 System.Int32.MaxValue) "Region capacity exceeds the finite storage model."
+                                |> Result.map (fun () -> SettledSlot.Integer(8,None),1,row.Alignment,int row.Capacity)
+                            | Some count -> result {
+                                let! length=exactCount count
+                                let! valueNode =
+                                    if kind=MemoryRegionKind.RetireCopy then operand |> Option.bind graph.Nodes.TryFind |> needed "Copy retirement lost its operand."
+                                    else Ok node
+                                let! slot=viewElementSlot graph numeric valueNode
+                                let! bytes,alignment=size graph slot
+                                return slot,bytes,alignment,length
+                              }
+                        let! offset =
+                            match kind with
+                            | MemoryRegionKind.Allocate | MemoryRegionKind.CopyTo -> regionOffset row node.Id
+                            | _ -> Ok 0L
+                        let capacity = if kind=MemoryRegionKind.CopyOut || kind=MemoryRegionKind.RetireCopy then int64 length*int64 bytes else row.Capacity
+                        do! demand (offset>=0L && offset+int64 length*int64 bytes<=capacity)
+                                "The source region reservation exceeds its settled capacity."
+                        let copyClaims = facts.RegionCopyEndpoints.TryFind node.Id |> Option.map (fun copy -> [copy.EscapeDischargeObligation]) |> Option.defaultValue []
+                        let participants = Set.union (row.Participants |> List.map _.Node |> Set.ofList) (Set.ofList (node.Id::row.Region::row.SpacePlacement::(Option.toList operand @ Option.toList source @ Option.toList count)))
+                        let finish = offset + int64 length * int64 bytes
+                        // Include the preceding reserved bytes so this layout tiles
+                        // the region prefix instead of claiming a gap at offset zero.
+                        let slots = (if offset=0L then [] else [0,int offset,1]) @ [int offset,length*bytes,alignment]
+                        let! layout = proof (ObligationBody.ContinuationLayout(slots,int finish,alignment)) participants "region_layout"
+                        let! capacityProof = proof (ObligationBody.CapacityFits(finish,capacity)) participants "region_capacity"
+                        let obligations = layout::capacityProof::(row.Obligations @ copyClaims)
+                        let copyOwner=
+                            if kind=MemoryRegionKind.RetireCopy then
+                                facts.RegionCopyEndpoints.Values |> Seq.tryFind(fun copy -> copy.Returned |> Option.exists(fun life -> life.Retirements |> List.exists(fun (_,site) -> site=node.Id))) |> Option.map _.Site
+                            elif kind=MemoryRegionKind.CopyOut then Some node.Id else None
+                        let lifetime=copyOwner |> Option.bind facts.RegionCopyEndpoints.TryFind |> Option.bind _.Returned
+                        let! runtime=regionRuntime row
+                        let space=match lifetime with Some life -> life.Space | None -> row.SpacePlacement
+                        let declarationRoots=row.SpacePlacement::space::(runtime |> Option.map _.Declaration |> Option.toList)
+                        let! declarations=declarationRoots |> List.distinct |> List.fold(fun state root ->
+                            state |> Result.bind(fun facts ->
+                                Clef.Compiler.Baker.Ingredients.Boundaries.declarationFacts graph root
+                                |> Result.map(fun current -> Map.fold(fun facts id value -> Map.add id value facts) facts current))) (Ok Map.empty)
+                        let! obligations =
+                            match lifetime with
+                            | None -> Ok obligations
+                            | Some life -> result {
+                                do! demand ((graph.Platform |> Option.bind _.ProjectMemoryPolicy)=Some(life.Policy.ProjectPath,life.Policy.SourceVersion,life.Policy.Model,true))
+                                        "Independent copy lost its captured project allocation permission."
+                                let! platform=getPlatform ()
+                                let! heap=platform.Spaces |> List.tryFind(fun selected -> selected.Node=life.Space && selected.Kind="heap" && selected.Access.Contains("w"))
+                                          |> needed "Independent copy lost its selected writable heap space."
+                                do! demand (runtime |> Option.forall(fun selected -> selected.Contract.EscapeSpace=heap.Name)) "Independent copy differs from its declared destination space."
+                                let support=Set.union participants (Set.ofList(life.Application::platform.Node::heap.Node::(life.Retirements |> List.map snd)))
+                                let! heapCapacity=proof (ObligationBody.CapacityFits(capacity,heap.Capacity)) support "region_copy_capacity"
+                                return heapCapacity::obligations
+                              }
+                        let runtimeSupport=runtime |> Option.map _.Participants |> Option.defaultValue Set.empty
+                        return MemoryWitnessOperation.Region {
+                            Site=node.Id; Region=row.Region; Kind=kind; Operand=operand; Source=source
+                            Count=(if kind=MemoryRegionKind.RetireCopy then None else count)
+                            Element=slot; ElementBytes=bytes; Length=length; Offset=offset; Capacity=capacity
+                            Alignment=alignment; Space=space; Runtime=runtime;CopyOwner=copyOwner;Declarations=declarations;Obligations=obligations
+                            Participants=Set.unionMany[participants;Set.ofList obligations;runtimeSupport;Set.singleton space;Set.ofList(Option.toList copyOwner);declarations.Keys |> Set.ofSeq] }
+                    }
                 | SemanticKind.Binding(_,true,_,_) ->
                     result {
                         let! scope = nearestLambda graph node.Id |> needed "A scalar cell lacks a lexical activation."
@@ -1116,6 +1276,7 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
             let needs =
                 match node.Kind with
                 | SemanticKind.ArrayExpr _ -> isArray graph node.Id
+                | SemanticKind.Application _ when (regionOperation node).IsSome -> true
                 | SemanticKind.AddressOf _ | SemanticKind.CellAddress _
                 | SemanticKind.ElementAddress _ | SemanticKind.FieldAddress _ | SemanticKind.Reborrow _ -> true
                 | SemanticKind.DUConstruct _ when (checkedCase node.Id).IsSome -> true

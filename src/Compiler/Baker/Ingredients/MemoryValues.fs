@@ -80,6 +80,7 @@ let snapshotStorageIds = function
     | MemoryCheckedSnapshotStorage.Allocated row -> row.Participants
     | MemoryCheckedSnapshotStorage.Empty row -> emptySnapshotIds row
 let participants operations = function
+    | MemoryWitnessOperation.Region fact -> fact.Participants
     | MemoryWitnessOperation.LocalScalar fact ->
         let residence = match fact.Residence with MemoryResidence.Stack(scope,space) -> [scope;space] | _ -> []
         Set.union fact.Reads (Set.ofList ([fact.Site;fact.Initializer;fact.Platform;fact.Layout;fact.Capacity] @ residence @ (fact.Writes |> List.collect (fun (site,value)->[site;value]))))
@@ -101,6 +102,7 @@ let participants operations = function
     | MemoryWitnessOperation.CheckedResultRetirement fact -> Set.add fact.Site (Set.add fact.Value (constructionIds fact.Construction))
     | MemoryWitnessOperation.EmptySnapshot fact -> emptySnapshotIds fact
 let operands = function
+    | MemoryWitnessOperation.Region fact -> Option.toList fact.Operand @ Option.toList fact.Source @ Option.toList fact.Count
     | MemoryWitnessOperation.LocalScalar fact -> fact.Initializer :: (fact.Writes |> List.map snd)
     | MemoryWitnessOperation.BufferExtent fact -> [fact.Source]
     | MemoryWitnessOperation.ArrayExtent fact -> [fact.Source]

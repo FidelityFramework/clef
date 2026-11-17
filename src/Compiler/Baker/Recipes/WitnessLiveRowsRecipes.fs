@@ -17,10 +17,15 @@ let private metadataDeclarations (emission: WitnessEmissionProjection) (scope: W
     let demanded = Set.union (scope.Occurrences.Keys |> Set.ofSeq) (scope.BindingUses.Values |> Seq.map _.Binding |> Set.ofSeq)
     let anchors = emission.Boundary.CallbackInvocations.Values |> Seq.choose(fun row ->
         match row.Extent with BoundaryCallbackExtent.ProcessExit(anchor,_) -> anchor | _ -> None) |> Set.ofSeq
+    let regions = emission.Memory.Operations.Values |> Seq.choose(function MemoryWitnessOperation.Region row -> row.Runtime | _ -> None)
+                  |> Seq.collect(fun runtime -> [runtime.Acquire;runtime.Release]) |> Set.ofSeq
     emission.Boundary.Imports.Values |> Seq.filter(fun row ->
-        anchors.Contains row.Binding && not(List.exists demanded.Contains row.DeclarationPath) &&
-        not(emission.Boundary.Calls.Values |> Seq.exists(fun call -> call.Import=row.Identity)))
-    |> Seq.collect _.DeclarationPath |> Set.ofSeq
+        regions.Contains row.Identity ||
+        (anchors.Contains row.Binding && not(List.exists demanded.Contains row.DeclarationPath) &&
+         not(emission.Boundary.Calls.Values |> Seq.exists(fun call -> call.Import=row.Identity))))
+    |> Seq.collect(fun row ->
+        if regions.Contains row.Identity then row.DeclarationPath @ (row.SourceTypes.Keys |> Seq.toList)
+        else row.DeclarationPath) |> Set.ofSeq
 
 let private branches ids (value: CallableBranchAuthority) =
     { value with Observations = selected ids value.Observations
@@ -115,6 +120,12 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         let before = ids
         let callableIds = Set.difference before metadata
         selected before emission.Ordinary.Parameters |> Map.iter (fun _ row -> addMany row)
+        selected before emission.Memory.Operations |> Map.iter(fun _ operation ->
+            match operation with
+            | MemoryWitnessOperation.Region row ->
+                add row.Region; add row.Space; addOptional row.CopyOwner
+                row.Runtime |> Option.iter(fun runtime -> add runtime.Acquire; add runtime.Release)
+            | _ -> ())
         selected before emission.Ordinary.Calls |> Map.iter (fun _ row -> add row.Implementation; addMany row.Actuals)
         selected callableIds emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
         selected callableIds emission.Callable.Contracts |> Map.iter (fun _ row -> contract row)

@@ -53,6 +53,49 @@ module private AsyncAndRegionFixture =
         let violations = Fidelity.PSG.Integrity.check revision
         Assert.True(violations.IsEmpty, Fidelity.PSG.Integrity.describe violations)
 
+    let regionMemory (revision: Fidelity.PSG.Revision) =
+        let memory = revision.Emission.Memory
+        let at site =
+            match memory.Operations.TryFind site with
+            | Some(Fidelity.PSG.MemoryWitnessOperation.Region row) -> row
+            | other -> failwithf "Missing region memory operation at %A: %A; required=%b; deferred=%b; reason=%A; node=%A"
+                           site other (memory.Required.Contains site)
+                           (revision.Emission.Ordinary.DeferredOnly.Contains site) (memory.Unresolved.TryFind site)
+                           (revision.Nodes.TryFind site |> Option.map (fun node -> node.Kind, node.IsReachable, node.Children))
+        for region in revision.Codata.RegionAllocations.Values do
+            let creation = at region.Region
+            Assert.Equal(Fidelity.PSG.MemoryRegionKind.Create, creation.Kind)
+            Assert.Equal(region.Capacity, creation.Capacity)
+            for allocation in region.AllocatedValues do
+                match revision.Nodes[allocation].Kind with
+                | Fidelity.PSG.SemanticKind.Application _ ->
+                    let operation = at allocation
+                    Assert.Contains(operation.Kind, [Fidelity.PSG.MemoryRegionKind.Allocate; Fidelity.PSG.MemoryRegionKind.CopyTo])
+                | _ -> ()
+            for _, release in region.ScopeExitReleases do
+                Assert.Equal(Fidelity.PSG.MemoryRegionKind.Release, (at release).Kind)
+            // A valid source lifetime row cannot authorize changed geometry.
+            let changed = { creation with Offset = creation.Capacity }
+            let changedMemory = { memory with Operations = memory.Operations.Add(creation.Site, Fidelity.PSG.MemoryWitnessOperation.Region changed) }
+            let tampered =
+                { revision with Emission = { revision.Emission with Memory = changedMemory } }
+            Assert.Contains(Fidelity.PSG.Integrity.check tampered, fun violation ->
+                violation.Part.StartsWith("Emission.Memory.Operations.Region"))
+            for _, release in region.ScopeExitReleases do
+                let released = at release
+                let changed = { released with Operand = Some region.Region }
+                let changedMemory = { memory with Operations = memory.Operations.Add(release, Fidelity.PSG.MemoryWitnessOperation.Region changed) }
+                let tampered =
+                    { revision with Emission = { revision.Emission with Memory = changedMemory } }
+                Assert.Contains(Fidelity.PSG.Integrity.check tampered, fun violation ->
+                    violation.Part.StartsWith("Emission.Memory.Operations.Region"))
+        for copy in revision.Codata.RegionCopyEndpoints.Values do
+            let operation = at copy.Site
+            Assert.Equal(Some copy.SourceView, operation.Source)
+            Assert.Equal(
+                (if copy.Kind=Fidelity.PSG.RegionCopyKind.CopyOut then Fidelity.PSG.MemoryRegionKind.CopyOut else Fidelity.PSG.MemoryRegionKind.CopyTo),
+                operation.Kind)
+
     let clefId (Fidelity.PSG.NodeId value) = NodeId value
     let psgId (NodeId value) = Fidelity.PSG.NodeId value
 
@@ -1221,6 +1264,7 @@ let main _ =
 """
         let graph = AsyncAndRegionFixture.check "20_BasicRegion" source
         let revision = AsyncAndRegionFixture.publish graph
+        AsyncAndRegionFixture.regionMemory revision
         AsyncAndRegionFixture.assertBakerSettled graph revision |> ignore
         AsyncAndRegionFixture.wellFormed revision
         Assert.Equal(2, revision.Codata.RegionAllocations.Count)
@@ -1319,6 +1363,7 @@ let main _ =
 """
         let graph = AsyncAndRegionFixture.check "21_RegionPassing" source
         let revision = AsyncAndRegionFixture.publish graph
+        AsyncAndRegionFixture.regionMemory revision
         AsyncAndRegionFixture.assertBakerSettled graph revision |> ignore
         AsyncAndRegionFixture.wellFormed revision
         let reg = Assert.Single(revision.Codata.RegionAllocations.Values)
@@ -1350,6 +1395,33 @@ let main _ =
 """
         let negRes = AsyncAndRegionFixture.checkRaw "21_RegionPassing_neg" negSource
         Assert.Contains(negRes.Diagnostics, fun d -> d.Code = "CCS8405")
+
+        let repeated = """
+module RepeatedRegionReservation
+
+let allocate (r: Region) =
+    let buffer = Region.alloc<int> r 1
+    buffer.[0] <- 10
+    buffer
+
+[<EntryPoint>]
+let main _ =
+    let r = Region.create 1
+    let first = allocate r
+    let second = allocate r
+    first.[0] <- 20
+    let value = second.[0]
+    Region.release r
+    Console.writeln (Format.int value)
+    0
+"""
+        let repeatedResult = AsyncAndRegionFixture.checkRaw "21_RegionPassing_repeated" repeated
+        Assert.Contains(repeatedResult.Diagnostics, fun d -> d.Code="CCS8405" && d.Message.Contains("repeatedly"))
+        let indirect =
+            repeated.Replace("let allocate (r: Region) =", "let invoke f r = f r\n\nlet allocate (r: Region) =")
+                    .Replace("let second = allocate r", "let second = invoke allocate r")
+        let indirectResult = AsyncAndRegionFixture.checkRaw "21_RegionPassing_indirect" indirect
+        Assert.Contains(indirectResult.Diagnostics, fun d -> d.Code="CCS8405" && d.Message.Contains("repeatedly"))
 
     [<Fact>]
     member _.``A-06 (22_RegionEscape): settles CopyOut and CopyTo RegionCopyEndpoints and refuses uncopied region escapes``() =
@@ -1390,6 +1462,7 @@ let main _ =
 """
         let graph = AsyncAndRegionFixture.check "22_RegionEscape" source
         let revision = AsyncAndRegionFixture.publish graph
+        AsyncAndRegionFixture.regionMemory revision
         AsyncAndRegionFixture.assertBakerSettled graph revision |> ignore
         AsyncAndRegionFixture.wellFormed revision
         Assert.Equal(2, revision.Codata.RegionCopyEndpoints.Count)

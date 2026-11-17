@@ -1522,6 +1522,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph =
         let facts = finalGraph.Codata.Value
         { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
+    let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.establishRegionImports finalGraph
     let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph

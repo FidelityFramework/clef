@@ -35,46 +35,8 @@ let private metadata name (node: SemanticNode) =
 /// edge never acquires an external identity from a coincidentally matching name.
 let private target = BoundaryDeclarations.target
 
-/// Retain the exact source descriptor structure and referenced declaration
-/// values. Parent/module nodes are participants, not recursively traversed.
-let private declarationFact (node: SemanticNode) =
-    let fact form text numbers references =
-        Ok { Form = form; Text = text; Numbers = numbers; References = references
-             Children = node.Children; Parent = node.Parent
-             SourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type }
-    match node.Kind with
-    | SemanticKind.RecordExpr(fields, copy) -> fact "record" (List.map fst fields) [] (List.map snd fields @ Option.toList copy)
-    | SemanticKind.ArrayExpr values -> fact "array" [] [] values
-    | SemanticKind.ListExpr values -> fact "list" [] [] values
-    | SemanticKind.TupleExpr values -> fact "tuple" [] [] values
-    | SemanticKind.UnionCase(name, index, value) -> fact "case" [name] [bigint index] (Option.toList value)
-    | SemanticKind.DUConstruct(name, index, value, _) -> fact "settled-case" [name] [bigint index] (Option.toList value)
-    | SemanticKind.Literal(NativeLiteral.String text) -> fact "string" [text] [] []
-    | SemanticKind.Literal(NativeLiteral.Int(value, kind)) -> fact "integer" [string kind] [bigint value] []
-    | SemanticKind.Literal(NativeLiteral.UInt(value, kind)) -> fact "unsigned-integer" [string kind] [bigint value] []
-    | SemanticKind.Literal(NativeLiteral.Bool value) -> fact "boolean" [] [if value then 1I else 0I] []
-    | SemanticKind.Literal NativeLiteral.Unit -> fact "unit" [] [] []
-    | SemanticKind.VarRef(name, binding) -> fact "reference" [name] [] (Option.toList binding)
-    | SemanticKind.Binding(name, mutable', recursive', _) -> fact "binding" [name] [if mutable' then 1I else 0I; if recursive' then 1I else 0I] node.Children
-    | SemanticKind.PatternBinding name -> fact "pattern-binding" [name] [] []
-    | SemanticKind.Lambda(parameters, _, [], _, _) ->
-        fact "declaration-lambda" (parameters |> List.map(fun (name,_,_) -> name)) [] node.Children
-    | SemanticKind.TypeAnnotation(inner, _) -> fact "annotation" [] [] [inner]
-    | SemanticKind.Quote(inner, _) -> fact "quotation" [] [] [inner]
-    | SemanticKind.Application(callee, arguments) -> fact "application" [] [] (callee :: arguments)
-    | SemanticKind.Intrinsic info -> fact "intrinsic" [string info.Module; info.Operation] [] []
-    | _ -> Error $"Descriptor participant {NodeId.value node.Id} has no immutable boundary declaration premise."
-
-let private declarationFacts (graph: SemanticGraph) root =
-    let rec visit facts id =
-        if Map.containsKey id facts then Ok facts else
-        match graph.Nodes.TryFind id with
-        | None -> Error $"Descriptor participant {NodeId.value id} is absent from the source graph."
-        | Some node -> checked' {
-            let! value = declarationFact node
-            let next = value.References @ value.Children
-            return! List.fold (fun state child -> state |> Result.bind (fun facts -> visit facts child)) (Ok (Map.add id value facts)) next }
-    visit Map.empty root
+let private declarationFact = Ingredients.declarationFact
+let private declarationFacts = Ingredients.declarationFacts
 
 /// Complete account observation stays with the source declaration/fact owners.
 let private absenceAccounts (graph:SemanticGraph) (descriptors:Declarations.Descriptors) (imports:Map<NodeId,BoundaryImport>) (invocations:Map<NodeId,BoundaryCallbackInvocation>) =
@@ -768,6 +730,15 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                        (readOnlyBuffers: Map<NodeId, BoundaryReadOnlyBufferDeclaration>)
                        (borrowedViews: Map<NodeId, BoundaryBorrowedResultViewDeclaration>) (binding: SemanticNode) library symbol =
     checked' {
+        let! regionMemory = Declarations.readRegionMemory graph
+        let regionDeclarations = regionMemory |> List.filter(fun row ->
+            externMatchesBinding graph binding.Id row.Descriptor.Acquire || externMatchesBinding graph binding.Id row.Descriptor.Release)
+        let rec regionHandle nullable ty =
+            match Clef.Compiler.NativeTypedTree.UnionFind.applySubst ty with
+            | NativeType.TApp(tc,[inner]) when tc.Name="option" || tc.Name="Option" -> nullable && regionHandle false inner
+            | NativeType.TApp(tc,[marker]) as value ->
+                not nullable && not regionDeclarations.IsEmpty && tc.Name="CHandle" && Types.tryGetNTUKind value=Some NTUKind.NTUptr && Types.tryGetNTUKind marker=Some NTUKind.NTUunit
+            | _ -> false
         let! scope =
             binding.Parent |> needed "The external binding has no source module owner."
 
@@ -941,9 +912,9 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                         | _ :: _ :: _ -> return! Error "CCS8403: Ambiguous resource declarations for boundary resource handle parameter."
                         | [] ->
                             let isSharedBufferStruct = isAnySharedBufferStructType graph descriptors formalNode.Type
-                            if isNominalCHandleType false formalNode.Type || isSharedBufferStruct then
+                            if isNominalCHandleType false formalNode.Type || isSharedBufferStruct || regionHandle false formalNode.Type then
                                 return formal, BoundaryScalar.ResourceHandle(formal, false)
-                            elif isNominalCHandleType true formalNode.Type then
+                            elif isNominalCHandleType true formalNode.Type || regionHandle true formalNode.Type then
                                 return formal, BoundaryScalar.ResourceHandle(formal, true)
                             else
                                 return! Error "A boundary parameter has no admitted integer or boolean declaration; pointer and aggregate values require a source-settled adapter."
@@ -991,7 +962,8 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
         let isSharedBufferStructResult =
             match Declarations.readTypeRef graph returnId, graph.Nodes.TryFind body with
             | Ok(Declarations.DeclaredTypeRef.Pointer _), Some bn ->
-                isSharedBufferAcquireBindingAndType graph descriptors binding.Id bn.Type
+                isSharedBufferAcquireBindingAndType graph descriptors binding.Id bn.Type ||
+                (regionHandle false bn.Type && regionDeclarations |> List.exists(fun row -> externMatchesBinding graph binding.Id row.Descriptor.Acquire))
             | _ -> false
 
         let! result =
@@ -1109,7 +1081,7 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
                 |> Result.map(fun (_,declaration)->[declaration])
 
         let! facts =
-            (descriptorBinding :: invocationRoots @ writableRoots @ readOnlyRoots @ callbackContextRoots @ byteRoots)
+            (descriptorBinding :: invocationRoots @ writableRoots @ readOnlyRoots @ callbackContextRoots @ byteRoots @ (regionDeclarations |> List.map _.Binding))
             |> List.distinct
             |> List.fold
                 (fun state root ->
@@ -1172,6 +1144,26 @@ let private adaptation (graph: SemanticGraph) site operand sourceBits targetBits
                 "The numeric meet's signedness or truncation premise disagrees with the established input range."
         return Some meet
 }
+
+/// Region memory reads generated ABI declarations before executable boundary
+/// calls are settled. The same import recipe owns both publication stages.
+let establishRegionImports (graph:SemanticGraph) =
+    if graph.Codata.Value.RegionAllocations.IsEmpty then Enrichment.empty else
+    let descriptors=Declarations.readDescriptors graph
+    let contracts=Declarations.readRegionMemory graph
+    let imports=checked' {
+        let! contracts=contracts
+        return! contracts |> List.collect(fun row -> [row.Descriptor.Acquire;row.Descriptor.Release]) |> List.distinct
+                |> List.map(fun name -> checked' {
+                    let! binding=graph.Nodes.Values |> Seq.filter(fun node -> BoundaryDeclarations.isExternal node && externMatchesBinding graph node.Id name)
+                                 |> Seq.toList |> function [binding] -> Ok binding | _ -> Error("Region import is not unique: " + name)
+                    let! library=metadata "FidelityExtern.Library" binding |> needed "Region import lacks its library."
+                    let! symbol=metadata "FidelityExtern.Symbol" binding |> needed "Region import lacks its symbol."
+                    return! readImport graph descriptors Map.empty Map.empty Map.empty Map.empty binding library symbol }) |> collect }
+    match imports with
+    | Ok imports -> {Enrichment.empty with NewEdges=imports |> List.map Ingredients.importRow}
+    // The complete boundary firing publishes the declaration diagnostic.
+    | Error _ -> Enrichment.empty
 
 let private sourceWidth graph id scalar =
     match scalar with
@@ -3316,6 +3308,25 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                     | _ -> imports, calls, entries, errors
                 | _ -> imports, calls, entries, errors)
             (Map.empty, Map.empty, Map.empty, initialErrors)
+
+    // Region storage owns its executable memory occurrences. These imports
+    // retain generated ABI/declaration authority without inventing surface calls.
+    let imports,errors =
+        let needsRegion = not graph.Codata.Value.RegionAllocations.IsEmpty
+        if not needsRegion then imports,errors else
+        match Declarations.readRegionMemory graph with
+        | Error reason -> imports,(anchor.Id,Set.singleton anchor.Id,reason)::errors
+        | Ok contracts ->
+            contracts |> List.fold(fun (imports,errors) contract ->
+                [contract.Descriptor.Acquire;contract.Descriptor.Release] |> List.fold(fun (imports,errors) name ->
+                    let result =
+                        graph.Nodes.Values |> Seq.filter(fun node -> BoundaryDeclarations.isExternal node && externMatchesBinding graph node.Id name)
+                        |> Seq.toList |> function
+                           | [binding] -> imported binding
+                           | _ -> Error("Region memory requires one generated external declaration: " + name)
+                    match result with
+                    | Ok imported -> Map.add imported.Identity imported imports,errors
+                    | Error reason -> imports,(contract.Node,contract.Participants,reason)::errors) (imports,errors)) (imports,errors)
 
     // Requirements retain their original source claim IDs. A typed body is
     // issued only from actual current conversion/layout and complete finite

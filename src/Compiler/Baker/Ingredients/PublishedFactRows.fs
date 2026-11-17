@@ -1335,6 +1335,11 @@ and mapRegionCopyEndpoint (value: S.RegionCopyEndpoint) : Fidelity.PSG.RegionCop
         DestinationLifetimeScope = nodeId value.DestinationLifetimeScope
         DestinationLifetimeDepth = value.DestinationLifetimeDepth
         EscapeDischargeObligation = nodeId value.EscapeDischargeObligation
+        Returned = value.Returned |> Option.map(fun life ->
+            ({Application=nodeId life.Application;Implementation=nodeId life.Implementation;Caller=nodeId life.Caller
+              Binding=nodeId life.Binding;Uses=Set.map nodeId life.Uses
+              Retirements=life.Retirements |> List.map(fun (tail,site) -> nodeId tail,nodeId site);Space=nodeId life.Space
+              Policy=mapProjectMemoryPolicy life.Policy}:Fidelity.PSG.RegionCopyLifetime))
         Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
     } : Fidelity.PSG.RegionCopyEndpoint)
 
@@ -2369,6 +2374,26 @@ and mapMemoryStringViewWitness (value: S.MemoryStringViewWitness) : Fidelity.PSG
 
 and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.MemoryWitnessOperation =
     match value with
+    | S.MemoryWitnessOperation.Region row ->
+        let kind =
+            match row.Kind with
+            | S.MemoryRegionKind.Create -> Fidelity.PSG.MemoryRegionKind.Create
+            | S.MemoryRegionKind.Allocate -> Fidelity.PSG.MemoryRegionKind.Allocate
+            | S.MemoryRegionKind.Release -> Fidelity.PSG.MemoryRegionKind.Release
+            | S.MemoryRegionKind.CopyOut -> Fidelity.PSG.MemoryRegionKind.CopyOut
+            | S.MemoryRegionKind.CopyTo -> Fidelity.PSG.MemoryRegionKind.CopyTo
+            | S.MemoryRegionKind.RetireCopy -> Fidelity.PSG.MemoryRegionKind.RetireCopy
+        Fidelity.PSG.MemoryWitnessOperation.Region {
+            Site=nodeId row.Site; Region=nodeId row.Region; Kind=kind
+            Operand=Option.map nodeId row.Operand; Source=Option.map nodeId row.Source; Count=Option.map nodeId row.Count
+            Element=mapSettledSlot row.Element; ElementBytes=row.ElementBytes; Length=row.Length; Offset=row.Offset
+            Capacity=row.Capacity; Alignment=row.Alignment; Space=nodeId row.Space
+            Runtime=row.Runtime |> Option.map(fun runtime ->
+                ({Declaration=nodeId runtime.Declaration;Acquire=nodeId runtime.Acquire;Release=nodeId runtime.Release
+                  Contract=runtime.Contract;Participants=Set.map nodeId runtime.Participants}:Fidelity.PSG.MemoryRegionRuntime))
+            CopyOwner=Option.map nodeId row.CopyOwner
+            Declarations=row.Declarations |> Map.toList |> List.map(fun (id,fact) -> nodeId id,mapBoundaryDeclarationFact fact) |> Map.ofList
+            Obligations=List.map nodeId row.Obligations; Participants=Set.map nodeId row.Participants }
     | S.MemoryWitnessOperation.LocalScalar row ->
         Fidelity.PSG.MemoryWitnessOperation.LocalScalar {
             Site = nodeId row.Site; Initializer = nodeId row.Initializer; Element = mapSettledSlot row.Element

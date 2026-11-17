@@ -369,3 +369,49 @@ let anchorWithRetained (retained: RetainedBoundaryNodes) enrichId graph =
 
 let anchor enrichId graph =
   anchorWithRetained RetainedBoundaryNodes.empty enrichId graph
+
+type private DeclarationResultBuilder() =
+    member _.Bind(value,next) = Result.bind next value
+    member _.ReturnFrom(value) = value
+let private checked' = DeclarationResultBuilder()
+
+/// Retain the exact source descriptor structure and referenced declaration
+/// values. Parent/module nodes are participants, not recursively traversed.
+let declarationFact (node: SemanticNode) =
+    let fact form text numbers references =
+        Ok { Form = form; Text = text; Numbers = numbers; References = references
+             Children = node.Children; Parent = node.Parent
+             SourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type }
+    match node.Kind with
+    | SemanticKind.RecordExpr(fields, copy) -> fact "record" (List.map fst fields) [] (List.map snd fields @ Option.toList copy)
+    | SemanticKind.ArrayExpr values -> fact "array" [] [] values
+    | SemanticKind.ListExpr values -> fact "list" [] [] values
+    | SemanticKind.TupleExpr values -> fact "tuple" [] [] values
+    | SemanticKind.UnionCase(name, index, value) -> fact "case" [name] [bigint index] (Option.toList value)
+    | SemanticKind.DUConstruct(name, index, value, _) -> fact "settled-case" [name] [bigint index] (Option.toList value)
+    | SemanticKind.Literal(NativeLiteral.String text) -> fact "string" [text] [] []
+    | SemanticKind.Literal(NativeLiteral.Int(value, kind)) -> fact "integer" [string kind] [bigint value] []
+    | SemanticKind.Literal(NativeLiteral.UInt(value, kind)) -> fact "unsigned-integer" [string kind] [bigint value] []
+    | SemanticKind.Literal(NativeLiteral.Bool value) -> fact "boolean" [] [if value then 1I else 0I] []
+    | SemanticKind.Literal NativeLiteral.Unit -> fact "unit" [] [] []
+    | SemanticKind.VarRef(name, binding) -> fact "reference" [name] [] (Option.toList binding)
+    | SemanticKind.Binding(name, mutable', recursive', _) -> fact "binding" [name] [if mutable' then 1I else 0I; if recursive' then 1I else 0I] node.Children
+    | SemanticKind.PatternBinding name -> fact "pattern-binding" [name] [] []
+    | SemanticKind.Lambda(parameters, _, [], _, _) ->
+        fact "declaration-lambda" (parameters |> List.map(fun (name,_,_) -> name)) [] node.Children
+    | SemanticKind.TypeAnnotation(inner, _) -> fact "annotation" [] [] [inner]
+    | SemanticKind.Quote(inner, _) -> fact "quotation" [] [] [inner]
+    | SemanticKind.Application(callee, arguments) -> fact "application" [] [] (callee :: arguments)
+    | SemanticKind.Intrinsic info -> fact "intrinsic" [string info.Module; info.Operation] [] []
+    | _ -> Error $"Descriptor participant {NodeId.value node.Id} has no immutable boundary declaration premise."
+
+let declarationFacts (graph: SemanticGraph) root =
+    let rec visit facts id =
+        if Map.containsKey id facts then Ok facts else
+        match graph.Nodes.TryFind id with
+        | None -> Error $"Descriptor participant {NodeId.value id} is absent from the source graph."
+        | Some node -> checked' {
+            let! value = declarationFact node
+            let next = value.References @ value.Children
+            return! List.fold (fun state child -> state |> Result.bind (fun facts -> visit facts child)) (Ok (Map.add id value facts)) next }
+    visit Map.empty root

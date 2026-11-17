@@ -58,6 +58,8 @@ let elaborate = Recipes.elaborate
 let foldIn (enrichment: Enrichment) graph =
     ObligationElaboration.foldIn enrichment graph
 
+let establishRegionImports graph = foldIn (Recipes.establishRegionImports graph) graph
+
 let private normalizeCore graph =
     let retained = Ingredients.RetainedBoundaryNodes.capture graph
     let retracted, hadBoundaryAggregateAnchors = retract graph

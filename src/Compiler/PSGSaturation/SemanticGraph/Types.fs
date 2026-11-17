@@ -2247,7 +2247,32 @@ type MemoryLocalScalarWitness = {
 }
 
 [<RequireQualifiedAccess>]
+type MemoryRegionKind = Create | Allocate | Release | CopyOut | CopyTo | RetireCopy
+
+type MemoryRegionRuntime = {
+    Declaration: NodeId
+    Acquire: NodeId
+    Release: NodeId
+    Contract: BAREWire.Descriptors.RegionMemoryDescriptor
+    Participants: Set<NodeId>
+}
+
+/// Complete source-selected geometry of one region memory occurrence.
+/// Offset is a reservation in the owning region, never emitter allocator state.
+type MemoryRegionWitness = {
+    Site: NodeId; Region: NodeId; Kind: MemoryRegionKind
+    Operand: NodeId option; Source: NodeId option; Count: NodeId option
+    Element: SettledSlot; ElementBytes: int; Length: int; Offset: int64
+    Capacity: int64; Alignment: int; Space: NodeId
+    Runtime: MemoryRegionRuntime option
+    CopyOwner: NodeId option
+    Declarations: Map<NodeId,BoundaryDeclarationFact>
+    Obligations: NodeId list; Participants: Set<NodeId>
+}
+
+[<RequireQualifiedAccess>]
 type MemoryWitnessOperation =
+    | Region of MemoryRegionWitness
     | LocalScalar of MemoryLocalScalarWitness
     | BufferExtent of MemoryExtentWitness
     | ArrayExtent of MemoryArrayExtentWitness
@@ -4022,6 +4047,17 @@ type RegionCopyKind =
     | CopyTo
 
 /// Settled region escape copyOut/copyTo transfer endpoint (A-06).
+type RegionCopyLifetime = {
+    Application: NodeId
+    Implementation: NodeId
+    Caller: NodeId
+    Binding: NodeId
+    Uses: Set<NodeId>
+    Retirements: (NodeId * NodeId) list
+    Space: NodeId
+    Policy: ProjectMemoryPolicy
+}
+
 type RegionCopyEndpoint = {
     Site: NodeId
     Kind: RegionCopyKind
@@ -4041,6 +4077,7 @@ type RegionCopyEndpoint = {
     DestinationLifetimeScope: NodeId
     DestinationLifetimeDepth: int
     EscapeDischargeObligation: NodeId
+    Returned: RegionCopyLifetime option
     Participants: Participant list
 }
 

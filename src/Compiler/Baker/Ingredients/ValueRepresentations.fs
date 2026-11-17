@@ -102,7 +102,8 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
                             | _ -> Error "Callable union components lack their exact declared cases and payload placement (CCS8414)."
                 | _ -> Error "Union has no complete source-settled representation."
             let nominal (tc: TypeConRef) args =
-                if resourceHandles.Contains key then Placement.handleSlot graph key |> Result.bind scalar
+                if Types.isRegionTypeCon tc then Ok(ValueRepresentation.Buffer(None, byte))
+                elif resourceHandles.Contains key then Placement.handleSlot graph key |> Result.bind scalar
                 else
                     match tc.NTUKind with
                     | Some NTUKind.NTUunit -> scalar SettledSlot.Unit

@@ -286,12 +286,19 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
                 |> function
                    | [row] -> Ok row
                    | _ -> Error "An uninitialized array lacks a unique complete source orchestration or copy construction."
+            let countText =
+                match count with
+                | ValueRange.Empty -> "empty"
+                | ValueRange.Bounded(lo,hi) -> sprintf "[%s..%s]" (string lo) (string hi)
+                | ValueRange.Above lo -> sprintf "[%s..+infinity)" (string lo)
+                | ValueRange.Below hi -> sprintf "(-infinity..%s]" (string hi)
+                | ValueRange.Unbounded -> "unbounded"
             do! demand (row.Site=construction.Owner && row.ResultCapacity>0 && row.ResultCapacity=row.Children.Length
                         && Set.count(Set.ofList row.Children)=row.Children.Length
                         && row.ResultOrdering=(row.Children |> List.mapi(fun ordinal child -> ordinal,child))
                         && count=ValueRange.point(bigint row.ResultCapacity) && row.ElementStride=bytes)
-                   (sprintf "The orchestration result allocation disagrees with its settled child ordering or capacity (owner %A/%A, capacity %d/%d, count %A, stride %d/%d)."
-                       row.Site construction.Owner row.ResultCapacity row.Children.Length count row.ElementStride bytes)
+                   (sprintf "The orchestration result allocation disagrees with its settled child ordering or capacity (owner %d/%d, capacity %d/%d, count %s, stride %d/%d)."
+                       (NodeId.value row.Site) (NodeId.value construction.Owner) row.ResultCapacity row.Children.Length countText row.ElementStride bytes)
             let writes =
                 operations |> Map.toList |> List.choose(fun (_,operation) ->
                     match operation with
