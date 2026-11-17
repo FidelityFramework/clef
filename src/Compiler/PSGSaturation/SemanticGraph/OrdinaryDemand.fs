@@ -294,10 +294,46 @@ let analyze (graph: SemanticGraph) : Reading =
         resolution.Calls |> Map.toList
         |> List.collect (fun (site, call) -> call.Targets |> List.map (fun target -> target.Lambda, site) |> List.distinct)
         |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
+    // The deferred callable of an async formation has no source call site: an
+    // activation enters it and supplies no unit actual. Its `_async_unit`
+    // formal is omitted when the complete use census holds no read of it.
+    let formationFormals =
+        nodes.Values |> Seq.choose (fun owner ->
+            let rec implementation depth id =
+                if depth > 4 then None else
+                match nodes.TryFind id with
+                | Some ({ Kind = SemanticKind.Lambda _ } as code) -> Some code
+                | Some { Kind = SemanticKind.ClosureValue(code, _) } -> implementation (depth + 1) code
+                | Some { Kind = SemanticKind.VarRef(_, Some definition) } -> implementation (depth + 1) definition
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> implementation (depth + 1) value
+                | _ -> None
+            match owner.Metadata.TryFind "Async.Formation", List.tryLast owner.Children |> Option.bind (implementation 0) with
+            | Some(MetadataValue.Bool true), Some ({ Kind = SemanticKind.Lambda(parameters, _, [], _, LambdaContext.RegularClosure) } as code)
+                when not (externalImplementations.Contains code.Id) && not (sitesByImplementation.ContainsKey code.Id) ->
+                parameters
+                |> List.indexed
+                |> List.tryPick (fun (ordinal, (name, ty, formal)) ->
+                    if name = "_async_unit" then Some(ordinal, ty, formal) else None)
+                |> Option.bind (fun (ordinal, ty, formal) ->
+                    let declared =
+                        match nodes.TryFind formal with
+                        | Some { Kind = SemanticKind.PatternBinding _; Type = actual } ->
+                            applySubst actual = applySubst ty && applySubst ty = applySubst Types.unitType
+                        | _ -> false
+                    let absent = getUses formal |> List.forall (fun edge ->
+                        edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Parameter &&
+                        edge.Target = code.Id && edge.Ordinal = ordinal && edge.Sources = [formal])
+                    if declared && absent && not (hidden.Contains formal) && not (rawCapture formal) then
+                        Some(formal, { Implementation = code.Id; Formal = formal; Ordinal = ordinal
+                                       Participants = Set.ofList [owner.Id; code.Id; formal] })
+                    else None)
+            | _ -> None) |> Map.ofSeq
+    let formals = Map.fold (fun found id proof -> Map.add id proof found) formals formationFormals
     let admitted =
         formals.Values |> Seq.map _.Implementation |> Set.ofSeq |> Set.filter (fun implementation ->
             let sites = sitesByImplementation.TryFind implementation |> Option.defaultValue []
             not sites.IsEmpty && sites |> List.forall calls.ContainsKey)
+        |> Set.union (formationFormals.Values |> Seq.map _.Implementation |> Set.ofSeq)
     let excludedByOwner =
         lazy (
             let structuralParents =

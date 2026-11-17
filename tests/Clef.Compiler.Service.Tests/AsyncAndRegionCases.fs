@@ -625,6 +625,17 @@ module private AsyncAndRegionFixture =
               let deferred = graph.Nodes[List.last formation.Children]
               let carrier, contract = settledContract row.Formation
               Assert.Equal(row.Callable, carrier.Implementation)
+              // The deferred callable's unused `_async_unit` formal is omitted
+              // in both Ordinary.Parameters and the callable carrier.
+              match graph.Nodes[clefId row.Callable].Kind with
+              | SemanticKind.Lambda(parameters, _, _, _, _) ->
+                  match parameters |> List.tryPick (fun (name, _, formal) -> if name = "_async_unit" then Some (psgId formal) else None) with
+                  | Some unitFormal ->
+                      let omittedFormals = revision.Emission.Ordinary.Parameters.TryFind row.Callable |> Option.defaultValue Set.empty
+                      Assert.Contains(unitFormal, omittedFormals)
+                      Assert.Contains(unitFormal, carrier.OmittedParameters)
+                  | None -> failwith "The deferred callable of an async formation has no _async_unit parameter."
+              | _ -> failwith "The deferred callable of an async formation is not a Lambda."
               match deferred.Kind, row.CapturedBindings with
               | SemanticKind.ClosureValue(code, environment), _ :: _ ->
                   Assert.Equal(row.Callable, psgId code)
@@ -701,6 +712,20 @@ module private AsyncAndRegionFixture =
     let assertBakerSettled (graph: SemanticGraph) (revision: Fidelity.PSG.Revision) =
         let operations = assertFrameElaboration graph revision
         assertOrchestrationElaboration graph revision
+        for cut in revision.Codata.AsyncSuspensions.Values do
+            Assert.True(revision.Codata.AsyncActivations.ContainsKey cut.Site,
+                        sprintf "The settled AsyncSuspension cut %d has no AsyncActivation row." (NodeId.value (clefId cut.Site)))
+        for KeyValue(site, activation) in revision.Codata.AsyncActivations do
+            let formation = revision.Codata.AsyncFormations[activation.Formation]
+            match graph.Nodes[clefId formation.Callable].Kind with
+            | SemanticKind.Lambda(_, bodyId, _, _, _) ->
+                let heldWidth id = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph id
+                match heldWidth bodyId, heldWidth (clefId site) with
+                | Some fromBits, Some toBits when fromBits <> toBits ->
+                    let meets = revision.Codata.Meets.TryFind site |> Option.defaultValue []
+                    Assert.Contains(meets, fun m -> m.Consumer = site && m.Operand = site && m.From = fromBits && m.To = toBits)
+                | _ -> ()
+            | _ -> ()
         assertSettledValues graph revision (operations @ orchestrationOperations graph revision)
         assertDischarged graph revision
         operations

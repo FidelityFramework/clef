@@ -1462,9 +1462,32 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
     let joins = joins |> List.choose id
     let orchestrationRows = orchestrations |> List.choose (fun (row, _, _, _) -> row) |> Map.ofList
     let childActivations = orchestrations |> List.collect (fun (_, rows, _, _) -> rows)
-    let activationRows = (activations |> List.choose id) @ childActivations |> Map.ofList
+    // A-02: a settled suspension cut activates the formation it awaits. The
+    // Async.Await application is published as an activation of that
+    // formation, with the result and completion targets of its own protocol
+    // anchors.
+    let awaitActivations, awaitAccruals =
+        awaitsByOwner |> Map.toList |> List.collect snd
+        |> List.choose (fun (site, intrinsic, awaited) ->
+            match suspensions.ContainsKey site.Id, resolve awaited |> Option.bind (fun id -> Map.tryFind id formations), intrinsic.Children with
+            | true, Some formation, resultTarget :: _ :: completionTarget :: _ ->
+                resultLayout formation |> Option.map (fun (slots, bytes, alignment) ->
+                    let sources = [ site.Id; formation.Formation; resultTarget; completionTarget; awaited ]
+                    let obligation, accrued =
+                        layoutClaim site (sprintf "async_await_activation_%d" (NodeId.value site.Id)) slots bytes alignment sources
+                    let row : AsyncActivation =
+                        { Site = site.Id
+                          Formation = formation.Formation
+                          ResultTarget = resultTarget
+                          CompletionTarget = completionTarget
+                          Obligations = [ obligation.Id ]
+                          Participants = participants sources }
+                    (site.Id, row), accrued)
+            | _ -> None)
+        |> List.unzip
+    let activationRows = (activations |> List.choose id) @ childActivations @ awaitActivations |> Map.ofList
     frames, formations, suspensions, activationRows, orchestrationRows, realizations, joins,
-    joinAll (orphanAwaitAccruals @ (settledOwners |> List.map (fun (_, _, accrued) -> accrued)) @ activationAccruals @ (orchestrations |> List.map (fun (_, _, _, accrued) -> accrued)) @ joinRefusals)
+    joinAll (orphanAwaitAccruals @ (settledOwners |> List.map (fun (_, _, accrued) -> accrued)) @ activationAccruals @ awaitAccruals @ (orchestrations |> List.map (fun (_, _, _, accrued) -> accrued)) @ joinRefusals)
 
 //-------------------------------------------------------------------------
 // Frame realization: fan the settled elaborations out and fold them in

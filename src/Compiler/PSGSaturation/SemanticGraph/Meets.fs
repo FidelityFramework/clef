@@ -501,6 +501,26 @@ let continuations (frames: Map<NodeId, ContinuationFrame>)
             else match forNode node with [] -> None | meets -> Some(node.Id, meets))
         |> Map.ofList
 
+/// An async activation (Async.RunSynchronously, Async.Await, a join's child
+/// activation) reads the result of the activated formation's deferred callable:
+/// from that callable's body width to the activation site's own, keyed with
+/// the site as its own operand, as a direct call's result is. The settled rows
+/// are explicit because Codata is being constructed at this seam.
+let asyncActivations (formations: Map<NodeId, AsyncFormation>) (activations: Map<NodeId, AsyncActivation>)
+                     (graph: SemanticGraph) : Map<NodeId, Meet list> =
+    if onFabric graph.Platform then Map.empty else
+    activations |> Map.toList |> List.choose (fun (site, activation) ->
+        let callable =
+            formations.TryFind activation.Formation
+            |> Option.bind (fun formation -> SemanticGraph.tryGetNode formation.Callable graph)
+        match SemanticGraph.tryGetNode site graph, callable with
+        | Some node, Some { Kind = SemanticKind.Lambda(_, bodyId, _, _, _) } when node.IsReachable ->
+            match nodeWidth graph bodyId, nodeWidth graph node.Id with
+            | Some from, Some target -> meet graph node.Id node.Id from target |> Option.map (fun result -> site, [ result ])
+            | _ -> None
+        | _ -> None)
+    |> Map.ofList
+
 /// Closure and continuation accesses consume the same settled slot contracts.
 let environments (layouts: Map<NodeId, EnvironmentLayout>) (origins: Map<NodeId, NodeId>)
                  (graph: SemanticGraph) : Map<NodeId, Meet list> =

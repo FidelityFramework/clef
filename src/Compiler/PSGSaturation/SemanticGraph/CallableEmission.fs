@@ -238,11 +238,25 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
             match node.Kind, node.Children |> List.tryHead |> Option.bind graph.Nodes.TryFind with
             | SemanticKind.Binding _, Some { Kind = SemanticKind.Lambda _ } -> Some node.Id
             | _ -> None) |> Set.ofSeq
+    // A captureless async formation bound at module level is a callable
+    // declaration: a reference to it from another function names the callable.
+    let moduleMembers =
+        graph.Nodes.Values |> Seq.collect (fun node ->
+            match node.Kind with SemanticKind.ModuleDef(_, members) -> members | _ -> []) |> Set.ofSeq
+    let formationBindings =
+        graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind, node.Children |> List.map graph.Nodes.TryFind with
+            | SemanticKind.Binding(_, false, _, _), [Some ({ Kind = SemanticKind.Sequential _ } as value)]
+                when moduleMembers.Contains node.Id &&
+                     value.Metadata.TryFind "Async.Formation" = Some(MetadataValue.Bool true) &&
+                     value.Metadata.TryFind "Async.HasCaptures" <> Some(MetadataValue.Bool true) -> Some node.Id
+            | _ -> None) |> Set.ofSeq
     let definitionOnlyBindings =
         functionBindings |> Set.filter (fun id ->
             match graph.Nodes[id].Kind, graph.Nodes[id].Children with
             | SemanticKind.Binding(_, false, _, _), [child] -> not (codata.Closures.ContainsKey child)
             | _ -> false)
+        |> Set.union formationBindings
     let definitionOnlyLambdas =
         graph.Nodes.Values |> Seq.choose (fun node ->
             match node.Kind, node.Parent with

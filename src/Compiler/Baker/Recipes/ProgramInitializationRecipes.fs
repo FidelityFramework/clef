@@ -25,6 +25,17 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
         | [moduleId] -> preturn moduleId
         | found ->
             fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle one lexical module declaration for startup initializer %d: found %d" (NodeId.value id) found.Length))
+    // A captureless async formation bound at module level is a callable
+    // declaration. Its binding is sequenced in the entry spine and has no
+    // program value slot.
+    let rec capturelessFormation seen id =
+        if Set.contains id seen then false else
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> capturelessFormation (Set.add id seen) inner
+        | Some ({ Kind = SemanticKind.Sequential _ } as value) ->
+            value.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) &&
+            value.Metadata.TryFind "Async.HasCaptures" <> Some (MetadataValue.Bool true)
+        | _ -> false
     let state = SaturationState.create { source.Range with End = source.Range.Start } ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let outcome, emitted = run state (saturation {
         let! parameters, sourceBody =
@@ -36,7 +47,7 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: Seman
             match node.Kind, node.Children with
             | SemanticKind.Binding _, [value] ->
                 let! moduleId = owner id
-                return id, id, value, moduleId, node.Type <> Types.unitType
+                return id, id, value, moduleId, node.Type <> Types.unitType && not (capturelessFormation Set.empty value)
             | SemanticKind.Binding _, children ->
                 return! fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle exactly one value for runtime initializer %d: found %d children" (NodeId.value id) children.Length))
             | _ ->

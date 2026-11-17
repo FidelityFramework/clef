@@ -99,9 +99,6 @@ let private selectUsing (ownedFiles: Set<string> option) (graph: SemanticGraph) 
         | Some ({ Kind = SemanticKind.Lambda(_, _, [], _, LambdaContext.RegularClosure) } as node) ->
             [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
             |> List.forall (fun key -> node.Metadata.TryFind key <> Some (MetadataValue.Bool true))
-        | Some ({ Kind = SemanticKind.Sequential _ } as node)
-            when node.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
-            node.Metadata.TryFind "Async.HasCaptures" <> Some (MetadataValue.Bool true)
         | _ -> false
     let code = ordered |> List.filter (ordinaryCode Set.empty)
     let codeSet = sourceMembers |> Set.filter (ordinaryCode Set.empty)

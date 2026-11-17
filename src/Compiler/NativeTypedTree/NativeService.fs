@@ -1322,7 +1322,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // callable. Demand belongs to the current occurrence incidence, as it does
     // after sequence realization above.
     let finalGraph =
-        if asyncAndRegions.Origins.IsEmpty then finalGraph
+        if asyncAndRegions.Formations.IsEmpty && asyncAndRegions.Origins.IsEmpty then finalGraph
         else
             finalGraph
             |> Clef.Compiler.Nanopass.EagerDemand.normalize
@@ -1417,6 +1417,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                         |> fun facts -> Meets.environments environments.Layouts environmentOrigins settled
                                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
                         |> fun facts -> Meets.lazies lazies.Layouts lazies.Origins settled
+                                        |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
+                        |> fun facts -> Meets.asyncActivations asyncAndRegions.Formations asyncAndRegions.Activations settled
                                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
                 ReturnMeets = Meets.returns platformContext settled
                 Closures = Placement.closures platformContext settled
