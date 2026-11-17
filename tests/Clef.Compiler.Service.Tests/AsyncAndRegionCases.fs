@@ -625,6 +625,19 @@ module private AsyncAndRegionFixture =
               let deferred = graph.Nodes[List.last formation.Children]
               let carrier, contract = settledContract row.Formation
               Assert.Equal(row.Callable, carrier.Implementation)
+              Assert.Equal(row.Formation, carrier.Formation)
+              // An immutable alias preserves the async formation frontier;
+              // the deferred callable at the end of its block has another type.
+              for alias in revision.Nodes.Values do
+                  let aliasesFormation =
+                      match alias.Kind with
+                      | Fidelity.PSG.SemanticKind.Binding(_, false, _, _) -> alias.Children = [ row.Formation ]
+                      | Fidelity.PSG.SemanticKind.VarRef(_, Some binding) ->
+                          revision.Nodes.TryFind binding
+                          |> Option.exists (fun bound -> bound.Children = [ row.Formation ])
+                      | _ -> false
+                  if aliasesFormation then
+                      Assert.Equal(row.Formation, callable.Carriers[alias.Id].Formation)
               // The deferred callable's unused `_async_unit` formal is omitted
               // in both Ordinary.Parameters and the callable carrier.
               match graph.Nodes[clefId row.Callable].Kind with

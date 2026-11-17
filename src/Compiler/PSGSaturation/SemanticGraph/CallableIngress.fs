@@ -465,6 +465,12 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                 | _, SemanticKind.VarRef(_, Some value), _ | _, SemanticKind.TypeAnnotation(value, _), _ -> Some value
                 | _, SemanticKind.EagerExpr value, [child]
                     when value = child && ExplicitDemand.operand graph id = Some value -> Some value
+                // An async formation block forms its async value at this
+                // occurrence. It is the formation frontier of that value and
+                // of every immutable alias of it; its final child is the
+                // deferred callable, a value of another source type.
+                | _, SemanticKind.Sequential _, _
+                    when node.Metadata.TryFind "Async.Formation" = Some(MetadataValue.Bool true) -> None
                 | _, SemanticKind.Sequential values, children when values = children -> List.tryLast values
                 | _ -> None
             match next with
