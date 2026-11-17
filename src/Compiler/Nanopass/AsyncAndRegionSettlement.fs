@@ -1365,68 +1365,76 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                         | true, Some (Result.Ok bound), [ (joinSite, joinInfo) ]
                             when joinInfo.FullName = "Async.RunSynchronously" && enclosingCallable joinSite.Id = enclosingCallable node.Id
                                  && (enclosingOwnerOf joinSite.Id).IsNone && bound.Children.Length = children.Length ->
-                            let plan : Machine.JoinPlan =
-                                { Orchestration = node.Id
-                                  Join = joinSite.Id
-                                  Children =
-                                    List.zip children bound.Children |> List.map (fun ((_, formation), child) ->
-                                        let work : Machine.ChildPlan =
-                                            { Child = child
-                                              Result = formation.ResultType
-                                              Range = Map.tryFind formation.Body graph.Nodes |> Option.bind _.ValueRange }
-                                        work) }
-                            match Machine.join graph plan with
-                            | Result.Error pending ->
-                                unsettled [ pending.Site ] (" has no settled child activations: " + pending.Reason)
-                            | Result.Ok elaboration ->
-                                // The explicit child activations are the orchestration's work items.
-                                let workItems = elaboration.Activations |> List.map (fun child -> child.Site.Id)
-                                let deliveries = elaboration.Activations |> List.map _.Delivery
-                                let workDependencies =
-                                    match mode with
-                                    | AsyncOrchestrationMode.Parallel -> []
-                                    | AsyncOrchestrationMode.Sequential -> List.pairwise workItems
-                                let slots = workItems |> List.mapi (fun index _ -> index * stride, stride, alignment)
-                                // The join application is no occurrence of the elaborated
-                                // block; the result storage its result array is bound to is.
-                                // That storage is the orchestration itself where the join's
-                                // operand is the orchestration and not a reference to it.
-                                let sources =
-                                    [ node.Id; joinCondition; resultStorage; lifetimeScope; elaboration.Storage; elaboration.Results ] @ workItems @ deliveries
-                                    |> List.distinct
-                                let obligation, accrued =
-                                    layoutClaim node (sprintf "async_orchestration_%d" (NodeId.value node.Id)) slots (workItems.Length * stride) alignment sources
-                                let row : AsyncOrchestration =
-                                    { Site = node.Id
-                                      Mode = mode
-                                      Children = workItems
-                                      WorkDependencies = workDependencies
-                                      ResultOrdering = workItems |> List.mapi (fun index child -> index, child)
-                                      JoinCondition = joinCondition
-                                      ResultStorage = resultStorage
-                                      ResultCapacity = workItems.Length
-                                      ElementStride = stride
-                                      LifetimeScope = lifetimeScope
-                                      SynchronizationObligations = [ obligation.Id ]
-                                      Participants = participants (sources @ childIds @ (bound.Children |> List.map _.Binding)) }
-                                // Each child activation is an activation of its child's formation.
-                                let childRows =
-                                    List.zip3 children bound.Children elaboration.Activations |> List.map (fun ((element, formation), binding, child) ->
-                                        let sources =
-                                            [ child.Site.Id; formation.Formation; child.ResultTarget; child.CompletionTarget
-                                              child.Computation; child.Delivery; binding.Binding; element; node.Id ]
-                                        let claimed, childAccrual =
-                                            layoutClaim child.Site (sprintf "async_child_activation_%d" (NodeId.value child.Site.Id)) [ (0, stride, alignment) ] stride alignment sources
-                                        let activation : AsyncActivation =
-                                            { Site = child.Site.Id
-                                              Formation = formation.Formation
-                                              ResultTarget = child.ResultTarget
-                                              CompletionTarget = child.CompletionTarget
-                                              Obligations = [ claimed.Id ]
-                                              Participants = participants sources }
-                                        (child.Site.Id, activation), childAccrual)
-                                Some (node.Id, row), childRows |> List.map fst, Some (bound, elaboration),
-                                joinAll (accrued :: (childRows |> List.map snd))
+                            match Clef.Compiler.Baker.Recipes.ArrayConstructionRecipes.uninitialized graph node joinSite.Type children.Length with
+                            | Result.Error reason -> unsettled [joinSite.Id] (" has no result allocation: " + reason)
+                            | Result.Ok storage ->
+                                let plan : Machine.JoinPlan =
+                                    { Orchestration = node.Id
+                                      Join = joinSite.Id
+                                      Storage = storage.Value
+                                      Children =
+                                        List.zip children bound.Children |> List.map (fun ((_, formation), child) ->
+                                            let work : Machine.ChildPlan =
+                                                { Child = child
+                                                  Result = formation.ResultType
+                                                  Range = Map.tryFind formation.Body graph.Nodes |> Option.bind _.ValueRange }
+                                            work) }
+                                match Machine.join graph plan with
+                                | Result.Error pending ->
+                                    unsettled [ pending.Site ] (" has no settled child activations: " + pending.Reason)
+                                | Result.Ok elaboration ->
+                                    // All consumers were settled above. The source
+                                    // orchestration is now a marker; the join owns
+                                    // explicit storage and child activations.
+                                    let anchors = [joinCondition;resultStorage;lifetimeScope]
+                                    let marker = { node with Kind=SemanticKind.Sequential anchors; Type=Types.unitType; Children=anchors }
+                                    let elaboration = { elaboration with Nodes=marker :: storage.Nodes @ elaboration.Nodes }
+                                    // The explicit child activations are the orchestration's work items.
+                                    let workItems = elaboration.Activations |> List.map (fun child -> child.Site.Id)
+                                    let deliveries = elaboration.Activations |> List.map _.Delivery
+                                    let workDependencies =
+                                        match mode with
+                                        | AsyncOrchestrationMode.Parallel -> []
+                                        | AsyncOrchestrationMode.Sequential -> List.pairwise workItems
+                                    let slots = workItems |> List.mapi (fun index _ -> index * stride, stride, alignment)
+                                    // The join owns its guarded allocation and every child
+                                    // delivery. The original orchestration remains a marker.
+                                    let sources =
+                                        [ node.Id; joinCondition; resultStorage; lifetimeScope; elaboration.Storage; elaboration.Results; storage.Allocation ] @ (storage.Nodes |> List.map _.Id) @ workItems @ deliveries
+                                        |> List.distinct
+                                    let obligation, accrued =
+                                        layoutClaim node (sprintf "async_orchestration_%d" (NodeId.value node.Id)) slots (workItems.Length * stride) alignment sources
+                                    let row : AsyncOrchestration =
+                                        { Site = node.Id
+                                          Mode = mode
+                                          Children = workItems
+                                          WorkDependencies = workDependencies
+                                          ResultOrdering = workItems |> List.mapi (fun index child -> index, child)
+                                          JoinCondition = joinCondition
+                                          ResultStorage = storage.Allocation
+                                          ResultCapacity = workItems.Length
+                                          ElementStride = stride
+                                          LifetimeScope = lifetimeScope
+                                          SynchronizationObligations = [ obligation.Id ]
+                                          Participants = participants (sources @ childIds @ (bound.Children |> List.map _.Binding)) }
+                                    // Each child activation is an activation of its child's formation.
+                                    let childRows =
+                                        List.zip3 children bound.Children elaboration.Activations |> List.map (fun ((element, formation), binding, child) ->
+                                            let sources =
+                                                [ child.Site.Id; formation.Formation; child.ResultTarget; child.CompletionTarget
+                                                  child.Computation; child.Delivery; binding.Binding; element; node.Id ]
+                                            let claimed, childAccrual =
+                                                layoutClaim child.Site (sprintf "async_child_activation_%d" (NodeId.value child.Site.Id)) [ (0, stride, alignment) ] stride alignment sources
+                                            let activation : AsyncActivation =
+                                                { Site = child.Site.Id
+                                                  Formation = formation.Formation
+                                                  ResultTarget = child.ResultTarget
+                                                  CompletionTarget = child.CompletionTarget
+                                                  Obligations = [ claimed.Id ]
+                                                  Participants = participants sources }
+                                            (child.Site.Id, activation), childAccrual)
+                                    Some (node.Id, row), childRows |> List.map fst, Some (bound, elaboration),
+                                    joinAll ({ accrued with Edges=accrued.Edges @ storage.Edges } :: (childRows |> List.map snd))
                         | true, Some (Result.Ok _), consumers ->
                             unsettled (consumers |> List.map (fun (consumer, _) -> consumer.Id))
                                 " requires exactly one Async.RunSynchronously join in the callable that forms it, outside an async formation; no other consumer has settled child activations."
@@ -1441,7 +1449,8 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
         (boundArrays |> List.map (fun bound -> bound.Rewrite, bound.Nodes, bound.Edited, []))
         @ (elaborated |> List.map (fun (_, join) ->
             // The result array holds one element per child.
-            join.Rewrite, join.Nodes, Set.empty, join.Activations |> List.map (fun child -> child.Delivery, join.Activations.Length)))
+            let edited = join.Nodes |> List.choose (fun node -> if graph.Nodes.ContainsKey node.Id then Some node.Id else None) |> Set.ofList
+            join.Rewrite, join.Nodes, edited, join.Activations |> List.map (fun child -> child.Delivery, join.Activations.Length)))
     let joins, joinRefusals =
         rewrites
         |> List.groupBy (fun (edit, _, _, _) -> edit.Target)
@@ -1604,6 +1613,33 @@ let private realize (graph: SemanticGraph) (folds: Fold list) : SemanticGraph =
             SequenceRangeProvenance = graph.SequenceRangeProvenance }
         |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable
         |> RepresentationRanges.preserve graph
+
+/// Result arrays use the numeric owner's complete-write element carrier.
+/// Renew orchestration geometry after the explicit join deliveries have entered
+/// that domain; a child's activation result layout is a separate contract.
+let settleResultStorage (graph: SemanticGraph) =
+    let facts = graph.Codata.Value
+    if facts.AsyncOrchestrations.IsEmpty then graph else
+    match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+    | Result.Error _ -> graph
+    | Result.Ok numeric ->
+        let updates =
+            facts.AsyncOrchestrations |> Map.toList |> List.choose(fun (site,row) ->
+                numeric.Elements.TryFind row.ResultStorage
+                |> Option.bind (Placement.extentOfSlot graph)
+                |> Option.map(fun (bytes,alignment) ->
+                    let slots = row.ResultOrdering |> List.map(fun (ordinal,_) -> ordinal*bytes,bytes,alignment)
+                    let citizens = row.SynchronizationObligations |> List.choose(fun id ->
+                        graph.Nodes.TryFind id |> Option.bind(fun node ->
+                            match node.Kind with
+                            | SemanticKind.Obligation info ->
+                                Some {node with Kind=SemanticKind.Obligation {info with Body=ObligationBody.ContinuationLayout(slots,row.ResultCapacity*bytes,alignment)}}
+                            | _ -> None))
+                    site,{row with ElementStride=bytes},citizens))
+        let graph = ObligationElaboration.foldIn
+                        {NewNodes=[];NewEdges=[];Annotated=updates |> List.collect(fun (_,_,citizens) -> citizens)} graph
+        let rows = updates |> List.fold(fun rows (site,row,_) -> Map.add site row rows) facts.AsyncOrchestrations
+        {graph with Codata=lazy {facts with AsyncOrchestrations=rows;WitnessEmission=None}}
 
 //-------------------------------------------------------------------------
 // Entry

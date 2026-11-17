@@ -690,6 +690,23 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
 let fanOut (graph: SemanticGraph) : RecipeSet =
     FanOut.fanOut "Saturation" needsSaturationBasic createSaturationRecipe graph
 
+/// Range-dependent string construction stays in the existing Baker recipe
+/// owner, before string storage and borrow settlement consume the result.
+let formatIntegers (graph: SemanticGraph) : SemanticGraph =
+    let create (node: SemanticNode) (graph: SemanticGraph) =
+        match node.Kind with
+        | SemanticKind.Application(callee, [argument]) when node.IsReachable ->
+            match graph.Nodes.TryFind callee with
+            | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Format; Operation = "int" } } ->
+                let ctx = mkContext node.Range node.Type graph.Platform "Format.int" node.Id
+                match StringRecipes.tryFormatInteger ctx graph argument with
+                | Some result -> toRecipeResult node.Id "Format.int" [] result
+                | None -> NotApplicable "Integer formatting has no admitted finite source range."
+            | _ -> NotApplicable "Not an integer formatting application."
+        | _ -> NotApplicable "Not an integer formatting application."
+    let recipes = FanOut.fanOut "Format.int" needsSaturationBasic create graph
+    if recipes.Recipes.IsEmpty then graph else FoldIn.foldIn recipes graph
+
 /// Selective rebuild keeps the complete graph available to recipes, while
 /// admitting only invalidated source occurrences to recipe creation.
 let fanOutScopes (scopes: Set<NodeId>) (graph: SemanticGraph) : RecipeSet =

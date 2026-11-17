@@ -1172,6 +1172,18 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     //=========================================================================
     let finalGraph, rangeDiagnostics = RangeAnalysis.run platformContext finalGraph
     tracePhase "ranges"
+    let formatted = BakerSaturation.formatIntegers finalGraph
+    let finalGraph, rangeDiagnostics =
+        if obj.ReferenceEquals(finalGraph, formatted) then finalGraph, rangeDiagnostics
+        else
+            let newNodes = formatted.Nodes.Keys |> Seq.filter (fun id -> not (finalGraph.Nodes.ContainsKey id)) |> Seq.toList
+            let formatted = Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable formatted
+            let formatted = NodeProofs.create formatted newNodes
+            let formatted = Clef.Compiler.Nanopass.SequenceEvaluation.normalize formatted
+            let formatted = Clef.Compiler.Nanopass.EagerDemand.normalize formatted
+            let formatted = Clef.Compiler.Nanopass.OrdinaryDemand.normalize formatted
+            let formatted = Clef.Compiler.Nanopass.StringBorrows.normalize formatted
+            RangeAnalysis.run platformContext formatted
     let byteGraph, stringByteDiagnostics = Clef.Compiler.Nanopass.StringByteStorage.normalize finalGraph
     // New copy loops and their read/write dependencies participate in the same
     // range fixed point. Replace preliminary diagnostics and invalidated tables;
@@ -1474,9 +1486,21 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 Mmio = mmio
                 ProgramStorage = ProgramStorageInventory.empty } }
 
+    // A join introduces child invocations and result deliveries after the
+    // preliminary numeric pass. Renew the existing borrow/range owners at
+    // this explicit source rewrite boundary before final publication.
+    let finalGraph, rangeDiagnostics, premiseDiagnostics =
+        if asyncAndRegions.Orchestrations.IsEmpty then finalGraph, rangeDiagnostics, premiseDiagnostics
+        else
+            let renewed = Clef.Compiler.Nanopass.StringBorrows.normalize finalGraph
+            let renewed, ranges = RangeAnalysis.run platformContext renewed
+            let renewed, premises = Clef.Compiler.Nanopass.PremiseEstablishment.normalize renewed
+            renewed, ranges, premiseDiagnostics @ premises
+
     // Boundary calls need the settled range/meet domain, and must contribute
     // their joint obligations before ledger emission and passive publication.
     let finalGraph = Clef.Compiler.Nanopass.NumericSettlement.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.AsyncAndRegionSettlement.settleResultStorage finalGraph
     // Representation rewriting is complete. Receiving conventions now read
     // actual scalar representations. Aggregate storage is settled before the
     // memory/spatial/boundary owners consume its extent.

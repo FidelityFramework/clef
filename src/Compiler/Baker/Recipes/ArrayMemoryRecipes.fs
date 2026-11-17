@@ -278,6 +278,45 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
             | ValueRange.Bounded(lo,hi) when lo<=hi && hi>=0I -> return (max 0I lo,hi)
             | _ -> return! Error "An array count has no finite nonnegative successful allocation range."
         }
+    let asyncInitialization (construction:ArrayAllocationConstruction) count slot bytes =
+        result {
+            let! row =
+                graph.Codata.Value.AsyncOrchestrations |> Map.toList |> List.choose (fun (_,row) ->
+                    if row.ResultStorage=construction.Site then Some row else None)
+                |> function
+                   | [row] -> Ok row
+                   | _ -> Error "An uninitialized array lacks a unique complete source orchestration or copy construction."
+            do! demand (row.Site=construction.Owner && row.ResultCapacity>0 && row.ResultCapacity=row.Children.Length
+                        && Set.count(Set.ofList row.Children)=row.Children.Length
+                        && row.ResultOrdering=(row.Children |> List.mapi(fun ordinal child -> ordinal,child))
+                        && count=ValueRange.point(bigint row.ResultCapacity) && row.ElementStride=bytes)
+                   (sprintf "The orchestration result allocation disagrees with its settled child ordering or capacity (owner %A/%A, capacity %d/%d, count %A, stride %d/%d)."
+                       row.Site construction.Owner row.ResultCapacity row.Children.Length count row.ElementStride bytes)
+            let writes =
+                operations |> Map.toList |> List.choose(fun (_,operation) ->
+                    match operation with
+                    | MemoryWitnessOperation.ArrayAccess access when access.Value.IsSome && allocationTarget graph access.Buffer=Ok construction.Site -> Some access
+                    | _ -> None)
+            do! demand (writes.Length=row.Children.Length) "The orchestration result array does not have exactly one write per child."
+            let! ordered = row.ResultOrdering |> mapResult(fun (ordinal,child) ->
+                result {
+                    let! write = writes |> List.filter(fun write -> write.Value=Some child) |> function
+                                 | [write] -> Ok write
+                                 | _ -> Error "An orchestration child has no unique result delivery."
+                    let! index = scalar numeric write.Index
+                    do! demand (index.Range=ValueRange.point(bigint ordinal) && write.Element=slot)
+                           "An orchestration child delivers to another ordinal or element carrier."
+                    return write.Bounds.Requirement.Frontier
+                })
+            let blocks = graph.Nodes.Values |> Seq.choose(fun node ->
+                match node.Kind with
+                | SemanticKind.Sequential(stored::tail) when tail.Length=ordered.Length+1 && allocationTarget graph stored=Ok construction.Site ->
+                    let output=List.last tail
+                    if reference graph stored output=Ok true && tail=ordered@[output] then Some node.Id else None
+                | _ -> None) |> Seq.toList
+            do! demand (blocks.Length=1) "The orchestration result escapes before its complete ordered child deliveries."
+            return Set.ofList(row.Site::construction.Site::(blocks@ordered@row.Children))
+        }
     let validateCopy (construction:ArrayCopyConstruction) =
         result {
             do! copyRow graph construction
@@ -414,6 +453,11 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
                 let! slot = element numeric construction.Site
                 let! bytes,alignment = Placement.extentOfSlot graph slot |> needed "An array element lacks a settled physical extent."
                 do! demand (bytes>0 && alignment>0 && bytes%alignment=0) "An array element has no admitted contiguous aligned stride."
+                let! asyncParticipants =
+                    if construction.Default.IsNone && construction.Initialization.IsNone &&
+                       not(constructions |> List.exists(fun copy -> copy.Allocation=Some construction.Site && copy.Count=construction.Count)) then
+                        asyncInitialization construction count.Range slot bytes
+                    else Ok Set.empty
                 do! match construction.Default,construction.Initialization with
                     | Some value,initialization ->
                         result {
@@ -440,7 +484,7 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
                                 do! demand (maximum=0I && count.Range=ValueRange.point 0I) "A nonempty zeroCreate allocation has no complete initialization loop."
                         }
                     | None,None ->
-                        demand (constructions |> List.exists(fun copy -> copy.Allocation=Some construction.Site && copy.Count=construction.Count))
+                        demand (not asyncParticipants.IsEmpty || (constructions |> List.exists(fun copy -> copy.Allocation=Some construction.Site && copy.Count=construction.Count)))
                                "An uninitialized array allocation lacks its complete source copy construction."
                     | None,Some _ -> Error "An array initializer has no source default-value authority."
                 let! declared = getPlatform ()
@@ -516,7 +560,7 @@ let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) 
                     do! demand (extent<=bigint System.Int64.MaxValue && extent<=indexMaximum && maximum<=countMaximum)
                            "The array's maximum byte extent exceeds the declared index/address domain."
                     do! demand (extent<=bigint space.Capacity) "The array's complete maximum byte extent exceeds its declared stack capacity."
-                    let participants=construction.Participants |> Set.union initializationParticipants |> Set.union uses |> Set.union count.Participants
+                    let participants=construction.Participants |> Set.union initializationParticipants |> Set.union asyncParticipants |> Set.union uses |> Set.union count.Participants
                                      |> Set.union(Set.ofList(requirement.Participants@[declared.Node;space.Node;core.Node;pointer.Node;scope]))
                     let mutable own=Enrichment.empty
                     let proof label body =

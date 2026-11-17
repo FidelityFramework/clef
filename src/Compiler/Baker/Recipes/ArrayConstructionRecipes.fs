@@ -89,6 +89,31 @@ let private knownEmpty (graph: SemanticGraph) count =
 
 type Expansion = { Nodes:SemanticNode list; Edges:Hyperedge list }
 
+type UninitializedAllocation = { Nodes:SemanticNode list; Edges:Hyperedge list; Allocation:NodeId; Value:NodeId }
+
+/// Allocate the exact capacity selected by another source construction. The
+/// late memory owner still requires its complete initialization account.
+let uninitialized (graph:SemanticGraph) (owner:SemanticNode) arrayType capacity =
+    let state = SaturationState.create owner.Range "Async.resultStorage" (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) owner.Id graph.Platform
+    let recipe = saturation {
+        let! count = intLit capacity
+        let! binding = letBind "__async_result_count" count Types.intType
+        let! reference = varRef "__async_result_count" (Some binding) Types.intType
+        let operand = { Actual=count; Binding=binding; Reference=reference }
+        let! allocation = createWithChildren (SemanticKind.ArrayAllocate reference) arrayType [reference]
+        let! guard = requireRange owner arrayType None None reference allocation arrayType
+        let! value = C.block [owner.Id;binding;guard.Frontier] arrayType
+        return allocation,value,operand,guard }
+    let outcome,nodes = run state recipe
+    match outcome with
+    | NoMatch reason -> Error reason
+    | Matched(allocation,value,count,guard) ->
+        let construction =
+            { Site=allocation; Owner=owner.Id; Count=count; Default=None; Initialization=None; Guard=guard
+              Participants=Set.ofList(owner.Id :: (nodes |> List.map _.Id)) }
+        Ok { Nodes=nodes; Edges=[requirementRow guard;Memory.allocationConstructionRow construction]
+             Allocation=allocation; Value=value }
+
 let materialize (graph: SemanticGraph) (source: SemanticNode) : Result<Expansion, string> =
     match selected graph source with
     | None -> Result.Error "No array construction occurrence."

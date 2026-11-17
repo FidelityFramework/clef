@@ -173,6 +173,31 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                 applySubst domain = applySubst actual.Type && applySubst result = applySubst application.Type
             | _ -> false
         | _ -> false
+    let awaits (application: SemanticNode) callee argument =
+        match nodes.TryFind callee, nodes.TryFind argument with
+        | Some { Kind = SemanticKind.Intrinsic { FullName = ("Async.Await" | "Async.RunSynchronously") }; Type = calleeType }, Some actual
+            when application.Children = [callee; argument] ->
+            match applySubst calleeType, Types.tryGetAsyncElement (applySubst actual.Type) with
+            | NativeType.TFun(domain, result), Some element ->
+                applySubst domain = applySubst actual.Type && applySubst result = applySubst element &&
+                applySubst application.Type = applySubst element
+            | _ -> false
+        | _ -> false
+    let asyncArray (ty: NativeType) =
+        match applySubst ty with
+        | NativeType.TApp(array, [element]) when array.Name = Types.arrayTyCon.Name ->
+            Types.tryGetAsyncElement (applySubst element)
+        | _ -> None
+    let orchestrates (application: SemanticNode) callee argument =
+        match nodes.TryFind callee, nodes.TryFind argument with
+        | Some { Kind = SemanticKind.Intrinsic { FullName = ("Async.Parallel" | "Async.Sequential") }; Type = calleeType }, Some actual
+            when application.Children = [callee; argument] ->
+            match applySubst calleeType, asyncArray actual.Type, Types.tryGetAsyncElement (applySubst application.Type) with
+            | NativeType.TFun(domain, result), Some element, Some array ->
+                applySubst domain = applySubst actual.Type && applySubst result = applySubst application.Type &&
+                applySubst array = NativeType.TApp(Types.arrayTyCon, [applySubst element])
+            | _ -> false
+        | _ -> false
     let row site (target: CallableOrigins.CallTarget) =
         { Site = site; Implementation = target.Lambda; Parameters = target.Parameters |> List.map (fun (_, _, formal) -> formal); Arguments = target.Arguments }
     let invocationsByImplementation =
@@ -285,6 +310,10 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                         | SemanticKind.TypeAnnotation(value, _), _ when value = id -> forward node.Id
                         | SemanticKind.EagerExpr value, _ when value = id && ExplicitDemand.operand graph node.Id = Some id -> forward node.Id
                         | SemanticKind.Sequential values, _ -> if List.tryLast values = Some id then forward node.Id
+                        | SemanticKind.ArrayExpr elements, _ when (asyncArray node.Type).IsSome && List.tryItem edge.Ordinal elements = Some id ->
+                            // The exact array carries its deferred work values;
+                            // subsequent uses must still close at an activation.
+                            forward node.Id
                         | SemanticKind.IfThenElse(_, yes, no), (EdgeRole.ThenBranch | EdgeRole.ElseBranch)
                             when id = yes || no = Some id -> forward node.Id
                         | SemanticKind.Match(_, cases), _ when cases |> List.exists (fun branch -> branch.Body = id) -> forward node.Id
@@ -349,6 +378,38 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                                         Calls = (call.Targets |> List.map (row node.Id)) @ proof.Calls }
                                 if Some caller <> entry then dependency caller
                             | _ -> reject ()
+                        | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
+                            when edge.Ordinal = 0 && argument = id && orchestrates node callee argument ->
+                            match graph.Codata.Value.AsyncOrchestrations.TryFind node.Id with
+                            | None -> forward node.Id
+                            | Some orchestration ->
+                                // Join elaboration has replaced the original
+                                // consumer with the published child activations.
+                                // Their exact current execution owners close the
+                                // task family; the result descriptor is no longer
+                                // a transport of these deferred callable values.
+                                let participants = orchestration.Participants |> List.map _.Node |> Set.ofList
+                                proof <- { proof with Participants = Set.union proof.Participants participants }
+                                if orchestration.Children.IsEmpty then reject ()
+                                for child in orchestration.Children do
+                                    match nodes.TryFind child, graph.Codata.Value.AsyncActivations.TryFind child, activation child with
+                                    | Some ({ Kind = SemanticKind.Application(activator, [computation]) } as current), Some _, Some caller
+                                        when awaits current activator computation ->
+                                        proof <- { proof with Callers = Set.add caller proof.Callers
+                                                              Participants = Set.add child proof.Participants }
+                                        if Some caller <> entry then dependency caller
+                                    | _ -> reject ()
+                        | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
+                            when edge.Ordinal = 0 && argument = id && awaits node callee argument ->
+                            // These source primitives activate the computation
+                            // carried by this exact operand. Keep that execution
+                            // dependency without inventing ordinary unit actuals.
+                            match activation node.Id with
+                            | Some caller ->
+                                proof <- { proof with Callers = Set.add caller proof.Callers
+                                                      Participants = Set.union proof.Participants (Set.ofList [callee; node.Id]) }
+                                if Some caller <> entry then dependency caller
+                            | None -> reject ()
                         | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
                             when edge.Ordinal = 0 && argument = id && discards node callee argument ->
                             // The resolved primitive evaluates and discards

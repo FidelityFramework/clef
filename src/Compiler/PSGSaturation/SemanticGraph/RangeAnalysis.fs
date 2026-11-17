@@ -630,6 +630,7 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                         match applySubst n.Type with NativeType.TFun _ -> true | _ -> false)))
             let initial =
                 match info.Category with
+                | _ when RangeSources.preservesSourceMemory info args.Length -> noWrites
                 | _ when info.Module = IntrinsicModule.Mmio || info.FullName.StartsWith("Async.", System.StringComparison.Ordinal) || info.FullName.StartsWith("Region.", System.StringComparison.Ordinal) -> noWrites
                 | IntrinsicCategory.Platform | IntrinsicCategory.Reactive -> unknownWrites
                 | IntrinsicCategory.Memory when List.isEmpty callbacks -> unknownWrites
@@ -2038,6 +2039,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                 // descriptor) is written where the pass sees no store: an unbounded store
                 let isBoundaryCall =
                     match Map.tryFind node.Id callees with
+                    | Some (Callee.Intrinsic info, args) when RangeSources.preservesSourceMemory info args.Length -> false
                     | Some (Callee.Intrinsic { Module = IntrinsicModule.Sys }, _) -> true
                     | _ ->
                         let (rootId, _) = flattenApplication reachableNodes funcId []
@@ -2750,8 +2752,8 @@ let private transfer (program: Program) (shared: Reading) (value: Reading) (appl
             match program.EnvironmentCaptures.TryFind slot with
             | Some (true, _) when program.Reachable.ContainsKey slot -> Some (get slot)
             | Some (false, initializers) ->
-                initializers |> List.fold (fun range (formation, value) ->
-                    let valueRange = if program.Reachable.ContainsKey value then read program shared formation value else fallback
+                initializers |> List.fold (fun range (formation, initializer) ->
+                    let valueRange = if program.Reachable.ContainsKey initializer then read program value formation initializer else fallback
                     ValueRange.join range valueRange) ValueRange.Empty |> Some
             | _ -> Some fallback
         | SemanticKind.FrameRead _ ->
@@ -2903,6 +2905,12 @@ let private contextualNode (program: Program) (node: SemanticNode) =
         | SemanticKind.IfThenElse _ | SemanticKind.Match _ | SemanticKind.CaseElimination _
         | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _
         | SemanticKind.Upcast _ | SemanticKind.Downcast _ -> true
+        | SemanticKind.EnvironmentRead(_, slot) ->
+            // Immutable captures retain their initializer's invocation facts.
+            // An initializer outside this lexical invocation still resolves to
+            // its shared cell; mutable storage keeps its owning analysis.
+            program.EnvironmentCaptures.TryFind slot
+            |> Option.exists (fun (mutableCell, initializers) -> not mutableCell && not initializers.IsEmpty)
         | SemanticKind.Application _ when program.Applications.ContainsKey node.Id -> true
         | SemanticKind.Application _ ->
             match program.Callees.TryFind node.Id with
@@ -2950,6 +2958,12 @@ let private lexicalBodies (program: Program) (roots: NodeId list) : Result<Map<N
                     // wrapper may contain an independently reachable occurrence.
                     match node.Kind with
                     | SemanticKind.Lambda _ -> Result.Ok(visited, members)
+                    | _ when node.Metadata.TryFind "Async.Formation" = Some(MetadataValue.Bool true) ->
+                        // A factory's result summary reads its deferred body
+                        // under that factory invocation's captured arguments.
+                        // These are range coordinates, not body activation.
+                        let children = node.Children @ (asyncFormationBody program.Graph.Nodes node |> Option.toList)
+                        children |> List.fold (fun state child -> walk state (Some id, child)) (Result.Ok(visited, members))
                     | _ -> node.Children |> List.fold (fun state child -> walk state (Some id, child)) (Result.Ok(visited, members))
         walk (Result.Ok(Set.empty, Set.empty)) (None, root) |> Result.map snd
     roots |> List.fold (fun bodies root ->

@@ -48,10 +48,20 @@ let create (graph: SemanticGraph) (newNodes: NodeId seq) : SemanticGraph =
         |> Seq.choose (fun id -> SemanticGraph.tryGetNode id graph)
         |> Seq.toList
     let enrichId = freshId ()
+    let existing =
+        graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with SemanticKind.Obligation info -> Some info.Id | _ -> None) |> Set.ofSeq
+    let distinctName (name, (text, participants: SemanticNode list)) =
+        let rec available suffix =
+            let candidate = if suffix = 0 then name else sprintf "%s_node_%d_%d" name (NodeId.value participants.Head.Id) suffix
+            if ["storage_"; "view_"; "sentinel_"] |> List.exists (fun prefix -> existing.Contains(prefix + candidate)) then available (suffix + 1)
+            else candidate
+        available 0, (text, participants)
     let proofs =
         literalTexts graph nodes
         |> List.map (fun (text, participants) -> slug text, (text, participants))
         |> uniquify
+        |> List.map distinctName
         |> List.map (Recipes.literalTriple enrichId)
         |> Enrichment.concat
     ObligationElaboration.foldIn proofs graph

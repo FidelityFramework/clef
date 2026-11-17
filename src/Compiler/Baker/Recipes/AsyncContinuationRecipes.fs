@@ -459,9 +459,8 @@ type ChildArray =
 
 /// Bind every child computation of an orchestration's child array to an
 /// immutable name. The bindings are sequenced, in element order, directly
-/// before the array's binding in its block, and each element of the array
-/// becomes a reference to its child's binding. A child activation reads its
-/// child through that binding; the child array is not read back.
+/// in place of the array's binding in its block. A child activation reads its
+/// child through that binding; the temporary descriptor array is retired.
 let bindChildren (graph: SemanticGraph) (plan: ChildArrayPlan) : Result<ChildArray, Residual> =
     let residual site reason = Error { Formation = plan.Array; Site = site; Reason = reason }
     match graph.Nodes.TryFind plan.Array, graph.Nodes.TryFind plan.Tasks with
@@ -494,7 +493,7 @@ let bindChildren (graph: SemanticGraph) (plan: ChildArrayPlan) : Result<ChildArr
                 Ok { Nodes = nodes
                      Edited = Set.singleton array.Id
                      Children = children
-                     Rewrite = { Target = block.Id; Before = tasks.Id; After = (children |> List.map _.Binding) @ [ tasks.Id ] } }
+                     Rewrite = { Target = block.Id; Before = tasks.Id; After = children |> List.map _.Binding } }
             | NoMatch reason, _ -> residual array.Id reason
         | None -> residual tasks.Id "The binding of the child array is not sequenced by a block."
     | _ -> residual plan.Array "The child array is not an array expression bound directly to an immutable name."
@@ -510,6 +509,8 @@ type JoinPlan =
     { Orchestration: NodeId
       /// The activation that joins the orchestration.
       Join: NodeId
+      /// The guarded result allocation, authored by ArrayConstructionRecipes.
+      Storage: NodeId
       Children: ChildPlan list }
 
 /// The explicit work item of one child: the application of an activator of
@@ -528,7 +529,7 @@ type ChildActivation =
 type JoinElaboration =
     { /// Every created node.
       Nodes: SemanticNode list
-      /// The result storage the result array is bound to: the join's operand.
+      /// The guarded allocation the result array is bound to.
       Storage: NodeId
       /// The binding of the join's result array.
       Results: NodeId
@@ -537,8 +538,7 @@ type JoinElaboration =
       Rewrite: Rewrite }
 
 /// Realize the join of a settled orchestration as explicit PSG operations.
-/// The result array is the result storage of the orchestration: the join's
-/// operand is bound once, with no activation applied to it. One activation
+/// The guarded result allocation is bound once. One activation
 /// per child is applied to the child read through its binding, and each
 /// result is stored into the result array at the child's result ordinal, in
 /// result order. The block of these operations takes the join's place in its
@@ -550,7 +550,7 @@ type JoinElaboration =
 let join (graph: SemanticGraph) (plan: JoinPlan) : Result<JoinElaboration, Residual> =
     let residual site reason = Error { Formation = plan.Orchestration; Site = site; Reason = reason }
     match graph.Nodes.TryFind plan.Join with
-    | Some ({ Kind = SemanticKind.Application(callee, [ operand ]) } as site) ->
+    | Some ({ Kind = SemanticKind.Application(callee, [ _ ]) } as site) ->
         match graph.Nodes.TryFind callee, site.Parent |> Option.bind graph.Nodes.TryFind with
         | Some ({ Kind = SemanticKind.Intrinsic _ } as activator), Some parent ->
             let anchors = activator.Children |> List.choose graph.Nodes.TryFind
@@ -559,11 +559,9 @@ let join (graph: SemanticGraph) (plan: JoinPlan) : Result<JoinElaboration, Resid
             let resultsName = sprintf "__async_join_%d" (NodeId.value site.Id)
             let recipe =
                 saturation {
-                    // The result array is the result storage of the orchestration:
-                    // the binding holds the join's operand, and no activation is
-                    // applied to the orchestration. The delivery of each child
-                    // stores its element before the block's value is read.
-                    let! results = C.create (SemanticKind.Binding(resultsName, false, false, None)) site.Type [ operand ]
+                    // Each child delivers its element into the allocation
+                    // before the block publishes the completed array.
+                    let! results = C.create (SemanticKind.Binding(resultsName, false, false, None)) site.Type [ plan.Storage ]
                     let! activations =
                         plan.Children |> C.collect (fun child ->
                             saturation {
@@ -605,7 +603,7 @@ let join (graph: SemanticGraph) (plan: JoinPlan) : Result<JoinElaboration, Resid
                     residual site.Id "A child activation of the orchestration join has no created occurrence."
                 else
                     Ok { Nodes = nodes
-                         Storage = operand
+                         Storage = plan.Storage
                          Results = results
                          Activations = settled
                          Rewrite = { Target = parent.Id; Before = site.Id; After = [ block ] } }

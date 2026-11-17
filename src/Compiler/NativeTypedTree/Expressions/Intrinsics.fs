@@ -1299,6 +1299,12 @@ let tryResolveConversion (name: string) (_range: SourceRange) : (IntrinsicInfo *
 ///    does not model.
 module RangeSources =
 
+    /// The write primitive reads its bounded input buffer and changes the
+    /// endpoint, not source cells or array elements. Partial applications do
+    /// not establish this complete primitive invocation.
+    let preservesSourceMemory (info: IntrinsicInfo) argumentCount =
+        info.Module = IntrinsicModule.Sys && info.Operation = "write" && argumentCount = 3
+
     /// What the table says of an intrinsic application's integer result.
     [<RequireQualifiedAccess>]
     type Result =

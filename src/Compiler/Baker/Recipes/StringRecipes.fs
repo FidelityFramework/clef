@@ -30,3 +30,35 @@ let tryReifyValue (ctx: Context) operation functionType enclosing : Result optio
         | Matched result, nodes -> Some(mkResultNoShadow nodes result [])
         | NoMatch reason, _ -> Some(mkFailedResult ctx.InspiringNode ("String.length function construction failed: " + reason))
     | _ -> None
+
+/// A finite integer formatting domain can be represented entirely by source
+/// selections and immutable decimal literals. The argument remains evaluated
+/// once before selection; the bound is read from its current range fact.
+let tryFormatInteger (ctx: Context) (graph: SemanticGraph) argument : Result option =
+    match graph.Nodes.TryFind argument with
+    | Some input ->
+        match input.ValueRange with
+        | Some(ValueRange.Bounded(lower, upper)) when lower <= upper && upper - lower < 256I
+                                                    && lower >= bigint System.Int64.MinValue && upper <= bigint System.Int64.MaxValue ->
+            let state = SaturationState.create ctx.SourceRange ctx.OriginalHOF ctx.ExpansionId ctx.InspiringNode ctx.Platform
+            let recipe = saturation {
+                let! binding = letBind "__format_integer" argument input.Type
+                let rec select (current: bigint) = saturation {
+                    let! text = createWithChildren (SemanticKind.Literal(NativeLiteral.String(current.ToString(System.Globalization.CultureInfo.InvariantCulture)))) Types.stringType []
+                    if current = upper then return text else
+                    let! value = varRef "__format_integer" (Some binding) input.Type
+                    let! expected = numLit (int64 current) input.Type
+                    let! equal = eq value expected input.Type
+                    let! remaining = select (current + 1I)
+                    return! ifThenElse equal text remaining Types.stringType
+                }
+                let! selected = select lower
+                let! value = varRef "__format_integer" (Some binding) input.Type
+                let! demanded = createWithChildren (SemanticKind.EagerExpr value) input.Type [value]
+                return! evaluateBefore [binding; demanded] selected Types.stringType
+            }
+            match run state recipe with
+            | Matched root, nodes -> Some(mkResultNoShadow nodes root [])
+            | NoMatch reason, _ -> Some(mkFailedResult ctx.InspiringNode reason)
+        | _ -> None
+    | None -> None
