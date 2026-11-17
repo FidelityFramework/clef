@@ -49,14 +49,8 @@ module private AsyncAndRegionFixture =
         | Error failures ->
             failwith (sprintf "Publication refused: %d failures" failures.Length)
 
-    /// `Integrity.check` reports the carrier of an index transport under the
-    /// part `Emission.Numeric.IndexTransports.Carrier` until that part is added
-    /// to `explicitParts` (Fidelity.PSG/src/Fidelity.PSG/Integrity.fs:5734).
-    /// That part alone is filtered; any other violation fails the case.
     let wellFormed (revision: Fidelity.PSG.Revision) =
-        let violations =
-            Fidelity.PSG.Integrity.check revision
-            |> List.filter (fun violation -> violation.Part <> "Emission.Numeric.IndexTransports.Carrier")
+        let violations = Fidelity.PSG.Integrity.check revision
         Assert.True(violations.IsEmpty, Fidelity.PSG.Integrity.describe violations)
 
     let clefId (Fidelity.PSG.NodeId value) = NodeId value

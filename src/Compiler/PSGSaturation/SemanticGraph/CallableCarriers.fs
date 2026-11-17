@@ -161,7 +161,7 @@ let private orchestrationStorage (graph: SemanticGraph) =
         | [] -> found
         | source :: rest ->
             let next =
-                aliases.TryFind source |> Option.defaultValue []
+                (match aliases.TryFind source with Some targets -> targets | None -> [])
                 |> List.filter (fun target -> not (Set.contains target found))
             close (List.fold (fun found target -> Set.add target found) found next) (next @ rest)
     close roots (Set.toList roots)
