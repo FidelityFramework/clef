@@ -425,6 +425,63 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
         match slots.Value |> List.filter (fun slot -> List.contains (writer, value) slot.Writers) with
         | [slot] -> Some slot
         | _ -> None
+    let environmentTransportSupport = System.Collections.Generic.Dictionary<NodeId, Set<NodeId>>()
+    let transportSupport allocation =
+        match environmentTransportSupport.TryGetValue allocation with
+        | true, participants -> Set.toList participants
+        | _ -> []
+    let currentEnvironmentAllocation formal inputs =
+        environmentOwner formal |> Option.bind (fun owner ->
+            match nodes.TryFind owner with
+            | Some { Kind = SemanticKind.ClosureValue(code, allocation); IsReachable = true } ->
+                match nodes.TryFind allocation, nodes.TryFind code with
+                | Some { Kind = SemanticKind.EnvironmentCreate(actual, _) },
+                  Some { Kind = SemanticKind.Lambda(parameters, _, [], _, _) } when actual = owner &&
+                    (ClosureEnvironments.capturedInitializers graph owner |> Option.isSome) ->
+                    let formals = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.EnvironmentFormal && edge.Target = formal)
+                    let ordinal = parameters |> List.tryFindIndex (fun (_, ty, id) -> id = formal && applySubst ty = ClosureEnvironments.environmentType)
+                    let rec transport seen id =
+                        if id = formal then Some(false, Set.singleton formal)
+                        elif Set.contains id seen then None
+                        else
+                            let seen = Set.add id seen
+                            let follow value = transport seen value |> Option.map (fun (rooted, support) -> rooted, support |> Set.add id |> Set.add value)
+                            match nodes.TryFind id with
+                            | Some { Kind = SemanticKind.EnvironmentCreate(actual, _) } when actual = owner && id = allocation ->
+                                Some(true, Set.ofList [id; owner; code; formal])
+                            | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _)
+                                           | SemanticKind.EnvironmentReference value } -> follow value
+                            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> follow value
+                            | Some { Kind = SemanticKind.ClosureValue(implementation, environment) } when implementation = code &&
+                                (knownCallable id |> Option.exists (fun known -> known.EnvironmentOwner = owner)) -> follow environment
+                            | Some { Kind = SemanticKind.EnvironmentRead(environment, slot); Children = [actual] } when actual = environment ->
+                                capturedValue environment slot |> Option.bind follow
+                                |> Option.map (fun (rooted, support) -> rooted, support |> Set.add environment |> Set.add slot)
+                            | Some { Kind = SemanticKind.FrameRead _ } ->
+                                CallableIngress.tryStorageAccess ingress.Value id
+                                |> Option.filter (fun access -> access.SharedCell.IsNone && not access.Inputs.IsEmpty)
+                                |> Option.bind (fun access ->
+                                    access.Inputs |> List.fold (fun proof (_, value) ->
+                                        Option.map2 (fun (rooted, support) (nextRoot, nextSupport) ->
+                                            rooted || nextRoot, Set.union support nextSupport)
+                                            proof (follow value)) (Some(false, access.Participants)))
+                            | _ -> None
+                    match formals, ordinal with
+                    | [{ Class = EdgeClass.Provenance; Sources = [held; implementation] }], Some ordinal
+                        when held = owner && implementation = code && not (List.isEmpty inputs) &&
+                             (inputs |> List.forall (fun (call, value) ->
+                                 environmentArguments.TryFind call = Some(ordinal, value) && environmentOwner value = Some owner &&
+                                 (callableOrigins.Value.Calls.TryFind call |> Option.exists (fun invocation ->
+                                     invocation.Complete && not invocation.Unknown && not invocation.Targets.IsEmpty &&
+                                     invocation.Targets |> List.forall (fun target -> target.Lambda = code))))) ->
+                        inputs |> List.fold (fun proof (call, value) ->
+                            Option.map2 (fun (rooted, support) (nextRoot, nextSupport) ->
+                                rooted || nextRoot, Set.union support nextSupport |> Set.add call)
+                                proof (transport Set.empty value)) (Some(false, Set.ofList [owner; code; formal; allocation]))
+                        |> Option.bind (fun (rooted, support) -> if rooted then Some(allocation, support) else None)
+                    | _ -> None
+                | _ -> None
+            | _ -> None)
     let rec sourceAllocations seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -448,7 +505,13 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
             capturedValue environment slot |> Option.bind (sourceAllocations seen)
         | Some { Kind = SemanticKind.PatternBinding _ } ->
             formalInputs id |> Option.bind (fun inputs ->
-                inputs |> List.fold (fun result (_, actual) -> Option.map2 Set.union result (sourceAllocations seen actual)) (Some Set.empty))
+                match currentEnvironmentAllocation id inputs with
+                | Some(allocation, support) ->
+                    sourceAllocations seen allocation |> Option.map (fun allocations ->
+                        for source in allocations do
+                            environmentTransportSupport[source] <- Set.union support (Set.ofList (transportSupport source))
+                        allocations)
+                | None -> inputs |> List.fold (fun result (_, actual) -> Option.map2 Set.union result (sourceAllocations seen actual)) (Some Set.empty))
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> sourceAllocations seen value
         | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (sourceAllocations seen)
         | Some { Kind = SemanticKind.IfThenElse(_, yes, Some no) } ->
@@ -994,7 +1057,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                                       Sources = [allocation; sourceOwner; slot; generator]; Target = owner; Ordinal = 0 }
                                 | _ ->
                                     { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence
-                                      Sources = [site; sourceOwner; allocation; slot; value]; Target = owner; Ordinal = 0 }
+                                      Sources = [site; sourceOwner; allocation; slot; value] @ transportSupport allocation; Target = owner; Ordinal = 0 }
                             edge :: evidence)))) (Ok [])
     let resultInputs site result call destination =
         match nodes[result.Constructor].Kind with
@@ -1082,7 +1145,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                                                             bounded id sourceOwner (Set.singleton id) Set.empty id)
                                                         |> Result.map (fun evidence ->
                                                             { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence
-                                                              Sources = [id; owner; allocation; sourceOwner; slot; value]
+                                                              Sources = [id; owner; allocation; sourceOwner; slot; value] @ transportSupport allocation
                                                               Target = layout; Ordinal = 0 } :: evidence)))) (Ok [])
                                     | _ -> Ok [])) (Ok [])
                 | _ -> Ok []
@@ -1098,12 +1161,12 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                     let prepared, call, destination = resultAllocations[id]
                     let initializers = ClosureEnvironments.capturedInitializers graph layout |> Option.defaultValue []
                     { Sources = List.distinct ((id :: owner :: prepared.Implementation :: prepared.Formal :: prepared.Constructor :: call :: destination :: prepared.FinalPath) @
-                                    (initializers |> List.collect (fun (slot, value, _) -> [slot; value])))
+                                    (initializers |> List.collect (fun (slot, value, _) -> [slot; value])) @ transportSupport id)
                       Target = layout; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence; Ordinal = 0 } :: evidence
                 | SemanticKind.EnvironmentCreate(layout, initializers) ->
                     let values = nodes |> Map.toList |> List.choose (fun (value, _) ->
                         if sourceAllocations Set.empty value |> Option.exists (Set.contains id) then Some value else None)
-                    { Sources = List.distinct (id :: owner :: (initializers |> List.collect (fun (slot, value) -> [slot; value])) @ values)
+                    { Sources = List.distinct (id :: owner :: (initializers |> List.collect (fun (slot, value) -> [slot; value])) @ values @ transportSupport id)
                       Target = layout; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence; Ordinal = 0 } :: evidence
                 | _ -> evidence
             let result = { result with Evidence = evidence @ result.Evidence

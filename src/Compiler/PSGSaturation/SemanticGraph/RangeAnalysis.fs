@@ -612,7 +612,16 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                     | Some (Callee.Intrinsic { FullName = ("Async.Parallel" | "Async.Sequential") }, [ tasks ]) -> bodies visited tasks
                     | _ -> None
                 | _ -> None
-            let resolved = args |> List.map (bodies Set.empty)
+            let computations =
+                match args with
+                | [computation; destination] ->
+                    match program.Reachable.TryFind destination with
+                    | Some { Kind = SemanticKind.AggregateStorage site } when
+                        program.Graph.Codata.Value.AsyncActivations.TryFind site
+                        |> Option.exists (fun activation -> activation.ResultTarget = destination) -> [computation]
+                    | _ -> args
+                | _ -> args
+            let resolved = computations |> List.map (bodies Set.empty)
             if resolved |> List.exists Option.isNone then unknownWrites, []
             else noWrites, resolved |> List.collect Option.get
         | Callee.Intrinsic info ->
@@ -2450,14 +2459,45 @@ let private immutableRecordField (program: Program) recordId field =
 /// Projection paths compose: extracting a tuple slot from a DU payload first selects the
 /// union payload, then the slot. Tags never stand in for payload values. Opaque alternatives
 /// and recursive aggregate origins remain unbounded rather than disappearing from a join.
-let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : bool * bool * Set<NodeId> =
+let private asyncResultTargets (program: Program) (compId: NodeId) : bool * Choice<NodeId, NodeId> list =
+    let combine (unknown, targets) (otherUnknown, others) = unknown || otherUnknown, targets @ others
+    let rec loop (id: NodeId) (visited: Set<NodeId>) =
+        if visited.Contains id then true, [] else
+        let visited = visited.Add id
+        match Map.tryFind id program.Reachable with
+        | Some n when n.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+            match asyncFormationBody program.Graph.Nodes n with
+            | Some body -> false, [Choice2Of2 body]
+            | None -> true, []
+        | Some { Kind = SemanticKind.VarRef(_, Some defId) } -> loop defId visited
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [rhs] } -> loop rhs visited
+        | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> loop (List.last items) visited
+        | Some { Kind = SemanticKind.IfThenElse(_, tBranch, Some eBranch) } ->
+            combine (loop tBranch visited) (loop eBranch visited)
+        | Some { Kind = SemanticKind.Application _ } when program.Applications.ContainsKey id ->
+            false, [Choice1Of2 id]
+        | Some { Kind = SemanticKind.Application _ } ->
+            match Map.tryFind id program.Callees with
+            | Some (Callee.Direct(_, body), _) -> loop body visited
+            | Some (Callee.Value(candidates, unknown), _) ->
+                candidates |> List.fold (fun found c -> combine found (loop c.Body visited)) (unknown || candidates.IsEmpty, [])
+            | Some (Callee.Intrinsic { FullName = ("Async.Parallel" | "Async.Sequential") }, _) ->
+                false, [Choice2Of2 id]
+            | _ -> true, []
+        | _ -> true, []
+    loop compId Set.empty
+
+let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId * AggregateProjection list>) (exprId: NodeId) (path: AggregateProjection list) : bool * bool * Set<NodeId> =
     if List.isEmpty path then false, false, Set.singleton exprId
-    elif Set.contains exprId visited then true, true, Set.empty
+    // A repeated identical projection contributes no new origin to the least
+    // fixed point. A growing/different projection remains opaque.
+    elif Set.contains (exprId, path) visited then true, false, Set.empty
+    elif visited |> Set.exists (fun (id, _) -> id = exprId) then true, true, Set.empty
     else
         match program.AggregateElementCache.TryGetValue((exprId, path)) with
         | true, (u, l) -> false, u, l
         | false, _ ->
-            let visited = Set.add exprId visited
+            let visited = Set.add (exprId, path) visited
             let project id nextPath = aggregateElementOrigins program visited id nextPath
             let recurse id = project id path
             let emptyResult = false, false, Set.empty
@@ -2469,7 +2509,10 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId>
             let hadCycle, u, l =
                 match Map.tryFind exprId program.Reachable with
                 | None -> unboundedResult
+                | Some node when node.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
+                    asyncFormationBody program.Graph.Nodes node |> Option.map recurse |> Option.defaultValue unboundedResult
                 | Some node ->
+                    let resultSource = lazy (CallableCarriers.resultDestinationSource program.Graph node.Id)
                     match node.Kind with
                     | SemanticKind.TupleExpr elements ->
                         match path with
@@ -2510,6 +2553,13 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId>
                             project value (RecordField(identity, field) :: path)
                         | _ -> unboundedResult
                     | SemanticKind.VarRef (_, Some defId) -> recurse defId
+                    | SemanticKind.EnvironmentRead _ ->
+                        readDefinition program exprId |> Option.map recurse |> Option.defaultValue unboundedResult
+                    | SemanticKind.FrameRead _ ->
+                        match CallableIngress.tryStorageAccess (CallableIngress.analyze program.Graph) exprId with
+                        | Some access when access.SharedCell.IsNone && not access.Inputs.IsEmpty ->
+                            access.Inputs |> List.map snd |> joinAll
+                        | _ -> unboundedResult
                     | SemanticKind.Binding (_, isMutable, _, _) ->
                         let value =
                             match List.tryLast node.Children with
@@ -2518,6 +2568,7 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId>
                         if isMutable then
                             Map.tryFind node.Id program.Assignments |> Option.defaultValue [] |> List.fold (fun acc a -> combine acc (recurse a)) value
                         else value
+                    | SemanticKind.PatternBinding _ when resultSource.Value.IsSome -> recurse resultSource.Value.Value
                     | SemanticKind.PatternBinding _ when Set.contains node.Id program.Parameters ->
                         if program.RootParameters.TryFind node.Id = Some DeclRoot.LibraryExport then
                             unboundedResult
@@ -2542,6 +2593,12 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId>
                     | SemanticKind.TypeAnnotation (inner, _) -> recurse inner
                     | SemanticKind.Application _ ->
                         match Map.tryFind node.Id program.Callees with
+                        | Some (Callee.Intrinsic { FullName = ("Async.Await" | "Async.RunSynchronously") }, computation :: _) ->
+                            let unknown, targets = asyncResultTargets program computation
+                            if unknown || targets.IsEmpty then unboundedResult
+                            else targets |> List.fold (fun ranges target ->
+                                let result = match target with Choice1Of2 call | Choice2Of2 call -> recurse call
+                                combine ranges result) emptyResult
                         | Some (Callee.Direct (_, bodyId), _) -> recurse bodyId
                         | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) -> joinAll (candidates |> List.map (fun c -> c.Body))
                         | Some (Callee.Intrinsic { Module = IntrinsicModule.Array; Operation = "get" }, arrId :: _) ->
@@ -2562,7 +2619,7 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId>
             hadCycle, u, l
 
 let private aggregateElement (program: Program) (value: Reading) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : ValueRange =
-    let _, unbounded, leaves = aggregateElementOrigins program visited exprId path
+    let _, unbounded, leaves = aggregateElementOrigins program (visited |> Set.map (fun id -> id, path)) exprId path
     let initial = if unbounded then ValueRange.Unbounded else ValueRange.Empty
     leaves |> Set.fold (fun acc leafId -> ValueRange.join acc (value leafId)) initial
 
@@ -2606,31 +2663,6 @@ let private foreignRange (program: Program) value call =
             | ValueRange.Bounded(lo, _), ValueRange.Bounded(_, hi) -> ValueRange.bounded lo hi
             | _ -> ValueRange.Unbounded
 
-let private asyncResultTargets (program: Program) (compId: NodeId) : Choice<NodeId, NodeId> list =
-    let rec loop (id: NodeId) (visited: Set<NodeId>) =
-        if visited.Contains id then [] else
-        let visited = visited.Add id
-        match Map.tryFind id program.Reachable with
-        | Some n when n.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) ->
-            asyncFormationBody program.Graph.Nodes n |> Option.map Choice2Of2 |> Option.toList
-        | Some { Kind = SemanticKind.VarRef(_, Some defId) } -> loop defId visited
-        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [rhs] } -> loop rhs visited
-        | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> loop (List.last items) visited
-        | Some { Kind = SemanticKind.IfThenElse(_, tBranch, Some eBranch) } ->
-            loop tBranch visited @ loop eBranch visited
-        | Some { Kind = SemanticKind.Application _ } when program.Applications.ContainsKey id ->
-            [Choice1Of2 id]
-        | Some { Kind = SemanticKind.Application _ } ->
-            match Map.tryFind id program.Callees with
-            | Some (Callee.Direct(_, body), _) -> loop body visited
-            | Some (Callee.Value(candidates, _), _) ->
-                candidates |> List.collect (fun c -> loop c.Body visited)
-            | Some (Callee.Intrinsic { FullName = ("Async.Parallel" | "Async.Sequential") }, _) ->
-                [Choice2Of2 id]
-            | _ -> []
-        | _ -> []
-    loop compId Set.empty
-
 /// The range an application computes: the table's fact for an intrinsic (`RangeSources`), the
 /// element range for an element read, or every complete target's contextual
 /// body fact. Other established calls retain shared body
@@ -2649,11 +2681,12 @@ let private applicationRange (program: Program) (shared: Reading) (value: Readin
         | _ -> fallback
     | Some (Callee.Intrinsic { FullName = ("Async.RunSynchronously" | "Async.Await") }, comp :: _) ->
         match asyncResultTargets program comp with
-        | [] ->
+        | true, _ -> fallback
+        | false, [] ->
             match Types.tryGetNTUKind node.Type with
             | Some NTUKind.NTUunit -> ValueRange.Empty
             | _ -> fallback
-        | targets ->
+        | false, targets ->
             targets |> List.fold (fun range target ->
                 let tRange =
                     match target with
@@ -5206,6 +5239,53 @@ let foreignResultApplications (graph: SemanticGraph) (facts: RangeContextFacts o
         Result.Ok rows
 
 /// Fresh logical source facts for a Baker recipe checking current premises.
+/// A branch is unconditional only when every current invocation excludes the
+/// other arm. Return the exact read support with the selected source arm.
+let selectedBranches (graph: SemanticGraph) =
+    match graph.RangeContextFacts with
+    | Some facts when Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent graph facts ->
+        let program = readProgram graph.Platform graph
+        match contextProgram program with
+        | Result.Error _ -> Map.empty
+        | Result.Ok contexts ->
+            program.Ordered |> List.collect (fun node ->
+                match node.Kind with
+                | SemanticKind.IfThenElse(guard, _, Some _) ->
+                    let contexts = contexts.Occurrences.TryFind guard |> Option.defaultValue [RangeContext.Shared]
+                    contexts |> List.map (fun context -> context, node)
+                | _ -> [])
+            |> List.choose (fun (context, node) ->
+                match node.Kind with
+                | SemanticKind.IfThenElse(guard, yes, Some no) ->
+                    let mutable support = Set.ofList [node.Id; guard; yes; no]
+                    let get key =
+                        support <- Set.add (snd key) support
+                        facts.Values.TryFind key |> Option.defaultValue ValueRange.Unbounded
+                    let value = contextReading contexts get context
+                    // Short-circuit boolean guards retain two alternatives.
+                    // Necessary atoms alone deliberately cannot exclude their
+                    // disjunction; check both source paths with the same owner.
+                    let rec feasible depth test polarity =
+                        if depth > 16 then true else
+                        match program.Reachable.TryFind test with
+                        | Some { Kind = SemanticKind.IfThenElse(condition, left, Some right) } ->
+                            (feasible (depth + 1) condition true && feasible (depth + 1) left polarity) ||
+                            (feasible (depth + 1) condition false && feasible (depth + 1) right polarity)
+                        | _ -> guardFeasible program value test polarity
+                    let selected =
+                        match feasible 0 guard true, feasible 0 guard false with
+                        | true, false -> Some yes
+                        | false, true -> Some no
+                        | _ -> None
+                    Some(node.Id, (selected, support))
+                | _ -> None)
+            |> List.groupBy fst |> List.choose (fun (site, rows) ->
+                match rows |> List.map (snd >> fst) |> List.distinct with
+                | [Some branch] -> Some(site, (branch, rows |> List.map (snd >> snd) |> Set.unionMany))
+                | _ -> None) |> Map.ofList
+    | _ -> Map.empty
+
+/// Fresh logical source facts for a Baker recipe checking current premises.
 /// This computes the existing range rules without publishing annotations,
 /// selecting carriers or discharging obligations. Invalid demand supplies no facts.
 let sourceFacts (graph: SemanticGraph) : Map<NodeId, ValueRange> =
@@ -5324,6 +5404,15 @@ let tupleElementRange (graph: SemanticGraph) (nodeId: NodeId) (index: int) : Val
                 | _ -> None
             | _ -> None
     trace Set.empty nodeId
+
+/// Selected scalar union payloads for a representation recipe. The ordinary
+/// range owner follows source constructors and exact callable/async origins;
+/// unknown suppliers remain unbounded and cannot acquire a carrier width here.
+let unionPayloadRanges (graph: SemanticGraph) requests =
+    let program = readProgram graph.Platform graph
+    let value id = graph.Nodes.TryFind id |> Option.bind _.ValueRange |> Option.defaultValue ValueRange.Unbounded
+    requests |> List.map (fun (source, tag, name) ->
+        (source, tag), aggregateElement program value Set.empty source [UnionPayload(tag, name)]) |> Map.ofList
 
 /// The escape reason of a lambda that escapes as a value (ruling 1; slice 1), read from the map
 /// RangeAnalysis wrote on the graph; None for a lambda that never escapes. Composer reads this

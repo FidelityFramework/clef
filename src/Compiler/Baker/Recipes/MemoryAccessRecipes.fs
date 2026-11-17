@@ -1186,8 +1186,30 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
     let validateReadOnlyViewConversion (node: SemanticNode) = function
         | ReadOnlyViewConversion.OfArray source ->
             result {
-                let! _ = live graph source
+                let! input = live graph source
                 let! _ = viewElementSlot graph numeric node
+                let! callee =
+                    match node.Kind with
+                    | SemanticKind.Application(callee, [actual]) when actual = source && node.Children = [callee; source] -> Ok callee
+                    | _ -> Result.Error "ReadOnlyView.ofArray lost its exact source operand."
+                let! _ =
+                    match applySubst input.Type, Types.tryGetReadOnlyViewElement (applySubst node.Type) with
+                    | NativeType.TApp(array, [element]), Some target
+                        when array.NTUKind = Some NTUKind.NTUarray && applySubst element = applySubst target -> Ok ()
+                    | _ -> Result.Error "ReadOnlyView.ofArray requires its exact array element type."
+                let! sourceCarrier = numeric.OccurrenceRepresentations.TryFind source |> Option.bind Result.toOption
+                                     |> needed "ReadOnlyView.ofArray source lacks its settled descriptor."
+                let! resultCarrier = numeric.OccurrenceRepresentations.TryFind node.Id |> Option.bind Result.toOption
+                                     |> needed "ReadOnlyView.ofArray result lacks its settled descriptor."
+                do! demand
+                        (match sourceCarrier, resultCarrier with
+                         | ValueRepresentation.Buffer(_, element), ValueRepresentation.Buffer(None, target) -> element = target
+                         | _ -> false)
+                        "ReadOnlyView.ofArray must preserve the source element representation."
+                let view = { Site = node.Id; Source = source; SourceCarrier = sourceCarrier; ResultCarrier = resultCarrier
+                             Participants = Set.ofList [node.Id; callee; source] }
+                operations <- (node.Id, MemoryWitnessOperation.ReadOnlyArrayView view) :: operations
+                required <- Set.add node.Id required
                 return Enrichment.empty
             }
         | ReadOnlyViewConversion.Slice(source, offset, count) ->

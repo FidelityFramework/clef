@@ -21,6 +21,12 @@ let private checked' = CheckedBuilder()
 
 let private require condition message = if condition then Ok () else Error message
 let private needed message = function Some value -> Ok value | None -> Error message
+
+/// Regions already publish their geometry and lifetime through their region
+/// witness; they are not heap instances or stack-array allocations.
+type private ReadOnlyResidence =
+    | Ordinary of MemoryResidence
+    | Region of MemoryRegionWitness
 let private collect values =
     List.foldBack (fun value rest ->
         match value, rest with
@@ -88,55 +94,76 @@ let private computeProgramOrders (graph: SemanticGraph) =
     reachableNodes |> List.iter (fun (id, _) -> walk id)
     orders |> Seq.map (fun kv -> kv.Key, kv.Value) |> Map.ofSeq
 
-let rec private canonicalExprOrigin (graph: SemanticGraph) (seen: Set<NodeId>) (id: NodeId) =
-    if Set.contains id seen then id else
-    let seen = Set.add id seen
-    match graph.Nodes.TryFind id with
-    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
-    | Some { Kind = SemanticKind.EagerExpr inner }
-    | Some { Kind = SemanticKind.VarRef(_, Some inner) } -> canonicalExprOrigin graph seen inner
-    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> canonicalExprOrigin graph seen value
-    | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> canonicalExprOrigin graph seen (List.last items)
-    | Some { Kind = SemanticKind.StringByteBorrow source } -> canonicalExprOrigin graph seen source
-    | Some { Kind = SemanticKind.Application(callee, args) } when not args.IsEmpty ->
-        match graph.Nodes.TryFind callee with
-        | Some { Kind = SemanticKind.Intrinsic info }
-            when info.Module = IntrinsicModule.Array &&
-                 (info.FullName = "ReadOnlyView.ofArray" || info.FullName = "ReadOnlyView.ofString" || info.FullName = "ReadOnlyView.slice") ->
-            canonicalExprOrigin graph seen args.Head
-        | _ -> id
-    | _ -> id
+/// An immutable captured formal has an origin only when its source declaration
+/// or one exact invocation supplies it. Multiple callers do not select a borrow.
+let private formalInputs = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, NodeId -> CallableIngress.FormalInputs option>()
 
-let rec private immutableExprOrigin (graph: SemanticGraph) (seen: Set<NodeId>) (id: NodeId) =
-    if Set.contains id seen then id else
+let private parameterEvidence (graph: SemanticGraph) id =
+    let source = DirectCaptures.sourceDefinition graph id
+    if source <> id then Some([source], Set.ofList [id; source])
+    else
+        let inputs = formalInputs.GetValue(graph,
+            System.Runtime.CompilerServices.ConditionalWeakTable<_, _>.CreateValueCallback(fun current ->
+                let origins = CallableOrigins.resolve current
+                CallableIngress.dominatedFormalInputs current origins (CallableIngress.analyzeWith current origins)))
+        inputs id |> Option.bind (fun proof ->
+            match proof.Inputs with [_, actual] -> Some([actual], proof.Participants) | _ -> None)
+
+let private parameterInput graph id = parameterEvidence graph id |> Option.bind (fst >> List.tryHead)
+
+let private capturedInputs (graph: SemanticGraph) id =
+    match graph.Nodes.TryFind id with
+    | Some { Kind = SemanticKind.EnvironmentRead(environment, slot); Children = [actual] } when actual = environment ->
+        ClosureEnvironments.tryCapturedValue graph environment slot
+        |> Option.map (fun value -> [value], Set.ofList [id; environment; slot; value])
+    | Some { Kind = SemanticKind.FrameRead _ } ->
+        CallableIngress.tryStorageAccess (CallableIngress.analyze graph) id
+        |> Option.filter (fun access -> access.SharedCell.IsNone && not access.Inputs.IsEmpty)
+        |> Option.map (fun access -> access.Inputs |> List.map snd, access.Participants)
+    | _ -> None
+
+/// Proven immutable inputs carry their complete current support. Multiple
+/// frame stores establish an origin only when every input has the same origin.
+let rec private exprOrigin immutableOnly (graph: SemanticGraph) (seen: Set<NodeId>) id =
+    let unchanged = id, Set.singleton id
+    if Set.contains id seen then unchanged else
     let seen = Set.add id seen
+    let follow input =
+        let origin, support = exprOrigin immutableOnly graph seen input
+        origin, Set.add id support
+    let inputs (evidence: (NodeId list * Set<NodeId>) option) =
+        match evidence with
+        | Some(values, support) when not values.IsEmpty ->
+            let origins = values |> List.map follow
+            match origins |> List.map fst |> List.distinct with
+            | [origin] -> origin, Set.unionMany (support :: (origins |> List.map snd))
+            | _ -> unchanged
+        | _ -> unchanged
     match graph.Nodes.TryFind id with
     | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
-    | Some { Kind = SemanticKind.EagerExpr inner } -> immutableExprOrigin graph seen inner
+    | Some { Kind = SemanticKind.EagerExpr inner } -> follow inner
     | Some { Kind = SemanticKind.VarRef(_, Some inner) } ->
+        if not immutableOnly then follow inner else
         match graph.Nodes.TryFind inner with
-        | Some { Kind = SemanticKind.Binding(_, false, _, _) }
-        | Some { Kind = SemanticKind.PatternBinding _ } -> immutableExprOrigin graph seen inner
-        | _ -> id
-    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> immutableExprOrigin graph seen value
-    | Some { Kind = SemanticKind.PatternBinding _ } ->
-        let sourceDef = DirectCaptures.sourceDefinition graph id
-        if sourceDef <> id then immutableExprOrigin graph seen sourceDef else id
-    | Some { Kind = SemanticKind.EnvironmentRead(_, declaration) } ->
-        match graph.Nodes.TryFind declaration with
-        | Some { Kind = SemanticKind.Binding(_, false, _, _) }
-        | Some { Kind = SemanticKind.PatternBinding _ } -> immutableExprOrigin graph seen declaration
-        | _ -> id
-    | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> immutableExprOrigin graph seen (List.last items)
-    | Some { Kind = SemanticKind.StringByteBorrow source } -> immutableExprOrigin graph seen source
+        | Some { Kind = SemanticKind.Binding(_, false, _, _) | SemanticKind.PatternBinding _ } -> follow inner
+        | _ -> unchanged
+    | Some { Kind = SemanticKind.EnvironmentRead _ | SemanticKind.FrameRead _ } -> inputs (capturedInputs graph id)
+    | Some { Kind = SemanticKind.PatternBinding _ } -> inputs (parameterEvidence graph id)
+    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> follow value
+    | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> follow (List.last items)
+    | Some { Kind = SemanticKind.StringByteBorrow source } -> follow source
     | Some { Kind = SemanticKind.Application(callee, args) } when not args.IsEmpty ->
         match graph.Nodes.TryFind callee with
         | Some { Kind = SemanticKind.Intrinsic info }
             when info.Module = IntrinsicModule.Array &&
                  (info.FullName = "ReadOnlyView.ofArray" || info.FullName = "ReadOnlyView.ofString" || info.FullName = "ReadOnlyView.slice") ->
-            immutableExprOrigin graph seen args.Head
-        | _ -> id
-    | _ -> id
+            let origin, support = follow args.Head
+            origin, Set.add callee support
+        | _ -> unchanged
+    | _ -> unchanged
+
+let private canonicalExprOrigin graph seen id = exprOrigin false graph seen id |> fst
+let private immutableExprOrigin graph seen id = exprOrigin true graph seen id |> fst
 
 let private buildAliasEnv (graph: SemanticGraph) =
     let setsByTarget = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
@@ -228,8 +255,10 @@ let private possibleOrigins
                 enqueue inner
             | SemanticKind.VarRef(_, Some inner) ->
                 enqueue inner
-            | SemanticKind.EnvironmentRead(_, declaration) ->
+            | SemanticKind.EnvironmentRead(_, declaration)
+            | SemanticKind.FrameRead(_, declaration) ->
                 enqueue declaration
+                capturedInputs graph cur |> Option.iter (fun (values, _) -> values |> List.iter enqueue)
             | SemanticKind.ClosureValue(implementation, _) ->
                 enqueue implementation
             | SemanticKind.Binding _ ->
@@ -241,6 +270,9 @@ let private possibleOrigins
                 for child in node.Children do enqueue child
                 let sourceDef = DirectCaptures.sourceDefinition graph cur
                 if sourceDef <> cur then enqueue sourceDef
+                else
+                    (CallableOrigins.resolve graph).ParameterInputs.TryFind cur
+                    |> Option.iter (List.iter (snd >> enqueue))
                 match patternScrutinees.TryGetValue cur with
                 | true, srcs -> for src in srcs do enqueue src
                 | false, _ -> ()
@@ -344,7 +376,49 @@ let private findLcaAndSuffixes (graph: SemanticGraph) (a: NodeId) (b: NodeId) =
         let prefixBefore chain = chain |> List.takeWhile ((<>) lca)
         Some(lca, prefixBefore aChain, prefixBefore bChain)
 
-let private dominatesOnUnconditionalSpine (graph: SemanticGraph) (siteId: NodeId) (candId: NodeId) : bool =
+let private selectedBranches = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Map<NodeId, NodeId * Set<NodeId>>>()
+
+let private selectedBranch (graph: SemanticGraph) id =
+    let branches = selectedBranches.GetValue(graph, fun current -> RangeAnalysis.selectedBranches current)
+    match branches.TryFind id with
+    | Some branch -> Some branch
+    | None ->
+        match graph.Nodes.TryFind id with
+        | Some ({ Kind = SemanticKind.ContinuationDispatch(selector, [ordinal, body], fallback) } as dispatch) ->
+            match dispatch.Parent |> Option.bind graph.Nodes.TryFind, graph.Nodes.TryFind selector with
+            | Some { Kind = SemanticKind.Sequential items; Children = children }, Some { Kind = SemanticKind.FrameRead(frame, slot) }
+                when items = children && dispatch.Children = [selector; body; fallback] ->
+                match items |> List.tryFindIndex ((=) id) with
+                | Some index when index >= 2 ->
+                    let transition, statement = items[index - 2], items[index - 1]
+                    let site =
+                        match graph.Nodes.TryFind statement with
+                        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> value
+                        | _ -> statement
+                    match graph.Nodes.TryFind transition, graph.Codata.Value.AsyncSuspensions.TryFind site with
+                    | Some { Kind = SemanticKind.FrameWrite(target, state, value) }, Some suspension
+                        when state = slot && suspension.StateOrdinal = ordinal
+                             && canonicalExprOrigin graph Set.empty target = canonicalExprOrigin graph Set.empty frame ->
+                        match graph.Nodes.TryFind value, graph.Codata.Value.ContinuationFrames.TryFind suspension.Frame with
+                        | Some { Kind = SemanticKind.Literal(NativeLiteral.Int(actual, _)) }, Some settled
+                            when actual = int64 ordinal && settled.State = state ->
+                            let reading = CallableIngress.analyze graph
+                            let allocation = canonicalExprOrigin graph Set.empty frame
+                            match graph.Nodes.TryFind allocation, CallableIngress.tryActivationFrameRead reading selector,
+                                  CallableIngress.tryActivationFrameStore reading transition with
+                            | Some { Kind = SemanticKind.ContinuationAllocate owner }, Some read, Some write
+                                when owner = suspension.Frame && read.Source = state && write.Source = state
+                                     && MemoryAccessRecipes.nearestLambda graph id = Some settled.Generator ->
+                                Some(body, Set.unionMany [read.Participants; write.Participants;
+                                    Set.ofList [id; selector; frame; slot; fallback; body; transition; statement; site; value; suspension.Frame; allocation]])
+                            | _ -> None
+                        | _ -> None
+                    | _ -> None
+                | _ -> None
+            | _ -> None
+        | _ -> None
+
+let private dominatesOnSpine selected (graph: SemanticGraph) (siteId: NodeId) (candId: NodeId) : bool =
     match findLcaAndSuffixes graph siteId candId with
     | None -> false
     | Some(lca, sitePrefix, candPrefix) ->
@@ -358,11 +432,117 @@ let private dominatesOnUnconditionalSpine (graph: SemanticGraph) (siteId: NodeId
         let candPrefixHasControlBoundary =
             candPrefix |> List.exists (fun pid ->
                 pid <> candId &&
-                (graph.Nodes.TryFind pid |> Option.exists (fun n -> isControlFlowBoundaryKind n.Kind)))
+                (graph.Nodes.TryFind pid |> Option.exists (fun n -> isControlFlowBoundaryKind n.Kind)) &&
+                not (selected && (selectedBranch graph pid |> Option.exists (fun (branch, _) -> ancestorChain graph candId |> List.contains branch))))
         not lcaIsBranchOrLoop &&
         not sitePrefixHasControlBoundary &&
         not candPrefixHasControlBoundary &&
         Set.isSubset (enclosingLoops graph candId) (enclosingLoops graph siteId)
+
+let private dominatesOnUnconditionalSpine graph site candidate = dominatesOnSpine false graph site candidate
+
+/// Project a region use through one completing activation in its allocation
+/// scope. The existing suspension retention owns the backing across that cut;
+/// invocation coverage alone never confers a storage lifetime.
+let private regionUse (graph: SemanticGraph) (region: MemoryRegionWitness) occurrence =
+    let owner =
+        if region.Kind = MemoryRegionKind.CopyOut then
+            region.CopyOwner |> Option.bind graph.Codata.Value.RegionCopyEndpoints.TryFind
+            |> Option.bind _.Returned |> Option.map _.Caller
+        else MemoryAccessRecipes.nearestLambda graph region.Site
+    match owner, MemoryAccessRecipes.nearestLambda graph occurrence with
+    | Some owner, Some actual when owner = actual -> Some(occurrence, Set.ofList [region.Site; occurrence; owner])
+    | Some owner, Some actual ->
+        let facts = graph.Codata.Value
+        let ingress = CallableIngress.analyze graph
+        facts.AsyncActivations.Values |> Seq.choose (fun activation ->
+            match graph.Nodes.TryFind activation.Site, facts.AsyncFormations.TryFind activation.Formation,
+                  facts.AsyncSuspensions.TryFind activation.Site, facts.RegionAllocations.TryFind region.Region with
+            | Some ({ Kind = SemanticKind.Application(_, computation :: _) } as call), Some formation, Some cut, Some backing
+                when MemoryAccessRecipes.nearestLambda graph call.Id = Some owner
+                     && ClosureEnvironments.isCompletingAsyncActivation graph.Nodes call computation ->
+                // The shared callable may have several formation instances.
+                // Require its complete activation census, including sites whose
+                // retention is absent, before selecting this residence proof.
+                let activations =
+                    facts.AsyncActivations.Values |> Seq.filter (fun other ->
+                        facts.AsyncFormations.TryFind other.Formation
+                        |> Option.exists (fun candidate -> candidate.Callable = formation.Callable))
+                    |> Seq.map _.Site |> Set.ofSeq
+                if activations <> Set.singleton call.Id ||
+                   (facts.AsyncActivations.Values |> Seq.exists (fun row -> not (facts.AsyncFormations.ContainsKey row.Formation))) then None else
+                let carrier = facts.CallableCarriers.TryFind computation
+                if carrier |> Option.exists (fun row -> row.Occurrence = computation && row.Implementation = formation.Callable) |> not then None else
+                CallableIngress.tryInvokedWithin ingress owner formation.Callable actual |> Option.bind (fun coverage ->
+                    if not coverage.UsedLazyForces.IsEmpty then None else
+                    let releases = backing.ScopeExitReleases |> List.map snd |> Set.ofList
+                    cut.SpanningRetentions |> List.tryPick (fun retention ->
+                        if retention.BackingRegion <> region.Region ||
+                           canonicalExprOrigin graph Set.empty retention.Binding <> canonicalExprOrigin graph Set.empty region.Site ||
+                           Set.ofList retention.InvalidatedBy <> releases then None else
+                        match graph.Nodes.TryFind retention.RetirementCheck with
+                        | Some { Kind = SemanticKind.Obligation { Body = ObligationBody.BorrowedResultViewScope model } }
+                            when model.Call = region.Site && model.Declaration = cut.Site && model.Owner = region.Region
+                                 && model.View = retention.Binding && not model.ReadOrders.IsEmpty
+                                 && model.InvalidationOrders.Length = releases.Count ->
+                            Some(call.Id, Set.union coverage.Participants (Set.ofList (
+                                [region.Site; occurrence; owner; actual; computation; carrier.Value.Formation; formation.Formation; formation.Callable; call.Id;
+                                 retention.Binding; retention.BackingRegion; retention.RetainedUntil; retention.RetirementCheck]
+                                @ retention.InvalidatedBy @ (cut.Participants |> List.map _.Node))))
+                        | _ -> None))
+            | _ -> None) |> Seq.toList |> function [projection] -> Some projection | _ -> None
+    | _ -> None
+
+/// All applicable invalidations must follow the native retirement. CopyOut
+/// owns independent backing; releasing its source region is not retirement.
+let private regionRetention (graph: SemanticGraph) (memory: MemoryWitnessProjection) (region: MemoryRegionWitness) call retirements = checked' {
+    let! projectedCall, callSupport = regionUse graph region call |> needed "CCS8425: Region backing has no closed suspension-spanning residence proof."
+    let order = computeProgramOrders graph
+    let before left right =
+        match order.TryFind left, order.TryFind right with
+        | Some a, Some b -> a < b && dominatesOnSpine true graph left right
+        | _ -> false
+    let! invalidations, frontierSupport =
+        if region.Kind = MemoryRegionKind.CopyOut then
+            match region.CopyOwner |> Option.bind graph.Codata.Value.RegionCopyEndpoints.TryFind |> Option.bind _.Returned with
+            | Some lifetime ->
+                let releases = lifetime.Retirements |> List.map snd |> Set.ofList
+                let actual = memory.Operations.Values |> Seq.choose (function
+                    | MemoryWitnessOperation.Region release when release.Kind = MemoryRegionKind.RetireCopy && release.CopyOwner = region.CopyOwner -> Some release.Site
+                    | _ -> None) |> Set.ofSeq
+                if releases.IsEmpty || actual <> releases then Error "CCS8425: Independent buffer copy lacks its complete retirement frontier."
+                else Ok(Set.toList releases, Set.add lifetime.Application lifetime.Uses)
+            | None -> Error "CCS8425: Independent buffer copy lacks its declared returned lifetime."
+        else
+            match graph.Codata.Value.RegionAllocations.TryFind region.Region with
+            | Some backing ->
+                let releases = backing.ScopeExitReleases |> List.map snd |> Set.ofList
+                let actual = memory.Operations.Values |> Seq.choose (function
+                    | MemoryWitnessOperation.Region release when release.Kind = MemoryRegionKind.Release && release.Region = region.Region -> Some release.Site
+                    | _ -> None) |> Set.ofSeq
+                if releases.IsEmpty || actual <> releases || Set.ofList (List.map fst backing.ScopeExitReleases) <> Set.ofList backing.ScopeExitPaths then
+                    Error "CCS8425: Region backing lacks its complete scope-exit release frontier."
+                else Ok(Set.toList releases, Set.ofList (backing.ScopeExitPaths @ backing.Obligations @ (backing.Participants |> List.map _.Node)))
+            | None -> Error "CCS8425: Region backing lacks its allocation lifetime."
+    let acquisition =
+        if region.Kind = MemoryRegionKind.CopyOut then
+            region.CopyOwner |> Option.bind graph.Codata.Value.RegionCopyEndpoints.TryFind
+            |> Option.bind _.Returned |> Option.map _.Application |> Option.defaultValue region.Site
+        else region.Site
+    do! require (before acquisition projectedCall) "CCS8425: Region allocation does not dominate its native use."
+    let! projectedRetirements =
+        (if List.isEmpty retirements then [call] else retirements)
+        |> List.map (fun retirement -> regionUse graph region retirement |> needed "CCS8425: Native retirement escapes its backing allocation scope.")
+        |> collect
+    do! require (List.isEmpty retirements ||
+                 List.zip retirements projectedRetirements |> List.forall (fun (nativeRetirement, (retirement, _)) ->
+                     if projectedCall = retirement then before call nativeRetirement
+                     else before projectedCall retirement))
+            "CCS8425: Native retirement precedes the retained operation."
+    do! require (projectedRetirements |> List.forall (fun (retirement, _) -> invalidations |> List.forall (before retirement)))
+            "CCS8425: Backing storage is released before native retention ends."
+    return Set.unionMany (callSupport :: frontierSupport :: Set.ofList invalidations :: (projectedRetirements |> List.map snd))
+}
 
 let private subtreeContains (graph: SemanticGraph) (root: NodeId) (target: NodeId) : bool =
     ancestorChain graph target |> List.contains root
@@ -2301,7 +2481,9 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         else
                             for a in args do addWrite node.Id a order
                 | _ -> ()
-        let callableWrites = System.Collections.Generic.Dictionary<NodeId, Set<NodeId>>()
+        // Keep each concrete write beside its possible origins. A call summary
+        // cannot replace that write's position relative to a suspension.
+        let callableWrites = System.Collections.Generic.Dictionary<NodeId, Set<NodeId * NodeId>>()
         let mergeWrites cid originSet =
             if not (Set.isEmpty originSet) then
                 match callableWrites.TryGetValue cid with
@@ -2309,7 +2491,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                 | false, _ -> callableWrites[cid] <- originSet
         for wSite, wOrigins, _ in writes do
             match enclosingCallable graph wSite with
-            | Some cid -> mergeWrites cid wOrigins
+            | Some cid -> mergeWrites cid (wOrigins |> Set.map (fun origin -> wSite, origin))
             | None -> ()
         let mutable changed = true
         while changed do
@@ -2339,8 +2521,12 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         match graph.Nodes.TryFind targetId, callableWrites.TryGetValue targetId with
                         | Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _) }, (true, targetOrigins) ->
                             parameters |> List.iteri (fun idx (_, _, formalId) ->
-                                if idx < args.Length && targetOrigins.Contains formalId then
-                                    mergeWrites callerId (possibleOrigins graph setsByTarget patternScrutinees args[idx]))
+                                if idx < args.Length then
+                                    let actualOrigins = possibleOrigins graph setsByTarget patternScrutinees args[idx]
+                                    let supplied = targetOrigins |> Seq.filter (fun (_, origin) -> origin = formalId)
+                                                   |> Seq.collect (fun (source, _) -> actualOrigins |> Seq.map (fun origin -> source, origin))
+                                                   |> Set.ofSeq
+                                    mergeWrites callerId supplied)
                         | _ -> ()
                     let afterCount =
                         match callableWrites.TryGetValue callerId with
@@ -2350,22 +2536,25 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                 | None -> ()
         let closureWrites =
             appCallables |> Seq.toList |> List.collect (fun (appId, targets, appOrder) ->
-                targets |> Set.toList |> List.choose (fun t ->
-                    match callableWrites.TryGetValue t with
-                    | true, s when not (Set.isEmpty s) -> Some(appId, s, Some t, appOrder)
-                    | _ -> None))
+                targets |> Set.toList |> List.collect (fun target ->
+                    match callableWrites.TryGetValue target with
+                    | true, pairs ->
+                        pairs |> Set.toList |> List.groupBy fst |> List.map (fun (source, writes) ->
+                            appId, (writes |> List.map snd |> Set.ofList), Some target, appOrder, source)
+                    | _ -> []))
         let paramWrites =
             localLambdaCalls |> Seq.toList |> List.collect (fun (appId, targets, args, appOrder) ->
-                targets |> Set.toList |> List.collect (fun t ->
-                    match graph.Nodes.TryFind t, callableWrites.TryGetValue t with
-                    | Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _) }, (true, targetOrigins) ->
-                        parameters |> List.mapi (fun idx (_, _, formalId) ->
-                            if idx < args.Length && targetOrigins.Contains formalId then
-                                Some(appId, possibleOrigins graph setsByTarget patternScrutinees args[idx], Some t, appOrder)
-                            else None)
-                        |> List.choose id
+                targets |> Set.toList |> List.collect (fun target ->
+                    match graph.Nodes.TryFind target, callableWrites.TryGetValue target with
+                    | Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _) }, (true, pairs) ->
+                        parameters |> List.indexed |> List.collect (fun (idx, (_, _, formal)) ->
+                            if idx >= args.Length then [] else
+                            pairs |> Set.toList |> List.choose (fun (source, origin) ->
+                                if origin = formal then
+                                    Some(appId, possibleOrigins graph setsByTarget patternScrutinees args[idx], Some target, appOrder, source)
+                                else None))
                     | _ -> []))
-        (writes |> Seq.map (fun (s, o, ord) -> s, o, None, ord) |> Seq.toList) @ closureWrites @ paramWrites,
+        (writes |> Seq.map (fun (site, origins, order) -> site, origins, None, order, site) |> Seq.toList) @ closureWrites @ paramWrites,
         callsInGraph |> Seq.toList,
         appCallables |> Seq.toList,
         callGraph
@@ -2393,7 +2582,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                         | Ok(_, _, false, None) ->
                             enrichment, (site.Id, Set.singleton actual, "CCS8424: Foreign optional read-only buffer lacks payload target.") :: errors, uses
                         | Ok(_, absenceParticipants, false, Some inspectTarget) ->
-                            let originNode = canonicalExprOrigin graph Set.empty inspectTarget
+                            let originNode, originSupport = exprOrigin false graph Set.empty inspectTarget
                             let refs = [ro.Contract.Hypothesis.Identity; ro.Contract.Hypothesis.Version; ro.Contract.Hypothesis.Source]
                             let outcome = checked' {
                                 // Discover buffer residence & capacity
@@ -2412,7 +2601,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                             seq { for i in entry.Offset .. entry.Offset + entry.Length - 1 -> pool.Bytes[i] }
                                             |> Seq.exists ((=) 0uy)
                                         let validTrailing = entry.Offset + entry.StorageLength <= pool.Bytes.Length && pool.Bytes[entry.Offset + entry.Length] = 0uy
-                                        Ok(MemoryResidence.ImmutableProgram pool.DeclarationNode, pool.DeclarationNode, bigint entry.Length, 1I, Some(pool, idx, entry, staticOrigin), Some(bigint entry.Length), hasInteriorZero || not validTrailing, Set.singleton pool.DeclarationNode)
+                                        Ok(ReadOnlyResidence.Ordinary(MemoryResidence.ImmutableProgram pool.DeclarationNode), pool.DeclarationNode, bigint entry.Length, 1I, Some(pool, idx, entry, staticOrigin), Some(bigint entry.Length), hasInteriorZero || not validTrailing, Set.singleton pool.DeclarationNode)
                                     | None ->
                                         match memoryLazy.Value with
                                         | Error _ -> Error "CCS8424: Foreign read-only buffer requires an established storage residence and finite extent."
@@ -2439,37 +2628,54 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                     memory.Operations.Values |> Seq.tryPick (function
                                                         | MemoryWitnessOperation.ArrayLiteral l when canonicalExprOrigin graph Set.empty l.Site = originNode -> Some l
                                                         | _ -> None)
-                                            match allocOpt, litOpt with
-                                            | Some alloc, _ ->
+                                            let regionOpt =
+                                                memory.Operations.Values |> Seq.tryPick (function
+                                                    | MemoryWitnessOperation.Region r
+                                                        when (r.Kind = MemoryRegionKind.Allocate || r.Kind = MemoryRegionKind.CopyTo || r.Kind = MemoryRegionKind.CopyOut)
+                                                             && canonicalExprOrigin graph Set.empty r.Site = originNode -> Some r
+                                                    | _ -> None)
+                                            match allocOpt, litOpt, regionOpt with
+                                            | Some alloc, _, _ ->
                                                 let cap = alloc.MinimumCount * bigint alloc.ElementBytes
-                                                Ok(alloc.Residence, alloc.Site, cap, bigint alloc.ElementBytes, None, viewLenOpt, false, alloc.Participants)
-                                            | None, Some lit ->
+                                                Ok(ReadOnlyResidence.Ordinary alloc.Residence, alloc.Site, cap, bigint alloc.ElementBytes, None, viewLenOpt, false, alloc.Participants)
+                                            | None, Some lit, _ ->
                                                 let hasZero =
                                                     lit.Initializers |> Option.exists (List.exists (function
                                                         | NativeLiteral.Int(0L, _) | NativeLiteral.UInt(0UL, _) | NativeLiteral.Char '\000' -> true
                                                         | _ -> false))
                                                 let cap = bigint lit.Length * bigint lit.ElementBytes
-                                                Ok(lit.Residence, lit.Site, cap, bigint lit.ElementBytes, None, Some cap, hasZero, lit.Participants)
-                                            | None, None ->
+                                                Ok(ReadOnlyResidence.Ordinary lit.Residence, lit.Site, cap, bigint lit.ElementBytes, None, Some cap, hasZero, lit.Participants)
+                                            | None, None, Some region ->
+                                                let cap = bigint region.Length * bigint region.ElementBytes
+                                                Ok(ReadOnlyResidence.Region region, region.Site, cap,
+                                                   bigint region.ElementBytes, None, viewLenOpt, false, region.Participants)
+                                            | None, None, None ->
                                                 Error "CCS8424: Foreign read-only buffer lacks static or memory-settled backing storage."
                                 do! require (elemBytes > 0I) "CCS8424: Foreign read-only buffer requires positive element byte width."
                                 let rec collectSliceChain seen id =
-                                    if Set.contains id seen then [] else
+                                    if Set.contains id seen then None else
                                     let seen = Set.add id seen
                                     match graph.Nodes.TryFind id with
                                     | Some { Kind = SemanticKind.TypeAnnotation(inner, _) }
                                     | Some { Kind = SemanticKind.EagerExpr inner }
                                     | Some { Kind = SemanticKind.VarRef(_, Some inner) } -> collectSliceChain seen inner
+                                    | Some { Kind = SemanticKind.EnvironmentRead _ | SemanticKind.FrameRead _ } ->
+                                        capturedInputs graph id |> Option.bind (fun (values, _) ->
+                                            let chains = values |> List.map (collectSliceChain seen) |> List.distinct
+                                            match chains with [Some chain] -> Some chain | _ -> None)
+                                    | Some { Kind = SemanticKind.PatternBinding _ } ->
+                                        parameterInput graph id |> Option.bind (collectSliceChain seen)
                                     | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> collectSliceChain seen value
                                     | Some { Kind = SemanticKind.Sequential items } when not items.IsEmpty -> collectSliceChain seen (List.last items)
                                     | Some { Kind = SemanticKind.Application(callee, args) } ->
                                         match graph.Nodes.TryFind callee with
                                         | Some { Kind = SemanticKind.Intrinsic info }
                                             when info.Module = IntrinsicModule.Array && info.FullName = "ReadOnlyView.slice" && args.Length = 3 ->
-                                            collectSliceChain seen args[0] @ [id, args[1], args[2]]
-                                        | _ -> []
-                                    | _ -> []
-                                let sliceSteps = collectSliceChain Set.empty inspectTarget
+                                            collectSliceChain seen args[0] |> Option.map (fun chain -> chain @ [id, args[1], args[2]])
+                                        | _ -> Some []
+                                    | _ -> Some []
+                                let! sliceSteps = collectSliceChain Set.empty inspectTarget
+                                                  |> needed "CCS8424: Read-only buffer has no single proven slice extent through its captures."
                                 do!
                                     if not sliceSteps.IsEmpty && ro.Contract.Extent = BAREWire.Descriptors.ReadOnlyBufferExtent.UncountedNulTerminated then
                                         let fullLiteralSlice =
@@ -2502,7 +2708,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                             | Some _ when cntLo = cntHi -> Some narrowedBytes
                                             | _ -> None
                                         return narrowedBytes, nextRuntimeLen, Set.union sup (Set.ofList [sliceSite; offArg; cntArg])
-                                    }) (Ok(extentCapacity, runtimeByteLenOpt, extraSupport))
+                                    }) (Ok(extentCapacity, runtimeByteLenOpt, Set.union extraSupport originSupport))
                                 // Determine retirements & retention mode
                                 let callScope = MemoryAccessRecipes.nearestLambda graph site.Id
                                 let! retirements, retirementOrders, retentionMode =
@@ -2510,8 +2716,9 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                     | BAREWire.Descriptors.BufferRetention.DuringCall ->
                                         let dominates =
                                             match residence with
-                                            | MemoryResidence.ImmutableProgram _ | MemoryResidence.Program _ | MemoryResidence.Heap _ -> true
-                                            | MemoryResidence.Stack(ownerScope, _) ->
+                                            | ReadOnlyResidence.Region region -> (regionUse graph region site.Id).IsSome
+                                            | ReadOnlyResidence.Ordinary(MemoryResidence.ImmutableProgram _ | MemoryResidence.Program _ | MemoryResidence.Heap _) -> true
+                                            | ReadOnlyResidence.Ordinary(MemoryResidence.Stack(ownerScope, _)) ->
                                                 match callScope with
                                                 | Some scope ->
                                                     let rec encloses cur =
@@ -2527,8 +2734,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                     | BAREWire.Descriptors.BufferRetention.RetainedUntil(ownerParam, releases) -> checked' {
                                         let! ownerArg = argAt calleeBinding args ownerParam |> needed "CCS8425: Retained buffer contract owner ordinal is out of range."
                                         let ownerOrigin = immutableExprOrigin graph Set.empty ownerArg
-                                        let matchesRelease (_, callBinding, callArgs, callOrder) =
-                                            callOrder > acquireOrder &&
+                                        let matchesRelease (_, callBinding, callArgs, _) =
                                             (releases |> Array.exists (function
                                                 | BAREWire.Descriptors.RetentionRelease.OwnerRelease rel ->
                                                     let matchesName =
@@ -2547,7 +2753,16 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                             allExternalCalls
                                             |> List.filter (fun (retSite, cBind, cArgs, cOrder) ->
                                                 matchesRelease (retSite, cBind, cArgs, cOrder) &&
-                                                dominatesOnUnconditionalSpine graph site.Id retSite.Id)
+                                                ((cOrder > acquireOrder && dominatesOnSpine true graph site.Id retSite.Id) ||
+                                                 (match residence with
+                                                  | ReadOnlyResidence.Region region ->
+                                                      match regionUse graph region site.Id, regionUse graph region retSite.Id with
+                                                      | Some(call, _), Some(retirement, _) when call <> retirement ->
+                                                          match programOrders.TryFind call, programOrders.TryFind retirement with
+                                                          | Some first, Some last -> first < last && dominatesOnSpine true graph call retirement
+                                                          | _ -> false
+                                                      | _ -> false
+                                                  | _ -> false)))
                                             |> List.sortBy (fun (_, _, _, o) -> o)
                                         let retNodes = matched |> List.map (fun (n, _, _, _) -> n.Id)
                                         let retOrders = matched |> List.map (fun (_, _, _, o) -> o)
@@ -2555,7 +2770,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                             return! Error "CCS8425: Retained read-only buffer lacks a dominating release or redefinition retirement."
                                         else
                                             match residence with
-                                            | MemoryResidence.Stack(ownerScope, _) ->
+                                            | ReadOnlyResidence.Ordinary(MemoryResidence.Stack(ownerScope, _)) ->
                                                 let allEnclosed =
                                                     retNodes |> List.forall (fun rn ->
                                                         match MemoryAccessRecipes.nearestLambda graph rn with
@@ -2566,7 +2781,31 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                 if not allEnclosed then return! Error "CCS8425: Stack-resident retained buffer escapes its defining activation before retirement."
                                                 else return (retNodes, retOrders, BufferRetentionMode.RetainedUntilOwner(ownerParam, retNodes.Length))
                                             | _ -> return (retNodes, retOrders, BufferRetentionMode.RetainedUntilOwner(ownerParam, retNodes.Length)) }
+                                let! residenceSupport =
+                                    match residence, memoryLazy.Value with
+                                    | ReadOnlyResidence.Region region, Ok memory -> regionRetention graph memory region site.Id retirements
+                                    | ReadOnlyResidence.Region _, Error _ -> Error "CCS8425: Region memory lifetime is not currently settled."
+                                    | _ -> Ok Set.empty
                                 // Check exclusivity (CCS8426)
+                                // A completing invocation encloses its native operations.
+                                // Give its entry/exit distinct coordinates; writes inside
+                                // the invocation conservatively overlap the entire borrow.
+                                let mutable writeProjectionSupport = Set.empty
+                                let projectedOrder occurrence =
+                                    match residence with
+                                    | ReadOnlyResidence.Region region ->
+                                        regionUse graph region occurrence |> Option.bind (fun (site, support) ->
+                                            writeProjectionSupport <- Set.union writeProjectionSupport (Set.add occurrence support)
+                                            programOrders.TryFind site)
+                                    | _ -> programOrders.TryFind occurrence
+                                let acquireOrder, retirementOrders =
+                                    match residence with
+                                    | ReadOnlyResidence.Region _ ->
+                                        let first = projectedOrder site.Id |> Option.defaultValue -1
+                                        let last = retirements |> List.map (fun retirement ->
+                                            2 * (projectedOrder retirement |> Option.defaultValue -1) + 1)
+                                        2 * first, last
+                                    | _ -> acquireOrder, retirementOrders
                                 let originSet =
                                     possibleOrigins graph setsByTarget patternScrutinees inspectTarget
                                     |> Set.add originNode
@@ -2585,17 +2824,23 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                 |> Set.add wApp.Allocation
                                             not (Set.isEmpty (Set.intersect originSet wSet))
                                         | Error _ -> false)
-                                let mutatedWhileBorrowed =
-                                    allWrites |> List.exists (fun (wSite, wOriginSet, targetCallableOpt, wOrder) ->
-                                        wSite <> site.Id &&
+                                let overlappingWrites =
+                                    allWrites |> List.filter (fun (wSite, wOriginSet, targetCallableOpt, wOrder, sourceWrite) ->
+                                        writeProjectionSupport <- Set.union writeProjectionSupport wOriginSet |> Set.add wSite |> Set.add sourceWrite
+                                        wSite <> site.Id && sourceWrite <> site.Id &&
                                         (match targetCallableOpt with
                                          | Some targetId -> not (subtreeContains graph targetId site.Id)
                                          | None -> true) &&
                                         not (Set.isEmpty (Set.intersect originSet wOriginSet)) &&
-                                        ((wOrder >= acquireOrder && wOrder <= maxOrder) ||
+                                        ((match residence with
+                                          | ReadOnlyResidence.Region _ ->
+                                              match projectedOrder sourceWrite with
+                                              | Some order -> 2 * order >= acquireOrder && 2 * order <= maxOrder
+                                              | None -> true
+                                          | _ -> wOrder >= acquireOrder && wOrder <= maxOrder) ||
                                          (borrowsAcrossLoopBackEdge &&
                                           not (Set.isEmpty (Set.intersect siteLoops (enclosingLoops graph wSite))))))
-                                do! require (not sameCallWritableOverlap && not mutatedWhileBorrowed)
+                                do! require (not sameCallWritableOverlap && overlappingWrites.IsEmpty)
                                         "CCS8426: Foreign read-only buffer aliases mutable storage or is mutated while borrowed."
                                 // Check extent and element range, and emit obligations
                                 let! elemCoverageEnrich =
@@ -2653,7 +2898,10 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                     let model: BufferRetentionDominationModel =
                                         { Call = site.Id; Declaration = ro.Quote; Buffer = actual; Residence = residenceNode
                                           Mode = retentionMode; AcquireOrder = acquireOrder; RetirementOrders = retirementOrders }
-                                    let rSupport = Set.unionMany [sliceParticipants; absenceParticipants; Set.ofList (site.Id :: actual :: residenceNode :: retirements)]
+                                    let branchSupport =
+                                        retirements |> List.collect (ancestorChain graph)
+                                        |> List.choose (selectedBranch graph) |> List.map snd |> Set.unionMany
+                                    let rSupport = Set.unionMany [sliceParticipants; absenceParticipants; branchSupport; residenceSupport; writeProjectionSupport; Set.ofList (site.Id :: actual :: residenceNode :: retirements)]
                                     let info =
                                         { Id = anchorFor ro site "retention"; Kind = "foreign-buffer-retention-domination"; Logic = "QF_LIA"
                                           Statement = "The read-only buffer residence dominates the foreign call and all declared retentions until retirement."

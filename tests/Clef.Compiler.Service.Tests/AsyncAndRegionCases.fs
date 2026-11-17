@@ -58,10 +58,9 @@ module private AsyncAndRegionFixture =
         let at site =
             match memory.Operations.TryFind site with
             | Some(Fidelity.PSG.MemoryWitnessOperation.Region row) -> row
-            | other -> failwithf "Missing region memory operation at %A: %A; required=%b; deferred=%b; reason=%A; node=%A"
-                           site other (memory.Required.Contains site)
-                           (revision.Emission.Ordinary.DeferredOnly.Contains site) (memory.Unresolved.TryFind site)
-                           (revision.Nodes.TryFind site |> Option.map (fun node -> node.Kind, node.IsReachable, node.Children))
+            | _ -> failwith (sprintf "Missing region memory operation at %d; required=%b; deferred=%b"
+                           (Fidelity.PSG.NodeId.value site) (memory.Required.Contains site)
+                           (revision.Emission.Ordinary.DeferredOnly.Contains site))
         for region in revision.Codata.RegionAllocations.Values do
             let creation = at region.Region
             Assert.Equal(Fidelity.PSG.MemoryRegionKind.Create, creation.Kind)

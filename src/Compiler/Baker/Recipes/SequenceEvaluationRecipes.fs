@@ -134,7 +134,10 @@ let private local (graph: SemanticGraph) resident owner generator (node: Semanti
     | SemanticKind.InterpolatedString parts ->
         parts |> List.choose (function InterpolatedPart.ExprPart id -> Some id | _ -> None) |> eager
     | SemanticKind.CaseElimination(subject, arms) ->
-        let declared = graph.Nodes.TryFind subject |> Option.bind (fun value -> Clef.Compiler.Baker.Ingredients.Options.cases value.Type)
+        let declared =
+            graph.Nodes.TryFind subject
+            |> Option.bind (fun value -> Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.casePayloads value.Type)
+            |> Option.map (List.mapi (fun ordinal (name, payload) -> ordinal, name, payload))
         let clauses = arms |> List.mapi (fun index arm ->
             if arm.Guard.IsSome || not arm.Bindings.IsEmpty then None else
             match arm.Pattern, declared with
@@ -176,8 +179,24 @@ let private local (graph: SemanticGraph) resident owner generator (node: Semanti
     | SemanticKind.AddressOf _ | SemanticKind.Quote _ | SemanticKind.ObjectExpr _
     | SemanticKind.ModuleDef _ | SemanticKind.TypeDef _ | SemanticKind.MemberDef _
     | SemanticKind.Error _ | SemanticKind.Obligation _ -> pending EvaluationResidual.InvalidShape []
-    | SemanticKind.ContinuationDispatch _ | SemanticKind.FrameRead _ | SemanticKind.FrameWrite _ | SemanticKind.FrameBorrow _ ->
-        pending EvaluationResidual.InvalidShape []
+    | SemanticKind.FrameRead(frame, _) | SemanticKind.FrameBorrow(frame, _) -> eager [frame]
+    | SemanticKind.FrameWrite(frame, _, value) -> eager [frame; value]
+    | SemanticKind.ContinuationDispatch(selector, cases, otherwise) ->
+        let ordinals = List.map fst cases
+        if ordinals.Length <> (List.distinct ordinals).Length then pending EvaluationResidual.InvalidShape [selector]
+        else
+            let ids = selector :: (List.map snd cases) @ [otherwise]
+            withOperands ids (fun operands ->
+                let link = E.flow owner node.Id operands
+                let branches = cases |> List.mapi (fun index (ordinal, _) ->
+                    [link (EvaluationPort.OperandExit 0) (EvaluationPort.OperandEntry(index + 1)) (EvaluationTransfer.WhenCase ordinal)
+                     link (EvaluationPort.OperandExit(index + 1)) EvaluationPort.Ready EvaluationTransfer.Continue]) |> List.concat
+                let fallback = cases.Length + 1
+                demands operands @
+                    [link EvaluationPort.Entry (EvaluationPort.OperandEntry 0) EvaluationTransfer.Continue] @ branches @
+                    [link (EvaluationPort.OperandExit 0) (EvaluationPort.OperandEntry fallback) (EvaluationTransfer.WhenOtherCases ordinals)
+                     link (EvaluationPort.OperandExit fallback) EvaluationPort.Ready EvaluationTransfer.Continue
+                     link EvaluationPort.Ready EvaluationPort.Exit EvaluationTransfer.Continue], ids)
     | SemanticKind.ContinuationStorage _ -> pending EvaluationResidual.InvalidShape []
     | SemanticKind.ContinuationAllocate _ | SemanticKind.AggregateStorage _ -> eager []
     | SemanticKind.DUInitialize (destination, _, _, payload) -> eager (destination :: Option.toList payload)

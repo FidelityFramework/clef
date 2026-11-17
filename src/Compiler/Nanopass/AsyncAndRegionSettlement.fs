@@ -27,6 +27,7 @@ open Clef.Compiler.Nanopass.Recipe
 module Platform = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 module Release = Clef.Compiler.Nanopass.RegionReleaseConstruction
 module Placement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
+module AggregateValues = Clef.Compiler.PSGSaturation.SemanticGraph.AggregateValues
 module Machine = Clef.Compiler.Baker.Recipes.AsyncContinuationRecipes
 
 type Settlement =
@@ -1017,7 +1018,8 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                 capturedLive @ localLive |> List.distinct
             let liveByCut = cuts |> List.map (fun cut -> cut, live cut)
             let hasValue (id: NodeId) =
-                Map.tryFind id graph.Nodes |> Option.exists (fun node -> not (isUnit node.Type))
+                (Map.tryFind id graph.Nodes |> Option.exists (fun node -> not (isUnit node.Type)))
+                && not (Clef.Compiler.Baker.Recipes.SequenceMachineRecipes.isSymbolic graph Set.empty id)
             let statementOf (cut: Cut) =
                 match cut.Bound with
                 | Some binding -> binding
@@ -1176,7 +1178,15 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                                   State = state
                                   Captures = captureSlots |> List.filter placedSources.Contains
                                   Cuts = machineCuts
-                                  Results = Set.ofList resultSlots }
+                                  Results = Set.ofList resultSlots
+                                  PayloadRanges =
+                                    (body :: (slots |> List.map _.Source)) |> List.distinct |> List.collect (fun source ->
+                                        match AggregateValues.scalarResult graph graph.Nodes[source].Type with
+                                        | Some _ -> [source, 0, "Ok"; source, 1, "Error"]
+                                        | None -> [])
+                                    |> Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.unionPayloadRanges graph
+                                  ResultDestination =
+                                    if AggregateValues.scalarResult graph graph.Nodes[body].Type |> Option.isSome then Some resultStorage else None }
                             match Machine.build placementGraph plan with
                             | Result.Error pending ->
                                 Result.Error (refusal "CCS8403" owner.Range [ owner.Id; pending.Site ] ("The async continuation frame operations are not settled: " + pending.Reason))
@@ -1198,7 +1208,10 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                     | other -> other
                 let resultLayout =
                     if isUnit resultType then Some ([], 0, 1)
-                    else slotOf platform resultType |> Option.map (fun (_, _, bytes, alignment) -> [ (0, bytes, alignment) ], bytes, alignment)
+                    else
+                        match AggregateValues.scalarLayout graph resultType with
+                        | Some(bytes, alignment) -> Some([ (0, bytes, alignment) ], bytes, alignment)
+                        | None -> slotOf platform resultType |> Option.map (fun (_, _, bytes, alignment) -> [ (0, bytes, alignment) ], bytes, alignment)
                 match resultLayout with
                 | None ->
                     [], [], refusal "CCS8403" owner.Range [ owner.Id; resultStorage ] "The async formation's result type has no settled storage layout."
@@ -1224,7 +1237,7 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                         { Formation = owner.Id
                           Callable = callable
                           Body = body
-                          CapturedBindings = captured
+                          CapturedBindings = captureSlots
                           ResultType = resultType
                           ResultStorage = resultStorage
                           Frame = frame
@@ -1299,7 +1312,10 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
 
     let resultLayout (formation: AsyncFormation) =
         if isUnit formation.ResultType then Some ([], 0, 1)
-        else slotOf platform formation.ResultType |> Option.map (fun (_, _, bytes, alignment) -> [ (0, bytes, alignment) ], bytes, alignment)
+        else
+            match AggregateValues.scalarLayout graph formation.ResultType with
+            | Some(bytes, alignment) -> Some([ (0, bytes, alignment) ], bytes, alignment)
+            | None -> slotOf platform formation.ResultType |> Option.map (fun (_, _, bytes, alignment) -> [ (0, bytes, alignment) ], bytes, alignment)
 
     let isOrchestration id =
         match Map.tryFind (origin graph id Set.empty) graph.Nodes with
@@ -1317,6 +1333,10 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
             | Some (intrinsic, info, [ computation ])
                 when info.FullName = "Async.RunSynchronously" || info.FullName = "Async.Start" || info.FullName = "Async.StartImmediate" ->
                 match resolve computation |> Option.bind (fun id -> Map.tryFind id formations), intrinsic.Children with
+                | Some formation, _ when info.FullName <> "Async.RunSynchronously"
+                                         && (AggregateValues.scalarResult graph formation.ResultType |> Option.isSome) ->
+                    Some(None, refusal "CCS8403" node.Range [node.Id; formation.Formation]
+                        "An unjoined async aggregate result has no caller-owned completion lifetime.")
                 | Some formation, resultTarget :: _ :: completionTarget :: _ ->
                     match resultLayout formation with
                     | Some (slots, bytes, alignment) ->
@@ -1578,7 +1598,7 @@ let private frameFold (machine: Realization) : Fold =
     { Carrier = machine.Callable
       Nodes = machine.Elaboration.Nodes
       Edited = machine.Elaboration.Edited
-      Provenance = frameProvenance machine
+      Provenance = frameProvenance machine @ machine.Elaboration.AggregateEvidence
       Accesses = [] }
 
 /// Fold every settled elaboration into the graph: the frame operations of
@@ -1724,14 +1744,34 @@ let private settleCore (admitted: bool) (graph: SemanticGraph) : SemanticGraph *
                   NewEdges = accrued.Edges
                   Annotated = [] }
             let enrichedGraph = ObligationElaboration.foldIn enrichment graph
-            let realized = realize enrichedGraph ((machines |> List.map frameFold) @ joins)
+            let resultDestinations =
+                activations.Values |> Seq.choose (fun activation ->
+                    match formations.TryFind activation.Formation, graph.Nodes.TryFind activation.Site, graph.Nodes.TryFind activation.ResultTarget with
+                    | Some formation, Some site, Some anchor when AggregateValues.scalarResult graph formation.ResultType |> Option.isSome ->
+                        match site.Kind with
+                        | SemanticKind.Application(callee, [computation]) ->
+                            let destination =
+                                { anchor with Kind = SemanticKind.AggregateStorage activation.Site
+                                              Type = formation.ResultType; Children = []; ValueRange = None
+                                              IsReachable = true; Parent = Some site.Id }
+                            let arguments = [computation; destination.Id]
+                            let invocation = { site with Kind = SemanticKind.Application(callee, arguments); Children = callee :: arguments }
+                            Some(destination.Id,
+                                { Carrier = site.Id; Nodes = [invocation; destination]; Edited = Set.ofList [site.Id; destination.Id]
+                                  Provenance = [{ Sources = [formation.Formation; formation.ResultStorage; site.Id]
+                                                  Target = destination.Id; Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0 }]
+                                  Accesses = [] })
+                        | _ -> None
+                    | _ -> None) |> Seq.toList
+            let realized = realize enrichedGraph ((machines |> List.map frameFold) @ joins @ (resultDestinations |> List.map snd))
             let origins =
                 machines
                 |> List.collect (fun machine -> machine.Elaboration.FrameReferences |> List.map (fun reference -> reference, machine.Frame))
                 |> Map.ofList
             // The frame is storage of the deferred callable's own activation.
             let frameResidences =
-                machines |> List.fold (fun facts machine -> Map.add machine.Elaboration.Allocation EscapeKind.StackScoped facts) residences
+                let frames = machines |> List.fold (fun facts machine -> Map.add machine.Elaboration.Allocation EscapeKind.StackScoped facts) residences
+                resultDestinations |> List.fold (fun facts (destination, _) -> Map.add destination EscapeKind.StackScoped facts) frames
             realized,
             { Frames = frames
               Formations = formations

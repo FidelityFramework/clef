@@ -15,6 +15,12 @@ let elaborate (graph: SemanticGraph) =
     // premises are recorded. This fan-out grants no resource or call authority.
     let resourceProject =
         not (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.readDescriptors graph).Resources.IsEmpty
+    // Extern bodies are flat declaration placeholders, not activations. The
+    // boundary owner accounts for their arguments and native effects.
+    let externalImplementations =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration.Implementation | _ -> None)
+        |> Set.ofList
     graph.Nodes.Values
     |> Seq.filter _.IsReachable
     |> Seq.choose (fun node ->
@@ -24,7 +30,7 @@ let elaborate (graph: SemanticGraph) =
             match node.Children with
             | [implementation] ->
                 match graph.Nodes.TryFind implementation with
-                | Some { Kind = SemanticKind.Lambda(_, body, [], _, _) } ->
+                | Some { Kind = SemanticKind.Lambda(_, body, [], _, _) } when not (externalImplementations.Contains implementation) ->
                     Some(Recipes.forOrdinaryRoot graph node.Id implementation body)
                 | _ -> None
             | _ -> None

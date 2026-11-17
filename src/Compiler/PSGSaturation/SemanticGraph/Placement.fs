@@ -479,69 +479,14 @@ let private payloadRanges (graph: SemanticGraph) =
     let node id = nodes.TryFind id
     let sameType left right = applySubst left = applySubst right
 
-    let copies =
-        graph.Edges
-        |> List.choose (fun edge ->
-            match edge.Class, edge.Role, edge.Ordinal, edge.Sources with
-            | EdgeClass.Provenance, EdgeRole.AggregateCopy, 0, [ source; destination; selected; value; some; none ] ->
-                match node source, node destination, node selected, node value, node some, node none, node edge.Target with
-                | Some sourceNode, Some destinationNode, Some selectedNode, Some valueNode, Some someNode, Some noneNode, Some branch ->
-                    match applySubst sourceNode.Type, valueNode.Kind, someNode.Kind, noneNode.Kind, branch.Kind with
-                    | NativeType.TApp(tc, [ inner ]),
-                      SemanticKind.DUEliminate(actual, 1, "Some", payloadType),
-                      SemanticKind.DUInitialize(someDestination, "Some", 1, Some payload),
-                      SemanticKind.DUInitialize(noneDestination, "None", 0, None),
-                      SemanticKind.IfThenElse(guard, yes, Some no) when
-                        tc.Name = "option"
-                        && sameType sourceNode.Type destinationNode.Type
-                        && sameType inner payloadType
-                        && sameType inner valueNode.Type
-                        && actual = source
-                        && someDestination = destination
-                        && noneDestination = destination
-                        && payload = value
-                        && guard = selected
-                        && yes = some
-                        && no = none
-                        && valueNode.Children = [ source ]
-                        && someNode.Children = [ destination; value ]
-                        && noneNode.Children = [ destination ]
-                        && branch.Children = [ selected; some; none ]
-                        ->
-                        let guarded =
-                            match selectedNode.Kind with
-                            | SemanticKind.Application(callee, [ tag; one ]) ->
-                                match node callee, node tag, node one with
-                                | Some {
-                                           Kind = SemanticKind.Intrinsic {
-                                                                             Module = IntrinsicModule.Operators
-                                                                             Operation = "op_Equality"
-                                                                         }
-                                       },
-                                  Some {
-                                           Kind = SemanticKind.DUGetTag(actual, actualType)
-                                       },
-                                  Some {
-                                           Kind = SemanticKind.Literal(NativeLiteral.Int(1L, _))
-                                       } when actual = source && sameType actualType sourceNode.Type -> true
-                                | _ -> false
-                            | _ -> false
-
-                        if guarded then
-                            Some(some, none, Set.ofList (edge.Target :: edge.Sources))
-                        else
-                            None
-                    | _ -> None
-                | _ -> None
-            | _ -> None)
-
     let copyWrites =
-        copies
-        |> List.collect (fun (some, none, support) -> [ some, support; none, support ])
+        graph.Edges
+        |> List.choose (AggregateValues.selectedCopy graph)
+        |> List.collect (fun (_, _, writes, support) -> writes |> List.map (fun writer -> writer, support))
         |> List.groupBy fst
         |> List.choose (fun (id, claims) ->
             match claims with
-            | [ (_, support) ] -> Some(id, support)
+            | [(_, support)] -> Some(id, support)
             | _ -> None)
         |> Map.ofList
 
@@ -813,6 +758,9 @@ let private placeContinuationFields (graph: SemanticGraph)
         else
             let settled slot alignmentKind =
                 extent node.Id slot alignmentKind |> Result.map (fun size -> slot, size)
+            if placer.ResourceHandles.Contains(keyOf ty) then
+                settled (SettledSlot.CHandle(keyOf ty, bits, bits / 8)) NTUKind.NTUptr
+            else
             match Types.tryGetNTUKind ty with
             | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) ->
                 let representation =
@@ -843,8 +791,10 @@ let private placeContinuationFields (graph: SemanticGraph)
     let isValueView ty =
         match ty with
         | NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> true
+        | NativeType.TApp(tc, _) when Types.isRegionTypeCon tc -> true
         | _ ->
             (match Types.tryGetNTUKind ty with Some NTUKind.NTUarray | Some NTUKind.NTUstring -> true | _ -> false)
+            || (Types.tryGetReadOnlyViewElement ty |> Option.isSome)
             || (RecordInstances.tryFields ty graph |> Option.isSome)
     let view role id holds =
         let slot = SettledSlot.Pointer ViewWords
@@ -857,8 +807,8 @@ let private placeContinuationFields (graph: SemanticGraph)
             if role <> ContinuationRole.State && concrete node && environment.IsSome then
                 view role id (CaptureSlotKind.EnvironmentView environment.Value)
             elif role <> ContinuationRole.State && role <> ContinuationRole.Capture
-                 && (AggregateValues.scalarOption graph ty |> Option.isSome) then
-                let _, bytes, alignment = (AggregateValues.scalarOption graph ty).Value
+                 && (AggregateValues.scalarLayout graph ty |> Option.isSome) then
+                let bytes, alignment = (AggregateValues.scalarLayout graph ty).Value
                 Ok(id, role, CaptureSlotKind.InlineValue ty, SettledSlot.InlineBytes(bytes, alignment), (bytes, alignment))
             elif role <> ContinuationRole.State && concrete node && isValueView ty then
                 view role id (CaptureSlotKind.ValueView ty)

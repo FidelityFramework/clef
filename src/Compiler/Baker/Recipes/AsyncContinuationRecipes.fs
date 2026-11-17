@@ -25,6 +25,8 @@ open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
 open Clef.Compiler.Baker.Ingredients.Closures
 module C = Clef.Compiler.Baker.Ingredients.Continuations
+module Aggregate = Clef.Compiler.Baker.Ingredients.AggregateCopies
+module AggregateValues = Clef.Compiler.PSGSaturation.SemanticGraph.AggregateValues
 
 /// One suspension cut of a formation.
 type Cut =
@@ -49,7 +51,9 @@ type Plan =
       Captures: NodeId list
       Cuts: Cut list
       /// The resumed computations whose value has a frame slot.
-      Results: Set<NodeId> }
+      Results: Set<NodeId>
+      PayloadRanges: Map<NodeId * int, ValueRange>
+      ResultDestination: NodeId option }
 
 type Elaboration =
     { /// Every created node and the current version of every edited node.
@@ -65,6 +69,7 @@ type Elaboration =
       Reads: (NodeId * NodeId) list
       /// Frame write occurrence, its slot and the stored value occurrence.
       Writes: (NodeId * NodeId * NodeId) list
+      AggregateEvidence: Hyperedge list
       /// Resumption dispatch occurrence and the state ordinal it selects.
       Dispatches: (NodeId * int) list }
 
@@ -153,6 +158,8 @@ let build (graph: SemanticGraph) (plan: Plan) : Result<Elaboration, Residual> =
         let state = SaturationState.create range "Async.frame" (NodeId.value owner.Id) owner.Id graph.Platform
         let storage = Types.internalStorageType
         let unsettled (reason: string) = fail (XParsec.ErrorType.Message reason)
+        let aggregateWrites = ResizeArray<NodeId * NodeId * NodeId>()
+        let aggregateEvidence = ResizeArray<Hyperedge>()
         let recipe =
             saturation {
                 // Every cut statement is sequenced by a block: the items after it
@@ -173,6 +180,29 @@ let build (graph: SemanticGraph) (plan: Plan) : Result<Elaboration, Residual> =
                 let! allocation = C.create (SemanticKind.ContinuationAllocate plan.Frame) storage []
                 let! frameBinding = letBind "__async_frame" allocation storage
                 let frame = varRef "__async_frame" (Some frameBinding) storage
+                let write target slot value = saturation {
+                    let source = graph.Nodes[slot]
+                    match AggregateValues.scalarLayout graph source.Type with
+                    | None -> return! C.write target slot value
+                    | Some _ ->
+                        // The resumed expression is evaluated once; the selected
+                        // case then copies into storage owned by this frame.
+                        let name = sprintf "__async_copy_%d" (NodeId.value slot)
+                        let! binding = C.createWithRange source.ValueRange (SemanticKind.Binding(name, false, false, None)) source.Type [value]
+                        let! reference = C.createWithRange source.ValueRange (SemanticKind.VarRef(name, Some binding)) source.Type []
+                        let! destination = C.read target source
+                        let! copy, evidence =
+                            match AggregateValues.scalarOption graph source.Type, AggregateValues.scalarResult graph source.Type with
+                            | Some(inner, _, _), _ -> Aggregate.option reference destination inner
+                            | _, Some(ok, error, _, _) ->
+                                Aggregate.result reference destination source.Type ok error
+                                    (plan.PayloadRanges.TryFind(slot, 0)) (plan.PayloadRanges.TryFind(slot, 1))
+                            | _ -> unsettled "The owned aggregate has no selected-case copy recipe."
+                        let! statement = C.block [binding; copy] Types.unitType
+                        aggregateWrites.Add(evidence.Target, slot, reference)
+                        aggregateEvidence.Add evidence
+                        return statement
+                }
 
                 // The reload of every slot retained across a cut that resumes
                 // a computation in its block.
@@ -296,7 +326,7 @@ let build (graph: SemanticGraph) (plan: Plan) : Result<Elaboration, Residual> =
                                             saturation {
                                                 let! value = valueAt statement slot
                                                 let! target = frame
-                                                return! C.write target slot value
+                                                return! write target slot value
                                             })
                                     let! transition = stateWrite cut.Ordinal
                                     match following, List.tryLast following with
@@ -309,7 +339,7 @@ let build (graph: SemanticGraph) (plan: Plan) : Result<Elaboration, Residual> =
                                                 match graph.Nodes.TryFind tail, List.tryLast resumedItems with
                                                 | Some tailNode, Some value when plan.Results.Contains tail && value = tail ->
                                                     let! target = frame
-                                                    let! store = C.write target tail value
+                                                    let! store = write target tail value
                                                     return Some(tailNode, Some store)
                                                 // A later cut of this block already stored the value.
                                                 | Some tailNode, Some _ when plan.Results.Contains tail -> return Some(tailNode, None)
@@ -362,14 +392,57 @@ let build (graph: SemanticGraph) (plan: Plan) : Result<Elaboration, Residual> =
                         saturation {
                             let! value = captureValue slot
                             let! target = frame
-                            let! write = C.write target slot value
-                            return slot, value, write
+                            let! store = write target slot value
+                            return slot, value, store
                         })
                 let! initial = stateWrite (-1)
-                let entryItems = frameBinding :: (captureWrites |> List.map (fun (_, _, write) -> write)) @ [ initial; body.Id ]
+                let! returned = saturation {
+                    match plan.ResultDestination, AggregateValues.scalarResult graph body.Type with
+                    | Some destination, Some(ok, error, _, _) ->
+                        let anchor = graph.Nodes[destination]
+                        do! enrich anchor (SemanticKind.PatternBinding "__async_result") body.Type [] anchor.EmissionStrategy false
+                        let! resultBinding = C.create (SemanticKind.Binding("__async_return", false, false, None)) body.Type [body.Id]
+                        let! source = varRef "__async_return" (Some resultBinding) body.Type
+                        let! target = varRef "__async_result" (Some destination) body.Type
+                        let! copy, evidence = Aggregate.result source target body.Type ok error
+                                                (plan.PayloadRanges.TryFind(body.Id, 0)) (plan.PayloadRanges.TryFind(body.Id, 1))
+                        aggregateEvidence.Add evidence
+                        let! result = varRef "__async_result" (Some destination) body.Type
+                        return! C.block [resultBinding; copy; result] body.Type
+                    | None, _ -> return body.Id
+                    | _ -> return! unsettled "The async result destination has no owned selected-case transport."
+                }
+                let entryItems = frameBinding :: (captureWrites |> List.map (fun (_, _, write) -> write)) @ [ initial; returned ]
                 let! entry = C.createWithRange body.ValueRange (SemanticKind.Sequential entryItems) body.Type entryItems
-                let children = callable.Children |> List.map (fun child -> if child = body.Id then entry else child)
-                do! enrich callable (SemanticKind.Lambda(parameters, entry, captures, enclosing, context)) callable.Type children callable.EmissionStrategy false
+                let () =
+                    match plan.ResultDestination with
+                    | Some destination ->
+                        aggregateEvidence.Add {
+                            Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0
+                            Sources = [plan.Formation; callable.Id; entry; returned]; Target = destination }
+                    | None -> ()
+                let destinationIndex =
+                    match parameters with
+                    | (_, _, formal) :: _ when graph.Edges |> List.exists (fun edge ->
+                        edge.Role = EdgeRole.EnvironmentFormal && edge.Target = formal && List.tryLast edge.Sources = Some callable.Id) -> 1
+                    | _ -> 0
+                let rec insertDestination index ty =
+                    match ty with
+                    | NativeType.TForall(formals, inner) -> NativeType.TForall(formals, insertDestination index inner)
+                    | NativeType.TFun(argument, result) when index > 0 -> NativeType.TFun(argument, insertDestination (index - 1) result)
+                    | _ -> NativeType.TFun(body.Type, ty)
+                let callable, parameters, callableType =
+                    match plan.ResultDestination with
+                    | None -> callable, parameters, callable.Type
+                    | Some destination ->
+                        let metadata =
+                            if callable.Metadata.ContainsKey ClosureMetadata.SourceSignature then callable.Metadata
+                            else callable.Metadata.Add(ClosureMetadata.SourceSignature, MetadataValue.Type callable.Type)
+                        { callable with Metadata = metadata },
+                        List.insertAt destinationIndex ("__async_result", body.Type, destination) parameters,
+                        insertDestination destinationIndex callable.Type
+                let children = (parameters |> List.map (fun (_, _, id) -> id)) @ [entry]
+                do! enrich callable (SemanticKind.Lambda(parameters, entry, captures, enclosing, context)) callableType children callable.EmissionStrategy false
                 return allocation, frameBinding, captureWrites |> List.map (fun (slot, value, _) -> slot, value)
             }
         match run state recipe with
@@ -394,10 +467,11 @@ let build (graph: SemanticGraph) (plan: Plan) : Result<Elaboration, Residual> =
                             | SemanticKind.FrameRead(_, slot) -> Some(node.Id, slot)
                             | _ -> None)
                      Writes =
-                        nodes |> List.choose (fun node ->
+                        (nodes |> List.choose (fun node ->
                             match node.Kind with
                             | SemanticKind.FrameWrite(_, slot, value) -> Some(node.Id, slot, value)
-                            | _ -> None)
+                            | _ -> None)) @ List.ofSeq aggregateWrites
+                     AggregateEvidence = List.ofSeq aggregateEvidence
                      Dispatches =
                         nodes |> List.collect (fun node ->
                             match node.Kind with

@@ -127,6 +127,12 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
         let initializers = plan.Captures |> List.map (fun capture -> capture.SourceNodeId.Value, capture.SourceNodeId.Value)
         let! environment = C.create (SemanticKind.EnvironmentCreate(source.Id, initializers)) environmentType []
         let captures = plan.Captures |> List.map (fun capture -> capture.SourceNodeId.Value, capture) |> Map.ofList
+        let selfBinding =
+            source.Parent |> Option.bind graph.Nodes.TryFind |> Option.bind (fun binding ->
+                match binding.Kind, binding.Children with
+                | SemanticKind.Binding(_, false, true, _), [value] when value = source.Id -> Some binding.Id
+                | _ -> None)
+        let forwards slot value = slot = value && (captures.ContainsKey slot || selfBinding = Some slot)
         let rec within (seen, missing) id =
             if Set.contains id seen then seen, missing else
             match graph.Nodes.TryFind id with
@@ -152,9 +158,13 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
                 // formation reads this activation's environment values/cells;
                 // it never reevaluates the outer source declarations.
                 match capturedInitializers graph owner with
-                | Some initializers when initializers |> List.exists (fun (slot, value, _) -> slot = value && captures.ContainsKey slot) ->
+                | Some initializers when initializers |> List.exists (fun (slot, value, _) -> forwards slot value) ->
                     let! initializers = initializers |> C.collect (fun (slot, value, mutableCell) -> saturation {
-                        if slot = value && captures.ContainsKey slot then
+                        if slot = value && selfBinding = Some slot && not mutableCell then
+                            let! env = varRef "__closure_environment" (Some formal) environmentType
+                            let! self = C.create (SemanticKind.ClosureValue(implementation, env)) source.Type [env]
+                            return slot, self, false
+                        elif slot = value && captures.ContainsKey slot then
                             let capture = captures[slot]
                             let! env = varRef "__closure_environment" (Some formal) environmentType
                             let kind, ty =
@@ -165,7 +175,7 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
                         else return slot, value, mutableCell
                     })
                     let eager = initializers |> List.choose (fun (slot, value, _) ->
-                        if slot <> value && captures.ContainsKey slot then Some value else None)
+                        if slot <> value && (captures.ContainsKey slot || selfBinding = Some slot) then Some value else None)
                     let children = List.distinct (node.Children @ eager)
                     do! enrich node (SemanticKind.EnvironmentCreate(owner, initializers |> List.map (fun (slot, value, _) -> slot, value)))
                                     node.Type children node.EmissionStrategy false

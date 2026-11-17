@@ -44,8 +44,46 @@ let resultDestinations (graph: SemanticGraph) implementation body =
     let sequencePath = finalPath graph (fun node -> match node.Kind with SemanticKind.SeqExpr _ -> true | _ -> false) body
     let closurePath = finalPath graph (fun node -> match node.Kind with SemanticKind.ClosureValue _ -> true | _ -> false) body
     let lazyPath = finalPath graph (fun node -> match node.Kind with SemanticKind.LazyValue _ -> true | _ -> false) body
+    let node id = graph.Nodes.TryFind id |> Option.filter _.IsReachable
+    let alias definition id =
+        match node id with
+        | Some { Kind = SemanticKind.VarRef(_, Some actual) } -> actual = definition
+        | _ -> false
+    let rec code seen id =
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        match node id with
+        | Some { Kind = SemanticKind.Lambda _ } -> Some id
+        | Some { Kind = SemanticKind.ClosureValue(value, _) }
+        | Some { Kind = SemanticKind.VarRef(_, Some value) }
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> code seen value
+        | _ -> None
+    let asyncDestination formation entry returned formal =
+        match node formation, node implementation, node formal, node entry, node returned with
+        | Some owner, Some { Kind = SemanticKind.Lambda(parameters, actualBody, _, _, _) },
+          Some { Kind = SemanticKind.PatternBinding _; Type = ty },
+          Some { Kind = SemanticKind.Sequential items },
+          Some { Kind = SemanticKind.Sequential [binding; copy; result] }
+            when owner.Metadata.TryFind "Async.Formation" = Some(MetadataValue.Bool true)
+                 && (List.tryLast owner.Children |> Option.bind (code Set.empty)) = Some implementation
+                 && actualBody = body && entry = body && List.tryLast items = Some returned
+                 && (parameters |> List.filter (fun (_, parameterType, id) -> id = formal && applySubst parameterType = applySubst ty)).Length = 1
+                 && (Types.tryGetAsyncElement owner.Type |> Option.map applySubst) = Some(applySubst ty)
+                 && (AggregateValues.scalarResult graph ty).IsSome && alias formal result ->
+            match node binding, node copy with
+            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [_] },
+              Some { Kind = SemanticKind.Sequential [source; destination; branch] }
+                when alias binding source && alias formal destination ->
+                graph.Edges |> List.exists (fun evidence ->
+                    evidence.Target = branch &&
+                    (AggregateValues.selectedCopy graph evidence |> Option.exists (fun (actualSource, actualDestination, _, _) ->
+                        actualSource = source && actualDestination = destination)))
+            | _ -> false
+        | _ -> false
     graph.Edges |> List.choose (fun edge ->
         match edge.Class, edge.Role, edge.Sources with
+        | EdgeClass.Provenance, EdgeRole.EnrichedWith, [formation; actual; entry; returned]
+            when edge.Ordinal = 0 && actual = implementation && asyncDestination formation entry returned edge.Target -> Some edge.Target
         | EdgeClass.Provenance, EdgeRole.EnrichedWith, path ->
             sequencePath |> Option.bind (fun resultPath ->
                 if path = implementation :: resultPath then
@@ -71,6 +109,22 @@ let resultDestinations (graph: SemanticGraph) implementation body =
                     when constructor = edge.Target && expected = owner && applySubst ty = ClosureEnvironments.environmentType -> Some formal
                 | _ -> None)
         | _ -> None) |> Set.ofList
+
+/// The selected-case source copied into an async result formal. Reading the
+/// final return follows this source, rather than the caller's uninitialized
+/// destination. The same complete receipt owns signature and value transport.
+let resultDestinationSource (graph: SemanticGraph) formal =
+    graph.Edges |> List.choose (fun edge ->
+        match edge.Class, edge.Role, edge.Ordinal, edge.Sources with
+        | EdgeClass.Provenance, EdgeRole.EnrichedWith, 0, [_; implementation; body; returned]
+            when edge.Target = formal && (resultDestinations graph implementation body).Contains formal ->
+            match graph.Nodes.TryFind returned with
+            | Some { Kind = SemanticKind.Sequential [binding; _; _] } ->
+                match graph.Nodes.TryFind binding with
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [source] } -> Some source
+                | _ -> None
+            | _ -> None
+        | _ -> None) |> List.distinct |> function [source] -> Some source | _ -> None
 
 /// A source sequence value transports its protocol and actual environment.
 /// The generator's frame formal and a producer's proved destination instead

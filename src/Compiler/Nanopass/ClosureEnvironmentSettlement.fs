@@ -152,6 +152,13 @@ let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: 
         residual site [generator] "A generator-local callback needs a settled owned environment region; activation-local backing storage cannot survive a suspension.")
     let placed = graph.Nodes.Values |> Seq.choose (fun owner ->
         match owner.Kind with
+        | SemanticKind.ClosureValue(implementation, environment) when owner.IsReachable &&
+            (Environments.tryKnown graph owner.Id |> Option.exists (fun known ->
+                known.Implementation = implementation && known.EnvironmentOwner <> owner.Id &&
+                Environments.tryEnvironmentOwner graph environment = Some known.EnvironmentOwner)) ->
+            // An exact recursive self pair reuses the current formal's storage;
+            // its original owner alone publishes the environment layout.
+            None
         | SemanticKind.ClosureValue(implementation, environment) when owner.IsReachable ->
             let captures = Environments.captures graph owner.Id
             let shape =

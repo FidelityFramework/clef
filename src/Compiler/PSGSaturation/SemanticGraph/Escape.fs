@@ -108,9 +108,13 @@ let analyze (graph: SemanticGraph) : Map<NodeId, EscapeKind> =
                 found
 
         let stackLambdas = lazy ((ScopedCallbacks.read graph).StackLambdas)
+        let copiedTemporaries = lazy (
+            graph.Nodes.Values |> Seq.collect Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence
+            |> AggregateValues.copiedTemporaries graph)
 
         let escapeOf (siteId: NodeId) (kind: SiteKind) : EscapeKind =
             match kind with
+            | SiteKind.Union when copiedTemporaries.Value.Contains siteId -> EscapeKind.StackScoped
             // a closure's environment is part of the pair it returns: structurally escaping
             | SiteKind.Closure when Set.contains siteId stackLambdas.Value -> EscapeKind.StackScoped
             | SiteKind.Closure -> EscapeKind.EscapesViaReturn

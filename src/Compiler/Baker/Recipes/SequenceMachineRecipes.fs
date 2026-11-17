@@ -133,7 +133,14 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                     let! copy, evidence = Aggregate.option value destination inner
                     aggregateEvidence.Add evidence
                     return copy
-                | None -> return! C.write target id value
+                | None ->
+                    match AggregateValues.scalarResult graph graph.Nodes[id].Type with
+                    | Some(ok, error, _, _) ->
+                        let! destination = C.read target graph.Nodes[id]
+                        let! copy, evidence = Aggregate.result value destination graph.Nodes[id].Type ok error None None
+                        aggregateEvidence.Add evidence
+                        return copy
+                    | None -> return! C.write target id value
             else
                 // Unit operations and symbolic callable identities have no
                 // runtime slot. Their evaluation effects remain in the block.

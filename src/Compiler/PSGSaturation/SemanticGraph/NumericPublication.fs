@@ -48,7 +48,11 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
             reject (Some anchor) participants "Finite-sequence relation premises changed or the source-to-machine range authority is absent; source settlement is required."
         elif Numeric.finiteCellRelations graph <> Ok domain.FiniteCellRelations ||
            Numeric.finiteCellObligations graph <> domain.FiniteCellObligations then
-            reject (Some anchor) participants "finite-cell relation premises changed; source numeric settlement is required."
+            let detail =
+                match Numeric.finiteCellRelations graph with
+                | Error reason -> " " + reason
+                | Ok _ -> ""
+            reject (Some anchor) participants ("finite-cell relation premises changed; source numeric settlement is required." + detail)
         elif domain.CaptureRelations <> Numeric.captureRelations graph then
             reject (Some anchor) participants "Closure capture relation premises changed; source numeric settlement is required."
         elif not domain.Unresolved.IsEmpty then

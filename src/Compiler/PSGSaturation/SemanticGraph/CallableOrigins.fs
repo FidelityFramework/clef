@@ -116,7 +116,7 @@ let private resultPayloads ty =
 
 /// Case identity comes from the exact native declarations, not a matching
 /// name or discriminant. Unsupported unions retain conservative origins.
-let private casePayloads ty =
+let casePayloads ty =
     match resultPayloads ty with
     | Some cases -> Some(cases |> List.map (fun (name, payload) -> name, Some payload))
     | None ->
@@ -485,7 +485,11 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
         | None ->
             match nodes.TryFind id with
             | Some { Kind = SemanticKind.EnvironmentCreate(owner, _) } -> Some owner
-            | Some { Kind = SemanticKind.ClosureValue _ } -> Some id
+            | Some { Kind = SemanticKind.ClosureValue(implementation, environment) } ->
+                environmentOwner seen environment |> Option.filter (fun owner ->
+                    match nodes.TryFind owner with
+                    | Some { Kind = SemanticKind.ClosureValue(code, _) } -> code = implementation
+                    | _ -> false)
             | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _)
                            | SemanticKind.EnvironmentReference value } -> environmentOwner seen value
             | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> environmentOwner seen value
@@ -606,7 +610,7 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
                 | SemanticKind.ClosureValue(implementation, _) ->
                     // The pair closes over its explicitly declared environment
                     // formal. Rewritten direct calls still supply that formal.
-                    let formal = environmentFormals.TryFind((id, implementation))
+                    let formal = environmentOwner Set.empty id |> Option.bind (fun owner -> environmentFormals.TryFind(owner, implementation))
                     match shapes.TryFind implementation, formal with
                     | Some ((_, _, first) :: _, _), Some actual when first = actual ->
                         transportInputs[id] <- node.Children @ [actual]

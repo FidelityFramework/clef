@@ -101,6 +101,7 @@ let participants operations = function
         Set.unionMany [fact.Uses;constructionIds fact.Construction;Set.ofList(fact.Site::fact.Owner::fact.Platform::fact.Layout::fact.Capacity::residence)]
     | MemoryWitnessOperation.CheckedResultRetirement fact -> Set.add fact.Site (Set.add fact.Value (constructionIds fact.Construction))
     | MemoryWitnessOperation.EmptySnapshot fact -> emptySnapshotIds fact
+    | MemoryWitnessOperation.ReadOnlyArrayView fact -> fact.Participants
 let operands = function
     | MemoryWitnessOperation.Region fact -> Option.toList fact.Operand @ Option.toList fact.Source @ Option.toList fact.Count
     | MemoryWitnessOperation.LocalScalar fact -> fact.Initializer :: (fact.Writes |> List.map snd)
@@ -110,6 +111,7 @@ let operands = function
     | MemoryWitnessOperation.ArrayLiteral fact -> fact.Elements |> List.map fst
     | MemoryWitnessOperation.ArrayAllocation fact -> [fact.Count]
     | MemoryWitnessOperation.StringView fact -> [fact.Source]
+    | MemoryWitnessOperation.ReadOnlyArrayView fact -> [fact.Source]
     | MemoryWitnessOperation.Utf8Validation fact -> [fact.Construction.Snapshot]
     | MemoryWitnessOperation.SnapshotRetirement fact -> [fact.Construction.Snapshot]
     | MemoryWitnessOperation.ConstructedValue _ -> []

@@ -2412,6 +2412,12 @@ and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.M
     | S.MemoryWitnessOperation.ConstructedValue value -> Fidelity.PSG.MemoryWitnessOperation.ConstructedValue(mapMemoryConstructedValueWitness value)
     | S.MemoryWitnessOperation.CheckedResultRetirement value -> Fidelity.PSG.MemoryWitnessOperation.CheckedResultRetirement(mapMemoryCheckedResultRetirementWitness value)
     | S.MemoryWitnessOperation.EmptySnapshot value -> Fidelity.PSG.MemoryWitnessOperation.EmptySnapshot(mapMemoryEmptySnapshotWitness value)
+    | S.MemoryWitnessOperation.ReadOnlyArrayView value ->
+        Fidelity.PSG.MemoryWitnessOperation.ReadOnlyArrayView {
+            Site = nodeId value.Site; Source = nodeId value.Source
+            SourceCarrier = mapValueRepresentation value.SourceCarrier
+            ResultCarrier = mapValueRepresentation value.ResultCarrier
+            Participants = Set.map nodeId value.Participants }
 
 and mapMemoryWitnessProjection (value: S.MemoryWitnessProjection) : Fidelity.PSG.MemoryWitnessProjection =
     ({

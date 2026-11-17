@@ -18,7 +18,7 @@ type private Candidate = { Aliases: NodeId list; Calls: Call list; Supports: Nod
 /// `Accounted` holds every ordinary implementation whose uses are all accounted for,
 /// applied in source or not; `Candidates` is its subset with complete applications,
 /// the shape coverage walks.
-type Reading = private { Entry: NodeId option; Candidates: Map<NodeId, Candidate>; Accounted: Map<NodeId, Candidate>; Ordinary: Set<NodeId>; Deferred: Set<NodeId> }
+type Reading = private { Entry: NodeId option; Candidates: Map<NodeId, Candidate>; Accounted: Map<NodeId, Candidate>; Ordinary: Set<NodeId>; Deferred: Set<NodeId>; Ingress: Lazy<CallableIngress.Reading> }
 type Coverage = { Dependencies: NodeId list; Evidence: Hyperedge list }
 
 /// Classify every use of each known code value. A missing invocation path,
@@ -26,7 +26,7 @@ type Coverage = { Dependencies: NodeId list; Evidence: Hyperedge list }
 /// a refusal, not permission derived from the function's lexical location.
 let analyze (graph: SemanticGraph) : Reading =
     match Initialization.read graph with
-    | None -> { Entry = None; Candidates = Map.empty; Accounted = Map.empty; Ordinary = Set.empty; Deferred = Set.empty }
+    | None -> { Entry = None; Candidates = Map.empty; Accounted = Map.empty; Ordinary = Set.empty; Deferred = Set.empty; Ingress = lazy (CallableIngress.analyze graph) }
     | Some entry ->
         let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
         let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
@@ -261,7 +261,7 @@ let analyze (graph: SemanticGraph) : Reading =
         let deferred = nodes |> Map.toList |> List.choose (fun (id, node) ->
             match node.Kind with SemanticKind.Lambda(_, _, _, _, LambdaContext.SeqGenerator) -> Some id | _ -> None) |> Set.ofList
         { Entry = Some entry.EntryLambda; Candidates = candidates; Accounted = Map.ofList accounted
-          Ordinary = ordinary |> List.map fst |> Set.ofList; Deferred = deferred }
+          Ordinary = ordinary |> List.map fst |> Set.ofList; Deferred = deferred; Ingress = lazy (CallableIngress.analyze graph) }
 
 /// How an ordinary implementation is reached, for a consumer that bounds its phase
 /// when coverage is incomplete: the sites and supports to bound in turn, and the
@@ -278,7 +278,7 @@ let invocations (reading: Reading) (implementation: NodeId) : (NodeId list * Nod
 /// Every incoming call must lead back to the supplied covering activation or to an
 /// explicit deferred owner that the caller must prove covered. Closed recursive
 /// groups are accepted only with such an external root; self-cycles prove nothing.
-let coverage (reading: Reading) covering actual : Coverage option =
+let private ordinaryCoverage (reading: Reading) covering actual : Coverage option =
     if reading.Entry.IsNone || not (reading.Ordinary.Contains covering) || reading.Deferred.Contains actual then None else
     let rec visit seen pending groups dependencies rooted =
         match pending with
@@ -307,3 +307,17 @@ let coverage (reading: Reading) covering actual : Coverage option =
                 visit (Set.add current seen) (candidate.Supports @ (candidate.Calls |> List.map (fun call -> call.Caller.Value)) @ rest)
                     ((current, candidate) :: groups) dependencies rooted
     visit Set.empty [actual] [] Set.empty false
+
+/// The ingress owner also accounts for completing async activations and their
+/// rooted recursive call families. Its complete use proof is directional;
+/// Start/StartImmediate and escaping computations cannot supply this evidence.
+let coverage (reading: Reading) covering actual : Coverage option =
+    ordinaryCoverage reading covering actual |> Option.orElseWith (fun () ->
+        if reading.Entry.IsNone || not (reading.Ordinary.Contains covering) || reading.Deferred.Contains actual then None else
+        CallableIngress.tryCovered reading.Ingress.Value covering actual
+        |> Option.filter (fun proof -> proof.UsedLazyForces.IsEmpty)
+        |> Option.map (fun proof ->
+            { Dependencies = []
+              Evidence =
+                [{ Sources = covering :: Set.toList proof.Participants |> List.distinct
+                   Target = actual; Class = EdgeClass.Provenance; Role = EdgeRole.ProgramActivationCoverage; Ordinal = 0 }] }))

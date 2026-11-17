@@ -94,6 +94,24 @@ let private resultOwner (graph: SemanticGraph) formal =
         | _ -> None)
     |> function [owner] -> Some owner | _ -> None
 
+/// A recursive self pair reuses this activation's exact environment formal.
+/// It does not introduce a second environment owner or allocation.
+let private closureValueOwner (graph: SemanticGraph) (node: SemanticNode) =
+    match node.Kind with
+    | SemanticKind.ClosureValue(implementation, environment) ->
+        let rec current seen id =
+            if Set.contains id seen then None else
+            let seen = Set.add id seen
+            match graph.Nodes.TryFind id with
+            | Some { Kind = SemanticKind.EnvironmentCreate(owner, _) } when owner = node.Id -> Some owner
+            | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> current seen source
+            | _ -> formalOwner graph id
+        current Set.empty environment |> Option.filter (fun owner ->
+            match graph.Nodes.TryFind owner with
+            | Some { Kind = SemanticKind.ClosureValue(code, _) } -> code = implementation
+            | _ -> false)
+    | _ -> None
+
 /// Source names and mutable aliases are not callable identity evidence.
 /// Complete call/result and formal/actual relations retain unknown alternatives.
 let private followUsing<'T when 'T: equality>
@@ -105,7 +123,7 @@ let private followUsing<'T when 'T: equality>
     let ownerTerminal (candidate: SemanticNode) =
         match candidate.Kind with
         | SemanticKind.EnvironmentCreate(owner, _) | SemanticKind.EnvironmentAllocate owner -> Some owner
-        | SemanticKind.ClosureValue _ -> Some candidate.Id
+        | SemanticKind.ClosureValue _ -> closureValueOwner graph candidate
         | _ -> formalOwner graph candidate.Id |> Option.orElseWith (fun () -> resultOwner graph candidate.Id)
     let rec goOwner (seen: Set<NodeId>) (id: NodeId) : bool * NodeId option =
         if Set.contains id seen then true, None else
@@ -249,7 +267,8 @@ let tryKnown (graph: SemanticGraph) =
             follow g (fun node ->
                 match node.Kind with
                 | SemanticKind.ClosureValue(implementation, _) ->
-                    Some { Implementation = implementation; EnvironmentOwner = node.Id }
+                    closureValueOwner g node |> Option.map (fun owner ->
+                        { Implementation = implementation; EnvironmentOwner = owner })
                 | _ -> None) Set.empty
         { Reader = reader })).Reader
 
@@ -342,7 +361,7 @@ let private environmentReader (graph: SemanticGraph) =
             follow g (fun node ->
                 match node.Kind with
                 | SemanticKind.EnvironmentCreate(owner, _) | SemanticKind.EnvironmentAllocate owner -> Some owner
-                | SemanticKind.ClosureValue _ -> Some node.Id
+                | SemanticKind.ClosureValue _ -> closureValueOwner g node
                 | _ -> formals.TryFind node.Id |> Option.orElseWith (fun () -> resultOwner g node.Id)) Set.empty
         { Reader = reader })).Reader
 
@@ -464,8 +483,16 @@ let isAsyncFormationCallable (nodes: Map<NodeId, SemanticNode>) (callable: Seman
         List.tryLast formation.Children = Some callable.Id)
 
 let private asyncActivator (nodes: Map<NodeId, SemanticNode>) (application: SemanticNode) operand =
+    let resultDestination = function
+        | [] -> true
+        | [destination] ->
+            match nodes.TryFind destination with
+            | Some { Kind = SemanticKind.AggregateStorage owner; Type = ty } ->
+                owner = application.Id && applySubst ty = applySubst application.Type
+            | _ -> false
+        | _ -> false
     match application.Kind with
-    | SemanticKind.Application(callee, [actual]) when actual = operand ->
+    | SemanticKind.Application(callee, actual :: rest) when actual = operand && resultDestination rest ->
         match nodes.TryFind callee with
         | Some { Kind = SemanticKind.Intrinsic info } -> Some info.FullName
         | _ -> None
@@ -672,7 +699,9 @@ let plans (graph: SemanticGraph) =
                     capture.SourceNodeId |> Option.exists (fun source ->
                         known.ContainsKey source || (lambda source |> Option.exists candidates.Contains))
                 | NativeType.TSeq _ when not capture.IsMutable -> true
+                | NativeType.TApp(constructor, [_]) when not capture.IsMutable && constructor = Types.cHandleTyCon -> true
                 | ty when not capture.IsMutable && Types.tryGetNTUKind ty = Some NTUKind.NTUstring -> true
+                | ty when not capture.IsMutable && (Types.tryGetReadOnlyViewElement ty |> Option.isSome) -> true
                 | ty ->
                     match Types.tryGetNTUKind ty with
                     | Some (NTUKind.NTUint _ | NTUKind.NTUuint _ | NTUKind.NTUfloat _ | NTUKind.NTUposit _

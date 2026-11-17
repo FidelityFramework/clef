@@ -61,6 +61,8 @@ type Reading = private {
     Correspondence: NodeId -> NodeId -> Set<NodeId> option
     ClosedImplementation: NodeId -> Evidence option
     Family: NodeId -> Family option
+    Covered: NodeId -> NodeId -> Evidence option
+    InvokedWithin: NodeId -> NodeId -> NodeId -> Evidence option
     ExecutionOwner: NodeId -> NodeId option
 }
 type private Closed = { Dependencies: Set<NodeId>; Callers: Set<NodeId>; Participants: Set<NodeId>; UsedLazyForces: Set<NodeId>; Calls: Call list; Valid: bool }
@@ -174,9 +176,26 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
             | _ -> false
         | _ -> false
     let awaits (application: SemanticNode) callee argument =
+        let operandsAgree =
+            match application.Kind, application.Children with
+            | SemanticKind.Application(actual, [computation]), children ->
+                actual = callee && computation = argument && children = [callee; argument]
+            | SemanticKind.Application(actual, [computation; destination]), children
+                when actual = callee && computation = argument && children = [callee; argument; destination] ->
+                match graph.Codata.Value.AsyncActivations.TryFind application.Id with
+                | Some activation when activation.ResultTarget = destination ->
+                    match graph.Codata.Value.AsyncFormations.TryFind activation.Formation, nodes.TryFind destination with
+                    | Some formation, Some { Kind = SemanticKind.AggregateStorage site; Type = ty }
+                        when site = application.Id && applySubst ty = applySubst formation.ResultType ->
+                        match nodes.TryFind formation.ResultStorage with
+                        | Some { Kind = SemanticKind.PatternBinding _; Type = formalType } -> applySubst formalType = applySubst ty
+                        | _ -> false
+                    | _ -> false
+                | _ -> false
+            | _ -> false
         match nodes.TryFind callee, nodes.TryFind argument with
         | Some { Kind = SemanticKind.Intrinsic { FullName = ("Async.Await" | "Async.RunSynchronously") }; Type = calleeType }, Some actual
-            when application.Children = [callee; argument] ->
+            when operandsAgree ->
             match applySubst calleeType, Types.tryGetAsyncElement (applySubst actual.Type) with
             | NativeType.TFun(domain, result), Some element ->
                 applySubst domain = applySubst actual.Type && applySubst result = applySubst element &&
@@ -230,287 +249,6 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
             |> Seq.groupBy fst |> Seq.map (fun (source, rows) -> source, rows |> Seq.map snd |> Seq.toList) |> Map.ofSeq)
     let mutableCells = lazy (MutableCallableStorage.sourceFamilies graph |> fst)
     let lazyThunk = LazyValues.closedThunk graph
-    let emptyClosed = { Dependencies = Set.empty; Callers = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Calls = []; Valid = true }
-    let classify implementation =
-        let mutable proof = emptyClosed
-        let reject () = proof <- { proof with Valid = false }
-        let dependency id = proof <- { proof with Dependencies = Set.add id proof.Dependencies }
-        let rec follow pending seen =
-            match pending with
-            | [] -> ()
-            | id :: rest when Set.contains id seen -> follow rest seen
-            | id :: rest ->
-                let seen = Set.add id seen
-                proof <- { proof with Participants = Set.add id proof.Participants }
-                let mutable next = rest
-                let forward target = next <- target :: next
-                if graph.DeclarationRoots |> List.exists (fun (root, _) -> root = id) then reject ()
-                let storage binding =
-                    mutableCells.Value.TryFind binding |> Option.filter (fun _ -> activation binding |> Option.isSome)
-                let retain (cell: MutableCallableStorage.SourceFamily) =
-                    proof <- { proof with Participants = Set.union proof.Participants cell.Participants }
-                match nodes.TryFind id with
-                | Some { Kind = SemanticKind.Binding(_, _, _, Some _) } -> reject ()
-                | Some { Kind = SemanticKind.Binding(_, true, _, _) } ->
-                    match storage id with
-                    | Some cell ->
-                        retain cell
-                        for read in cell.Reads do forward read
-                        for writer, _, _ in cell.Writes do
-                            match activation writer with
-                            | Some owner when Some owner <> entry -> dependency owner
-                            | Some _ -> ()
-                            | None -> reject ()
-                    | None -> reject ()
-                | Some node when (Clef.Compiler.Baker.Ingredients.Boundaries.premise node).HasExtern -> reject ()
-                | None -> reject ()
-                | _ -> ()
-                for edge in observedUses id do
-                    let target = nodes.TryFind edge.Target
-                    let declared = getUses id |> List.exists (fun expected -> edgeKey expected = edgeKey edge)
-                    match target, edge.Class, edge.Role with
-                    | Some { Kind = SemanticKind.ModuleDef(_, members) }, EdgeClass.Reference, EdgeRole.Member
-                        when edge.Sources = [id] && List.tryItem edge.Ordinal members = Some id -> ()
-                    | Some { Kind = SemanticKind.VarRef(_, Some source) }, EdgeClass.Reference, EdgeRole.Definition
-                        when declared && source = id && edge.Sources = [id] -> forward edge.Target
-                    | Some { Kind = SemanticKind.EnvironmentCreate(owner, initializers) }, EdgeClass.Reference, EdgeRole.EnvironmentInitializer
-                        when declared && List.tryItem edge.Ordinal initializers |> Option.exists (fun (_, value) -> value = id) ->
-                        match ClosureEnvironments.capturedInitializers graph owner with
-                        | Some values ->
-                            let selected = values |> List.filter (fun (slot, value, mutableCell) ->
-                                value = id && (not mutableCell ||
-                                    (slot = id && storage id |> Option.exists (fun cell ->
-                                        cell.Captures.Contains edge.Target))))
-                            if selected.IsEmpty then reject () else
-                            match nodes.TryFind owner with
-                            | Some { Kind = SemanticKind.ClosureValue(code, _) } ->
-                                dependency code
-                                for slot, _, _ in selected do capturedReads owner slot |> List.iter forward
-                            | _ -> reject ()
-                        | None -> reject ()
-                    | Some node, EdgeClass.Structural, _ when declared ->
-                        match node.Kind, edge.Role with
-                        | SemanticKind.Binding(_, true, _, None), _ when node.Children = [id] ->
-                            match storage node.Id with
-                            | Some cell when cell.Initial = id -> retain cell; forward node.Id
-                            | _ -> reject ()
-                        | SemanticKind.Set(destination, value), _ ->
-                            let cell = mutableCells.Value.Values |> Seq.tryFind (fun cell ->
-                                cell.Writes |> List.contains (node.Id, destination, value))
-                            match cell |> Option.bind (fun cell -> storage cell.Binding) with
-                            | Some cell when id = value -> retain cell; forward cell.Binding
-                            | Some cell when id = destination -> retain cell
-                            | _ -> reject ()
-                        | SemanticKind.EnvironmentWrite(_, slot, value), _ ->
-                            match storage slot with
-                            | Some cell when id = value && List.contains (node.Id, node.Id, value) cell.Writes ->
-                                retain cell; forward cell.Binding
-                            | _ -> reject ()
-                        | SemanticKind.Binding(_, false, _, None), _ when node.Children = [id] -> forward node.Id
-                        | SemanticKind.TypeAnnotation(value, _), _ when value = id -> forward node.Id
-                        | SemanticKind.EagerExpr value, _ when value = id && ExplicitDemand.operand graph node.Id = Some id -> forward node.Id
-                        | SemanticKind.Sequential values, _ -> if List.tryLast values = Some id then forward node.Id
-                        | SemanticKind.ArrayExpr elements, _ when (asyncArray node.Type).IsSome && List.tryItem edge.Ordinal elements = Some id ->
-                            // The exact array carries its deferred work values;
-                            // subsequent uses must still close at an activation.
-                            forward node.Id
-                        | SemanticKind.IfThenElse(_, yes, no), (EdgeRole.ThenBranch | EdgeRole.ElseBranch)
-                            when id = yes || no = Some id -> forward node.Id
-                        | SemanticKind.Match(_, cases), _ when cases |> List.exists (fun branch -> branch.Body = id) -> forward node.Id
-                        | SemanticKind.CaseElimination(_, cases), _ when cases |> List.exists (fun branch -> branch.Body = id) -> forward node.Id
-                        | SemanticKind.RecordExpr _, _
-                        | SemanticKind.TupleExpr _, _
-                        | SemanticKind.UnionCase _, _
-                        | SemanticKind.DUConstruct _, _ ->
-                            // Construction is a use of the value, not an
-                            // invocation. Follow its exact typed slots from
-                            // the same origin census; unknown storage cannot
-                            // certify the complete incoming family.
-                            match resolution.Aggregates.TryFind node.Id with
-                            | Some aggregate when aggregate.UnknownOrigins.IsEmpty &&
-                                                  not aggregate.Alternatives.IsEmpty &&
-                                                  (aggregate.Alternatives |> List.forall (fun alternative ->
-                                                      alternative.Slots |> List.forall (fun slot -> slot.UnknownOrigins.IsEmpty))) &&
-                                                  (aggregate.Alternatives |> List.exists (fun alternative ->
-                                                      alternative.Construction = node.Id &&
-                                                      (alternative.Slots |> List.exists (fun slot ->
-                                                          slot.Values |> List.exists seen.Contains)))) ->
-                                for KeyValue(source, inputs) in aggregate.Dependencies do
-                                    proof <- { proof with Participants = Set.union proof.Participants (Set.ofList (source :: inputs)) }
-                                forward node.Id
-                            | _ -> reject ()
-                        | (SemanticKind.FieldGet _ | SemanticKind.TupleGet _ | SemanticKind.DUEliminate _), _ ->
-                            match AggregateProjections.read resolution node.Id with
-                            | Some projection when projection.Aggregate = id ->
-                                proof <- { proof with Participants = Set.union proof.Participants projection.Participants }
-                                if projection.Inputs |> List.exists seen.Contains then forward node.Id
-                            | _ ->
-                                match AggregateProjections.tryTerminal resolution node.Id with
-                                | Some(aggregate, participants) when aggregate = id ->
-                                    proof <- { proof with Participants = Set.union proof.Participants participants }
-                                | _ -> reject ()
-                        | SemanticKind.DUGetTag(subject, _), EdgeRole.Subject when subject = id ->
-                            proof <- { proof with Participants = Set.add node.Id proof.Participants }
-                        | SemanticKind.Lambda(parameters, _, _, _, _), EdgeRole.Parameter
-                            when parameters |> List.exists (fun (_, _, formal) -> formal = id) -> ()
-                        | SemanticKind.ClosureValue(code, _), EdgeRole.Body when code = id -> forward node.Id
-                        | SemanticKind.LazyValue(code, _), EdgeRole.Body when code = id ->
-                            match lazyThunk code with
-                            | Some lazyProof when lazyProof.Scope = LazyValues.IngressScope.WholeCurrentGraph && lazyProof.Formations.Contains node.Id ->
-                                proof <-
-                                    { proof with
-                                        Participants = Set.union proof.Participants lazyProof.Participants
-                                        UsedLazyForces = Set.union proof.UsedLazyForces lazyProof.UsedLazyForces }
-                            | _ -> reject ()
-                        | SemanticKind.EnvironmentReference value, EdgeRole.Subject when value = id ->
-                            // Only the proven environment actual of an exact call
-                            // can consume this projection as part of the value.
-                            let consumers = getUses node.Id
-                            if consumers.IsEmpty || consumers |> List.exists (fun useSite ->
-                                useSite.Role <> EdgeRole.Argument || complete useSite.Target |> Option.isNone ||
-                                environmentCalls.Value.TryFind useSite.Target <> Some(useSite.Ordinal, node.Id)) then reject ()
-                        | SemanticKind.Application(callee, _), EdgeRole.Callee when callee = id ->
-                            match complete node.Id, activation node.Id with
-                            | Some call, Some caller ->
-                                proof <-
-                                    { proof with
-                                        Callers = Set.add caller proof.Callers
-                                        Calls = (call.Targets |> List.map (row node.Id)) @ proof.Calls }
-                                if Some caller <> entry then dependency caller
-                            | _ -> reject ()
-                        | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
-                            when edge.Ordinal = 0 && argument = id && orchestrates node callee argument ->
-                            match graph.Codata.Value.AsyncOrchestrations.TryFind node.Id with
-                            | None -> forward node.Id
-                            | Some orchestration ->
-                                // Join elaboration has replaced the original
-                                // consumer with the published child activations.
-                                // Their exact current execution owners close the
-                                // task family; the result descriptor is no longer
-                                // a transport of these deferred callable values.
-                                let participants = orchestration.Participants |> List.map _.Node |> Set.ofList
-                                proof <- { proof with Participants = Set.union proof.Participants participants }
-                                if orchestration.Children.IsEmpty then reject ()
-                                for child in orchestration.Children do
-                                    match nodes.TryFind child, graph.Codata.Value.AsyncActivations.TryFind child, activation child with
-                                    | Some ({ Kind = SemanticKind.Application(activator, [computation]) } as current), Some _, Some caller
-                                        when awaits current activator computation ->
-                                        proof <- { proof with Callers = Set.add caller proof.Callers
-                                                              Participants = Set.add child proof.Participants }
-                                        if Some caller <> entry then dependency caller
-                                    | _ -> reject ()
-                        | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
-                            when edge.Ordinal = 0 && argument = id && awaits node callee argument ->
-                            // These source primitives activate the computation
-                            // carried by this exact operand. Keep that execution
-                            // dependency without inventing ordinary unit actuals.
-                            match activation node.Id with
-                            | Some caller ->
-                                proof <- { proof with Callers = Set.add caller proof.Callers
-                                                      Participants = Set.union proof.Participants (Set.ofList [callee; node.Id]) }
-                                if Some caller <> entry then dependency caller
-                            | None -> reject ()
-                        | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
-                            when edge.Ordinal = 0 && argument = id && discards node callee argument ->
-                            // The resolved primitive evaluates and discards
-                            // this value; it never invokes the stored code.
-                            proof <- { proof with Participants = Set.union proof.Participants (Set.ofList [callee; node.Id]) }
-                        | SemanticKind.Application(_, arguments), EdgeRole.Argument
-                            when List.tryItem edge.Ordinal arguments = Some id ->
-                            match complete node.Id with
-                            | Some call ->
-                                for target in call.Targets do
-                                    match List.tryItem edge.Ordinal target.Parameters with
-                                    | Some (_, _, formal) ->
-                                        match scopedDeclarations.Value.Participants.TryFind formal with
-                                        | Some participants ->
-                                            // A declared synchronous callback is activated
-                                            // inside this exact invocation's lifetime. Its
-                                            // native/library body need not contain a source
-                                            // Invoke node. Keep that activation dependency
-                                            // distinct from an invented callback argument list.
-                                            match activation node.Id with
-                                            | Some caller ->
-                                                proof <-
-                                                    { proof with
-                                                        Callers = Set.add caller proof.Callers
-                                                        Participants = Set.union proof.Participants (Set.add node.Id participants)
-                                                        Calls = row node.Id target :: proof.Calls }
-                                                if Some caller <> entry then dependency caller
-                                            | None -> reject ()
-                                        | None -> dependency target.Lambda; forward formal
-                                    | None -> reject ()
-                            | None -> reject ()
-                        | SemanticKind.Lambda(_, body, _, _, _), EdgeRole.Body when body = id ->
-                            dependency node.Id
-                            let callers = invocations node.Id
-                            // The complete enclosing family owns whether this
-                            // returned value can be formed. No observed calls
-                            // is admissible only with that dependency's full
-                            // census; active ingress still requires connection
-                            // to the program entry below.
-                            for site, call in callers do
-                                if not call.Complete || call.Unknown then reject () else forward site
-                        | _ -> reject ()
-                    | _ -> reject ()
-                // Source captures are independent uses even when the value has
-                // no structural edge into the nested deferred body yet.
-                for node, capture in captureUses.Value.TryFind id |> Option.defaultValue [] do
-                    match node.Kind with
-                    | SemanticKind.Lambda _ when not capture.IsMutable -> dependency node.Id
-                    | SemanticKind.Lambda _ when storage id |> Option.exists (fun cell -> cell.Captures.Contains node.Id) ->
-                        dependency node.Id
-                    | _ -> reject ()
-                follow next seen
-        follow [implementation] Set.empty
-        proof
-    let candidates = Dictionary<NodeId, Closed>()
-    let candidate id =
-        match candidates.TryGetValue id with
-        | true, value -> Some value
-        | _ ->
-            match nodes.TryFind id with
-            | Some { Kind = SemanticKind.Lambda _ } ->
-                let value = classify id
-                candidates.Add(id, value)
-                Some value
-            | _ -> None
-    let familyCache = Dictionary<NodeId, (Set<NodeId> * Set<NodeId>) option>()
-    let findFamily implementation =
-        match entry with
-        | None -> None
-        | Some root ->
-            let rec collect pending seen valid =
-                match pending with
-                | [] -> if valid then Some seen else None
-                | id :: rest when id = root || Set.contains id seen -> collect rest seen valid
-                | id :: rest ->
-                    match candidate id with
-                    | Some candidate -> collect (Set.toList candidate.Dependencies @ rest) (Set.add id seen) (valid && candidate.Valid)
-                    | None -> None
-            collect [implementation] Set.empty true |> Option.map (fun required ->
-                let rec connect reached =
-                    let next = required |> Set.fold (fun reached id ->
-                        if not (Set.intersect candidates[id].Callers reached).IsEmpty then Set.add id reached else reached) reached
-                    if next = reached then reached else connect next
-                required, connect (Set.singleton root))
-    let family implementation =
-        match familyCache.TryGetValue implementation with
-        | true, value -> value
-        | _ ->
-            let value = findFamily implementation
-            familyCache.Add(implementation, value)
-            value
-    let closed implementation =
-        family implementation |> Option.bind (fun (required, reached) ->
-            if Set.isSubset required reached then Some required else None)
-    let empty = { Entry = entry; Roots = graph.DeclarationRoots; Formals = Set.empty; Implementations = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Uses = Map.empty; Calls = [] }
-    let merge left right =
-        { left with Formals = Set.union left.Formals right.Formals
-                    Implementations = Set.union left.Implementations right.Implementations
-                    Participants = Set.union left.Participants right.Participants
-                    UsedLazyForces = Set.union left.UsedLazyForces right.UsedLazyForces
-                    Calls = List.distinct (left.Calls @ right.Calls) }
     let continuationRows = lazy (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationSlotAccess) |> List.groupBy _.Target |> Map.ofList)
     let originalRows = lazy (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationValue) |> List.groupBy _.Target |> Map.ofList)
     let checkedInstance = SchemeInstances.reader graph
@@ -542,6 +280,10 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
             | _ -> None
     // One complete storage census serves read occurrences and the synthetic
     // control slots. A row enumerating writers is checked against these uses.
+    let aggregateCopies =
+        graph.Edges |> List.choose (fun edge ->
+            AggregateValues.selectedCopy graph edge |> Option.map (fun (source, destination, _, _) -> destination, (edge.Target, source)))
+        |> List.groupBy fst |> Map.ofList
     let storageCensuses = Dictionary<NodeId * NodeId * NodeId * NodeId, (Set<NodeId> * Set<NodeId * NodeId>) option>()
     let storageCensus generator formal root slot =
         let key = generator, formal, root, slot
@@ -581,8 +323,13 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                                             when target.Id = generator && current = formal && parameters |> List.exists (fun (_, _, parameter) -> parameter = current) -> Some(aliases, writers)
                                         | SemanticKind.Sequential values, EdgeClass.Structural, _
                                             when here && List.contains current values && List.tryLast values <> Some current -> Some(aliases, writers)
-                                        | SemanticKind.FrameRead(actual, _), EdgeClass.Structural, EdgeRole.Subject
-                                            when actual = current && here -> Some(aliases, writers)
+                                        | SemanticKind.FrameRead(actual, readSlot), EdgeClass.Structural, EdgeRole.Subject
+                                            when actual = current && here ->
+                                            match aggregateCopies.TryFind target.Id with
+                                            | None -> Some(aliases, writers)
+                                            | Some [_, writer] when readSlot = slot -> Some(aliases, Set.add writer writers)
+                                            | Some [_] -> Some(aliases, writers)
+                                            | _ -> None
                                         | SemanticKind.FrameBorrow(actual, other), EdgeClass.Structural, EdgeRole.Subject
                                             when actual = current && other <> slot && here -> Some(aliases, writers)
                                         | SemanticKind.FrameWrite(actual, written, value), EdgeClass.Structural, EdgeRole.Subject
@@ -1041,7 +788,318 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                         | _ -> None) (Some(Set.ofList [expected; actual]))
                 | _ -> None
         | _ -> None
+    let emptyClosed = { Dependencies = Set.empty; Callers = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Calls = []; Valid = true }
+    let classify implementation =
+        let mutable proof = emptyClosed
+        let reject () = proof <- { proof with Valid = false }
+        let dependency id = proof <- { proof with Dependencies = Set.add id proof.Dependencies }
+        let rec follow pending seen =
+            match pending with
+            | [] -> ()
+            | id :: rest when Set.contains id seen -> follow rest seen
+            | id :: rest ->
+                let seen = Set.add id seen
+                proof <- { proof with Participants = Set.add id proof.Participants }
+                let mutable next = rest
+                let forward target = next <- target :: next
+                if graph.DeclarationRoots |> List.exists (fun (root, _) -> root = id) then reject ()
+                let storage binding =
+                    mutableCells.Value.TryFind binding |> Option.filter (fun _ -> activation binding |> Option.isSome)
+                let retain (cell: MutableCallableStorage.SourceFamily) =
+                    proof <- { proof with Participants = Set.union proof.Participants cell.Participants }
+                match nodes.TryFind id with
+                | Some { Kind = SemanticKind.Binding(_, _, _, Some _) } -> reject ()
+                | Some { Kind = SemanticKind.Binding(_, true, _, _) } ->
+                    match storage id with
+                    | Some cell ->
+                        retain cell
+                        for read in cell.Reads do forward read
+                        for writer, _, _ in cell.Writes do
+                            match activation writer with
+                            | Some owner when Some owner <> entry -> dependency owner
+                            | Some _ -> ()
+                            | None -> reject ()
+                    | None -> reject ()
+                | Some node when (Clef.Compiler.Baker.Ingredients.Boundaries.premise node).HasExtern -> reject ()
+                | None -> reject ()
+                | _ -> ()
+                let capture owner target =
+                    match ClosureEnvironments.capturedInitializers graph owner with
+                    | Some values ->
+                        let selected = values |> List.filter (fun (slot, value, mutableCell) ->
+                            value = id && (not mutableCell ||
+                                (slot = id && storage id |> Option.exists (fun cell ->
+                                    cell.Captures.Contains target))))
+                        if selected.IsEmpty then reject () else
+                        match nodes.TryFind owner with
+                        | Some { Kind = SemanticKind.ClosureValue(code, _) } ->
+                            dependency code
+                            for slot, _, _ in selected do capturedReads owner slot |> List.iter forward
+                        | _ -> reject ()
+                    | None -> reject ()
+                for edge in observedUses id do
+                    let target = nodes.TryFind edge.Target
+                    let declared = getUses id |> List.exists (fun expected -> edgeKey expected = edgeKey edge)
+                    match target, edge.Class, edge.Role with
+                    | Some { Kind = SemanticKind.ModuleDef(_, members) }, EdgeClass.Reference, EdgeRole.Member
+                        when edge.Sources = [id] && List.tryItem edge.Ordinal members = Some id -> ()
+                    | Some { Kind = SemanticKind.VarRef(_, Some source) }, EdgeClass.Reference, EdgeRole.Definition
+                        when declared && source = id && edge.Sources = [id] -> forward edge.Target
+                    | Some { Kind = SemanticKind.EnvironmentCreate(owner, initializers) }, EdgeClass.Reference, EdgeRole.EnvironmentInitializer
+                        when declared && edge.Sources = [id] &&
+                             (List.tryItem edge.Ordinal initializers |> Option.exists (fun (_, value) -> value = id)) ->
+                        capture owner edge.Target
+                    | Some ({ Kind = SemanticKind.EnvironmentCreate(owner, initializers) } as node), EdgeClass.Structural, EdgeRole.Attached
+                        when declared && edge.Sources = [id] && List.tryItem edge.Ordinal node.Children = Some id &&
+                             (initializers |> List.filter (fun (_, value) -> value = id) |> List.length) = 1 ->
+                        capture owner edge.Target
+                    | Some node, EdgeClass.Structural, _ when declared ->
+                        match node.Kind, edge.Role with
+                        | SemanticKind.Binding(_, true, _, None), _ when node.Children = [id] ->
+                            match storage node.Id with
+                            | Some cell when cell.Initial = id -> retain cell; forward node.Id
+                            | _ -> reject ()
+                        | SemanticKind.Set(destination, value), _ ->
+                            let cell = mutableCells.Value.Values |> Seq.tryFind (fun cell ->
+                                cell.Writes |> List.contains (node.Id, destination, value))
+                            match cell |> Option.bind (fun cell -> storage cell.Binding) with
+                            | Some cell when id = value -> retain cell; forward cell.Binding
+                            | Some cell when id = destination -> retain cell
+                            | _ -> reject ()
+                        | SemanticKind.EnvironmentWrite(_, slot, value), _ ->
+                            match storage slot with
+                            | Some cell when id = value && List.contains (node.Id, node.Id, value) cell.Writes ->
+                                retain cell; forward cell.Binding
+                            | _ -> reject ()
+                        | SemanticKind.FrameWrite(_, slot, value), EdgeRole.AssignValue when value = id ->
+                            // Callable values use the same activation-local slot
+                            // census as scalar reads; a store is not an escape.
+                            match activationFrameStore node.Id, activation node.Id with
+                            | Some access, Some generator when access.Source = slot && access.SharedCell.IsNone ->
+                                let readers = nodes.Values |> Seq.filter (fun read ->
+                                    match read.Kind with
+                                    | SemanticKind.FrameRead(_, actual) -> actual = slot && activation read.Id = Some generator
+                                    | _ -> false) |> Seq.toList
+                                let checkedReads = readers |> List.map (fun read ->
+                                    activationFrameRead read.Id |> Option.filter (fun current ->
+                                        current.Source = slot && current.SharedCell.IsNone &&
+                                        Set.ofList current.Inputs = Set.ofList access.Inputs)
+                                    |> Option.map (fun current -> read.Id, current))
+                                if checkedReads |> List.exists Option.isNone then reject () else
+                                proof <- { proof with Participants = Set.union proof.Participants access.Participants }
+                                dependency generator
+                                for read, current in List.choose (fun value -> value) checkedReads do
+                                    proof <- { proof with Participants = Set.union proof.Participants current.Participants }
+                                    forward read
+                            | _ -> reject ()
+                        | SemanticKind.Binding(_, false, _, None), _ when node.Children = [id] -> forward node.Id
+                        | SemanticKind.TypeAnnotation(value, _), _ when value = id -> forward node.Id
+                        | SemanticKind.EagerExpr value, _ when value = id && ExplicitDemand.operand graph node.Id = Some id -> forward node.Id
+                        | SemanticKind.Sequential values, _ -> if List.tryLast values = Some id then forward node.Id
+                        | SemanticKind.ArrayExpr elements, _ when (asyncArray node.Type).IsSome && List.tryItem edge.Ordinal elements = Some id ->
+                            // The exact array carries its deferred work values;
+                            // subsequent uses must still close at an activation.
+                            forward node.Id
+                        | SemanticKind.IfThenElse(_, yes, no), (EdgeRole.ThenBranch | EdgeRole.ElseBranch)
+                            when id = yes || no = Some id -> forward node.Id
+                        | SemanticKind.Match(_, cases), _ when cases |> List.exists (fun branch -> branch.Body = id) -> forward node.Id
+                        | SemanticKind.CaseElimination(_, cases), _ when cases |> List.exists (fun branch -> branch.Body = id) -> forward node.Id
+                        | SemanticKind.RecordExpr _, _
+                        | SemanticKind.TupleExpr _, _
+                        | SemanticKind.UnionCase _, _
+                        | SemanticKind.DUConstruct _, _ ->
+                            // Construction is a use of the value, not an
+                            // invocation. Follow its exact typed slots from
+                            // the same origin census; unknown storage cannot
+                            // certify the complete incoming family.
+                            match resolution.Aggregates.TryFind node.Id with
+                            | Some aggregate when aggregate.UnknownOrigins.IsEmpty &&
+                                                  not aggregate.Alternatives.IsEmpty &&
+                                                  (aggregate.Alternatives |> List.forall (fun alternative ->
+                                                      alternative.Slots |> List.forall (fun slot -> slot.UnknownOrigins.IsEmpty))) &&
+                                                  (aggregate.Alternatives |> List.exists (fun alternative ->
+                                                      alternative.Construction = node.Id &&
+                                                      (alternative.Slots |> List.exists (fun slot ->
+                                                          slot.Values |> List.exists seen.Contains)))) ->
+                                for KeyValue(source, inputs) in aggregate.Dependencies do
+                                    proof <- { proof with Participants = Set.union proof.Participants (Set.ofList (source :: inputs)) }
+                                forward node.Id
+                            | _ -> reject ()
+                        | (SemanticKind.FieldGet _ | SemanticKind.TupleGet _ | SemanticKind.DUEliminate _), _ ->
+                            match AggregateProjections.read resolution node.Id with
+                            | Some projection when projection.Aggregate = id ->
+                                proof <- { proof with Participants = Set.union proof.Participants projection.Participants }
+                                if projection.Inputs |> List.exists seen.Contains then forward node.Id
+                            | _ ->
+                                match AggregateProjections.tryTerminal resolution node.Id with
+                                | Some(aggregate, participants) when aggregate = id ->
+                                    proof <- { proof with Participants = Set.union proof.Participants participants }
+                                | _ -> reject ()
+                        | SemanticKind.DUGetTag(subject, _), EdgeRole.Subject when subject = id ->
+                            proof <- { proof with Participants = Set.add node.Id proof.Participants }
+                        | SemanticKind.Lambda(parameters, _, _, _, _), EdgeRole.Parameter
+                            when parameters |> List.exists (fun (_, _, formal) -> formal = id) -> ()
+                        | SemanticKind.ClosureValue(code, _), EdgeRole.Body when code = id -> forward node.Id
+                        | SemanticKind.LazyValue(code, _), EdgeRole.Body when code = id ->
+                            match lazyThunk code with
+                            | Some lazyProof when lazyProof.Scope = LazyValues.IngressScope.WholeCurrentGraph && lazyProof.Formations.Contains node.Id ->
+                                proof <-
+                                    { proof with
+                                        Participants = Set.union proof.Participants lazyProof.Participants
+                                        UsedLazyForces = Set.union proof.UsedLazyForces lazyProof.UsedLazyForces }
+                            | _ -> reject ()
+                        | SemanticKind.EnvironmentReference value, EdgeRole.Subject when value = id ->
+                            // Only the proven environment actual of an exact call
+                            // can consume this projection as part of the value.
+                            let consumers = getUses node.Id
+                            if consumers.IsEmpty || consumers |> List.exists (fun useSite ->
+                                useSite.Role <> EdgeRole.Argument || complete useSite.Target |> Option.isNone ||
+                                environmentCalls.Value.TryFind useSite.Target <> Some(useSite.Ordinal, node.Id)) then reject ()
+                        | SemanticKind.Application(callee, _), EdgeRole.Callee when callee = id ->
+                            match complete node.Id, activation node.Id with
+                            | Some call, Some caller ->
+                                proof <-
+                                    { proof with
+                                        Callers = Set.add caller proof.Callers
+                                        Calls = (call.Targets |> List.map (row node.Id)) @ proof.Calls }
+                                if Some caller <> entry then dependency caller
+                            | _ -> reject ()
+                        | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
+                            when edge.Ordinal = 0 && argument = id && orchestrates node callee argument ->
+                            match graph.Codata.Value.AsyncOrchestrations.TryFind node.Id with
+                            | None -> forward node.Id
+                            | Some orchestration ->
+                                // Join elaboration has replaced the original
+                                // consumer with the published child activations.
+                                // Their exact current execution owners close the
+                                // task family; the result descriptor is no longer
+                                // a transport of these deferred callable values.
+                                let participants = orchestration.Participants |> List.map _.Node |> Set.ofList
+                                proof <- { proof with Participants = Set.union proof.Participants participants }
+                                if orchestration.Children.IsEmpty then reject ()
+                                for child in orchestration.Children do
+                                    match nodes.TryFind child, graph.Codata.Value.AsyncActivations.TryFind child, activation child with
+                                    | Some ({ Kind = SemanticKind.Application(activator, computation :: _) } as current), Some _, Some caller
+                                        when awaits current activator computation ->
+                                        proof <- { proof with Callers = Set.add caller proof.Callers
+                                                              Participants = Set.add child proof.Participants }
+                                        if Some caller <> entry then dependency caller
+                                    | _ -> reject ()
+                        | SemanticKind.Application(callee, argument :: _), EdgeRole.Argument
+                            when edge.Ordinal = 0 && argument = id && awaits node callee argument ->
+                            // These source primitives activate the computation
+                            // carried by this exact operand. Keep that execution
+                            // dependency without inventing ordinary unit actuals.
+                            match activation node.Id with
+                            | Some caller ->
+                                proof <- { proof with Callers = Set.add caller proof.Callers
+                                                      Participants = Set.union proof.Participants (Set.ofList [callee; node.Id]) }
+                                if Some caller <> entry then dependency caller
+                            | None -> reject ()
+                        | SemanticKind.Application(callee, [argument]), EdgeRole.Argument
+                            when edge.Ordinal = 0 && argument = id && discards node callee argument ->
+                            // The resolved primitive evaluates and discards
+                            // this value; it never invokes the stored code.
+                            proof <- { proof with Participants = Set.union proof.Participants (Set.ofList [callee; node.Id]) }
+                        | SemanticKind.Application(_, arguments), EdgeRole.Argument
+                            when List.tryItem edge.Ordinal arguments = Some id ->
+                            match complete node.Id with
+                            | Some call ->
+                                for target in call.Targets do
+                                    match List.tryItem edge.Ordinal target.Parameters with
+                                    | Some (_, _, formal) ->
+                                        match scopedDeclarations.Value.Participants.TryFind formal with
+                                        | Some participants ->
+                                            // A declared synchronous callback is activated
+                                            // inside this exact invocation's lifetime. Its
+                                            // native/library body need not contain a source
+                                            // Invoke node. Keep that activation dependency
+                                            // distinct from an invented callback argument list.
+                                            match activation node.Id with
+                                            | Some caller ->
+                                                proof <-
+                                                    { proof with
+                                                        Callers = Set.add caller proof.Callers
+                                                        Participants = Set.union proof.Participants (Set.add node.Id participants)
+                                                        Calls = row node.Id target :: proof.Calls }
+                                                if Some caller <> entry then dependency caller
+                                            | None -> reject ()
+                                        | None -> dependency target.Lambda; forward formal
+                                    | None -> reject ()
+                            | None -> reject ()
+                        | SemanticKind.Lambda(_, body, _, _, _), EdgeRole.Body when body = id ->
+                            dependency node.Id
+                            let callers = invocations node.Id
+                            // The complete enclosing family owns whether this
+                            // returned value can be formed. No observed calls
+                            // is admissible only with that dependency's full
+                            // census; active ingress still requires connection
+                            // to the program entry below.
+                            for site, call in callers do
+                                if not call.Complete || call.Unknown then reject () else forward site
+                        | _ -> reject ()
+                    | _ -> reject ()
+                // Source captures are independent uses even when the value has
+                // no structural edge into the nested deferred body yet.
+                for node, capture in captureUses.Value.TryFind id |> Option.defaultValue [] do
+                    match node.Kind with
+                    | SemanticKind.Lambda _ when not capture.IsMutable -> dependency node.Id
+                    | SemanticKind.Lambda _ when storage id |> Option.exists (fun cell -> cell.Captures.Contains node.Id) ->
+                        dependency node.Id
+                    | _ -> reject ()
+                follow next seen
+        follow [implementation] Set.empty
+        proof
+    let candidates = Dictionary<NodeId, Closed>()
+    let candidate id =
+        match candidates.TryGetValue id with
+        | true, value -> Some value
+        | _ ->
+            match nodes.TryFind id with
+            | Some { Kind = SemanticKind.Lambda _ } ->
+                let value = classify id
+                candidates.Add(id, value)
+                Some value
+            | _ -> None
+    let familyCache = Dictionary<NodeId, (Set<NodeId> * Set<NodeId>) option>()
+    let findFamilyFrom root implementation =
+        match root with
+        | None -> None
+        | Some root ->
+            let rec collect pending seen valid =
+                match pending with
+                | [] -> if valid then Some seen else None
+                | id :: rest when id = root || Set.contains id seen -> collect rest seen valid
+                | id :: _ when Some id = entry -> None
+                | id :: rest ->
+                    match candidate id with
+                    | Some candidate -> collect (Set.toList (Set.union candidate.Dependencies candidate.Callers) @ rest) (Set.add id seen) (valid && candidate.Valid)
+                    | None -> None
+            collect [implementation] Set.empty true |> Option.map (fun required ->
+                let rec connect reached =
+                    let next = required |> Set.fold (fun reached id ->
+                        if not (Set.intersect candidates[id].Callers reached).IsEmpty then Set.add id reached else reached) reached
+                    if next = reached then reached else connect next
+                required, connect (Set.singleton root))
+    let family implementation =
+        match familyCache.TryGetValue implementation with
+        | true, value -> value
+        | _ ->
+            let value = findFamilyFrom entry implementation
+            familyCache.Add(implementation, value)
+            value
+    let closed implementation =
+        family implementation |> Option.bind (fun (required, reached) ->
+            if Set.isSubset required reached then Some required else None)
+    let empty = { Entry = entry; Roots = graph.DeclarationRoots; Formals = Set.empty; Implementations = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Uses = Map.empty; Calls = [] }
+    let merge left right =
+        { left with Formals = Set.union left.Formals right.Formals
+                    Implementations = Set.union left.Implementations right.Implementations
+                    Participants = Set.union left.Participants right.Participants
+                    UsedLazyForces = Set.union left.UsedLazyForces right.UsedLazyForces
+                    Calls = List.distinct (left.Calls @ right.Calls) }
     let occurrenceMemo = Dictionary<bool * NodeId, (Evidence * Set<NodeId>) option>()
+    let knownCallable = lazy (ClosureEnvironments.tryKnown graph)
     let rec occurrenceCore retained seen id : bool * (Evidence * Set<NodeId>) option =
         if Set.contains id seen then true, Some(empty, Set.empty) else
         let key = retained, id
@@ -1115,7 +1173,25 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                             { proof with Participants = Set.union proof.Participants reading.Participants }, leaves)
                 | Some { Kind = SemanticKind.FrameRead _ } ->
                     match continuationSource Set.empty id with
-                    | None -> false, None
+                    | None ->
+                        // A re-paired recursive closure need not be the original
+                        // source expression. Its loaded descriptor remains this
+                        // read's value frontier; only code/layout identity is shared.
+                        match storageAccess id, knownCallable.Value id with
+                        | Some (storage, _), Some expected when storage.SharedCell.IsNone && not storage.Inputs.IsEmpty ->
+                            let steps = storage.Inputs |> List.map (snd >> occurrenceCore retained seen)
+                            let hadCycle = steps |> List.exists fst
+                            let valid =
+                                steps |> List.forall (function
+                                    | _, Some(_, leaves) when not leaves.IsEmpty ->
+                                        leaves |> Set.forall (fun leaf -> knownCallable.Value leaf = Some expected)
+                                    | _ -> false)
+                            if not valid then hadCycle, None else
+                            let proof, leaves =
+                                steps |> List.choose snd |> List.fold (fun (proof, leaves) (next, values) ->
+                                    merge proof next, Set.union leaves values) (empty, Set.empty)
+                            hadCycle, Some({ proof with Participants = Set.union proof.Participants storage.Participants }, leaves)
+                        | _ -> false, None
                     | Some (source, participants) ->
                         let c, step = occurrenceCore true seen source
                         c, step |> Option.map (fun (proof, leaves) ->
@@ -1211,6 +1287,29 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                      Calls = required |> Set.toList |> List.collect (fun code -> candidates[code].Calls) |> List.distinct
                      Uses = participants |> Set.toList |> List.map (fun id -> id, observedUses id) |> Map.ofList }
     let closedImplementation implementation = closed implementation |> Option.map familyEvidence
+    let invokedWithin owner activation implementation =
+        // Validate the complete construction/use census, including factories
+        // formed outside the storage scope. Runtime invocation edges must all
+        // be contained by the selected completing activation.
+        let complete = findFamilyFrom (Some owner) implementation |> Option.orElseWith (fun () -> family implementation)
+        complete |> Option.map fst |> Option.bind (fun complete ->
+            let rec collect pending seen =
+                match pending with
+                | [] -> Some seen
+                | id :: rest when id = activation || Set.contains id seen -> collect rest seen
+                | id :: _ when id = owner || Some id = entry -> None
+                | id :: rest when complete.Contains id ->
+                    match candidate id with
+                    | Some value when value.Valid && not value.Callers.IsEmpty ->
+                        collect (Set.toList value.Callers @ rest) (Set.add id seen)
+                    | _ -> None
+                | _ -> None
+            collect [implementation] Set.empty |> Option.bind (fun required ->
+                let rec connect reached =
+                    let next = required |> Set.fold (fun reached id ->
+                        if Set.intersect candidates[id].Callers reached |> Set.isEmpty then reached else Set.add id reached) reached
+                    if next = reached then reached else connect next
+                if Set.isSubset required (connect (Set.singleton activation)) then Some(familyEvidence complete) else None))
     { Evidence = evidence; RetainedEvidence = retained
       AllowsOccurrence = fun id -> lock gate (fun () -> allowsOccurrenceCore id)
       Access = fun id -> lock gate (fun () -> access id)
@@ -1228,6 +1327,15 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
           lock gate (fun () ->
               family implementation |> Option.map (fun (required, reached) ->
                   { Evidence = familyEvidence required; Activated = reached }))
+      Covered = fun covering implementation ->
+          lock gate (fun () ->
+              match nodes.TryFind covering with
+              | Some { Kind = SemanticKind.Lambda _ } ->
+                  findFamilyFrom (Some covering) implementation |> Option.bind (fun (required, reached) ->
+                      if Set.isSubset required reached then Some(familyEvidence required) else None)
+              | _ -> None)
+      InvokedWithin = fun owner activation implementation ->
+          lock gate (fun () -> invokedWithin owner activation implementation)
       ExecutionOwner = fun id -> lock gate (fun () -> activation id)
       Correspondence = fun source current -> lock gate (fun () -> corresponds Set.empty Set.empty source current) }
 
@@ -1252,13 +1360,18 @@ let tryClosedImplementation reading implementation = reading.ClosedImplementatio
 /// Reuses the ingress owner's caller closure; consumers supply their own
 /// activation or execution-count obligations without another use census.
 let tryFamily reading implementation = reading.Family implementation
+/// Every incoming use is completing and rooted within this supplied activation.
+/// Recursive families with no connection to covering never establish coverage.
+let tryCovered reading covering implementation = reading.Covered covering implementation
+/// Complete construction lifetime plus invocation containment under one await.
+let tryInvokedWithin reading owner activation implementation = reading.InvokedWithin owner activation implementation
 /// Lexical execution ownership is not an assertion that the owner runs.
 let tryExecutionOwner reading occurrence = reading.ExecutionOwner occurrence
 
 /// Share the complete scalar/descriptor ingress decision with source recipes.
 /// ParameterInputs is only a census; it becomes authority after the owning
 /// implementation is closed and every actual occupies its exact formal slot.
-let closedFormalInputs (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) (reading: Reading) =
+let private formalInputs allowCallerScope (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) (reading: Reading) =
     let owners =
         graph.Nodes.Values |> Seq.collect (fun node ->
             match node.Kind with
@@ -1269,7 +1382,17 @@ let closedFormalInputs (graph: SemanticGraph) (resolution: CallableOrigins.Resol
             | [owner] -> Some(formal,owner)
             | _ -> None) |> Map.ofSeq
     fun formal ->
-        match resolution.ParameterInputs.TryFind formal, owners.TryFind formal |> Option.bind (tryClosedImplementation reading) with
+        let inputs = resolution.ParameterInputs.TryFind formal
+        let closure = owners.TryFind formal |> Option.bind (fun implementation ->
+            tryClosedImplementation reading implementation |> Option.orElseWith (fun () ->
+                match allowCallerScope, inputs with
+                | true, Some [site, _] ->
+                    tryExecutionOwner reading site |> Option.bind (fun covering ->
+                        if covering = implementation then None
+                        else tryCovered reading covering implementation |> Option.map (fun proof ->
+                            { proof with Participants = proof.Participants |> Set.add covering |> Set.add site }))
+                | _ -> None))
+        match inputs, closure with
         | Some inputs, Some proof when not inputs.IsEmpty ->
             let exact = proof.Calls |> List.collect (fun call ->
                 if call.Parameters.Length <> call.Arguments.Length then [] else
@@ -1281,6 +1404,13 @@ let closedFormalInputs (graph: SemanticGraph) (resolution: CallableOrigins.Resol
                 Some { Inputs = inputs; Closure = proof; Participants = participants }
             else None
         | _ -> None
+
+let closedFormalInputs graph resolution reading = formalInputs false graph resolution reading
+
+/// A sole caller may supply provenance within its own activation, including a
+/// foreign entry. The census only seeds that scope; complete directional use
+/// coverage and the same exact formal/actual set remain mandatory.
+let dominatedFormalInputs graph resolution reading = formalInputs true graph resolution reading
 /// Retained logical values are readable only through a validated current access;
 /// they remain absent from executable occurrence admission.
 let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.Value.TryFind occurrence
