@@ -54,6 +54,9 @@ type Reading = private {
     Access: NodeId -> Access option
     StorageAccess: NodeId -> StorageAccess option
     SlotAccess: NodeId -> NodeId -> StorageAccess option
+    ActivationFrameAccesses: NodeId -> StorageAccess list
+    ActivationFrameRead: NodeId -> StorageAccess option
+    ActivationFrameStore: NodeId -> StorageAccess option
     ValueIdentity: NodeId -> Access option
     Correspondence: NodeId -> NodeId -> Set<NodeId> option
     ClosedImplementation: NodeId -> Evidence option
@@ -525,6 +528,41 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                     visit Set.empty [root] Set.empty
             storageCensuses.Add(key, validated)
             validated
+    // An async continuation frame is storage local to one activation of the
+    // formation's deferred callable. Its owner is the formation's frame
+    // anchor, and the allocation is the single storage root of that owner.
+    let asyncFrames = Dictionary<NodeId, (NodeId * NodeId) option>()
+    let asyncFrame owner =
+        match asyncFrames.TryGetValue owner with
+        | true, value -> value
+        | _ ->
+            let rec implementation depth id =
+                if depth > 4 then None else
+                match nodes.TryFind id with
+                | Some { Kind = SemanticKind.Lambda _ } -> Some id
+                | Some { Kind = SemanticKind.ClosureValue(code, _) } -> implementation (depth + 1) code
+                | Some { Kind = SemanticKind.VarRef(_, Some definition) } -> implementation (depth + 1) definition
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> implementation (depth + 1) value
+                | _ -> None
+            let value =
+                match nodes.TryFind owner |> Option.bind _.Parent |> Option.bind nodes.TryFind with
+                | Some formation when formation.Metadata.TryFind "Async.Formation" = Some(MetadataValue.Bool true)
+                                      && List.contains owner formation.Children ->
+                    match List.tryLast formation.Children |> Option.bind (implementation 0) with
+                    | Some generator ->
+                        let roots =
+                            nodes.Values |> Seq.filter (fun node ->
+                                match node.Kind with
+                                | SemanticKind.ContinuationAllocate actual -> actual = owner
+                                | _ -> false) |> Seq.toList
+                        match roots with
+                        | [root] when activation root.Id = Some generator && applySubst root.Type = Types.internalStorageType ->
+                            Some(generator, root.Id)
+                        | _ -> None
+                    | None -> None
+                | _ -> None
+            asyncFrames.Add(owner, value)
+            value
     let controlProtocols = Dictionary<NodeId, ControlInputs.Protocol option>()
     let controlProtocol owner =
         match controlProtocols.TryGetValue owner with
@@ -689,6 +727,22 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                                InitialState = if slot = protocol.StateSlot then Some(protocol.InitialEntry, 0I) else None
                                Participants = participants }
                     | None -> None
+                | _ when (asyncFrame owner).IsSome ->
+                    // Every store of the slot goes through the frame allocation of
+                    // this activation; the census rejects any other use of it.
+                    asyncFrame owner |> Option.bind (fun (generator, root) ->
+                        storageCensus generator root root slot |> Option.bind (fun (aliases, writers) ->
+                            let inputs = Set.toList writers
+                            let typed =
+                                graph.Nodes.TryFind slot |> Option.exists (fun source ->
+                                    inputs |> List.forall (fun (_, value) ->
+                                        nodes.TryFind value |> Option.exists (fun node -> applySubst node.Type = applySubst source.Type)))
+                            if not typed || inputs.IsEmpty then None else
+                            let participants =
+                                inputs |> List.fold (fun participants (writer, value) ->
+                                    participants |> Set.add writer |> Set.add value) (Set.union aliases (Set.ofList [owner; generator; root; slot]))
+                            Some { Source = slot; Inputs = inputs; SharedCell = None
+                                   InitialState = None; Participants = participants }))
                 | _ ->
                     sharedCapture owner slot |> Option.bind (fun (generator, formal, formation) ->
                         storageCensus generator formal formal slot |> Option.bind (fun (aliases, writers) ->
@@ -785,8 +839,82 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                             InitialState = control |> Option.bind _.InitialState
                             Participants = participants }: StorageAccess), immutableCapture)
                 | _ -> None
+            // An async frame read: the slot's declared writers are exactly the
+            // stores through the activation's frame allocation, each of the
+            // read's type. Captures are stored at callable entry like any slot.
+            | Some _, Some { Kind = SemanticKind.Lambda _ }, Some original, Some ({ Kind = SemanticKind.ContinuationAllocate actualOwner } as storage)
+                when actualOwner = owner && asyncFrame owner = Some(generator, root)
+                     && applySubst valueType = applySubst original.Type ->
+                let rec actualStorage seen id =
+                    if Set.contains id seen then false else
+                    match nodes.TryFind id with
+                    | Some node when applySubst node.Type = applySubst storage.Type ->
+                        if id = root then true else
+                        match node.Kind, node.Children with
+                        | SemanticKind.VarRef(_, Some value), _ | SemanticKind.TypeAnnotation(value, _), _
+                        | SemanticKind.Binding(_, false, _, _), [value] -> actualStorage (Set.add id seen) value
+                        | _ -> false
+                    | _ -> false
+                let rec writerPairs parts =
+                    match parts with
+                    | [] -> Some []
+                    | writer :: value :: rest -> writerPairs rest |> Option.map (fun pairs -> (writer, value) :: pairs)
+                    | _ -> None
+                match actualStorage Set.empty frame, writerPairs declaredWriters, storageCensus generator root root slot with
+                | true, Some declared, Some(aliases, actual)
+                    when Set.count (Set.ofList declared) = declared.Length
+                         && (declared |> List.map fst |> Set.ofList |> Set.count) = declared.Length
+                         && Set.ofList declared = actual
+                         && not actual.IsEmpty ->
+                    let writes = Set.toList actual
+                    let typed = writes |> List.forall (fun (_, value) ->
+                        nodes.TryFind value |> Option.exists (fun node -> applySubst node.Type = applySubst valueType))
+                    if not typed then None else
+                    let participants =
+                        writes |> List.fold (fun participants (writer, value) ->
+                            participants |> Set.add writer |> Set.add value) (Set.union aliases (Set.ofList [id; owner; generator; root; slot]))
+                    Some(({ Source = slot; Inputs = writes; SharedCell = None
+                            InitialState = None; Participants = participants }: StorageAccess), false)
+                | _ -> None
             | _ -> None
         | _ -> None
+    // A read of an async continuation frame slot under the validated
+    // activation-local storage protocol. Sequence frame reads are not included.
+    let activationFrameRead id =
+        match continuationRows.Value.TryFind id with
+        | Some [{ Sources = owner :: _ }] when (asyncFrame owner).IsSome -> continuationStorage id |> Option.map fst
+        | _ -> None
+    // A store into an async continuation frame slot, with the slot's complete
+    // writer census. The frame operand must be an alias of the allocation.
+    let activationFrameStore id =
+        match nodes.TryFind id with
+        | Some { Kind = SemanticKind.FrameWrite(frame, slot, value) } ->
+            let rec ownerOf seen current =
+                if Set.contains current seen then None else
+                match nodes.TryFind current with
+                | Some { Kind = SemanticKind.ContinuationAllocate owner } -> Some owner
+                | Some { Kind = SemanticKind.VarRef(_, Some next) } -> ownerOf (Set.add current seen) next
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [next] } -> ownerOf (Set.add current seen) next
+                | _ -> None
+            ownerOf Set.empty frame |> Option.bind (fun owner ->
+                if (asyncFrame owner).IsNone then None
+                else slotAccess owner slot |> Option.filter (fun access -> List.contains (id, value) access.Inputs))
+        | _ -> None
+    // The slots stored through one async frame allocation, each with its
+    // complete writer census. A slot without a resident read is included.
+    let activationFrameAccesses owner =
+        match asyncFrame owner with
+        | Some(generator, root) ->
+            match storageCensus generator root root owner with
+            | Some(aliases, _) ->
+                nodes.Values |> Seq.choose (fun node ->
+                    match node.Kind with
+                    | SemanticKind.FrameWrite(actual, slot, _) when aliases.Contains actual -> Some slot
+                    | _ -> None)
+                |> Seq.distinct |> Seq.toList
+                |> List.choose (slotAccess owner)
+            | None -> []
+        | None -> []
     let storageAccesses = Dictionary<NodeId, (StorageAccess * bool) option>()
     let storageAccess id =
         match storageAccesses.TryGetValue id with
@@ -972,7 +1100,9 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
         lock gate (fun () ->
             nodes |> Map.toList |> List.choose (fun (id, node) ->
                 match applySubst node.Type with
-                | NativeType.TFun _ ->
+                // An async computation value is the closure pair of its
+                // formation's deferred callable.
+                | ty when Types.isCallableCarrierType ty ->
                     occurrence false Set.empty id |> Option.bind (fun (proof, leaves) ->
                         if leaves.IsEmpty then None else
                         Some(id, { proof with Uses = proof.Participants |> Set.toList |> List.map (fun participant -> participant, observedUses participant) |> Map.ofList }))
@@ -999,7 +1129,7 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                     match nodes.TryFind id with
                     | Some node ->
                         match applySubst node.Type with
-                        | NativeType.TFun _ ->
+                        | ty when Types.isCallableCarrierType ty ->
                             occurrence false Set.empty id
                             |> Option.exists (fun (_, leaves) -> not leaves.IsEmpty)
                         | _ -> false
@@ -1019,6 +1149,9 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
       Access = fun id -> lock gate (fun () -> access id)
       StorageAccess = fun id -> lock gate (fun () -> storageAccess id |> Option.map fst)
       SlotAccess = fun owner slot -> lock gate (fun () -> slotAccess owner slot)
+      ActivationFrameAccesses = fun owner -> lock gate (fun () -> activationFrameAccesses owner)
+      ActivationFrameRead = fun id -> lock gate (fun () -> activationFrameRead id)
+      ActivationFrameStore = fun id -> lock gate (fun () -> activationFrameStore id)
       ValueIdentity = fun id ->
           lock gate (fun () ->
               originalIdentity Set.empty id |> Option.map (fun (source, participants) ->
@@ -1093,5 +1226,12 @@ let tryValueIdentity reading occurrence = reading.ValueIdentity occurrence
 let tryStorageAccess reading occurrence = reading.StorageAccess occurrence
 /// Current control slot inputs under the checked cut/resume and storage census.
 let trySlotAccess reading owner slot = reading.SlotAccess owner slot
+/// Every slot stored through an async continuation frame allocation, with its
+/// complete writer census under the activation-local storage protocol.
+let tryActivationFrameAccesses reading owner = reading.ActivationFrameAccesses owner
+/// The complete stores of the async continuation frame slot a read observes.
+let tryActivationFrameRead reading occurrence = reading.ActivationFrameRead occurrence
+/// The slot census a store into an async continuation frame belongs to.
+let tryActivationFrameStore reading occurrence = reading.ActivationFrameStore occurrence
 let tryCorrespondence reading source current = reading.Correspondence source current
 let allowsOccurrence reading occurrence = reading.AllowsOccurrence occurrence

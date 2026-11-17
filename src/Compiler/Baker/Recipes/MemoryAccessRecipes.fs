@@ -485,12 +485,19 @@ let arrayUses (graph: SemanticGraph) site =
                 | SemanticKind.Lambda(parameters, _, _, _, _), _ -> Some parameters
                 | _ -> None
         resolve Set.empty callee
+    // A descriptor stored in an async continuation frame slot stays in the
+    // deferred callable's activation; a validated read of that slot is the
+    // same descriptor. The reading is built only when a frame access is met.
+    let ingress = lazy (Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.analyze graph)
     let rec close aliases =
         let more =
             nodes |> List.choose (fun node ->
                 let aliasesInput =
                     match node.Kind, node.Children with
                     | SemanticKind.Binding(_, false, _, _), [value] -> Set.contains value aliases
+                    | SemanticKind.FrameRead _, _ ->
+                        Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryActivationFrameRead ingress.Value node.Id
+                        |> Option.exists (fun access -> access.Inputs |> List.exists (fun (_, value) -> Set.contains value aliases))
                     | SemanticKind.VarRef(_, Some definition), _ -> Set.contains definition aliases
                     | SemanticKind.TypeAnnotation(value, _), _ | SemanticKind.EagerExpr value, _
                     | SemanticKind.StringByteBorrow value, _ -> Set.contains value aliases
@@ -550,6 +557,9 @@ let arrayUses (graph: SemanticGraph) site =
                         closed <- closed && safe
                     | None -> closed <- false
                 | SemanticKind.FieldGet(buffer, "Length") when aliases.Contains buffer -> ()
+                | SemanticKind.FrameWrite(_, _, value)
+                    when aliases.Contains value &&
+                         (Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryActivationFrameStore ingress.Value target.Id).IsSome -> ()
                 | SemanticKind.DUGetTag(value,_) when aliases.Contains value -> ()
                 | SemanticKind.CaseElimination(value,arms) when aliases.Contains value && checkedOption value &&
                                                               arms |> List.forall(fun arm -> arm.Guard.IsNone) -> ()

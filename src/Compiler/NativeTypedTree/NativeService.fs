@@ -1318,6 +1318,21 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted physicalAdmitted finalGraph
     let finalGraph, asyncAndRegions =
         Clef.Compiler.Nanopass.AsyncAndRegionSettlement.settleWhenSourceAdmitted physicalAdmitted finalGraph
+    // Frame realization adds and redirects value occurrences in each deferred
+    // callable. Demand belongs to the current occurrence incidence, as it does
+    // after sequence realization above.
+    let finalGraph =
+        if asyncAndRegions.Origins.IsEmpty then finalGraph
+        else
+            finalGraph
+            |> Clef.Compiler.Nanopass.EagerDemand.normalize
+            |> Clef.Compiler.Nanopass.OrdinaryDemand.normalize
+    // An async frame is addressed through its allocation, binding and
+    // references, the same way a sequence frame is addressed through its formal.
+    let continuationFrames =
+        asyncAndRegions.Frames |> Map.fold (fun acc k v -> Map.add k v acc) sequences.Frames
+    let continuationOrigins =
+        asyncAndRegions.Origins |> Map.fold (fun acc k v -> Map.add k v acc) sequences.Origins
     let finalGraph, initializationOrderDiagnostics, programInitializationOrders =
         Clef.Compiler.Nanopass.ProgramInitializationOrder.settleWithAccounts finalGraph
     let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
@@ -1395,7 +1410,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             Codata = lazy {
                 Escapes = allocationResidences
                 Curry = curry
-                Meets = Meets.continuations sequences.Frames sequences.Origins sequences.Storage sequences.Initializers settled
+                Meets = Meets.continuations continuationFrames continuationOrigins sequences.Storage sequences.Initializers settled
                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) (Meets.derive platformContext settled curry)
                         |> fun facts -> Meets.deviceAccess platformContext settled mmio
                                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
@@ -1434,10 +1449,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 WitnessPublishedRows = None
                 ProofDispatch = None
                 SSAAssignment = None
-                ContinuationFrames =
-                    asyncAndRegions.Frames
-                    |> Map.fold (fun acc k v -> Map.add k v acc) sequences.Frames
-                SequenceOrigins = sequences.Origins
+                ContinuationFrames = continuationFrames
+                SequenceOrigins = continuationOrigins
                 SequenceFlows = sequences.Flows
                 SequenceFamilies = sequences.Families
                 SequenceTemplateCopies = sequences.TemplateCopies

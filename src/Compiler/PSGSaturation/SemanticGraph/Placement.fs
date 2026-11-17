@@ -931,6 +931,16 @@ let placeEmptyContinuationWithRanges (graph: SemanticGraph) (state: NodeId) (cap
 
 let placeEmptyContinuation graph state captures = placeEmptyContinuationWithRanges graph state captures Map.empty
 
+/// Place an async continuation frame: its state field, the formation's
+/// captures and every value retained across a suspension cut. An awaited
+/// result is delivered to its binding, so the frame has no in-flight payload.
+let placeAsyncContinuationWithRanges (graph: SemanticGraph) (state: NodeId)
+                                     (captures: CaptureInfo list) (retained: NodeId list)
+                                     (storageRanges: Map<NodeId, ValueRange>)
+                                     : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
+    placeContinuationFields graph [ContinuationRole.State, state] captures
+        (retained |> List.map (fun id -> ContinuationRole.LiveAcross, id)) storageRanges
+
 /// Place one activation's transient values, separately from the persistent frame.
 /// The caller must establish every store-before-read relation; no initial value
 /// or persistent lifetime is implied by this storage layout.

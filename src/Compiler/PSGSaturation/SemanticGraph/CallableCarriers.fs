@@ -126,9 +126,64 @@ let private rawSequenceStorage (graph: SemanticGraph) =
 // keys do not retain abandoned editor snapshots. No Codata is forced here.
 let private rawStorageCache = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Set<NodeId>>()
 
+/// The value of an async orchestration is the result storage its join binds;
+/// it has no deferred callable. The orchestration application and its
+/// immutable aliases name that storage, although their source type is an
+/// async computation type. An equal source type never establishes this
+/// distinction.
+let private orchestrationStorage (graph: SemanticGraph) =
+    let roots =
+        graph.Nodes.Values |> Seq.choose (fun candidate ->
+            match candidate.Kind with
+            | SemanticKind.Application(callee, _) ->
+                match graph.Nodes.TryFind callee with
+                | Some { Kind = SemanticKind.Intrinsic info }
+                    when info.FullName = "Async.Parallel" || info.FullName = "Async.Sequential" -> Some candidate.Id
+                | _ -> None
+            | _ -> None) |> Set.ofSeq
+    let aliases =
+        graph.Nodes.Values |> Seq.choose (fun node ->
+            let source =
+                match node.Kind, node.Children with
+                | SemanticKind.VarRef(_, Some declaration), _ -> Some declaration
+                | SemanticKind.Binding(_, false, _, _), [value] -> Some value
+                | SemanticKind.TypeAnnotation(value, _), _ -> Some value
+                | SemanticKind.EagerExpr value, _ when ExplicitDemand.operand graph node.Id = Some value -> Some value
+                | SemanticKind.Sequential values, _ -> List.tryLast values
+                | _ -> None
+            source |> Option.map (fun source -> source, node.Id))
+        |> Seq.toList
+        |> List.groupBy fst
+        |> List.map (fun (source, values) -> source, values |> List.map snd)
+        |> Map.ofList
+    let rec close found pending =
+        match pending with
+        | [] -> found
+        | source :: rest ->
+            let next =
+                aliases.TryFind source |> Option.defaultValue []
+                |> List.filter (fun target -> not (Set.contains target found))
+            close (List.fold (fun found target -> Set.add target found) found next) (next @ rest)
+    close roots (Set.toList roots)
+
+let private orchestrationStorageCache = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Set<NodeId>>()
+
+/// The callable signature of a value's source type. An async computation
+/// value has the signature of its formation's deferred `unit -> 'T` callable.
+let callableSignature (ty: NativeType) =
+    let ty = applySubst ty
+    match Types.tryGetAsyncCallableSignature ty with
+    | Some signature -> applySubst signature
+    | None -> ty
+
 let valueShape (graph: SemanticGraph) (node: SemanticNode) =
     match applySubst node.Type with
     | NativeType.TFun _ -> CallableValueShape.Callable node.Id
+    // An async computation value is the code and environment of its
+    // formation's deferred callable. An orchestration's value is storage.
+    | ty when Types.isCallableCarrierType ty ->
+        let storage = orchestrationStorageCache.GetValue(graph, fun graph -> orchestrationStorage graph)
+        if storage.Contains node.Id then CallableValueShape.Data node.Id else CallableValueShape.Callable node.Id
     | NativeType.TLazy _ -> CallableValueShape.Lazy node.Id
     | NativeType.TSeq _ | NativeType.TSeqEnumerator _ ->
         let raw = rawStorageCache.GetValue(graph, fun graph -> rawSequenceStorage graph)
@@ -225,7 +280,9 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
                     let sourceAgrees =
                         match native with
                         | None ->
-                            applySubst (sourceType node) = applySubst declared ||
+                            // An async occurrence agrees with the signature of
+                            // its deferred `unit -> 'T` implementation.
+                            callableSignature (sourceType node) = applySubst declared ||
                             instance implementation declared node.Id |> Option.isSome
                         | Some _ ->
                             hidden.IsEmpty &&
@@ -278,7 +335,7 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
         | _ -> refuse node.Id "Callable implementation lacks a reachable capture-free physical lambda boundary."
     let carriers = graph.Nodes |> Map.toList |> List.choose (fun (_, node) ->
         match applySubst node.Type with
-        | NativeType.TFun _ when node.IsReachable && CallableIngress.allowsOccurrence ingress node.Id ->
+        | ty when Types.isCallableCarrierType ty && node.IsReachable && CallableIngress.allowsOccurrence ingress node.Id ->
             match inputs.Known.TryFind node.Id with
             | Some known -> project node known.Implementation (Some known) None
             | None ->

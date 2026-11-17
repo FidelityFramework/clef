@@ -105,6 +105,7 @@ let reader (graph:SemanticGraph) =
     let flow=Origins.resolve graph
     let inputs=FormalDemand.reader graph flow
     let stringOrigins = lazy (Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigins graph flow)
+    let ingress = lazy (Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.analyzeWith graph flow)
     let combine values =
         if List.isEmpty values || values |> List.exists Option.isNone then None else
         let values=List.choose id values
@@ -134,6 +135,13 @@ let reader (graph:SemanticGraph) =
             | _ -> None
         | Some {Kind=SemanticKind.Sequential values} -> List.tryLast values |> Option.bind(follow seen) |> add
         | Some {Kind=SemanticKind.IfThenElse(_,yes,Some no)} -> combine[follow seen yes;follow seen no] |> add
+        | Some {Kind=SemanticKind.FrameRead _} ->
+            // A value reloaded from an async continuation frame is a value its
+            // slot's stores hold; the validated storage census names every store.
+            match Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryActivationFrameRead ingress.Value id with
+            | Some access when access.SharedCell.IsNone && not access.Inputs.IsEmpty ->
+                access.Inputs |> List.map (fun (_, value) -> follow seen value) |> combine |> add
+            | _ -> None
         | Some {Kind=SemanticKind.PatternBinding _} ->
             match inputs id with
             | Some formal when formal.UsedLazyForces.IsEmpty ->

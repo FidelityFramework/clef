@@ -118,7 +118,10 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
             let actual = (Option.toList source @ flowInputs) |> List.filter (fun source ->
                 shapes.TryFind source = Some(CallableValueShape.Callable source) &&
                 shapes.TryFind destination = Some(CallableValueShape.Callable destination) &&
-                applySubst (CallableCarriers.sourceType graph.Nodes[source]) = applySubst (CallableCarriers.sourceType node)) |> Set.ofList
+                // A formation transports its deferred `unit -> 'T` callable
+                // as the async computation value of the same signature.
+                CallableCarriers.callableSignature (CallableCarriers.sourceType graph.Nodes[source]) =
+                    CallableCarriers.callableSignature (CallableCarriers.sourceType node)) |> Set.ofList
             let admitted = Set.union actual (instantiatedTransports.TryFind destination |> Option.defaultValue Set.empty)
             if admitted.IsEmpty then None else Some admitted)
     // An already witnessed occurrence preserves itself. Transparent result
@@ -331,7 +334,9 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
     let closedData =
         graph.Nodes.Values |> Seq.filter (fun node ->
             not (hasUnboundVars node.Type) && (freeMeasureVars node.Type).IsEmpty &&
-            (match applySubst node.Type with NativeType.TFun _ | NativeType.TForall _ -> false | _ -> true)) |> Seq.map _.Id |> Set.ofSeq
+            (match applySubst node.Type with
+             | NativeType.TForall _ -> false
+             | ty -> not (Types.isCallableCarrierType ty))) |> Seq.map _.Id |> Set.ofSeq
     let demandCallSupports =
         ordinary.Calls |> Map.toSeq |> Seq.groupBy (fun (_, call) -> call.Implementation)
         |> Seq.map (fun (implementation, calls) ->

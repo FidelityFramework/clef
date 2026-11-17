@@ -22,7 +22,8 @@ type private Facts = { Leaves: Set<NodeId>; Unknown: Set<NodeId> }
 
 let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableFlow> * Residual list =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    let tracked = nodes |> Map.filter (fun _ node -> match applySubst node.Type with NativeType.TFun _ -> true | _ -> false)
+    // Function values and async computation values are callable carriers.
+    let tracked = nodes |> Map.filter (fun _ node -> Types.isCallableCarrierType (applySubst node.Type))
     let ingress = CallableIngress.analyzeWith graph resolution
     let admitted id = CallableIngress.allowsOccurrence ingress id
     // Reuse the storage owner's current census before forwarding a join.
@@ -179,7 +180,7 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
             | _ -> false
         | _ -> false
     and sameBoundary seen (left: CallableCarrier) (right: CallableCarrier) =
-        applySubst left.SourceType = applySubst right.SourceType &&
+        CallableCarriers.callableSignature left.SourceType = CallableCarriers.callableSignature right.SourceType &&
         environmentBytes left = environmentBytes right && (environmentBytes left).IsSome &&
         left.ParameterShapes.Length = right.ParameterShapes.Length &&
         List.forall2 (sameShape seen) left.ParameterShapes right.ParameterShapes &&
@@ -206,7 +207,7 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
         else
         let physical = Option.get physical
         let first = physical.Head
-        if applySubst (CallableCarriers.sourceType tracked[id]) <> applySubst first.SourceType ||
+        if CallableCarriers.callableSignature (CallableCarriers.sourceType tracked[id]) <> CallableCarriers.callableSignature first.SourceType ||
            not (physical |> List.forall (sameBoundary Set.empty first)) then
             residuals <- { Occurrence = id; Reason = "Every callable alternative must share its actual source type, parameter, result and environment convention." } :: residuals
             None

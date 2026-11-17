@@ -518,9 +518,12 @@ let private analyzeWith (schedule: OriginSchedule) branchSelections (graph: Sema
             | _ -> ()
         | _ -> ()
 
+    // An async computation value is the deferred callable of its formation:
+    // its origins are the callable's, and they flow like a function value's.
     let isNonCallableNTU ty =
         match applySubst ty with
-        | NativeType.TApp(tycon, _) -> tycon.NTUKind.IsSome && tycon.NTUKind <> Some NTUKind.NTUfnptr
+        | NativeType.TApp(tycon, _) ->
+            tycon.NTUKind.IsSome && tycon.NTUKind <> Some NTUKind.NTUfnptr && not (Types.isAsyncTypeCon tycon)
         | _ -> false
 
     let rec invoke call seen (origins: Set<Origin>) (arguments: NodeId list) =

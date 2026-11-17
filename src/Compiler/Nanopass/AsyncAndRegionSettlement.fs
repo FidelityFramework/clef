@@ -7,6 +7,14 @@
 /// platform's declarations and the analysed value ranges. A missing premise is
 /// refused at its owner with a deterministic diagnostic; no row is published
 /// with a substituted identity, a default width or a default count.
+///
+/// The continuation frame of each settled formation is realized in the PSG
+/// (clef#163): its allocation, capture and state initialization, the stores
+/// before each suspension cut and the resumption dispatch are explicit nodes
+/// of the formation's deferred callable, folded in before SSA assignment.
+/// The join of each settled orchestration is realized the same way: each
+/// child is bound once, and the join holds one explicit activation per child
+/// and the store of each result into its result array.
 module Clef.Compiler.Nanopass.AsyncAndRegionSettlement
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -14,8 +22,12 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open Clef.Compiler.Baker.Ingredients.Obligations
+open Clef.Compiler.Baker.Ingredients.Closures
+open Clef.Compiler.Nanopass.Recipe
 module Platform = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 module Release = Clef.Compiler.Nanopass.RegionReleaseConstruction
+module Placement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
+module Machine = Clef.Compiler.Baker.Recipes.AsyncContinuationRecipes
 
 type Settlement =
     { Frames: Map<NodeId, ContinuationFrame>
@@ -27,6 +39,8 @@ type Settlement =
       RegionCallPassings: Map<NodeId, RegionCallPassing>
       RegionCopyEndpoints: Map<NodeId, RegionCopyEndpoint>
       Residences: Map<NodeId, EscapeKind>
+      /// Frame allocation, binding and reference occurrence -> frame identity.
+      Origins: Map<NodeId, NodeId>
       Diagnostics: Diagnostic list }
 
 let empty : Settlement =
@@ -39,6 +53,7 @@ let empty : Settlement =
       RegionCallPassings = Map.empty
       RegionCopyEndpoints = Map.empty
       Residences = Map.empty
+      Origins = Map.empty
       Diagnostics = [] }
 
 //-------------------------------------------------------------------------
@@ -815,14 +830,35 @@ type private Cut =
       Awaited: NodeId
       Bound: NodeId option
       Continuation: NodeId
+      /// Every item the cut's block evaluates after its statement: the
+      /// computation the continuation recipe places in the cut's dispatch region.
+      Resumed: NodeId list
       Delimiter: NodeId
       BindResume: NodeId
       Completion: NodeId
       Cleanup: NodeId
       Order: int }
 
+/// The settled frame operations of one formation's deferred callable.
+type private Realization =
+    { Frame: NodeId
+      Callable: NodeId
+      Elaboration: Machine.Elaboration }
+
+/// One settled elaboration to fold into the graph.
+type private Fold =
+    { /// The edited occurrence whose recipe carries the created nodes.
+      Carrier: NodeId
+      /// Every created node and the current version of every edited node.
+      Nodes: SemanticNode list
+      Edited: Set<NodeId>
+      Provenance: Hyperedge list
+      /// The source array accesses the elaboration introduces, each with the
+      /// settled extent of the array it addresses.
+      Accesses: (NodeId * int) list }
+
 let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (regions: RegionState)
-        : Map<NodeId, ContinuationFrame> * Map<NodeId, AsyncFormation> * Map<NodeId, AsyncSuspension> * Map<NodeId, AsyncActivation> * Map<NodeId, AsyncOrchestration> * Accrual =
+        : Map<NodeId, ContinuationFrame> * Map<NodeId, AsyncFormation> * Map<NodeId, AsyncSuspension> * Map<NodeId, AsyncActivation> * Map<NodeId, AsyncOrchestration> * Realization list * Fold list * Accrual =
     let platform = graph.Platform
     let owners = reachable |> List.filter isFormation |> List.sortBy (fun node -> NodeId.value node.Id)
     let ownerSpanByFormation =
@@ -893,25 +929,32 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                     | delimiter :: bindResume :: completionTarget :: cleanup :: _ ->
                         let parent = site.Parent |> Option.bind (fun parent -> Map.tryFind parent graph.Nodes)
                         let bound = match parent with Some ({ Kind = SemanticKind.Binding _ } as binding) -> Some binding.Id | _ -> None
-                        let statement = bound |> Option.defaultValue site.Id
-                        let following =
-                            Map.tryFind statement graph.Nodes |> Option.bind _.Parent |> Option.bind (fun parent -> Map.tryFind parent graph.Nodes)
-                            |> Option.bind (fun block ->
-                                match block.Kind with
-                                | SemanticKind.Sequential items ->
-                                    match items |> List.skipWhile ((<>) statement) with
-                                    | _ :: next :: _ -> Some next
-                                    | _ -> None
-                                | _ -> None)
+                        let statement =
+                            match bound with
+                            | Some binding -> binding
+                            | None -> site.Id
+                        // One definition of the resumed computation, shared with the
+                        // recipe that moves it into the cut's dispatch region.
+                        let resumed = Machine.resumed graph statement
+                        let continuation =
+                            match resumed with
+                            | next :: _ -> next
+                            | [] -> completionTarget
                         Some { Site = site; Intrinsic = intrinsic; Awaited = awaited; Bound = bound
-                               Continuation = following |> Option.defaultValue completionTarget
+                               Continuation = continuation; Resumed = resumed
                                Delimiter = delimiter; BindResume = bindResume; Completion = completionTarget; Cleanup = cleanup
                                Order = orderOf site.Id }
                     | _ -> None)
                 |> List.sortBy _.Order
+            // Liveness and initialization are read over every resumed item, not
+            // the first one: a value read by any later item of the block is live.
+            let resumedReads (cut: Cut) =
+                cut.Resumed |> List.fold (fun reads item -> Set.union reads (readDeclarations graph item)) Set.empty
+            let resumedNodes (cut: Cut) =
+                cut.Resumed |> List.fold (fun nodes item -> Set.union nodes (subtree graph item)) Set.empty
             let live (cut: Cut) =
-                let reads = readDeclarations graph cut.Continuation
-                let continuationNodes = subtree graph cut.Continuation
+                let reads = resumedReads cut
+                let continuationNodes = resumedNodes cut
                 let capturedLive = captured |> List.filter reads.Contains
                 let localLive =
                     locals |> List.filter (fun binding ->
@@ -919,27 +962,178 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                         orderOf binding < cut.Order && reads.Contains binding)
                 capturedLive @ localLive |> List.distinct
             let liveByCut = cuts |> List.map (fun cut -> cut, live cut)
-            let slotSources =
-                (captured |> List.map (fun id -> id, true))
-                @ (liveByCut |> List.collect snd |> List.filter (fun id -> not (List.contains id captured)) |> List.distinct |> List.map (fun id -> id, false))
-                |> List.filter (fun (id, _) -> Map.tryFind id graph.Nodes |> Option.exists (fun node -> not (isUnit node.Type)))
-            let layouts =
-                slotSources |> List.map (fun (id, isCapture) ->
-                    let ty = graph.Nodes[id].Type
-                    id, isCapture, ty, slotOf platform ty)
-            match layouts |> List.filter (fun (_, _, _, layout) -> layout.IsNone) with
-            | (missing, _, _, _) :: _ ->
-                [], refusal "CCS8403" owner.Range [ owner.Id; missing ] "The async continuation frame has a live slot whose type has no settled layout."
-            | [] ->
-                let settled = layouts |> List.map (fun (id, isCapture, ty, layout) -> id, isCapture, ty, Option.get layout)
-                let placed, frameBytes, frameAlignment = tile (settled |> List.map (fun (_, _, _, (_, _, bytes, alignment)) -> bytes, alignment))
-                let slots : ContinuationSlot list =
-                    List.zip settled placed |> List.mapi (fun index ((id, isCapture, ty, (slot, holds, bytes, alignment)), (offset, _, _)) ->
-                        { Source = id
-                          ValueType = ty
-                          Field = { Name = sprintf "slot_%d" index; Slot = slot; Offset = Some offset; Size = Some bytes; Align = Some alignment }
-                          Holds = holds
-                          IsCapture = isCapture })
+            let hasValue (id: NodeId) =
+                Map.tryFind id graph.Nodes |> Option.exists (fun node -> not (isUnit node.Type))
+            let statementOf (cut: Cut) =
+                match cut.Bound with
+                | Some binding -> binding
+                | None -> cut.Site.Id
+            let captureSlots = captured |> List.filter hasValue
+            let retainedLocals =
+                liveByCut |> List.collect snd |> List.filter (fun id -> not (List.contains id captured)) |> List.distinct |> List.filter hasValue
+            // The value of each resumed computation leaves its dispatch region
+            // through a frame slot of its own.
+            let resultSlots =
+                cuts |> List.choose (fun cut -> Machine.resumedValue graph (statementOf cut)) |> List.filter hasValue |> List.distinct
+            // A retained value is stored and reloaded by value. A binding that
+            // is assigned after its declaration requires a cell slot, which this
+            // frame does not settle.
+            let mutableSlots =
+                (captureSlots @ retainedLocals) |> List.filter (fun id ->
+                    match Map.tryFind id graph.Nodes with
+                    | Some { Kind = SemanticKind.Binding(_, true, _, _) } -> true
+                    | _ -> captures |> List.exists (fun capture -> capture.SourceNodeId = Some id && capture.IsMutable))
+            let captureInfos : (NodeId * CaptureInfo option) list =
+                captureSlots |> List.map (fun id ->
+                    match captures |> List.tryFind (fun capture -> capture.SourceNodeId = Some id), Map.tryFind id graph.Nodes with
+                    | Some capture, _ -> id, Some capture
+                    | None, Some ({ Kind = SemanticKind.Binding(name, isMutable, _, _) } as node) ->
+                        id, Some { Name = name; Type = node.Type; IsMutable = isMutable; SourceNodeId = Some id }
+                    | None, Some ({ Kind = SemanticKind.PatternBinding name } as node) ->
+                        id, Some { Name = name; Type = node.Type; IsMutable = false; SourceNodeId = Some id }
+                    | None, _ -> id, None)
+            // Retention of region-backed and borrowed values across each cut. A
+            // refused retention leaves the frame without a settled slot set.
+            let retentionOf (cut: Cut) (liveSlots: NodeId list) =
+                liveSlots |> List.map (fun binding ->
+                    let node = graph.Nodes[binding]
+                    let ty = applySubst node.Type
+                    let isView =
+                        match ty with
+                        | NativeType.TApp(tc, _) -> Types.isReadOnlyViewTypeCon tc || tc.NTUKind = Some NTUKind.NTUborrowedview
+                        | _ -> false
+                    let isRegionHandle =
+                        match ty with
+                        | NativeType.TApp(tc, _) -> Types.isRegionTypeCon tc
+                        | _ -> false
+                    let allocation =
+                        regions.Settled |> List.tryFind (fun allocation -> allocation.Binding = Some binding || allocation.Site.Id = origin graph binding Set.empty)
+                    let ownedRegion region = bodyNodes.Contains region
+                    match isView, isRegionHandle, allocation with
+                    | true, _, _ ->
+                        None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding ]
+                            "Borrowed region or view handle cannot be retained across an async suspension point without a dominating buffer retention or lifetime scope proof."
+                    | _, true, _ when not (regions.RegionsOf binding |> List.forall ownedRegion) || List.contains binding captured ->
+                        None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding ]
+                            "A borrowed region handle cannot be retained across an async suspension point; its lifetime belongs to a scope outside the suspended computation."
+                    | _, _, Some allocation ->
+                        match allocation.Regions with
+                        | [ region ] when ownedRegion region && not (List.contains binding captured) ->
+                            // A region without a settled release is refused below.
+                            let releases =
+                                match Map.tryFind region regions.Releases with
+                                | Some settled -> settled
+                                | None -> []
+                            let reads = cut.Resumed |> List.collect (fun item -> readsOf graph item binding) |> List.distinct
+                            let readOrders = reads |> List.map orderOf
+                            let releaseOrders = releases |> List.map orderOf
+                            let allocationOrder = orderOf allocation.Site.Id
+                            if releases.IsEmpty || reads.IsEmpty then
+                                None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding; region ]
+                                    "A region-allocated value live across an async suspension point has no settled region release frontier to prove retention against."
+                            elif releaseOrders |> List.exists (fun release -> release > allocationOrder && readOrders |> List.exists (fun read -> release < read)) then
+                                None, refusal "CCS8425" cut.Site.Range ([ cut.Site.Id; binding; region ] @ releases)
+                                    "Borrowed region or view handle is invalidated or released before its post-resumption use across an async suspension point."
+                            else
+                                let lastRead = reads |> List.maxBy orderOf
+                                let model : BorrowedResultViewScopeModel =
+                                    { Call = allocation.Site.Id
+                                      Declaration = cut.Site.Id
+                                      Owner = region
+                                      View = binding
+                                      CallOrder = allocationOrder
+                                      InvalidationOrders = releaseOrders
+                                      ReadOrders = readOrders
+                                      NullToNoneBoundary = true }
+                                let obligation, accrued =
+                                    claim cut.Site (sprintf "async_retention_%d_%d" (NodeId.value cut.Site.Id) (NodeId.value binding))
+                                        "region-retention-scope"
+                                        "The backing region is acquired before, and released only after, every post-resumption read across the suspension cut."
+                                        (ObligationBody.BorrowedResultViewScope model)
+                                        ([ cut.Site.Id; binding; region; allocation.Site.Id; lastRead ] @ releases @ reads)
+                                Some { Binding = binding
+                                       BackingRegion = region
+                                       RetainedUntil = lastRead
+                                       InvalidatedBy = releases
+                                       RetirementCheck = obligation.Id }, accrued
+                        | _ ->
+                            None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding ]
+                                "Borrowed region or view handle cannot be retained across an async suspension point without a dominating buffer retention or lifetime scope proof."
+                    | _ -> None, none)
+            let retentionByCut =
+                liveByCut |> List.map (fun (cut, liveSlots) -> cut.Site.Id, retentionOf cut (liveSlots |> List.filter hasValue))
+            let retentionAccruals = retentionByCut |> List.collect (fun (_, rows) -> rows |> List.map snd)
+            // Frame placement follows the sequence frame: the state field, the
+            // captures and the retained values take their range-selected
+            // representations from the declared platform.
+            let framePlacement =
+                match retentionAccruals |> List.exists (fun accrued -> not accrued.Diagnostics.IsEmpty), mutableSlots, captureInfos |> List.filter (fun (_, info) -> info.IsNone), Map.tryFind state graph.Nodes with
+                | true, _, _, _ -> Result.Error (joinAll retentionAccruals)
+                | false, cell :: _, _, _ ->
+                    Result.Error (refusal "CCS8403" owner.Range [ owner.Id; cell ] "A binding declared for assignment is retained in an async continuation frame, which has no settled cell slot for it.")
+                | false, [], (undeclared, _) :: _, _ ->
+                    Result.Error (refusal "CCS8403" owner.Range [ owner.Id; undeclared ] "An async formation capture has no named source declaration.")
+                | false, [], [], None ->
+                    Result.Error (refusal "CCS8403" owner.Range [ owner.Id ] "The async formation lacks its state anchor.")
+                | false, [], [], Some anchor ->
+                    // The formation's state anchor declares the frame's state field: an
+                    // occurrence of the published graph holding the state before any
+                    // suspension cut (-1), with the range of every settled state.
+                    let stateSlot : SemanticNode =
+                        { anchor with
+                            Kind = SemanticKind.Literal (NativeLiteral.Int(-1L, NTUKind.NTUint(NTUWidth.Resolved WidthDimension.Register)))
+                            Type = Types.intType
+                            ValueRange = Some (ValueRange.bounded -1I (bigint (cuts.Length - 1))) }
+                    let placementGraph = { graph with Nodes = graph.Nodes.Add(state, stateSlot) }
+                    match Placement.placeAsyncContinuationWithRanges placementGraph state (captureInfos |> List.choose snd) (retainedLocals @ resultSlots) Map.empty with
+                    | Result.Error error ->
+                        Result.Error (refusal "CCS8403" owner.Range [ owner.Id ] ("The async continuation frame has no settled placement: " + Placement.describeContinuationPlacementError error))
+                    | Result.Ok (SettledLayout.Record(_, Some frameBytes, Some frameAlignment), fields) ->
+                        let slots : ContinuationSlot list =
+                            fields |> List.choose (fun field ->
+                                Map.tryFind field.Source placementGraph.Nodes |> Option.map (fun source ->
+                                    { Source = field.Source
+                                      ValueType = source.Type
+                                      Field = field.Field
+                                      Holds = field.Holds
+                                      IsCapture = field.Role = Placement.ContinuationRole.Capture }))
+                        let extents =
+                            slots |> List.choose (fun slot ->
+                                match slot.Field.Offset, slot.Field.Size, slot.Field.Align with
+                                | Some offset, Some bytes, Some alignment -> Some (slot.Source, (offset, bytes, alignment))
+                                | _ -> None)
+                        if slots.Length <> fields.Length || extents.Length <> fields.Length then
+                            Result.Error (refusal "CCS8403" owner.Range [ owner.Id ] "The async continuation frame has a slot without a complete placement.")
+                        else
+                            let placedSources = slots |> List.map _.Source |> Set.ofList
+                            let machineCuts : Machine.Cut list =
+                                liveByCut |> List.mapi (fun ordinal (cut, liveSlots) ->
+                                    let machineCut : Machine.Cut =
+                                        { Site = cut.Site.Id
+                                          Statement = statementOf cut
+                                          Ordinal = ordinal
+                                          Retained = liveSlots |> List.filter placedSources.Contains }
+                                    machineCut)
+                            let plan : Machine.Plan =
+                                { Formation = owner.Id
+                                  Frame = frame
+                                  Callable = callable
+                                  Body = body
+                                  State = state
+                                  Captures = captureSlots |> List.filter placedSources.Contains
+                                  Cuts = machineCuts
+                                  Results = Set.ofList resultSlots }
+                            match Machine.build placementGraph plan with
+                            | Result.Error pending ->
+                                Result.Error (refusal "CCS8403" owner.Range [ owner.Id; pending.Site ] ("The async continuation frame operations are not settled: " + pending.Reason))
+                            | Result.Ok elaboration ->
+                                Result.Ok (slots, Map.ofList extents, frameBytes, frameAlignment, elaboration)
+                    | Result.Ok _ ->
+                        Result.Error (refusal "CCS8403" owner.Range [ owner.Id ] "The declared target has no concrete async continuation frame extent and alignment.")
+            match framePlacement with
+            | Result.Error accrued -> [], [], accrued
+            | Result.Ok (slots, extents, frameBytes, frameAlignment, elaboration) ->
+                let placed = slots |> List.choose (fun slot -> Map.tryFind slot.Source extents)
                 let frameSet = slots |> List.map _.Source |> Set.ofList
                 let anchors = [ owner.Id; callable; body; frame; resultStorage; lifetimeScope; completion ] @ captured
                 let frameClaim, frameAccrual =
@@ -953,7 +1147,7 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                     else slotOf platform resultType |> Option.map (fun (_, _, bytes, alignment) -> [ (0, bytes, alignment) ], bytes, alignment)
                 match resultLayout with
                 | None ->
-                    [], refusal "CCS8403" owner.Range [ owner.Id; resultStorage ] "The async formation's result type has no settled storage layout."
+                    [], [], refusal "CCS8403" owner.Range [ owner.Id; resultStorage ] "The async formation's result type has no settled storage layout."
                 | Some (resultSlots, resultBytes, resultAlignment) ->
                     let formationClaim, formationAccrual =
                         layoutClaim owner (sprintf "async_result_%d" (NodeId.value owner.Id)) resultSlots resultBytes resultAlignment anchors
@@ -969,7 +1163,7 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                           ScratchSlots = []
                           ScratchBytes = 0
                           ScratchAlignment = 1
-                          Initializers = captured |> List.filter frameSet.Contains |> List.map (fun id -> id, id)
+                          Initializers = elaboration.CaptureInitializers
                           ResumeStates = cuts |> List.mapi (fun index _ -> index)
                           Obligations = [ frameClaim.Id ] }
                     let formationRow : AsyncFormation =
@@ -987,79 +1181,20 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                     let suspensions =
                         liveByCut |> List.mapi (fun ordinal (cut, liveSlots) ->
                             let liveSlots = liveSlots |> List.filter frameSet.Contains
-                            let continuationNodes = subtree graph cut.Continuation
+                            let continuationNodes = resumedNodes cut
                             let initialized =
                                 (captured @ (locals |> List.filter (fun binding ->
                                     not (continuationNodes.Contains binding) && cut.Bound <> Some binding && orderOf binding < cut.Order)))
                                 |> List.filter frameSet.Contains |> Set.ofList
                             let retained =
-                                liveSlots |> List.map (fun binding ->
-                                    let node = graph.Nodes[binding]
-                                    let ty = applySubst node.Type
-                                    let isView =
-                                        match ty with
-                                        | NativeType.TApp(tc, _) -> Types.isReadOnlyViewTypeCon tc || tc.NTUKind = Some NTUKind.NTUborrowedview
-                                        | _ -> false
-                                    let isRegionHandle =
-                                        match ty with
-                                        | NativeType.TApp(tc, _) -> Types.isRegionTypeCon tc
-                                        | _ -> false
-                                    let allocation =
-                                        regions.Settled |> List.tryFind (fun allocation -> allocation.Binding = Some binding || allocation.Site.Id = origin graph binding Set.empty)
-                                    let ownedRegion region = bodyNodes.Contains region
-                                    match isView, isRegionHandle, allocation with
-                                    | true, _, _ ->
-                                        None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding ]
-                                            "Borrowed region or view handle cannot be retained across an async suspension point without a dominating buffer retention or lifetime scope proof."
-                                    | _, true, _ when not (regions.RegionsOf binding |> List.forall ownedRegion) || List.contains binding captured ->
-                                        None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding ]
-                                            "A borrowed region handle cannot be retained across an async suspension point; its lifetime belongs to a scope outside the suspended computation."
-                                    | _, _, Some allocation ->
-                                        match allocation.Regions with
-                                        | [ region ] when ownedRegion region && not (List.contains binding captured) ->
-                                            let releases = Map.tryFind region regions.Releases |> Option.defaultValue []
-                                            let reads = readsOf graph cut.Continuation binding
-                                            let readOrders = reads |> List.map orderOf
-                                            let releaseOrders = releases |> List.map orderOf
-                                            let allocationOrder = orderOf allocation.Site.Id
-                                            if releases.IsEmpty || reads.IsEmpty then
-                                                None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding; region ]
-                                                    "A region-allocated value live across an async suspension point has no settled region release frontier to prove retention against."
-                                            elif releaseOrders |> List.exists (fun release -> release > allocationOrder && readOrders |> List.exists (fun read -> release < read)) then
-                                                None, refusal "CCS8425" cut.Site.Range ([ cut.Site.Id; binding; region ] @ releases)
-                                                    "Borrowed region or view handle is invalidated or released before its post-resumption use across an async suspension point."
-                                            else
-                                                let lastRead = reads |> List.maxBy orderOf
-                                                let model : BorrowedResultViewScopeModel =
-                                                    { Call = allocation.Site.Id
-                                                      Declaration = cut.Site.Id
-                                                      Owner = region
-                                                      View = binding
-                                                      CallOrder = allocationOrder
-                                                      InvalidationOrders = releaseOrders
-                                                      ReadOrders = readOrders
-                                                      NullToNoneBoundary = true }
-                                                let obligation, accrued =
-                                                    claim cut.Site (sprintf "async_retention_%d_%d" (NodeId.value cut.Site.Id) (NodeId.value binding))
-                                                        "region-retention-scope"
-                                                        "The backing region is acquired before, and released only after, every post-resumption read across the suspension cut."
-                                                        (ObligationBody.BorrowedResultViewScope model)
-                                                        ([ cut.Site.Id; binding; region; allocation.Site.Id; lastRead ] @ releases @ reads)
-                                                Some { Binding = binding
-                                                       BackingRegion = region
-                                                       RetainedUntil = lastRead
-                                                       InvalidatedBy = releases
-                                                       RetirementCheck = obligation.Id }, accrued
-                                        | _ ->
-                                            None, refusal "CCS8424" cut.Site.Range [ cut.Site.Id; binding ]
-                                                "Borrowed region or view handle cannot be retained across an async suspension point without a dominating buffer retention or lifetime scope proof."
-                                    | _ -> None, none)
+                                match retentionByCut |> List.tryFind (fun (site, _) -> site = cut.Site.Id) with
+                                | Some (_, rows) -> rows
+                                | None -> []
                             let spanning = retained |> List.choose fst
                             let retainedAccrual = retained |> List.map snd |> joinAll
                             let liveLayout =
-                                settled
-                                |> List.choose (fun (id, _, _, (_, _, bytes, alignment)) ->
-                                    if List.contains id liveSlots then Some (bytes, alignment) else None)
+                                liveSlots |> List.choose (fun id ->
+                                    Map.tryFind id extents |> Option.map (fun (_, bytes, alignment) -> bytes, alignment))
                             let livePlaced, liveBytes, liveAlignment = tile liveLayout
                             let sources =
                                 [ cut.Site.Id; owner.Id; frame; cut.Delimiter; cut.Continuation; cut.Awaited; cut.BindResume; cut.Completion; cut.Cleanup ] @ liveSlots
@@ -1094,12 +1229,14 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
                                   Participants = participants (sources @ retentionNodes) }
                             (cut.Site.Id, row), joinAll [ retainedAccrual; suspensionAccrual; { none with Edges = edges } ])
                     [ (frame, frameRow), (owner.Id, formationRow), suspensions |> List.map fst ],
+                    [ { Frame = frame; Callable = callable; Elaboration = elaboration } ],
                     joinAll ([ frameAccrual; formationAccrual ] @ (suspensions |> List.map snd))
         | _ ->
-            [], refusal "CCS8403" owner.Range [ owner.Id ] "The async formation lacks its deferred callable or its protocol anchors."
+            [], [], refusal "CCS8403" owner.Range [ owner.Id ] "The async formation lacks its deferred callable or its protocol anchors."
 
     let settledOwners = owners |> List.map settleOwner
-    let ownerRows = settledOwners |> List.collect fst
+    let ownerRows = settledOwners |> List.collect (fun (rows, _, _) -> rows)
+    let realizations = settledOwners |> List.collect (fun (_, machines, _) -> machines)
     let frames = ownerRows |> List.map (fun (frame, _, _) -> frame) |> Map.ofList
     let formations = ownerRows |> List.map (fun (_, formation, _) -> formation) |> Map.ofList
     let suspensions = ownerRows |> List.collect (fun (_, _, suspensions) -> suspensions) |> Map.ofList
@@ -1149,89 +1286,307 @@ let private settleAsync (graph: SemanticGraph) (reachable: SemanticNode list) (r
             | _ -> None)
         |> List.unzip
 
-    // A-03: orchestrations over a settled array of child formations.
-    let orchestrations =
+    // A-03: orchestrations over a settled array of child formations. The
+    // child work items are explicit operations. Each child computation is
+    // bound once ahead of the child array, and the orchestration's join is
+    // elaborated into one activation per child, each applied to the child
+    // read through its binding, and the store of each result into the
+    // join's result array.
+    let enclosingCallable (id: NodeId) =
+        let rec climb (current: NodeId) (visited: Set<NodeId>) =
+            if Set.contains current visited then None else
+            match Map.tryFind current graph.Nodes |> Option.bind _.Parent |> Option.bind (fun parent -> Map.tryFind parent graph.Nodes) with
+            | Some { Kind = SemanticKind.Lambda _; Id = lambda } -> Some lambda
+            | Some parent -> climb parent.Id (Set.add current visited)
+            | None -> None
+        climb id Set.empty
+    // The immutable binding an operand names.
+    let rec namedBinding (id: NodeId) (visited: Set<NodeId>) =
+        if Set.contains id visited then None else
+        match Map.tryFind id graph.Nodes with
+        | Some { Kind = SemanticKind.VarRef(_, Some definition) } ->
+            match Map.tryFind definition graph.Nodes with
+            | Some { Kind = SemanticKind.Binding(_, false, _, _) } -> Some definition
+            | _ -> None
+        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> namedBinding inner (Set.add id visited)
+        | _ -> None
+    // The intrinsic applications that consume an orchestration's value.
+    let consumersOf (site: NodeId) =
         reachable |> List.choose (fun node ->
             match intrinsicApplication graph node with
-            | Some (intrinsic, info, [ tasks ]) when info.FullName = "Async.Parallel" || info.FullName = "Async.Sequential" ->
-                let mode = if info.FullName = "Async.Parallel" then AsyncOrchestrationMode.Parallel else AsyncOrchestrationMode.Sequential
-                match Map.tryFind (origin graph tasks Set.empty) graph.Nodes, intrinsic.Children with
-                | Some { Kind = SemanticKind.ArrayExpr elements }, joinCondition :: resultStorage :: lifetimeScope :: _ when not elements.IsEmpty ->
-                    let children = elements |> List.map (fun element -> element, resolve element |> Option.bind (fun id -> Map.tryFind id formations))
-                    match children |> List.tryFind (fun (_, formation) -> formation.IsNone) with
-                    | Some (child, _) ->
-                        Some (None, [], refusal "CCS8403" node.Range [ node.Id; child ] (info.FullName + " has a child that is not a settled async formation."))
-                    | None ->
-                        let children = children |> List.map (fun (element, formation) -> element, Option.get formation)
-                        let childIds = children |> List.map fst
-                        match childIds |> List.distinct |> List.length = childIds.Length, children |> List.map (snd >> resultLayout) with
-                        | false, _ ->
-                            Some (None, [], refusal "CCS8403" node.Range [ node.Id ] (info.FullName + " requires distinct child computations."))
-                        | true, layouts when layouts |> List.forall Option.isSome && (layouts |> List.choose id |> List.map (fun (_, bytes, alignment) -> bytes, alignment) |> List.distinct |> List.length) = 1 ->
-                            let _, stride, alignment = layouts |> List.head |> Option.get
-                            if stride <= 0 then
-                                Some (None, [], refusal "CCS8403" node.Range [ node.Id ] (info.FullName + " requires a child result with positive storage."))
-                            else
-                                let childSpecs =
-                                    children |> List.map (fun (element, formation) ->
-                                        element, formation, stride, alignment, resultStorage)
+            | Some (_, info, [ computation ]) when node.Id <> site && origin graph computation Set.empty = site -> Some (node, info)
+            | _ -> None)
+    let orchestrationSites =
+        reachable |> List.choose (fun node ->
+            match intrinsicApplication graph node with
+            | Some (intrinsic, info, [ tasks ]) when info.FullName = "Async.Parallel" || info.FullName = "Async.Sequential" -> Some (node, intrinsic, info, tasks)
+            | _ -> None)
+    // The child arrays: each is an array expression bound directly to an
+    // immutable name outside every async formation. Its children are bound
+    // once, whatever number of orchestrations read the array.
+    let childArrayOf (tasks: NodeId) =
+        match namedBinding tasks Set.empty, Map.tryFind (origin graph tasks Set.empty) graph.Nodes with
+        | Some binding, Some ({ Kind = SemanticKind.ArrayExpr _ } as array)
+            when (Map.tryFind binding graph.Nodes |> Option.map _.Children) = Some [ array.Id ] && (enclosingOwnerOf binding).IsNone ->
+            Some (array.Id, binding)
+        | _ -> None
+    let childArrays =
+        orchestrationSites
+        |> List.choose (fun (_, _, _, tasks) -> childArrayOf tasks)
+        |> List.distinctBy fst
+        |> List.map (fun (array, binding) ->
+            let plan : Machine.ChildArrayPlan = { Array = array; Tasks = binding }
+            array, Machine.bindChildren graph plan)
+        |> Map.ofList
+    let orchestrations =
+        orchestrationSites |> List.map (fun (node, intrinsic, info, tasks) ->
+            let mode = if info.FullName = "Async.Parallel" then AsyncOrchestrationMode.Parallel else AsyncOrchestrationMode.Sequential
+            let unsettled related message = None, [], None, refusal "CCS8403" node.Range (node.Id :: related) (info.FullName + message)
+            match Map.tryFind (origin graph tasks Set.empty) graph.Nodes, intrinsic.Children with
+            | Some { Kind = SemanticKind.ArrayExpr elements }, joinCondition :: resultStorage :: lifetimeScope :: _ when not elements.IsEmpty ->
+                let children = elements |> List.map (fun element -> element, resolve element |> Option.bind (fun id -> Map.tryFind id formations))
+                match children |> List.tryFind (fun (_, formation) -> formation.IsNone) with
+                | Some (child, _) -> unsettled [ child ] " has a child that is not a settled async formation."
+                | None ->
+                    let children = children |> List.map (fun (element, formation) -> element, Option.get formation)
+                    let childIds = children |> List.map fst
+                    match childIds |> List.distinct |> List.length = childIds.Length, children |> List.map (snd >> resultLayout) with
+                    | false, _ -> unsettled [] " requires distinct child computations."
+                    | true, layouts when layouts |> List.forall Option.isSome && (layouts |> List.choose id |> List.map (fun (_, bytes, alignment) -> bytes, alignment) |> List.distinct |> List.length) = 1 ->
+                        let _, stride, alignment = layouts |> List.head |> Option.get
+                        match stride > 0, childArrayOf tasks |> Option.bind (fun (array, _) -> Map.tryFind array childArrays), consumersOf node.Id with
+                        | false, _, _ -> unsettled [] " requires a child result with positive storage."
+                        | true, None, _ ->
+                            unsettled [ tasks ] " requires its child array bound directly to an immutable name outside an async formation, so that each child activation reads its child through a binding."
+                        | true, Some (Result.Error pending), _ ->
+                            unsettled [ pending.Site ] (" has no settled child bindings: " + pending.Reason)
+                        | true, Some (Result.Ok _), [] ->
+                            unsettled [] " has no Async.RunSynchronously join; its child activations have no settled site."
+                        | true, Some (Result.Ok bound), [ (joinSite, joinInfo) ]
+                            when joinInfo.FullName = "Async.RunSynchronously" && enclosingCallable joinSite.Id = enclosingCallable node.Id
+                                 && (enclosingOwnerOf joinSite.Id).IsNone && bound.Children.Length = children.Length ->
+                            let plan : Machine.JoinPlan =
+                                { Orchestration = node.Id
+                                  Join = joinSite.Id
+                                  Children =
+                                    List.zip children bound.Children |> List.map (fun ((_, formation), child) ->
+                                        let work : Machine.ChildPlan =
+                                            { Child = child
+                                              Result = formation.ResultType
+                                              Range = Map.tryFind formation.Body graph.Nodes |> Option.bind _.ValueRange }
+                                        work) }
+                            match Machine.join graph plan with
+                            | Result.Error pending ->
+                                unsettled [ pending.Site ] (" has no settled child activations: " + pending.Reason)
+                            | Result.Ok elaboration ->
+                                // The explicit child activations are the orchestration's work items.
+                                let workItems = elaboration.Activations |> List.map (fun child -> child.Site.Id)
+                                let deliveries = elaboration.Activations |> List.map _.Delivery
                                 let workDependencies =
                                     match mode with
                                     | AsyncOrchestrationMode.Parallel -> []
-                                    | AsyncOrchestrationMode.Sequential -> List.pairwise childIds
-                                let slots = childIds |> List.mapi (fun index _ -> index * stride, stride, alignment)
-                                let sources = [ node.Id; joinCondition; resultStorage; lifetimeScope ] @ childIds
+                                    | AsyncOrchestrationMode.Sequential -> List.pairwise workItems
+                                let slots = workItems |> List.mapi (fun index _ -> index * stride, stride, alignment)
+                                // The join application is no occurrence of the elaborated
+                                // block; the result storage its result array is bound to is.
+                                // That storage is the orchestration itself where the join's
+                                // operand is the orchestration and not a reference to it.
+                                let sources =
+                                    [ node.Id; joinCondition; resultStorage; lifetimeScope; elaboration.Storage; elaboration.Results ] @ workItems @ deliveries
+                                    |> List.distinct
                                 let obligation, accrued =
-                                    layoutClaim node (sprintf "async_orchestration_%d" (NodeId.value node.Id)) slots (childIds.Length * stride) alignment sources
+                                    layoutClaim node (sprintf "async_orchestration_%d" (NodeId.value node.Id)) slots (workItems.Length * stride) alignment sources
                                 let row : AsyncOrchestration =
                                     { Site = node.Id
                                       Mode = mode
-                                      Children = childIds
+                                      Children = workItems
                                       WorkDependencies = workDependencies
-                                      ResultOrdering = childIds |> List.mapi (fun index child -> index, child)
+                                      ResultOrdering = workItems |> List.mapi (fun index child -> index, child)
                                       JoinCondition = joinCondition
                                       ResultStorage = resultStorage
-                                      ResultCapacity = childIds.Length
+                                      ResultCapacity = workItems.Length
                                       ElementStride = stride
                                       LifetimeScope = lifetimeScope
                                       SynchronizationObligations = [ obligation.Id ]
-                                      Participants = participants (sources @ (workDependencies |> List.collect (fun (u, v) -> [ u; v ]))) }
-                                Some (Some (node.Id, row), childSpecs, accrued)
-                        | true, _ ->
-                            Some (None, [], refusal "CCS8403" node.Range [ node.Id ] (info.FullName + " requires children whose results share one settled storage layout."))
-                | _ ->
-                    Some (None, [], refusal "CCS8403" node.Range [ node.Id; tasks ] (info.FullName + " requires a settled array of child async computations."))
-            | _ -> None)
-    let orchestrationRows = orchestrations |> List.choose (fun (row, _, _) -> row) |> Map.ofList
-    // A child shared by two orchestrations is one activation of its formation;
-    // deduplicate before minting its activation claim so no orphaned claim is emitted.
-    let childActivations, childAccruals =
-        orchestrations
-        |> List.collect (fun (_, specs, _) -> specs)
-        |> List.distinctBy (fun (element, _, _, _, _) -> element)
-        |> List.map (fun (element, formation, stride, alignment, orchResultStorage) ->
-            let elementNode = graph.Nodes[element]
-            let sources = [ element; formation.Formation; orchResultStorage; formation.CompletionProtocol ]
-            let obligation, accrued =
-                layoutClaim elementNode (sprintf "async_child_activation_%d" (NodeId.value element)) [ (0, stride, alignment) ] stride alignment sources
-            let row : AsyncActivation =
-                { Site = element
-                  Formation = formation.Formation
-                  ResultTarget = orchResultStorage
-                  CompletionTarget = formation.CompletionProtocol
-                  Obligations = [ obligation.Id ]
-                  Participants = participants sources }
-            (element, row), accrued)
+                                      Participants = participants (sources @ childIds @ (bound.Children |> List.map _.Binding)) }
+                                // Each child activation is an activation of its child's formation.
+                                let childRows =
+                                    List.zip3 children bound.Children elaboration.Activations |> List.map (fun ((element, formation), binding, child) ->
+                                        let sources =
+                                            [ child.Site.Id; formation.Formation; child.ResultTarget; child.CompletionTarget
+                                              child.Computation; child.Delivery; binding.Binding; element; node.Id ]
+                                        let claimed, childAccrual =
+                                            layoutClaim child.Site (sprintf "async_child_activation_%d" (NodeId.value child.Site.Id)) [ (0, stride, alignment) ] stride alignment sources
+                                        let activation : AsyncActivation =
+                                            { Site = child.Site.Id
+                                              Formation = formation.Formation
+                                              ResultTarget = child.ResultTarget
+                                              CompletionTarget = child.CompletionTarget
+                                              Obligations = [ claimed.Id ]
+                                              Participants = participants sources }
+                                        (child.Site.Id, activation), childAccrual)
+                                Some (node.Id, row), childRows |> List.map fst, Some (bound, elaboration),
+                                joinAll (accrued :: (childRows |> List.map snd))
+                        | true, Some (Result.Ok _), consumers ->
+                            unsettled (consumers |> List.map (fun (consumer, _) -> consumer.Id))
+                                " requires exactly one Async.RunSynchronously join in the callable that forms it, outside an async formation; no other consumer has settled child activations."
+                    | true, _ -> unsettled [] " requires children whose results share one settled storage layout."
+            | _ -> unsettled [ tasks ] " requires a settled array of child async computations.")
+    // The elaborations of the settled orchestrations: the child bindings of
+    // each child array, once, and each join. Every edited occurrence has one
+    // current version under all the rewrites that name it.
+    let elaborated = orchestrations |> List.choose (fun (_, _, elaboration, _) -> elaboration)
+    let boundArrays = elaborated |> List.map fst |> List.distinctBy (fun bound -> bound.Rewrite)
+    let rewrites =
+        (boundArrays |> List.map (fun bound -> bound.Rewrite, bound.Nodes, bound.Edited, []))
+        @ (elaborated |> List.map (fun (_, join) ->
+            // The result array holds one element per child.
+            join.Rewrite, join.Nodes, Set.empty, join.Activations |> List.map (fun child -> child.Delivery, join.Activations.Length)))
+    let joins, joinRefusals =
+        rewrites
+        |> List.groupBy (fun (edit, _, _, _) -> edit.Target)
+        |> List.map (fun (target, group) ->
+            let previous = graph.Nodes[target]
+            match Machine.rewrite previous (group |> List.map (fun (edit, _, _, _) -> edit)) with
+            | Result.Ok version ->
+                let fold : Fold =
+                    { Carrier = target
+                      Nodes = version :: (group |> List.collect (fun (_, nodes, _, _) -> nodes))
+                      Edited = group |> List.fold (fun edited (_, _, ids, _) -> Set.union edited ids) (Set.singleton target)
+                      Provenance = []
+                      Accesses = group |> List.collect (fun (_, _, _, accesses) -> accesses) }
+                Some fold, none
+            | Result.Error reason ->
+                None, refusal "CCS8403" previous.Range [ target ] ("The orchestration elaboration has no settled structure: " + reason))
         |> List.unzip
+    let joins = joins |> List.choose id
+    let orchestrationRows = orchestrations |> List.choose (fun (row, _, _, _) -> row) |> Map.ofList
+    let childActivations = orchestrations |> List.collect (fun (_, rows, _, _) -> rows)
     let activationRows = (activations |> List.choose id) @ childActivations |> Map.ofList
-    frames, formations, suspensions, activationRows, orchestrationRows,
-    joinAll (orphanAwaitAccruals @ (settledOwners |> List.map snd) @ activationAccruals @ (orchestrations |> List.map (fun (_, _, accrued) -> accrued)) @ childAccruals)
+    frames, formations, suspensions, activationRows, orchestrationRows, realizations, joins,
+    joinAll (orphanAwaitAccruals @ (settledOwners |> List.map (fun (_, _, accrued) -> accrued)) @ activationAccruals @ (orchestrations |> List.map (fun (_, _, _, accrued) -> accrued)) @ joinRefusals)
+
+//-------------------------------------------------------------------------
+// Frame realization: fan the settled elaborations out and fold them in
+//-------------------------------------------------------------------------
+
+/// The provenance of every frame read of one formation: the slot it reads
+/// and the stores of that slot through the formation's frame allocation.
+let private frameProvenance (machine: Realization) : Hyperedge list =
+    let writers =
+        machine.Elaboration.Writes
+        |> List.groupBy (fun (_, slot, _) -> slot)
+        |> List.map (fun (slot, rows) ->
+            slot, rows |> List.sortBy (fun (writer, _, _) -> NodeId.value writer) |> List.collect (fun (writer, _, value) -> [ writer; value ]))
+        |> Map.ofList
+    machine.Elaboration.Reads |> List.collect (fun (read, slot) ->
+        let stores =
+            match writers.TryFind slot with
+            | Some rows -> rows
+            | None -> []
+        [ { Sources = [ slot ]; Target = read; Class = EdgeClass.Provenance; Role = EdgeRole.ContinuationValue; Ordinal = 0 }
+          { Sources = [ machine.Frame; machine.Callable; machine.Elaboration.Allocation; slot ] @ stores
+            Target = read; Class = EdgeClass.Provenance; Role = EdgeRole.ContinuationSlotAccess; Ordinal = 0 } ])
+
+let private frameFold (machine: Realization) : Fold =
+    { Carrier = machine.Callable
+      Nodes = machine.Elaboration.Nodes
+      Edited = machine.Elaboration.Edited
+      Provenance = frameProvenance machine
+      Accesses = [] }
+
+/// Fold every settled elaboration into the graph: the frame operations of
+/// each formation and the child activations of each orchestration join. Each
+/// edited occurrence keeps its identity; replaced structural incidence is
+/// retired and the incidence of every current node is recorded with the
+/// provenance its elaboration settled.
+let private realize (graph: SemanticGraph) (folds: Fold list) : SemanticGraph =
+    match folds with
+    | [] -> graph
+    | _ ->
+        let nodes = folds |> List.collect _.Nodes
+        let edited = folds |> List.fold (fun ids fold -> Set.union ids fold.Edited) Set.empty
+        let versions =
+            nodes |> List.filter (fun node -> edited.Contains node.Id) |> List.map (fun node -> node.Id, node) |> Map.ofList
+        let created =
+            folds
+            |> List.groupBy _.Carrier
+            |> List.map (fun (carrier, group) ->
+                carrier, group |> List.collect (fun fold -> fold.Nodes |> List.filter (fun node -> not (fold.Edited.Contains node.Id))))
+            |> Map.ofList
+        let create (source: SemanticNode) (_: SemanticGraph) =
+            match versions.TryFind source.Id with
+            | Some version ->
+                let fresh =
+                    match created.TryFind source.Id with
+                    | Some nodes -> nodes
+                    | None -> []
+                RecipeCreated
+                    { OriginalNodeId = source.Id
+                      NewNodes = version :: fresh
+                      NewEdges = []
+                      ReplacementRootId = source.Id
+                      ElaborationKind = "Baker"
+                      ElaborationSource = "Async.frame" }
+            | None -> NotApplicable "The occurrence has no async continuation or orchestration elaboration."
+        let folded = FoldIn.foldIn (FanOut.fanOut "AsyncContinuation" (fun node -> versions.ContainsKey node.Id) create graph) graph
+        let key (edge: Hyperedge) = edge.Target, edge.Class, edge.Role, edge.Ordinal, edge.Sources
+        let retired =
+            edited
+            |> Set.toList
+            |> List.collect (fun id ->
+                match graph.Nodes.TryFind id with
+                | Some previous -> structuralIncidence previous
+                | None -> [])
+            |> List.map key
+            |> Set.ofList
+        let incidence = nodes |> List.collect structuralIncidence
+        let provenance = folds |> List.collect _.Provenance
+        let current = { folded with Edges = (folded.Edges |> List.filter (fun edge -> not (retired.Contains(key edge)))) @ incidence @ provenance }
+        // The child reads and result stores of an orchestration join are source
+        // array accesses. Each receives its bounds guard from the memory access
+        // elaboration, as every source access does. The guard's zero endpoint
+        // and its extent read hold the ranges this settlement establishes: the
+        // extent of the addressed array is the orchestration's child count.
+        let extents = folds |> List.collect _.Accesses |> Map.ofList
+        let guarded =
+            if extents.IsEmpty then current
+            else MemoryAccessElaboration.normalize current
+        let endpoints =
+            guarded.Edges |> List.collect (fun edge ->
+                match edge.Role, edge.Sources with
+                | EdgeRole.MemoryAccessGuard, [ _; _; length; zero; _; _; _; _; source ] ->
+                    match extents.TryFind source with
+                    | Some extent -> [ length, ValueRange.bounded (bigint extent) (bigint extent); zero, ValueRange.bounded 0I 0I ]
+                    | None -> []
+                | _ -> [])
+            |> Map.ofList
+        let ranged =
+            guarded.Nodes |> Map.map (fun id node ->
+                match endpoints.TryFind id with
+                | Some range when node.ValueRange.IsNone -> { node with ValueRange = Some range }
+                | _ -> node)
+        // The fold keeps every node identity. The tables settled before this
+        // representation-only recipe remain keyed by those identities.
+        { guarded with
+            Nodes = ranged
+            FieldRanges = graph.FieldRanges
+            ElementRanges = graph.ElementRanges
+            Layouts = graph.Layouts
+            StaticStringPool = graph.StaticStringPool
+            LiteralStorage = graph.LiteralStorage
+            Escaping = graph.Escaping
+            Codata = graph.Codata
+            RangeContextFacts = graph.RangeContextFacts
+            SequenceRangeProvenance = graph.SequenceRangeProvenance }
+        |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable
+        |> RepresentationRanges.preserve graph
 
 //-------------------------------------------------------------------------
 // Entry
 //-------------------------------------------------------------------------
 
-let settleWhenSourceAdmitted (admitted: bool) (graph: SemanticGraph) : SemanticGraph * Settlement =
+let private settleCore (admitted: bool) (graph: SemanticGraph) : SemanticGraph * Settlement =
     if not admitted || graph.Platform.IsNone then
         graph, empty
     else
@@ -1249,14 +1604,22 @@ let settleWhenSourceAdmitted (admitted: bool) (graph: SemanticGraph) : SemanticG
             graph, empty
         else
             let regions, passings, copies, residences, regionAccrual = settleRegions graph reachable
-            let frames, formations, suspensions, activations, orchestrations, asyncAccrual = settleAsync graph reachable regions
+            let frames, formations, suspensions, activations, orchestrations, machines, joins, asyncAccrual = settleAsync graph reachable regions
             let accrued = join regionAccrual asyncAccrual
             let enrichment : Enrichment =
                 { NewNodes = accrued.Obligations
                   NewEdges = accrued.Edges
                   Annotated = [] }
             let enrichedGraph = ObligationElaboration.foldIn enrichment graph
-            enrichedGraph,
+            let realized = realize enrichedGraph ((machines |> List.map frameFold) @ joins)
+            let origins =
+                machines
+                |> List.collect (fun machine -> machine.Elaboration.FrameReferences |> List.map (fun reference -> reference, machine.Frame))
+                |> Map.ofList
+            // The frame is storage of the deferred callable's own activation.
+            let frameResidences =
+                machines |> List.fold (fun facts machine -> Map.add machine.Elaboration.Allocation EscapeKind.StackScoped facts) residences
+            realized,
             { Frames = frames
               Formations = formations
               Activations = activations
@@ -1265,5 +1628,9 @@ let settleWhenSourceAdmitted (admitted: bool) (graph: SemanticGraph) : SemanticG
               RegionAllocations = regions.Allocations
               RegionCallPassings = passings
               RegionCopyEndpoints = copies
-              Residences = residences
+              Residences = frameResidences
+              Origins = origins
               Diagnostics = accrued.Diagnostics }
+
+let settleWhenSourceAdmitted (admitted: bool) (graph: SemanticGraph) : SemanticGraph * Settlement =
+    Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore admitted graph)

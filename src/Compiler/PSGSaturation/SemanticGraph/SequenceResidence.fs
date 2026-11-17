@@ -321,7 +321,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
          // A sequence result may retain a callback whose backing environment
          // has other deferred uses. Those uses need the same joint proof even
          // when the sites being admitted in this reading are sequence frames.
-         | NativeType.TFun _ -> capture.SourceNodeId |> Option.bind knownCallable |> Option.isSome
+         | ty when Types.isCallableCarrierType ty -> capture.SourceNodeId |> Option.bind knownCallable |> Option.isSome
          | _ -> false)
     // Identity of a realized read is not its residence. The existing ingress
     // validator checks its complete writer/raw-storage census; residence also
@@ -536,7 +536,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                         | [(slot, _)] when immutableInitializer node.Id slot source ->
                             match applySubst nodes[source].Type with
                             | NativeType.TSeq _ -> EnvironmentCaptured(node.Id, slot, source)
-                            | NativeType.TFun _ when knownCallable source |> Option.isSome -> EnvironmentCaptured(node.Id, slot, source)
+                            | ty when Types.isCallableCarrierType ty && (knownCallable source |> Option.isSome) -> EnvironmentCaptured(node.Id, slot, source)
                             | _ -> Consumed(node.Id, source)
                         | [(slot, _)] when ClosureEnvironments.capturedInitializers graph owner |> Option.exists (List.contains (slot, source, true)) ->
                             Consumed(node.Id, source)
@@ -561,6 +561,11 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                     | SemanticKind.Application _, EdgeRole.Argument
                         when resultCalls.TryFind node.Id |> Option.exists (fun (actual, allocation) ->
                             actual = source && storageSource Set.empty source = Some allocation) -> Alias node.Id
+                    // Async.RunSynchronously and Async.Await complete the computation
+                    // of their async operand before the application yields its
+                    // value: the use of the operand's environment ends there.
+                    | SemanticKind.Application _, EdgeRole.Argument when ClosureEnvironments.isCompletingAsyncActivation nodes node source ->
+                        Consumed(node.Id, source)
                     | SemanticKind.Application(callee, _), EdgeRole.Argument ->
                         match intrinsic Set.empty callee, edge.Ordinal with
                         | _, ordinal when environmentArguments.TryFind node.Id = Some(ordinal, source) -> Consumed(node.Id, source)
@@ -572,7 +577,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                             | Some argument, Some targets when
                                 (match applySubst argument.Type with
                                  | NativeType.TSeq _ -> true
-                                 | NativeType.TFun _ -> knownCallable source |> Option.isSome
+                                 | ty when Types.isCallableCarrierType ty -> knownCallable source |> Option.isSome
                                  | _ -> false) ->
                                 Argument(node.Id, source, targets)
                             | _ -> Refused (ResidualReason.UnsupportedConsumer node.Id)
@@ -580,6 +585,10 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                         match writtenSlot node.Id value with
                         | Some slot -> SlotStored(node.Id, slot)
                         | None -> Refused (ResidualReason.StoredAt node.Id)
+                    // The child array of an orchestration is not read back: the
+                    // orchestration's join, settled in the callable that forms
+                    // it, applies each child's deferred callable.
+                    | SemanticKind.ArrayExpr _, _ when ClosureEnvironments.isAsyncChildArray nodes node -> Consumed(node.Id, source)
                     | SemanticKind.RecordExpr _, _ | SemanticKind.TupleExpr _, _ | SemanticKind.ArrayExpr _, _
                     | SemanticKind.ListExpr _, _ | SemanticKind.DUConstruct _, _ | SemanticKind.UnionCase _, _
                     | SemanticKind.Set _, _ | SemanticKind.FieldSet _, _ | SemanticKind.IndexSet _, _
@@ -594,7 +603,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                     | Some value ->
                         match applySubst value.Type with
                         | NativeType.TSeq _ -> true
-                        | NativeType.TFun _ -> knownCallable source |> Option.isSome
+                        | ty when Types.isCallableCarrierType ty -> knownCallable source |> Option.isSome
                         | _ -> false
                     | None -> false
                 let usage =
@@ -1008,14 +1017,14 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                                     bounded site sourceOwner (Set.singleton site) Set.empty site))
                         | Some actual ->
                             match applySubst nodes[value].Type with
-                            | NativeType.TSeq _ | NativeType.TFun _ -> retainedView site owner slot actual
+                            | ty when (match ty with NativeType.TSeq _ -> true | _ -> Types.isCallableCarrierType ty) -> retainedView site owner slot actual
                             | _ -> Ok [])) (Ok [])
         | SemanticKind.SeqExpr(_, captured) ->
             match ClosureEnvironments.sequenceInitializers graph nodes[result.Constructor] with
             | None -> Error (ResidualReason.UnknownInputRegion result.Constructor)
             | Some initializers ->
                 captured |> List.fold (fun proof capture ->
-                    let view = not capture.IsMutable && (match applySubst capture.Type with NativeType.TSeq _ | NativeType.TFun _ -> true | _ -> false)
+                    let view = not capture.IsMutable && (match applySubst capture.Type with NativeType.TSeq _ -> true | ty -> Types.isCallableCarrierType ty)
                     if not view then proof else
                     combine proof (fun () ->
                         match capture.SourceNodeId |> Option.bind (fun slot -> initializers |> List.tryFind (fst >> (=) slot)) with
@@ -1062,7 +1071,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                                         activationCovered cellOwner (Set.singleton id) owner)
                                 else
                                     match applySubst nodes[value].Type with
-                                    | NativeType.TSeq _ | NativeType.TFun _ ->
+                                    | ty when (match ty with NativeType.TSeq _ -> true | _ -> Types.isCallableCarrierType ty) ->
                                         match sourceAllocations Set.empty value with
                                         | None -> Error (ResidualReason.UnknownInputRegion value)
                                         | Some allocations ->

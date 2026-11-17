@@ -398,6 +398,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\SequenceResidence.fs" />
     <Compile Include="Baker\Recipes\ContinuationObligationRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceMachineRecipes.fs" />
+    <Compile Include="Baker\Recipes\AsyncContinuationRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceContinuationEvidence.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
@@ -482,7 +483,6 @@
     <Compile Include="Nanopass\EnvironmentFactoryResults.fs" />
     <Compile Include="Nanopass\ClosureEnvironmentSettlement.fs" />
     <Compile Include="Nanopass\LazyRuntime.fs" />
-    <Compile Include="Nanopass\AsyncAndRegionSettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ProgramStorage.fs" />
     <Compile Include="Baker\Recipes\CallableBranchRecipes.fs" />
     <Compile Include="Nanopass\CallableBranchSettlement.fs" />
@@ -502,6 +502,7 @@
     <Compile Include="Baker\Recipes\ArrayMemoryRecipes.fs" />
     <Compile Include="Baker\Recipes\StringViewRecipes.fs" />
     <Compile Include="Nanopass\MemoryAccessElaboration.fs" />
+    <Compile Include="Nanopass\AsyncAndRegionSettlement.fs" />
     <Compile Include="Nanopass\DeadBodies.fs" />
     <Compile Include="Nanopass\MemorySettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MemoryPublication.fs" />

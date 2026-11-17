@@ -82,3 +82,13 @@ let rec collect make = function
         let! values = collect make rest
         return value :: values
       }
+
+/// A typed occurrence that retains the analysed range of the source value it
+/// stands for. Construction after range settlement publishes no new range.
+let createWithRange (range: ValueRange option) kind ty children =
+    saturation {
+        let! state = getUserState
+        let node = mkNode state kind ty children
+        do! emit { node with ValueRange = range }
+        return node.Id
+    }

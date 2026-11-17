@@ -1422,7 +1422,16 @@ let private continuationSources (ingress: Lazy<CallableIngress.Reading>) (unacco
                         capture.SourceNodeId |> Option.bind (CallableIngress.trySlotAccess ingress.Value node.Id)
                     else None)
             | _ -> []) |> Seq.toList
-    let allAccesses = (accesses |> List.map snd) @ currentAccesses @ sharedAccesses
+    // A store into an async continuation frame is private to the deferred
+    // callable's activation, including a slot without a resident read.
+    let activationAccesses =
+        graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.ContinuationAllocate owner when node.IsReachable -> Some owner
+            | _ -> None)
+        |> Seq.distinct |> Seq.toList
+        |> List.collect (CallableIngress.tryActivationFrameAccesses ingress.Value)
+    let allAccesses = (accesses |> List.map snd) @ currentAccesses @ sharedAccesses @ activationAccesses
     let sharedCells =
         allAccesses |> List.choose (fun access -> access.SharedCell |> Option.map (fun cell -> cell, access.Inputs))
         |> List.groupBy fst

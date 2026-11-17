@@ -366,10 +366,11 @@ let knownCallables (graph: SemanticGraph) =
                 Map.empty
             else
                 let known = tryKnown g
+                // An async computation value is the closure pair of its
+                // formation's deferred callable.
                 g.Nodes |> Map.toList |> List.choose (fun (id, node) ->
-                    match applySubst node.Type with
-                    | NativeType.TFun _ -> known id |> Option.map (fun value -> id, value)
-                    | _ -> None) |> Map.ofList
+                    if Types.isCallableCarrierType (applySubst node.Type) then known id |> Option.map (fun value -> id, value)
+                    else None) |> Map.ofList
         { Callables = callables })).Callables
 
 /// Lifted implementations are code declarations, not activation values that
@@ -449,6 +450,67 @@ let tryCapturedSourceReference (graph: SemanticGraph) =
                      (captures |> List.exists (fun (captured, _, _) -> captured = declaration)) -> Some declaration
             | _ -> None
         | _ -> None
+
+/// An async computation value is carried as the code and environment of its
+/// formation's deferred `unit -> 'T` callable.
+let isAsyncValue (node: SemanticNode) =
+    (Types.tryGetAsyncElement (applySubst node.Type)).IsSome
+
+/// The deferred callable of an async formation: the final structural child of
+/// the formation occurrence.
+let isAsyncFormationCallable (nodes: Map<NodeId, SemanticNode>) (callable: SemanticNode) =
+    callable.Parent |> Option.bind nodes.TryFind |> Option.exists (fun formation ->
+        formation.Metadata.TryFind "Async.Formation" = Some (MetadataValue.Bool true) &&
+        List.tryLast formation.Children = Some callable.Id)
+
+let private asyncActivator (nodes: Map<NodeId, SemanticNode>) (application: SemanticNode) operand =
+    match application.Kind with
+    | SemanticKind.Application(callee, [actual]) when actual = operand ->
+        match nodes.TryFind callee with
+        | Some { Kind = SemanticKind.Intrinsic info } -> Some info.FullName
+        | _ -> None
+    | _ -> None
+
+/// An activation applies the deferred callable of the async computation value
+/// given as its single operand, under the formation's calling convention.
+let isAsyncActivation (nodes: Map<NodeId, SemanticNode>) (application: SemanticNode) operand =
+    match asyncActivator nodes application operand with
+    | Some ("Async.RunSynchronously" | "Async.Start" | "Async.StartImmediate" | "Async.Await") -> true
+    | _ -> false
+
+/// An activation that completes the computation before the application yields
+/// its value: the use of the operand's environment ends within the
+/// application. Async.Start and Async.StartImmediate establish no such bound.
+let isCompletingAsyncActivation (nodes: Map<NodeId, SemanticNode>) (application: SemanticNode) operand =
+    match asyncActivator nodes application operand with
+    | Some ("Async.RunSynchronously" | "Async.Await") -> true
+    | _ -> false
+
+/// The child array of an async orchestration: an array expression of async
+/// computation values bound directly to an immutable name, every reference to
+/// which is the operand of Async.Parallel or Async.Sequential. The join of the
+/// orchestration applies each child; the array is not read back.
+let isAsyncChildArray (nodes: Map<NodeId, SemanticNode>) (array: SemanticNode) =
+    match array.Kind, array.Parent |> Option.bind nodes.TryFind with
+    | SemanticKind.ArrayExpr elements,
+      Some { Id = binding; Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
+        when value = array.Id && not elements.IsEmpty &&
+             (elements |> List.forall (fun element -> nodes.TryFind element |> Option.exists isAsyncValue)) ->
+        let references =
+            nodes.Values |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.VarRef(_, Some definition) -> definition = binding
+                | _ -> false) |> Seq.toList
+        let orchestrated (reference: SemanticNode) =
+            match reference.Parent |> Option.bind nodes.TryFind with
+            | Some { Kind = SemanticKind.Application(callee, [operand]) } when operand = reference.Id ->
+                match nodes.TryFind callee with
+                | Some { Kind = SemanticKind.Intrinsic info } ->
+                    info.FullName = "Async.Parallel" || info.FullName = "Async.Sequential"
+                | _ -> false
+            | _ -> false
+        not references.IsEmpty && List.forall orchestrated references
+    | _ -> false
 
 type Plan = { Source: SemanticNode; Captures: CaptureInfo list; Calls: NodeId list }
 
@@ -605,7 +667,8 @@ let plans (graph: SemanticGraph) =
             let sources = captures |> List.choose _.SourceNodeId |> Set.ofList
             let supportedCapture (capture: CaptureInfo) =
                 match applySubst capture.Type with
-                | NativeType.TFun _ when not capture.IsMutable ->
+                // A captured function value or async computation value.
+                | ty when not capture.IsMutable && Types.isCallableCarrierType ty ->
                     capture.SourceNodeId |> Option.exists (fun source ->
                         known.ContainsKey source || (lambda source |> Option.exists candidates.Contains))
                 | NativeType.TSeq _ when not capture.IsMutable -> true
@@ -636,6 +699,11 @@ let plans (graph: SemanticGraph) =
                         | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _ -> ()
                         | SemanticKind.Sequential _ -> ()
                         | SemanticKind.Application(callee, _) when callee = input && callSet.Contains node.Id -> ()
+                        // An activation, or the join of the orchestration a child
+                        // array belongs to, applies the deferred callable of an
+                        // async computation value under the formation's convention.
+                        | SemanticKind.Application _ when isAsyncActivation nodes node input -> ()
+                        | SemanticKind.ArrayExpr _ when isAsyncChildArray nodes node -> ()
                         | SemanticKind.Application(_, arguments) when List.contains input arguments ->
                             // An actual callable argument must feed an exact known
                             // formal; opaque higher-order consumers remain residual.
@@ -662,7 +730,10 @@ let plans (graph: SemanticGraph) =
             // Stateless promotion supplies a named declaration; it rewrites no
             // invocation and needs no singleton direct call. A higher-order
             // formal can legitimately receive several such code alternatives.
-            if rejected || (not captures.IsEmpty && calls.IsEmpty) then None
+            // The deferred callable of an async formation has no direct
+            // application: every invocation is an activation of the formation's
+            // value, checked with the other uses above.
+            if rejected || (not captures.IsEmpty && calls.IsEmpty && not (isAsyncFormationCallable nodes source)) then None
             else Some { Source = source; Captures = captures; Calls = calls }
         | _ -> None)
     // Plain code has no runtime environment. Settle these declarations before

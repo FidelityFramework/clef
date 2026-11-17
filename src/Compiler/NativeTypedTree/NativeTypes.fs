@@ -2190,6 +2190,17 @@ module Types =
         match ty with
         | NativeType.TApp(tc, [elem]) when isAsyncTypeCon tc -> Some elem
         | _ -> None
+    /// The signature of the deferred implementation of an async computation.
+    /// A value of `Async<'T>` is the code and environment of a `unit -> 'T`
+    /// callable; an activation applies that callable.
+    let tryGetAsyncCallableSignature (ty: NativeType) : NativeType option =
+        tryGetAsyncElement ty |> Option.map (fun element -> NativeType.TFun(unitType, element))
+    /// A value carried as code and an optional environment: a function value
+    /// or an async computation value. The type is read after substitution.
+    let isCallableCarrierType (ty: NativeType) : bool =
+        match ty with
+        | NativeType.TFun _ -> true
+        | _ -> (tryGetAsyncElement ty).IsSome
 
     // Deterministic memory region handle (`Region`, A-04..A-06).
     let regionTyCon = mkNTUTypeConRefWithArity "Region" NTUKind.NTUptr 0 TypeLayout.PlatformWord

@@ -347,6 +347,28 @@ let private valueFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
     selected ids graph.Codata.Value.ContinuationFrames |> Map.iter (fun _ row ->
         add row.Formal; add row.State; add row.Current; slots row.Slots; slots row.ScratchSlots
         row.Initializers |> List.iter (fun (destination, source) -> add destination; add source))
+    // The value-bearing participants of the selected async and region rows
+    // (clef#163). Each keeps its settled alias target, value shape and
+    // occurrence representation whether or not it is a scope occurrence;
+    // obligations, scopes and protocol-only anchors are not value consumers.
+    selected ids graph.Codata.Value.AsyncFormations |> Map.iter (fun _ row ->
+        add row.Formation; add row.Body; add row.ResultStorage; addMany row.CapturedBindings)
+    selected ids graph.Codata.Value.AsyncActivations |> Map.iter (fun _ row ->
+        add row.Site; add row.Formation; add row.ResultTarget; add row.CompletionTarget)
+    selected ids graph.Codata.Value.AsyncSuspensions |> Map.iter (fun _ row ->
+        add row.Site; add row.AwaitedSource; addMany row.LiveSlots; addMany row.InitializedSlots
+        add row.BindResumeTarget; add row.CompletionTarget
+        row.SpanningRetentions |> List.iter (fun retention -> add retention.Binding; add retention.BackingRegion))
+    selected ids graph.Codata.Value.AsyncOrchestrations |> Map.iter (fun _ row ->
+        add row.Site; addMany row.Children; add row.ResultStorage)
+    selected ids graph.Codata.Value.RegionAllocations |> Map.iter (fun _ row ->
+        add row.Region; addMany row.AllocatedValues
+        row.ScopeExitReleases |> List.iter (fun (_, release) -> add release))
+    selected ids graph.Codata.Value.RegionCallPassings |> Map.iter (fun _ row ->
+        add row.Site; add row.Call; add row.Region; addMany row.CalleeReleases)
+    selected ids graph.Codata.Value.RegionCopyEndpoints |> Map.iter (fun _ row ->
+        add row.Site; add row.EscapingValue; add row.SourceRegion; add row.SourceView
+        Option.iter add row.DestinationRegion; add row.DestinationStorage)
     selected ids emission.Boundary.Imports |> Map.iter (fun _ row -> addMany row.SourceTypes.Keys)
     selected ids emission.Boundary.Calls |> Map.iter (fun _ row ->
         row.Arguments |> List.iter (fun argument -> add argument.Actual; add argument.Formal))

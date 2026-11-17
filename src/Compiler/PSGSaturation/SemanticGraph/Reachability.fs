@@ -245,6 +245,19 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
                     | _ -> []
                 // Follow string-literal symbol references (dlsym reachability)
                 let symbolRef = getStringLiteralBindingRef node qualifiedIndex |> Option.toList
+                // A closure value names its implementation directly. The
+                // implementation's code binding is its declaration: it is
+                // retained with the closure value when no direct application
+                // references it, as for the deferred callable of an async
+                // formation, which only an activation applies.
+                let codeDeclaration =
+                    match node.Kind with
+                    | SemanticKind.ClosureValue(implementation, _) ->
+                        match graph.Nodes.TryFind implementation |> Option.bind _.Parent |> Option.bind graph.Nodes.TryFind with
+                        | Some { Id = binding; Kind = SemanticKind.Binding(_, false, _, _); Children = [declared] }
+                            when declared = implementation -> [binding]
+                        | _ -> []
+                    | _ -> []
                 // A module's quotation bindings are declarations the compiler reads, not values the
                 // module initialises (D9): the walk does not enter them from the module. A reference
                 // from executed code still reaches one, and is CCS8066 there.
@@ -253,7 +266,7 @@ let private computeContributions (graph: SemanticGraph) (entries: (NodeId * 'Roo
                     // Its placeholder body is not executable Clef; the actual
                     // acquisition/release bindings above remain dependencies.
                     ((if Map.containsKey node.Id mappedReferences then [] else node.Children)
-                     @ refs @ typeRefs @ intrinsicRef @ symbolRef
+                     @ refs @ typeRefs @ intrinsicRef @ symbolRef @ codeDeclaration
                      @ (lazyDeclarations.TryFind node.Id |> Option.defaultValue []))
                     |> List.distinct
                     |> List.filter (fun r ->
