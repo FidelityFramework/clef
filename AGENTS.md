@@ -19,8 +19,20 @@ These are owner requirements for all work in this repository.
   substitute convenient widths, partial premises or weaker tests for proof.
 - Preserve Clef's native dimensional type universe and lazy-default semantics.
   .NET is the compiler/tooling host, not the language's semantic model.
+- Hold the Zone A (self-hosting pure core: `NativeTypedTree/`, `PSGSaturation/`,
+  `Baker/`, `Nanopass/`) vs. Zone B (thin `.NET` host shell) membrane
+  ([Compiler Core Boundary and Saturation Recovery](https://forge.spkez.dev/FidelityFramework/clef/wiki/Compiler-Core-Boundary-and-Saturation-Recovery)):
+  zero `System.Reflection` or `Microsoft.FSharp.Reflection`, zero
+  `ConditionalWeakTable`/`Concurrent*`, zero new mutable BCL collections, zero
+  repeated `*Publication.project` or `PlatformResolution.read*` scans inside
+  recipes/loops, and zero new serialized `.normalize` passes in
+  `NativeService.fs`. Preserve `Dimensional_Range_Design.md` §1.2a
+  representation-threshold widening and bounded narrowing.
+- Load `fidelity-clef-core-boundary` before editing Zone A compiler code and
+  `fidelity-blind-audit` before auditing or signing off on a tranche.
 - Use .NET tooling; do not introduce or run Python automation.
 - Keep temporary test fixtures and gate scratch under `artifacts/scratch/` in
   this primary checkout.
-- Record exact evidence and failures. Focused passing checks do not establish
-  complete F/C acceptance.
+- Record exact evidence and failures, including live `.fidproj` canary receipts
+  (`01_HelloWorldDirect` phase timings, allocation/call counts, peak RSS, native
+  exit). Synthetic micro-tests alone do not establish acceptance.
