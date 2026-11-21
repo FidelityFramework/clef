@@ -567,7 +567,7 @@ let bindChildren (graph: SemanticGraph) (plan: ChildArrayPlan) : Result<ChildArr
                 Ok { Nodes = nodes
                      Edited = Set.singleton array.Id
                      Children = children
-                     Rewrite = { Target = block.Id; Before = tasks.Id; After = children |> List.map _.Binding } }
+                     Rewrite = { Target = block.Id; Before = tasks.Id; After = (children |> List.map _.Binding) @ [ tasks.Id ] } }
             | NoMatch reason, _ -> residual array.Id reason
         | None -> residual tasks.Id "The binding of the child array is not sequenced by a block."
     | _ -> residual plan.Array "The child array is not an array expression bound directly to an immutable name."

@@ -25,8 +25,8 @@ module private AsyncAndRegionFixture =
                 "Representations = [| { Name = \"uint8\"; Capability = \"native\"; Family = \"uint\"; Bits = 8; MinMagnitude = \"0\"; MaxMagnitude = \"255\"; Boundary = \"wrap\" }; ")
             .Replace(
                 "let rodata =",
-                "let regionPages = { Name = \"region\"; Kind = \"region\"; Capacity = 1048576; Alignment = 16; Granularity = 4096; Growth = \"up\"; Access = \"rw\"; Base = None }\nlet rodata =")
-            .Replace("Spaces = [| rodata |]", "Spaces = [| rodata; regionPages |]")
+                "let stack = { Name = \"stack\"; Kind = \"stack\"; Capacity = 4096; Alignment = 16; Granularity = 16; Growth = \"down\"; Access = \"rw\"; Base = None }\nlet regionPages = { Name = \"region\"; Kind = \"region\"; Capacity = 1048576; Alignment = 16; Granularity = 4096; Growth = \"up\"; Access = \"rw\"; Base = None }\nlet rodata =")
+            .Replace("Spaces = [| rodata |]", "Spaces = [| rodata; stack; regionPages |]")
 
     let checkRaw (name: string) (body: string) =
         let parse text path =
@@ -59,7 +59,7 @@ module private AsyncAndRegionFixture =
             match memory.Operations.TryFind site with
             | Some(Fidelity.PSG.MemoryWitnessOperation.Region row) -> row
             | _ -> failwith (sprintf "Missing region memory operation at %d; required=%b; deferred=%b"
-                           (Fidelity.PSG.NodeId.value site) (memory.Required.Contains site)
+                           (let (Fidelity.PSG.NodeId n) = site in n) (memory.Required.Contains site)
                            (revision.Emission.Ordinary.DeferredOnly.Contains site))
         for region in revision.Codata.RegionAllocations.Values do
             let creation = at region.Region
@@ -339,17 +339,15 @@ module private AsyncAndRegionFixture =
         | [ Some block ] -> graph.Nodes[block], activations, stores, accesses
         | _ -> failwith "The result stores of an orchestration do not share one block."
 
-    /// The child array of an orchestration: the binding its site reads, the
-    /// elements of the bound array expression and the block that sequences the
-    /// binding.
-    let private childArray (graph: SemanticGraph) (row: Fidelity.PSG.AsyncOrchestration) =
+    /// Both orchestrations in A-03 consume the same source binding, tasks.
+    let private childArray (graph: SemanticGraph) =
         let tasks =
-            match graph.Nodes[clefId row.Site].Kind with
-            | SemanticKind.Application(_, [ operand ]) ->
-                (match graph.Nodes[operand].Kind with
-                 | SemanticKind.VarRef(_, Some definition) -> graph.Nodes[definition]
-                 | _ -> failwith "The orchestration's child array is not read through a binding.")
-            | _ -> failwith "The orchestration site is not an application to its child array."
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding("tasks", false, _, _) -> true
+                | _ -> false)
+            |> Assert.Single
         let elements =
             match tasks.Children |> List.map (fun value -> graph.Nodes[value].Kind) with
             | [ SemanticKind.ArrayExpr elements ] -> elements
@@ -378,7 +376,7 @@ module private AsyncAndRegionFixture =
                   | SemanticKind.Sequential (results :: _) -> List.head graph.Nodes[results].Children
                   | _ -> failwith "The join block does not begin with the binding of the result array."
               yield! within storage block.Id Set.empty |> Set.toList |> List.map (fun id -> graph.Nodes[id])
-              let _, elements, _ = childArray graph row
+              let _, elements, _ = childArray graph
               for element in elements |> List.map (fun id -> graph.Nodes[id]) do
                   yield element
                   match element.Kind with
@@ -414,7 +412,7 @@ module private AsyncAndRegionFixture =
             for (before, after) in row.WorkDependencies do
                 Assert.Contains(before, row.Children)
                 Assert.Contains(after, row.Children)
-            let tasks, elements, taskItems = childArray graph row
+            let tasks, elements, taskItems = childArray graph
             Assert.Equal(row.Children.Length, elements.Length)
             // Result delivery: the guarded stores are the items of one block, in
             // result order, between the binding of the result array and the block's value.
@@ -426,14 +424,23 @@ module private AsyncAndRegionFixture =
                     Assert.Equal<NodeId list>(accesses |> List.map _.Id, List.take accesses.Length rest)
                     graph.Nodes[results], graph.Nodes[List.last rest]
                 | _ -> failwith "The join block is not the binding, the result stores and the value."
-            // The binding holds the result storage of the orchestration: the
-            // orchestration itself, with no activation applied to it.
+            // The results binding owns the block containing the source marker
+            // and the guarded allocation that the orchestration publishes.
             let storage =
                 match results.Kind, results.Children with
                 | SemanticKind.Binding(_, false, _, _), [ storage ] -> graph.Nodes[storage]
                 | _ -> failwith "The join block does not begin with the binding of the result array."
             Assert.True(storage.IsReachable)
-            Assert.Equal(clefId row.Site, storage.Id)
+            match storage.Kind with
+            | SemanticKind.Sequential [ marker; _; guarded ] ->
+                Assert.Equal(clefId row.Site, marker)
+                match graph.Nodes[guarded].Kind with
+                | SemanticKind.Sequential [ requirement; allocation ] ->
+                    Assert.True(match graph.Nodes[requirement].Kind with SemanticKind.Require _ -> true | _ -> false)
+                    Assert.Equal(clefId row.ResultStorage, allocation)
+                    Assert.True(match graph.Nodes[allocation].Kind with SemanticKind.ArrayAllocate _ -> true | _ -> false)
+                | _ -> failwith "The result allocation is not guarded by its bounds requirement."
+            | _ -> failwith "The result binding does not own the orchestration marker and guarded allocation."
             Assert.Equal(Some results.Id, storage.Parent)
             Assert.True(match value.Kind with SemanticKind.VarRef(_, Some definition) -> definition = results.Id | _ -> false)
             let participants = row.Participants |> List.map _.Node
@@ -1139,8 +1146,7 @@ let main _ =
         Assert.Equal("unsat", AsyncAndRegionFixture.solveObligation graphRetained revRetained.CurrentClaims[retention.RetirementCheck])
         AsyncAndRegionFixture.wellFormed revRetained
 
-    [<Fact>]
-    member _.``A-03 (19_AsyncParallel & Async.Sequential): populates AsyncOrchestration with 5 children and iterates every result``() =
+    static member private OrchestrationSource finalExpression =
         let source = """
 module AsyncParallelSample
 
@@ -1173,9 +1179,30 @@ let main _ =
     for s in seqResults do
         Console.writeln (Format.int s)
 
-    0
 """
-        let graph = AsyncAndRegionFixture.check "19_AsyncParallel" source
+        source + "    " + finalExpression + "\n"
+
+    [<Fact>]
+    member _.``A-03: a shared child array remains available to an ordinary consumer after both joins``() =
+        let graph = AsyncAndRegionCases.OrchestrationSource "Array.length tasks" |> AsyncAndRegionFixture.check "19_AsyncArrayConsumer"
+        let revision = AsyncAndRegionFixture.publish graph
+        Assert.Equal(2, revision.Codata.AsyncOrchestrations.Count)
+        let readsTasksLength (node: SemanticNode) =
+            match node.Kind with
+            | SemanticKind.Application(callee, [ argument ]) when node.IsReachable ->
+                match graph.Nodes[callee].Kind, graph.Nodes[argument].Kind with
+                | SemanticKind.Intrinsic info, SemanticKind.VarRef(_, Some definition) when info.FullName = "Array.length" ->
+                    match graph.Nodes[definition].Kind with
+                    | SemanticKind.Binding("tasks", false, _, _) -> true
+                    | _ -> false
+                | _ -> false
+            | _ -> false
+        Assert.True(graph.Nodes.Values |> Seq.exists readsTasksLength, "The returned length must read the shared tasks binding.")
+        AsyncAndRegionFixture.assertOrchestrationElaboration graph revision
+
+    [<Fact>]
+    member _.``A-03 (19_AsyncParallel & Async.Sequential): populates AsyncOrchestration with 5 children and iterates every result``() =
+        let graph = AsyncAndRegionCases.OrchestrationSource "0" |> AsyncAndRegionFixture.check "19_AsyncParallel"
         let revision = AsyncAndRegionFixture.publish graph
         AsyncAndRegionFixture.assertBakerSettled graph revision |> ignore
         Assert.Equal(2, revision.Codata.AsyncOrchestrations.Count)
