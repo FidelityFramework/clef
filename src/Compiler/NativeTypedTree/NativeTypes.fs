@@ -1474,6 +1474,8 @@ and [<NoComparison; ReferenceEquality>] TypeParam = {
     Id: TypeParamId
     /// User-visible name (e.g., "'a", "'T", "'region")
     Name: string
+    /// True when the inference allocator supplied the name.
+    HasInferredName: bool
     /// Is this a type parameter or a measure parameter?
     Kind: TypeParamKind
     /// Constraints on this type parameter (populated during checking)
@@ -1925,9 +1927,10 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
 //-------------------------------------------------------------------------
 
 /// Format a type for display
-let rec formatType (ty: NativeType) : string =
+let rec formatTypeWithParameterName (nameOf: TypeParam -> string) (ty: NativeType) : string =
+    let formatType ty = formatTypeWithParameterName nameOf ty
     match ty with
-    | NativeType.TVar tp -> tp.Name
+    | NativeType.TVar tp -> nameOf tp
     | NativeType.TApp(tc, []) -> tc.Name
     | NativeType.TApp(tc, [arg]) -> $"{formatType arg} {tc.Name}"
     | NativeType.TApp(tc, args) -> 
@@ -1941,7 +1944,7 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TTuple(elems, false) -> 
         elems |> List.map formatType |> String.concat " * "
     | NativeType.TForall(tps, body) ->
-        let tpsStr = tps |> List.map (fun tp -> tp.Name) |> String.concat " "
+        let tpsStr = tps |> List.map nameOf |> String.concat " "
         let members =
             tps |> List.collect _.Constraints |> List.distinct
             |> List.choose (function
@@ -1960,7 +1963,7 @@ let rec formatType (ty: NativeType) : string =
         let name =
             match CarrierRef.resolve carrier with
             | CarrierRef.Carrier tc -> tc.Name
-            | CarrierRef.CVar tp -> tp.Name
+            | CarrierRef.CVar tp -> nameOf tp
         if dim = Dimension.one then name else $"{name}<{Dimension.render dim}>"
     | NativeType.TMeasure dim -> Dimension.render dim
     | NativeType.TAnon(fields, isStruct) ->
@@ -1975,6 +1978,8 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TMap(k, v) -> $"Map<{formatType k}, {formatType v}>"  // PRD-13a
     | NativeType.TSet elem -> $"Set<{formatType elem}>"  // PRD-13a
     | NativeType.TError msg -> $"<error: {msg}>"
+
+let formatType ty = formatTypeWithParameterName (fun tp -> tp.Name) ty
 
 //-------------------------------------------------------------------------
 // Standard Types Module (NTU-based type definitions)

@@ -99,6 +99,7 @@ let private measureCell (v: MeasureVar) : TypeParam =
         let cell =
             { Id = v.Id
               Name = Dimension.renderVar v
+              HasInferredName = Option.isNone v.Name
               Kind = TypeParamKind.Measure
               Constraints = []
               Parent = TypeParamState.Unbound
@@ -364,63 +365,71 @@ let hasUnboundVars (ty: NativeType) : bool =
 let isResolved (ty: NativeType) : bool =
     Set.isEmpty (freeTypeVars ty)
 
-/// Collect all free (unbound) TypeParam objects in a type
-/// Returns the actual TypeParam records, not just IDs, for use in TForall construction
-let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
+let rec private collectTypeParams forDisplay (ty: NativeType) : TypeParam list =
+    let collect = collectTypeParams forDisplay
     match ty with
+    | NativeType.TVar typar when forDisplay -> [typar]
     | NativeType.TVar typar ->
         match find typar with
         | (root, None) -> [root]  // Unbound - collect it
-        | (_, Some boundTy) -> collectFreeTypeParams boundTy
+        | (_, Some boundTy) -> collect boundTy
 
     | NativeType.TApp(_, args) ->
-        args |> List.collect collectFreeTypeParams
+        args |> List.collect collect
 
     | NativeType.TFun(domain, range) ->
-        collectFreeTypeParams domain @ collectFreeTypeParams range
+        collect domain @ collect range
 
     | NativeType.TTuple(elems, _) ->
-        elems |> List.collect collectFreeTypeParams
+        elems |> List.collect collect
 
+    | NativeType.TForall(typars, body) when forDisplay ->
+        let members =
+            typars |> List.collect _.Constraints |> List.distinct
+            |> List.collect (function
+                | Constraint.HasMember(receiver, _, result, _) -> collect receiver @ collect result
+                | _ -> [])
+        typars @ collect body @ members
     | NativeType.TForall(typars, body) ->
         // Exclude bound type parameters
         let boundIds = typars |> List.map (fun tp -> tp.Id) |> Set.ofList
-        collectFreeTypeParams body |> List.filter (fun tp -> not (Set.contains tp.Id boundIds))
+        collect body |> List.filter (fun tp -> not (Set.contains tp.Id boundIds))
 
     | NativeType.TByref(elem, _) ->
-        collectFreeTypeParams elem
+        collect elem
 
     | NativeType.TNativePtr elem ->
-        collectFreeTypeParams elem
+        collect elem
 
     | NativeType.TAnon(fields, _) ->
-        fields |> List.collect (fun (_, t) -> collectFreeTypeParams t)
+        fields |> List.collect (fun (_, t) -> collect t)
 
     // Named records use TApp - handled above (empty args)
 
+    | NativeType.TUnion _ when forDisplay -> []
     | NativeType.TUnion(_, cases) ->
         cases
         |> List.collect (fun c -> c.Fields |> List.map snd)
-        |> List.collect collectFreeTypeParams
+        |> List.collect collect
 
     | NativeType.TLazy elem ->
-        collectFreeTypeParams elem  // PRD-14
+        collect elem  // PRD-14
 
     | NativeType.TSeq elem ->
-        collectFreeTypeParams elem  // PRD-15
+        collect elem  // PRD-15
 
     | NativeType.TSeqEnumerator elem ->
-        collectFreeTypeParams elem  // PRD-15/16
+        collect elem  // PRD-15/16
 
     // PRD-13a: Immutable collection types
     | NativeType.TList elem ->
-        collectFreeTypeParams elem
+        collect elem
 
     | NativeType.TMap(keyTy, valueTy) ->
-        collectFreeTypeParams keyTy @ collectFreeTypeParams valueTy
+        collect keyTy @ collect valueTy
 
     | NativeType.TSet elem ->
-        collectFreeTypeParams elem
+        collect elem
 
     // Note: option<'T> is handled via TUnion - it's a discriminated union
 
@@ -432,6 +441,12 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
         | CarrierRef.Carrier _ -> []
     | NativeType.TMeasure _ -> []
     | NativeType.TError _ -> []
+
+/// Free unbound representatives used for type generalization.
+let collectFreeTypeParams ty = collectTypeParams false ty
+
+/// Parameters present in the printed type, including quantified member signatures.
+let collectDisplayedTypeParams ty = collectTypeParams true ty
 
 /// Like applySubst, and additionally rewrite every still-unbound variable to its union-find
 /// ROOT record. TypeParam has reference equality, so a type must mention each variable through
@@ -474,22 +489,25 @@ let freshTypeParam (name: string) (kind: TypeParamKind) (range: SourceRange) : T
     nextTypeParamId <- nextTypeParamId + 1
     { Id = id
       Name = name
+      HasInferredName = false
       Kind = kind
       Constraints = []
       Parent = TypeParamState.Unbound
       Range = range }
 
+let anonymousTypeParamName kind id =
+    match kind with
+    | TypeParamKind.Type -> $"'?{id}"
+    | TypeParamKind.Measure -> $"'u?{id}"
+    | TypeParamKind.Carrier -> $"'k?{id}"
+
 /// Generate a fresh type parameter with an auto-generated name
 let freshTypeParamAuto (kind: TypeParamKind) (range: SourceRange) : TypeParam =
     let id = nextTypeParamId
     nextTypeParamId <- nextTypeParamId + 1
-    let prefix =
-        match kind with
-        | TypeParamKind.Type -> "'?"
-        | TypeParamKind.Measure -> "'u?"
-        | TypeParamKind.Carrier -> "'k?"
     { Id = id
-      Name = $"{prefix}{id}"
+      Name = anonymousTypeParamName kind id
+      HasInferredName = true
       Kind = kind
       Constraints = []
       Parent = TypeParamState.Unbound

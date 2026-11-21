@@ -35,6 +35,49 @@ type MemberInferenceCases() =
         | _ -> ()
 
     [<Fact>]
+    member _.``Unresolved member diagnostics preserve distinct inferred and explicitly quoted receivers across checks``() =
+        let source = """let read (named: '``?0``) first second =
+    let a: int = first.Left
+    let b: int = first.Again
+    let c: int = second.Other
+    let d: int = named.Explicit
+    (a, b, c, d)
+"""
+        let check () =
+            let checkedSource = MemberOracle.rejected "CCS8711" source
+            checkedSource.Diagnostics |> List.filter (fun d -> d.Code = "CCS8711")
+        let first = check ()
+        let headers =
+            [ "'``?0``.Explicit"; "'?0.Other"; "'?1.Again"; "'?1.Left" ]
+            |> List.map (fun memberName ->
+                $"Member constraint '{memberName}: int' remains unresolved; supply receiver context or retain it in an inline member scheme.")
+        Assert.Equal<string list>(headers, first |> List.map _.Message)
+        MemberOracle.accepted "let keep value = value\nlet useValue f x = f x\n" |> ignore
+        let shape (d: Diagnostic) = d.Code, d.Severity, d.Range, d.Reachability, d.Message
+        Assert.Equal<_ list>(first |> List.map shape, check () |> List.map shape)
+
+    [<Fact>]
+    member _.``Unresolved member constraints share inferred labels across union-find aliases and keep observed quoted names``() =
+        let check parameter expectedLeft =
+            let source = $"let read {parameter} q =\n    let r = if true then p else q\n    let a: int = p.Left\n    let b: int = q.Again\n    (a,b,r)\n"
+            let result = MemberOracle.rejected "CCS8711" source
+            let messages = result.Diagnostics |> List.filter (fun row -> row.Code = "CCS8711") |> List.map _.Message
+            let fields = ["'?0.Again"; expectedLeft + ".Left"]
+            Assert.Equal<string list>(fields |> List.map (fun field -> $"Member constraint '{field}: int' remains unresolved; supply receiver context or retain it in an inline member scheme."), messages)
+        check "p" "'?0"
+        check "(p: '``space here``)" "'``space here``"
+
+    [<Fact>]
+    member _.``Undefined member on a concrete function preserves unresolved variable identity across checks``() =
+        let check () =
+            let result = MemberOracle.rejected "CCS8702" "let project x = x.Value\nlet bad = project (fun y -> y)\n"
+            result.Diagnostics |> List.filter (fun d -> d.Code = "CCS8702") |> List.map _.Message
+        let expected = ["Type ''?0 -> '?0' does not define member 'Value'."]
+        Assert.Equal<string list>(expected, check ())
+        MemberOracle.accepted "let keep x = x\nlet apply f x = f x\n" |> ignore
+        Assert.Equal<string list>(expected, check ())
+
+    [<Fact>]
     member _.``A concrete actual without the required field is rejected at source checking``() =
         MemberOracle.rejected "CCS8702" "let project x = x.Value\nlet bad = project 1\n" |> ignore
 

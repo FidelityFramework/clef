@@ -327,25 +327,49 @@ let private solveAndGetDiagnostics (env: TypeEnv) (constraints: Constraint list)
         | Solved | Deferred _ -> []
         | Failed errors -> errors
     let memberErrors, pending = dischargeMemberConstraints env constraints
+    let render names ty =
+        let representativeId tp = (find tp |> fst).Id
+        let names =
+            (names, collectDisplayedTypeParams ty)
+            ||> List.fold (fun names tp ->
+                if tp.Kind = TypeParamKind.Type && tp.HasInferredName then
+                    let id = representativeId tp
+                    if Map.containsKey id names then names
+                    else Map.add id (anonymousTypeParamName tp.Kind (Map.count names)) names
+                else names)
+        let spelling (tp: TypeParam) =
+            if tp.Kind = TypeParamKind.Type && tp.HasInferredName then
+                Map.tryFind (representativeId tp) names |> Option.defaultValue tp.Name
+            elif tp.Kind = TypeParamKind.Type && tp.Name.Length > 1 && tp.Name[0] = '\'' then
+                "'" + PrettyNaming.NormalizeIdentifierBackticks tp.Name[1..]
+            else tp.Name
+        formatTypeWithParameterName spelling ty, names
     let memberDiagnostics =
-        pending |> List.choose (fun constraint' ->
+        pending |> List.mapFold (fun names constraint' ->
             match constraint' with
             | Constraint.HasMember(receiver, name, result, range) when not (isGeneralizedMemberConstraint env constraint') ->
                 match applySubst receiver with
-                | NativeType.TError _ -> None
+                | NativeType.TError _ -> None, names
                 | actual ->
-                    let unresolved = match actual with NativeType.TVar _ -> true | _ -> false
+                    let receiver, names = render names actual
+                    let code, message, names =
+                        match actual with
+                        | NativeType.TVar _ ->
+                            let result, names = render names (applySubst result)
+                            DiagnosticCodes.CCS8711_UnsupportedConstraint,
+                            $"Member constraint '{receiver}.{name}: {result}' remains unresolved; supply receiver context or retain it in an inline member scheme.", names
+                        | _ ->
+                            DiagnosticCodes.CCS8702_UndefinedField, $"Type '{receiver}' does not define member '{name}'.", names
                     Some {
                         Severity = NativeDiagnosticSeverity.Error
-                        Code = if unresolved then DiagnosticCodes.CCS8711_UnsupportedConstraint else DiagnosticCodes.CCS8702_UndefinedField
-                        Message =
-                            if unresolved then $"Member constraint '{formatType actual}.{name}: {formatType (applySubst result)}' remains unresolved; supply receiver context or retain it in an inline member scheme."
-                            else $"Type '{formatType actual}' does not define member '{name}'."
+                        Code = code
+                        Message = message
                         Range = range
                         RelatedNodes = []
                         Reachability = ReachabilityContext.Unknown
-                    }
-            | _ -> None)
+                    }, names
+            | _ -> None, names) Map.empty
+        |> fst |> List.choose id
     errorsToDiagnostics (solveErrors @ memberErrors) @ memberDiagnostics
 
 //-------------------------------------------------------------------------
