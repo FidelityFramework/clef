@@ -622,4 +622,6 @@
     <ProjectReference Include="$(FidelityPSGProjectPath)" />
   </ItemGroup>
 
+  <Import Project="../../build/ClefCore.targets" />
+
 </Project>
