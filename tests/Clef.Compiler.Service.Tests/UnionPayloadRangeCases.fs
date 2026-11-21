@@ -188,6 +188,46 @@ let main _ = extract (9000, IntVal 42)
                 "[<EntryPoint>]\nlet main argv = extract (argv.Length > 0) (fun () -> IntVal argv.Length)\n"
         UnionPayloadRangeFixture.refusedAtPayload "IntVal" "x" (DimensionalCases.check ("type Number = IntVal of int\n" + program))
 
+    [<Fact>]
+    member _.``Nested calls to the same aggregate identity retain the supplied payload``() =
+        let graph = UnionPayloadRangeFixture.check """
+type Number = IntVal of int
+let identity (value: Number) = value
+let extract n = match n with IntVal result -> result
+[<EntryPoint>]
+let main _ = extract (identity (identity (IntVal 7)))
+"""
+        Assert.Equal(Some(ValueRange.point 7I), (UnionPayloadRangeFixture.payload "IntVal" graph).ValueRange)
+
+    [<Fact>]
+    member _.``Recursive work with an independently constructed result retains its payload``() =
+        let graph = UnionPayloadRangeFixture.check """
+type Number = IntVal of int | Other
+let rec make flag =
+    if flag then IntVal 7
+    else match make true with IntVal _ -> IntVal 11 | Other -> IntVal 13
+let extract n = match n with IntVal result -> result | Other -> 0
+[<EntryPoint>]
+let main _ = extract (make false)
+"""
+        match (UnionPayloadRangeFixture.binding "result" graph).ValueRange with
+        | Some(ValueRange.Bounded(lo, hi)) ->
+            Assert.Equal(7I, lo)
+            Assert.InRange(hi, 11I, 13I)
+        | range -> failwithf "Independent constructors lost their finite payloads: %A" range
+
+    [<Fact>]
+    member _.``A forwarded recursive application cannot disappear through an aggregate identity``() =
+        let result = DimensionalCases.check """
+type Number = IntVal of int
+let identity (value: Number) = value
+let rec make flag = if flag then IntVal 7 else identity (make flag)
+let extract flag = match make flag with IntVal result -> result
+[<EntryPoint>]
+let main _ = extract true
+"""
+        UnionPayloadRangeFixture.refusedAtPayload "IntVal" "result" result
+
 module private RecordPayloadRangeFixture =
     let declarations = "type Number = IntVal of int | Other of int\ntype Holder = { Payload: Number; Marker: int }\n"
     let extract = "let extract (holder: Holder) = match holder.Payload with IntVal value -> value | Other _ -> 0\n"

@@ -2487,7 +2487,7 @@ let private asyncResultTargets (program: Program) (compId: NodeId) : bool * Choi
         | _ -> true, []
     loop compId Set.empty
 
-let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId * AggregateProjection list>) (exprId: NodeId) (path: AggregateProjection list) : bool * bool * Set<NodeId> =
+let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId * AggregateProjection list>) (returnCalls: (NodeId * NodeId) list) (exprId: NodeId) (path: AggregateProjection list) : bool * bool * Set<NodeId> =
     if List.isEmpty path then false, false, Set.singleton exprId
     // A repeated identical projection contributes no new origin to the least
     // fixed point. A growing/different projection remains opaque.
@@ -2498,8 +2498,13 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId 
         | true, (u, l) -> false, u, l
         | false, _ ->
             let visited = Set.add (exprId, path) visited
-            let project id nextPath = aggregateElementOrigins program visited id nextPath
+            let projectFrom calls id nextPath = aggregateElementOrigins program visited calls id nextPath
+            let project id nextPath = projectFrom returnCalls id nextPath
             let recurse id = project id path
+            // A recursive return supplies no payload enclosure until its call group has one.
+            let callResult body =
+                if returnCalls |> List.exists (fun (_, active) -> active = body) then true, true, Set.empty
+                else projectFrom ((exprId, body) :: returnCalls) body path
             let emptyResult = false, false, Set.empty
             let unboundedResult = false, true, Set.empty
             let combine (c1, u1, l1) (c2, u2, l2) =
@@ -2576,7 +2581,13 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId 
                             match Map.tryFind node.Id program.CallArguments with
                             | Some args ->
                                 args
-                                |> List.fold (fun acc (_, a) -> combine acc (recurse a)) emptyResult
+                                |> List.fold (fun acc (call, actual) ->
+                                    // A formal reads its actual in the supplying caller, including nested uses of the same function.
+                                    let callers =
+                                        match returnCalls |> List.skipWhile (fun (source, _) -> source <> call) with
+                                        | _ :: parent -> parent
+                                        | [] -> []
+                                    combine acc (projectFrom callers actual path)) emptyResult
                             | None -> unboundedResult
                     | SemanticKind.PatternBinding _ ->
                         match List.tryLast node.Children with
@@ -2599,8 +2610,9 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId 
                             else targets |> List.fold (fun ranges target ->
                                 let result = match target with Choice1Of2 call | Choice2Of2 call -> recurse call
                                 combine ranges result) emptyResult
-                        | Some (Callee.Direct (_, bodyId), _) -> recurse bodyId
-                        | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) -> joinAll (candidates |> List.map (fun c -> c.Body))
+                        | Some (Callee.Direct (_, bodyId), _) -> callResult bodyId
+                        | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) ->
+                            candidates |> List.fold (fun acc candidate -> combine acc (callResult candidate.Body)) emptyResult
                         | Some (Callee.Intrinsic { Module = IntrinsicModule.Array; Operation = "get" }, arrId :: _) ->
                             match Map.tryFind arrId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
                             | Some elem -> joinAll (Map.tryFind (elementKey elem) program.ElementStores |> Option.defaultValue [] |> List.map snd)
@@ -2619,7 +2631,7 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId 
             hadCycle, u, l
 
 let private aggregateElement (program: Program) (value: Reading) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : ValueRange =
-    let _, unbounded, leaves = aggregateElementOrigins program (visited |> Set.map (fun id -> id, path)) exprId path
+    let _, unbounded, leaves = aggregateElementOrigins program (visited |> Set.map (fun id -> id, path)) [] exprId path
     let initial = if unbounded then ValueRange.Unbounded else ValueRange.Empty
     leaves |> Set.fold (fun acc leafId -> ValueRange.join acc (value leafId)) initial
 
@@ -3875,7 +3887,7 @@ let private fixpoint (program: Program) (contexts: ContextProgram) : State * Ran
                     | _ ->
                         NodeTransferPlan.Constant (applyCarrier carrier fallback)
                 | SemanticKind.TupleGet (tupleId, index) ->
-                    let _, unbounded, leaves = aggregateElementOrigins program Set.empty tupleId [TupleSlot index]
+                    let _, unbounded, leaves = aggregateElementOrigins program Set.empty [] tupleId [TupleSlot index]
                     let init = if unbounded then ValueRange.Unbounded else ValueRange.Empty
                     if leaves.IsEmpty then NodeTransferPlan.Constant (applyCarrier carrier init)
                     else
@@ -3883,7 +3895,7 @@ let private fixpoint (program: Program) (contexts: ContextProgram) : State * Ran
                         System.Array.Sort(leafKeys)
                         NodeTransferPlan.SharedLeaves (init, leafKeys, carrier)
                 | SemanticKind.DUEliminate (value, tag, name, _) ->
-                    let _, unbounded, leaves = aggregateElementOrigins program Set.empty value [UnionPayload(tag, name)]
+                    let _, unbounded, leaves = aggregateElementOrigins program Set.empty [] value [UnionPayload(tag, name)]
                     let init = if unbounded then ValueRange.Unbounded else ValueRange.Empty
                     if leaves.IsEmpty then NodeTransferPlan.Constant (applyCarrier carrier init)
                     else
