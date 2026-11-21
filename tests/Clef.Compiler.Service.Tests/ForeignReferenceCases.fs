@@ -2331,6 +2331,51 @@ let main _ =
         )
 
     [<Fact>]
+    member _.``Numeric publication attributes a shared foreign anchor to the refused call alone``() =
+        let graph =
+            ForeignCases.resultPlatformGraph ForeignCases.resultContract """
+[<EntryPoint>]
+let main _ =
+    let first = read 4
+    let second = read 7
+    if first >= -1 && second <= 7 then 0 else 1
+"""
+        let readyId, readyInfo, missingId, missingInfo, missingModel =
+            ForeignCases.resultClaims graph
+            |> List.filter (fun (_, _, model) -> model.Role = ForeignResultProofRole.LogicalCoverage)
+            |> function
+                | [ readyId, readyInfo, _; missingId, missingInfo, missingModel ] ->
+                    readyId, readyInfo, missingId, missingInfo, missingModel
+                | rows -> failwithf "Expected two settled foreign behaviors; found %d." rows.Length
+        Assert.NotEqual(readyInfo.Id, missingInfo.Id)
+
+        // Keep the same typed proof occurrence and remove only its behavior.
+        // A source program with no declared behavior would instead have
+        // published a Pending body before the numeric projection reads it.
+        let unresolved = { missingModel with Application = { missingModel.Application with Hypothesis = None } }
+        let failedNode =
+            { graph.Nodes[missingId] with
+                Kind = SemanticKind.Obligation { missingInfo with Body = ObligationBody.ForeignResultCoverage unresolved } }
+        let graph = { graph with Nodes = graph.Nodes.Add(missingId, failedNode) }
+
+        let failures graph =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+            | Error rows -> rows |> List.filter (fun row -> row.Reason.StartsWith "NumericPublication: Pending claim ")
+            | Ok _ -> failwith "The missing foreign behavior was published"
+
+        let original = failures graph
+        let reason = "NumericPublication: Pending claim " + missingInfo.Id + ": Foreign result behavior contract is missing"
+        let refusal = original |> List.filter (fun row -> row.Reason = reason) |> Assert.Single
+        Assert.Equal(Some missingId, refusal.Occurrence)
+        Assert.Equal(Set.singleton missingId, refusal.Participants)
+        Assert.DoesNotContain(original, fun row -> row.Occurrence = Some readyId)
+
+        let sameAnchor =
+            { graph.Nodes[readyId] with Kind = SemanticKind.Obligation { readyInfo with Id = missingInfo.Id } }
+        let renamed = { graph with Nodes = graph.Nodes.Add(readyId, sameAnchor) }
+        Assert.Equal<_ list>(original, failures renamed)
+
+    [<Fact>]
     member _.``Missing foreign behavior retains both pending role claims``() =
         let graph =
             ForeignCases.resultGraph
