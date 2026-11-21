@@ -2487,7 +2487,7 @@ let private asyncResultTargets (program: Program) (compId: NodeId) : bool * Choi
         | _ -> true, []
     loop compId Set.empty
 
-let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId * AggregateProjection list>) (returnCalls: (NodeId * NodeId) list) (exprId: NodeId) (path: AggregateProjection list) : bool * bool * Set<NodeId> =
+let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId * AggregateProjection list>) returnCalls (exprId: NodeId) (path: AggregateProjection list) : bool * bool * Set<NodeId> =
     if List.isEmpty path then false, false, Set.singleton exprId
     // A repeated identical projection contributes no new origin to the least
     // fixed point. A growing/different projection remains opaque.
@@ -2498,13 +2498,13 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId 
         | true, (u, l) -> false, u, l
         | false, _ ->
             let visited = Set.add (exprId, path) visited
-            let projectFrom calls id nextPath = aggregateElementOrigins program visited calls id nextPath
-            let project id nextPath = projectFrom returnCalls id nextPath
+            let projectFrom seen calls id nextPath = aggregateElementOrigins program seen calls id nextPath
+            let project id nextPath = projectFrom visited returnCalls id nextPath
             let recurse id = project id path
             // A recursive return supplies no payload enclosure until its call group has one.
             let callResult body =
-                if returnCalls |> List.exists (fun (_, active) -> active = body) then true, true, Set.empty
-                else projectFrom ((exprId, body) :: returnCalls) body path
+                if returnCalls |> List.exists (fun (_, active, _) -> active = body) then true, true, Set.empty
+                else projectFrom visited ((exprId, body, visited) :: returnCalls) body path
             let emptyResult = false, false, Set.empty
             let unboundedResult = false, true, Set.empty
             let combine (c1, u1, l1) (c2, u2, l2) =
@@ -2582,12 +2582,12 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId 
                             | Some args ->
                                 args
                                 |> List.fold (fun acc (call, actual) ->
-                                    // A formal reads its actual in the supplying caller, including nested uses of the same function.
-                                    let callers =
-                                        match returnCalls |> List.skipWhile (fun (source, _) -> source <> call) with
-                                        | _ :: parent -> parent
-                                        | [] -> []
-                                    combine acc (projectFrom callers actual path)) emptyResult
+                                    // A formal reads its actual with the supplying caller's structural and return ancestry.
+                                    let seen, callers =
+                                        match returnCalls |> List.skipWhile (fun (source, _, _) -> source <> call) with
+                                        | (_, _, beforeBody) :: parent -> beforeBody, parent
+                                        | [] -> visited, []
+                                    combine acc (projectFrom seen callers actual path)) emptyResult
                             | None -> unboundedResult
                     | SemanticKind.PatternBinding _ ->
                         match List.tryLast node.Children with
@@ -2611,8 +2611,7 @@ let rec private aggregateElementOrigins (program: Program) (visited: Set<NodeId 
                                 let result = match target with Choice1Of2 call | Choice2Of2 call -> recurse call
                                 combine ranges result) emptyResult
                         | Some (Callee.Direct (_, bodyId), _) -> callResult bodyId
-                        | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) ->
-                            candidates |> List.fold (fun acc candidate -> combine acc (callResult candidate.Body)) emptyResult
+                        | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) -> joinAll (candidates |> List.map (fun c -> c.Body))
                         | Some (Callee.Intrinsic { Module = IntrinsicModule.Array; Operation = "get" }, arrId :: _) ->
                             match Map.tryFind arrId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
                             | Some elem -> joinAll (Map.tryFind (elementKey elem) program.ElementStores |> Option.defaultValue [] |> List.map snd)

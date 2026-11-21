@@ -216,17 +216,40 @@ let main _ = extract (make false)
             Assert.InRange(hi, 11I, 13I)
         | range -> failwithf "Independent constructors lost their finite payloads: %A" range
 
-    [<Fact>]
-    member _.``A forwarded recursive application cannot disappear through an aggregate identity``() =
-        let result = DimensionalCases.check """
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Recursive aggregate returns through an identity function retain the located refusal``(identityAtScrutinee: bool) =
+        let scrutinee = if identityAtScrutinee then "identity (make flag)" else "make flag"
+        let source = $"""
 type Number = IntVal of int
 let identity (value: Number) = value
 let rec make flag = if flag then IntVal 7 else identity (make flag)
-let extract flag = match make flag with IntVal result -> result
+let extract flag = match {scrutinee} with IntVal result -> result
 [<EntryPoint>]
 let main _ = extract true
 """
-        UnionPayloadRangeFixture.refusedAtPayload "IntVal" "result" result
+        UnionPayloadRangeFixture.refusedAtPayload "IntVal" "result" (DimensionalCases.check source)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Closed indirect aggregate returns follow the supplied function body``(recursive: bool) =
+        let producer, scrutinee =
+            if recursive then "let rec make flag = if flag then IntVal 7 else apply make flag", "make flag"
+            else "let make flag = if flag then IntVal 7 else IntVal 11", "apply make flag"
+        let source = $"""
+type Number = IntVal of int
+let apply (f: bool -> Number) flag = f flag
+{producer}
+let extract flag = match {scrutinee} with IntVal result -> result
+[<EntryPoint>]
+let main _ = extract true
+"""
+        if recursive then UnionPayloadRangeFixture.refusedAtPayload "IntVal" "result" (DimensionalCases.check source)
+        else
+            let graph = UnionPayloadRangeFixture.check source
+            Assert.Equal(Some(ValueRange.Bounded(7I, 11I)), (UnionPayloadRangeFixture.binding "result" graph).ValueRange)
 
 module private RecordPayloadRangeFixture =
     let declarations = "type Number = IntVal of int | Other of int\ntype Holder = { Payload: Number; Marker: int }\n"
