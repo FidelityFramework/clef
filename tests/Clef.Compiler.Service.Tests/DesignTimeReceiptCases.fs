@@ -72,10 +72,20 @@ type DesignTimeReceiptCases() =
         let pending = DesignTimeReceiptFixture.plain "receipts_capacity_pending" (ObligationBody.Pending blockers)
         let checkedSnapshot = Receipts.ofGraph graph
         Assert.Contains(checkedSnapshot, fun ob -> ob.Id = info.Id)
-        let snapshot = checkedSnapshot @ [ tautological; ignoring; proved; refuted; pending ]
+        let shared source (ob: ObligationInfo) = { ob with Id = "receipts_shared"; Source = source }
+        let first = shared "receipts.clef:7:1" proved
+        let occurrences = [ first; shared "receipts.clef:8:1" pending; shared "receipts.clef:9:1" refuted; first ]
+        let snapshot = checkedSnapshot @ [ tautological; ignoring; proved; refuted; pending ] @ occurrences
 
         let receipts = Receipts.designTimeReceiptsWithProjectionOverride DesignTimeReceiptFixture.budget overrideProjection snapshot
         Assert.Equal<string list>(snapshot |> List.map _.Id, receipts |> List.map _.ObligationId)
+        let singleton ob =
+            Receipts.designTimeReceiptsWithProjectionOverride DesignTimeReceiptFixture.budget overrideProjection [ob] |> List.exactlyOne
+        Assert.Equal<Receipts.ObligationReceipt list>(List.map singleton snapshot, receipts)
+        let actual = receipts |> List.skip (snapshot.Length - occurrences.Length)
+        Assert.Equal<Receipts.DesignTimeVerdict list>(
+            [ Receipts.DesignTimeVerdict.Proved; Receipts.DesignTimeVerdict.Pending blockers
+              Receipts.DesignTimeVerdict.Refuted; Receipts.DesignTimeVerdict.Proved ], actual |> List.map _.Verdict)
         let receiptOf id = receipts |> List.find (fun receipt -> receipt.ObligationId = id)
 
         // Byte identity: every receipt's reason is the compiler run's error for that obligation.

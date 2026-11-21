@@ -173,19 +173,54 @@ let private readAnswers marker count lines =
         | _ -> Error "cvc5 returned an invalid framed answer batch"
     read 0 [] lines
 
+type internal BudgetedAnswer =
+    { Answer: Result<string list, string>
+      SolverUnavailable: bool }
+
+type private ChunkAttempt =
+    | Returned of BudgetedAnswer
+    | DeadlineReached of string
+
+let private response answer = { Answer = answer; SolverUnavailable = false }
+
 let private runChunk solve queries =
+    let memberAnswer = function
+        | Returned answer -> answer
+        | DeadlineReached reason -> response (Error reason)
+    let replay () = queries |> List.map (fun query -> query, solve query)
+    let results attempts = attempts |> List.map (fun (query, attempt) -> query, memberAnswer attempt)
     match queries with
-    | [ query ] -> [ (query, solve query) ]
+    | [ query ] -> [ (query, solve query |> memberAnswer) ]
     | _ ->
         let marker, text = frameQueries queries
-        match solve text |> Result.bind (readAnswers marker queries.Length) with
-        | Ok answers -> List.zip queries (List.map Ok answers)
-        | Error batchReason ->
-            // Replay isolates a failed member. If the failure cannot be
-            // reproduced, the batch evidence remains unavailable for every item.
-            let replay = queries |> List.map (fun query -> query, solve query)
-            if replay |> List.exists (snd >> isSingleAnswer >> not) then replay
-            else queries |> List.map (fun query -> query, Error batchReason)
+        match solve text with
+        | DeadlineReached _ ->
+            // A deadline on the whole frame does not identify a slow member.
+            replay () |> results
+        | Returned frame ->
+            match frame.Answer |> Result.bind (readAnswers marker queries.Length) with
+            | Ok answers -> List.zip queries (answers |> List.map (Ok >> response))
+            | Error frameReason ->
+                let attempts = replay ()
+                let reproduced =
+                    attempts |> List.exists (function
+                        | _, Returned item -> not (isSingleAnswer item.Answer)
+                        | _, DeadlineReached _ -> false)
+                if reproduced then results attempts
+                else
+                    // A cutoff did not observe the malformed frame on any singleton.
+                    attempts |> List.map (function
+                        | query, DeadlineReached reason -> query, response (Error reason)
+                        | query, Returned _ -> query, { frame with Answer = Error frameReason })
+
+let private runChunks solve queries =
+    queries
+    |> List.chunkBySize 64
+    |> List.map (fun chunk -> async { return runChunk solve chunk })
+    |> fun chunks -> Async.Parallel(chunks, maxDegreeOfParallelism = 4)
+    |> Async.RunSynchronously
+    |> Array.toList
+    |> List.concat
 
 /// Resolve independent, single-verdict compiler queries. Chunk framing
 /// changes transport only. The caller associates answers to obligation occurrences.
@@ -202,37 +237,41 @@ let internal runSolverBatch (queries: string list) : Map<string, Result<string l
         let fresh =
             misses
             |> List.map fst
-            |> List.chunkBySize 64
-            |> List.map (fun chunk -> async { return runChunk (runUnbounded solver) chunk })
-            |> fun chunks -> Async.Parallel(chunks, maxDegreeOfParallelism = 4)
-            |> Async.RunSynchronously
-            |> Array.toList
-            |> List.concat
-            |> List.map (fun (query, answer) -> query, rememberAnswer solver (cacheAllowed && isSingleAnswer answer) query answer)
+            |> runChunks (runUnbounded solver >> response >> Returned)
+            |> List.map (fun (query, item) -> query, rememberAnswer solver (cacheAllowed && isSingleAnswer item.Answer) query item.Answer)
         Map.ofList (cached @ fresh)
 
 let private milliseconds (span: System.TimeSpan) = int64 span.TotalMilliseconds
 
-/// A design-time run: every query within `perQuery`, the run within `total`.
+/// A design-time invocation shares its wall-clock budget across all stages and replays.
 let internal budgetedSolver (perQuery: System.TimeSpan) (total: System.TimeSpan) =
     let clock = System.Diagnostics.Stopwatch.StartNew()
-    let mutable unavailable = false
-    let solve query =
-        // A previously successful query does not establish that the currently
-        // configured solver is still present and executable.
+    let attempt query =
         let remaining = total - clock.Elapsed
         if remaining <= System.TimeSpan.Zero then
-            Error (sprintf "cvc5 was not run: the design-time budget of %d ms was exhausted" (milliseconds total))
+            DeadlineReached (sprintf "cvc5 was not run: the design-time budget of %d ms was exhausted" (milliseconds total))
         else
             let solver, _ = solverExecutable ()
             let cutByTotal = remaining < perQuery
             match execute solver (Some (if cutByTotal then remaining else perQuery)) query with
-            | Answered answer -> answer
-            | Unavailable reason ->
-                unavailable <- true
-                Error reason
+            | Answered answer -> Returned (response answer)
+            | Unavailable reason -> Returned { Answer = Error reason; SolverUnavailable = true }
             | TimedOut when cutByTotal ->
-                Error (sprintf "cvc5 did not answer before the design-time budget of %d ms was exhausted" (milliseconds total))
+                DeadlineReached (sprintf "cvc5 did not answer before the design-time budget of %d ms was exhausted" (milliseconds total))
             | TimedOut ->
-                Error (sprintf "cvc5 did not answer within the per-query limit of %d ms" (milliseconds perQuery))
-    solve, (fun () -> unavailable), (fun () -> unavailable <- false)
+                DeadlineReached (sprintf "cvc5 did not answer within the per-query limit of %d ms" (milliseconds perQuery))
+    fun queries -> queries |> List.distinct |> runChunks attempt |> Map.ofList
+
+let internal omittedBatchQuery = "cvc5 batch omitted a requested query"
+
+/// Only answers consumed by this occurrence can mark its solver unavailable.
+let internal withBudgetedAnswers (answers: Map<string, BudgetedAnswer>) evaluate =
+    let mutable unavailable = false
+    let resolve query =
+        match Map.tryFind query answers with
+        | None -> Error omittedBatchQuery
+        | Some item ->
+            unavailable <- unavailable || item.SolverUnavailable
+            item.Answer
+    let value = evaluate resolve
+    value, unavailable

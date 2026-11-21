@@ -634,10 +634,6 @@ let solverStartInfo (solver: string) (tempPath: string) : System.Diagnostics.Pro
 let private runSolver (query: string) : Result<string list, string> =
     Clef.Compiler.Utilities.HostTools.runSolver query
 
-/// A design-time run: every query within `PerQuery`, the run within `Total`.
-let private budgetedSolver (budget: DesignTimeBudget) =
-    Clef.Compiler.Utilities.HostTools.budgetedSolver budget.PerQuery budget.Total
-
 //=============================================================================
 // DISCHARGE STAGES
 //=============================================================================
@@ -825,19 +821,20 @@ let private settleReadiness solve = function
                         { shaped with NonVacuity = List.rev (clauseReceipt ob participants row (String.concat ", " verdicts) :: acc) }
         clauses [] rows
 
-let private readinessWith solve overrideProjection ob =
-    planReadiness overrideProjection ob |> settleReadiness solve
-
 let private batchAnswer answers query =
     Map.tryFind query answers
-    |> Option.defaultValue (Error "cvc5 batch omitted a requested query")
+    |> Option.defaultValue (Error Clef.Compiler.Utilities.HostTools.omittedBatchQuery)
 
-let private readinessBatchWith solveBatch overrideProjection obligations =
+let private readinessBatchPlan overrideProjection obligations =
     let plans = obligations |> List.map (planReadiness overrideProjection)
     let queries =
         plans |> List.collect (function
             | SettledReadiness _ -> []
             | AwaitingClauses (_, _, rows) -> rows |> List.map (fun (_, _, query) -> query))
+    plans, queries
+
+let private readinessBatchWith solveBatch overrideProjection obligations =
+    let plans, queries = readinessBatchPlan overrideProjection obligations
     let answers = solveBatch queries
     plans |> List.map (settleReadiness (batchAnswer answers))
 
@@ -1020,31 +1017,56 @@ let discharge (obligations: ObligationInfo list) : Result<DischargeReceipt, stri
 //=============================================================================
 
 /// The editor's proof authority: one receipt per obligation, in inventory
-/// order, each run through the same stages as the compiler run and bounded by
-/// the caller's budget. Each `Reason` is the text `discharge [obligation]`
-/// returns; a budget limit appears only where the compiler run has no limit.
+/// order, folded from the same stages as compiler discharge. Every stage shares
+/// the caller's host deadline and uses only the answers it actually consults.
 let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : ObligationReceipt list =
-    let solve, isUnavailable, clearUnavailable = budgetedSolver budget
-    obligations |> List.map (fun ob ->
-        clearUnavailable ()
-        let r = readinessWith solve overrideProjection ob
-        let receipt verdict reason premises evidence =
-            { ObligationId = ob.Id; Kind = ob.Kind; Source = ob.Source
-              Verdict = (if isUnavailable () then SolverUnavailable else verdict); Reason = reason
-              Premises = premises; NonVacuity = r.NonVacuity; Participants = r.Participants
-              IgnoredParticipants = r.Ignored; Evidence = evidence }
-        match r.Stop with
-        | Some (verdict, _) -> receipt verdict (Some (unreadyReason [ r ])) [] []
-        | None ->
-            match premisesWith solve r with
-            | Error (verdict, reason, premises) -> receipt verdict (Some reason) premises []
-            | Ok premises ->
-                match solve (readySmtLibWithOverride overrideProjection [ ob ]) with
-                | Error reason -> receipt (Undecided "psg") (Some reason) premises []
-                | Ok [ "unsat" ] -> receipt Proved None premises [ evidenceReceipt overrideProjection ob "unsat" ]
-                | Ok [ "sat" ] -> receipt Refuted (Some (Reason.notDischarged ob "sat")) premises [ evidenceReceipt overrideProjection ob "sat" ]
-                | Ok [ verdict ] -> receipt (Undecided "psg") (Some (Reason.notDischarged ob verdict)) premises [ evidenceReceipt overrideProjection ob verdict ]
-                | Ok verdicts -> receipt (Undecided "psg") (Some (Reason.verdictCount 1 verdicts.Length)) premises [])
+    let solveBatch = Clef.Compiler.Utilities.HostTools.budgetedSolver budget.PerQuery budget.Total
+    let receipt (r: Readiness) unavailable verdict reason premises evidence =
+        let ob = r.Obligation
+        { ObligationId = ob.Id; Kind = ob.Kind; Source = ob.Source
+          Verdict = (if unavailable then SolverUnavailable else verdict); Reason = reason
+          Premises = premises; NonVacuity = r.NonVacuity; Participants = r.Participants
+          IgnoredParticipants = r.Ignored; Evidence = evidence }
+
+    let plans, clauseQueries = readinessBatchPlan overrideProjection obligations
+    let clauseAnswers = solveBatch clauseQueries
+    let readiness =
+        plans |> List.map (fun plan ->
+            Clef.Compiler.Utilities.HostTools.withBudgetedAnswers clauseAnswers (fun solve -> settleReadiness solve plan))
+    let premiseAnswers =
+        readiness
+        |> List.collect (fun (r, _) -> if r.Stop.IsNone then r.PremiseQueries else [])
+        |> solveBatch
+    let checkedPremises =
+        readiness |> List.map (fun (r, unavailable) ->
+            match r.Stop with
+            | Some (verdict, _) -> Error (receipt r unavailable verdict (Some (unreadyReason [ r ])) [] [])
+            | None ->
+                let result, premiseUnavailable =
+                    Clef.Compiler.Utilities.HostTools.withBudgetedAnswers premiseAnswers (fun solve -> premisesWith solve r)
+                match result with
+                | Error (verdict, reason, premises) ->
+                    Error (receipt r premiseUnavailable verdict (Some reason) premises [])
+                | Ok premises ->
+                    Ok (r, premises, readySmtLibWithOverride overrideProjection [ r.Obligation ]))
+    let evidenceAnswers =
+        checkedPremises
+        |> List.choose (function Ok (_, _, query) -> Some query | Error _ -> None)
+        |> solveBatch
+    checkedPremises |> List.map (function
+        | Error stopped -> stopped
+        | Ok (r, premises, query) ->
+            let ob = r.Obligation
+            let answer, unavailable =
+                Clef.Compiler.Utilities.HostTools.withBudgetedAnswers evidenceAnswers (fun solve -> solve query)
+            let verdict, reason, evidence =
+                match answer with
+                | Error reason -> Undecided "psg", Some reason, []
+                | Ok [ "unsat" ] -> Proved, None, [ evidenceReceipt overrideProjection ob "unsat" ]
+                | Ok [ "sat" ] -> Refuted, Some (Reason.notDischarged ob "sat"), [ evidenceReceipt overrideProjection ob "sat" ]
+                | Ok [ verdict ] -> Undecided "psg", Some (Reason.notDischarged ob verdict), [ evidenceReceipt overrideProjection ob verdict ]
+                | Ok verdicts -> Undecided "psg", Some (Reason.verdictCount 1 verdicts.Length), []
+            receipt r unavailable verdict reason premises evidence)
 
 let designTimeReceipts (budget: DesignTimeBudget) (obligations: ObligationInfo list) : ObligationReceipt list =
     designTimeReceiptsWithProjectionOverride budget (fun _ -> None) obligations
