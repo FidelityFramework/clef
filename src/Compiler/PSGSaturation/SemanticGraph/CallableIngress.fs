@@ -951,7 +951,7 @@ let private analyzeWithCore (graph: SemanticGraph) (resolution: CallableOrigins.
                         | SemanticKind.EnvironmentReference value, EdgeRole.Subject when value = id ->
                             // Only the proven environment actual of an exact call
                             // can consume this projection as part of the value.
-                            let consumers = getUses node.Id
+                            let consumers = observedUses node.Id
                             if consumers.IsEmpty || consumers |> List.exists (fun useSite ->
                                 useSite.Role <> EdgeRole.Argument || complete useSite.Target |> Option.isNone ||
                                 environmentCalls.Value.TryFind useSite.Target <> Some(useSite.Ordinal, node.Id)) then reject ()
