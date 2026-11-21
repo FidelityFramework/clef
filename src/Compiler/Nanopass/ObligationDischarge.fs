@@ -780,44 +780,73 @@ type private Readiness = {
     Stop: (DesignTimeVerdict * string list) option
 }
 
-let private readinessWith solve overrideProjection (ob: ObligationInfo) : Readiness =
+let private stopReadiness verdict missing readiness =
+    { readiness with Stop = Some (verdict, missing) }
+
+type private ReadinessPlan =
+    | SettledReadiness of Readiness
+    | AwaitingClauses of Readiness * ConditionalLaw * (int * string * string) list
+
+let private planReadiness overrideProjection (ob: ObligationInfo) : ReadinessPlan =
     let open' = { Obligation = ob; Participants = []; Ignored = []; NonVacuity = []; PremiseQueries = []; Stop = None }
-    let stop verdict missing readiness = { readiness with Stop = Some (verdict, missing) }
     match ob.Body with
-    | ObligationBody.Pending reasons -> stop (Pending reasons) reasons open'
+    | ObligationBody.Pending reasons -> SettledReadiness (stopReadiness (Pending reasons) reasons open')
     | _ ->
         match conditionalLaw overrideProjection ob with
-        | None -> open'
-        | Some (Error reason) -> stop (Pending [ reason ]) [ reason ] open'
+        | None -> SettledReadiness open'
+        | Some (Error reason) -> SettledReadiness (stopReadiness (Pending [ reason ]) [ reason ] open')
         | Some (Ok law) ->
-            let participants = participantsOf law
-            let ignored = ignoredOf law
-            let shaped = { open' with Participants = participants; Ignored = ignored }
-            let rec clauses acc = function
-                | [] when not ignored.IsEmpty ->
-                    stop (IgnoresParticipants ignored) [ Reason.ignoresParticipants ob ignored ] { shaped with NonVacuity = List.rev acc }
-                | [] -> { shaped with NonVacuity = List.rev acc; PremiseQueries = premiseQueriesOf ob.Id law }
-                | (clauseIndex, clause, query as row) :: rest ->
-                    match solve query with
-                    | Error reason ->
-                        stop (Undecided "psg-nonvacuity") [ reason ] { shaped with NonVacuity = List.rev acc }
-                    | Ok [ "sat" ] -> clauses (clauseReceipt ob participants row "sat" :: acc) rest
-                    | Ok [ "unsat" ] ->
-                        stop (ValidWithoutPremises(clauseIndex, clause)) [ Reason.validWithoutPremises ob clauseIndex clause ]
-                            { shaped with NonVacuity = List.rev (clauseReceipt ob participants row "unsat" :: acc) }
-                    | Ok verdicts ->
-                        stop (Undecided "psg-nonvacuity") [ Reason.clauseAnswer ob clauseIndex verdicts ]
-                            { shaped with NonVacuity = List.rev (clauseReceipt ob participants row (String.concat ", " verdicts) :: acc) }
+            let shaped = { open' with Participants = participantsOf law; Ignored = ignoredOf law }
             match clausesOf ob.Id law with
-            | Error reason ->
-                stop (Undecided "psg-nonvacuity") [ reason ] shaped
-            | Ok clauseRows ->
-                clauses [] clauseRows
+            | Error reason -> SettledReadiness (stopReadiness (Undecided "psg-nonvacuity") [ reason ] shaped)
+            | Ok rows -> AwaitingClauses (shaped, law, rows)
+
+let private settleReadiness solve = function
+    | SettledReadiness ready -> ready
+    | AwaitingClauses (shaped, law, rows) ->
+        let ob = shaped.Obligation
+        let participants = shaped.Participants
+        let ignored = shaped.Ignored
+        let rec clauses acc = function
+            | [] when not ignored.IsEmpty ->
+                stopReadiness (IgnoresParticipants ignored) [ Reason.ignoresParticipants ob ignored ]
+                    { shaped with NonVacuity = List.rev acc }
+            | [] -> { shaped with NonVacuity = List.rev acc; PremiseQueries = premiseQueriesOf ob.Id law }
+            | (clauseIndex, clause, query as row) :: rest ->
+                match solve query with
+                | Error reason ->
+                    stopReadiness (Undecided "psg-nonvacuity") [ reason ] { shaped with NonVacuity = List.rev acc }
+                | Ok [ "sat" ] -> clauses (clauseReceipt ob participants row "sat" :: acc) rest
+                | Ok [ "unsat" ] ->
+                    stopReadiness (ValidWithoutPremises(clauseIndex, clause)) [ Reason.validWithoutPremises ob clauseIndex clause ]
+                        { shaped with NonVacuity = List.rev (clauseReceipt ob participants row "unsat" :: acc) }
+                | Ok verdicts ->
+                    stopReadiness (Undecided "psg-nonvacuity") [ Reason.clauseAnswer ob clauseIndex verdicts ]
+                        { shaped with NonVacuity = List.rev (clauseReceipt ob participants row (String.concat ", " verdicts) :: acc) }
+        clauses [] rows
+
+let private readinessWith solve overrideProjection ob =
+    planReadiness overrideProjection ob |> settleReadiness solve
+
+let private batchAnswer answers query =
+    Map.tryFind query answers
+    |> Option.defaultValue (Error "cvc5 batch omitted a requested query")
+
+let private readinessBatchWith solveBatch overrideProjection obligations =
+    let plans = obligations |> List.map (planReadiness overrideProjection)
+    let queries =
+        plans |> List.collect (function
+            | SettledReadiness _ -> []
+            | AwaitingClauses (_, _, rows) -> rows |> List.map (fun (_, _, query) -> query))
+    let answers = solveBatch queries
+    plans |> List.map (settleReadiness (batchAnswer answers))
+
+let private unavailableItem r =
+    r.Stop |> Option.map (fun (_, missing) ->
+        { Anchor = r.Obligation.Id; Source = r.Obligation.Source; MissingPremises = missing })
 
 let private unavailableOf (readiness: Readiness list) : UnavailableObligation list =
-    readiness |> List.choose (fun r ->
-        r.Stop |> Option.map (fun (_, missing) ->
-            { Anchor = r.Obligation.Id; Source = r.Obligation.Source; MissingPremises = missing }))
+    readiness |> List.choose unavailableItem
 
 /// The compiler run's refusal over unready obligations: a clause or relevance
 /// refusal is reported alone, ahead of unavailable premises.
@@ -913,10 +942,19 @@ let conditionalNonVacuity (obligations: ObligationInfo list) : Result<(Obligatio
     |> Result.map (List.map (fun (ob, _, _, _, _, query) -> ob, query))
 
 let unavailableWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : UnavailableObligation list =
-    obligations |> List.map (readinessWith runSolver overrideProjection) |> unavailableOf
+    readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch overrideProjection obligations |> unavailableOf
 
 let unavailable (obligations: ObligationInfo list) : UnavailableObligation list =
     unavailableWithOverride (fun _ -> None) obligations
+
+/// Keep the originating occurrence even when two obligations use the same
+/// textual anchor. A successful sibling has no refusal row.
+let internal unavailableByOccurrence (obligations: (NodeId * ObligationInfo) list) =
+    let occurrences, infos = List.unzip obligations
+    let ready = readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch (fun _ -> None) infos
+    List.zip occurrences ready
+    |> List.choose (fun (occurrence, item) -> unavailableItem item |> Option.map (fun refusal -> occurrence, refusal))
+    |> Map.ofList
 
 let private readySmtLibWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : string =
     obligations
@@ -946,14 +984,16 @@ let private evidenceReceipt overrideProjection (ob: ObligationInfo) verdict =
 /// The compiler run: readiness of every obligation, then SAT(H) of every
 /// premise query, then one UNSAT(H and not C) query over the inventory.
 let dischargeWithProjectionOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
-    let readiness = obligations |> List.map (readinessWith runSolver overrideProjection)
+    let readiness = readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch overrideProjection obligations
     match readiness |> List.filter (fun r -> r.Stop.IsSome) with
     | unready when not unready.IsEmpty -> Error (unreadyReason unready)
     | _ ->
+        let premiseAnswers =
+            readiness |> List.collect _.PremiseQueries |> Clef.Compiler.Utilities.HostTools.runSolverBatch
         let rec premises acc = function
             | [] -> Ok (List.rev acc |> List.concat)
             | r :: rest ->
-                match premisesWith runSolver r with
+                match premisesWith (batchAnswer premiseAnswers) r with
                 | Error (_, reason, _) -> Error reason
                 | Ok receipts -> premises (receipts :: acc) rest
         match premises [] readiness with
@@ -1081,9 +1121,7 @@ let private foreignLedgerFields (model: ForeignResultCoverageModel) =
         "trustedBase", JsonValue.Array(hypothesis @ abi)
     ]
 
-let ledgerJson (obligations: ObligationInfo list) : string =
-    let hasPending = unavailable obligations |> List.isEmpty |> not
-
+let private ledgerJsonWithPending hasPending (obligations: ObligationInfo list) : string =
     let hasConditional =
         obligations
         |> List.exists (fun obligation ->
@@ -1154,6 +1192,9 @@ let ledgerJson (obligations: ObligationInfo list) : string =
         ]
     |> Json.serializePretty
 
+let ledgerJson (obligations: ObligationInfo list) : string =
+    ledgerJsonWithPending (unavailable obligations |> List.isEmpty |> not) obligations
+
 let private unavailableJson (pending: UnavailableObligation list) =
     pending
     |> List.map (fun obligation -> JsonValue.Object [
@@ -1191,13 +1232,15 @@ let emit (inventory: Result<ObligationInfo list, string list>) : unit =
         | Error _ | Ok [] -> clear ()
         | Ok obs ->
             Directory.CreateDirectory dir |> ignore
-            File.WriteAllText(ledgerPath, ledgerJson obs)
-            match trySmtLib obs with
-            | Ok query ->
+            let pending = unavailable obs
+            File.WriteAllText(ledgerPath, ledgerJsonWithPending (not pending.IsEmpty) obs)
+            match pending with
+            | [] ->
+                let query = readySmtLib obs
                 File.Delete unavailablePath
                 File.WriteAllText(queryPath, query + "\n")
                 if isVerbose () then printfn "[CCS] Wrote obligations: 06a_obligations.json, 06b_obligations.smt2 (%d obligations)" obs.Length
-            | Error pending ->
+            | _ ->
                 File.Delete queryPath
                 File.WriteAllText(unavailablePath, unavailableJson pending)
                 if isVerbose () then printfn "[CCS] Wrote obligation ledger; query unavailable for %d pending obligations" pending.Length

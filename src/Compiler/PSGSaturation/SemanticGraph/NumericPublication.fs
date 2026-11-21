@@ -213,33 +213,34 @@ let private projectDomain (graph: SemanticGraph) : Result<NumericWitnessProjecti
 /// Every admitted domain still requires completeness; neither a partial ledger
 /// nor a Pending claim can grant physical publication.
 let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessProjectionFailure list> =
-    let pending =
+    let ownedClaims =
         graph.Nodes
         |> Map.toList
         |> List.choose (fun (id, node) ->
             match node.Kind with
-            | SemanticKind.Obligation info when Numeric.owned node ->
-                match info.Body with
-                | ObligationBody.Pending reasons ->
-                    Some
-                        {
-                            Kind = WitnessProjectionFailureKind.Settlement
-                            Occurrence = Some id
-                            Participants = Set.singleton id
-                            Reason =
-                                "NumericPublication: Pending claim "
-                                + info.Id
-                                + ": "
-                                + String.concat "; " reasons
-                        }
-                | ObligationBody.ForeignResultCoverage _ ->
-                    Clef.Compiler.Nanopass.ObligationDischarge.unavailable [info]
-                    |> List.tryHead
-                    |> Option.map (fun unavailable ->
-                        { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some id; Participants = Set.singleton id
-                          Reason = "NumericPublication: Pending claim " + info.Id + ": " + String.concat "; " unavailable.MissingPremises })
-                | _ -> None
+            | SemanticKind.Obligation info when Numeric.owned node -> Some (id, info)
             | _ -> None)
+
+    let foreignRefusals =
+        ownedClaims
+        |> List.filter (fun (_, info) ->
+            match info.Body with
+            | ObligationBody.ForeignResultCoverage _ -> true
+            | _ -> false)
+        |> Clef.Compiler.Nanopass.ObligationDischarge.unavailableByOccurrence
+
+    let pending =
+        ownedClaims
+        |> List.choose (fun (id, info) ->
+            let reasons =
+                match info.Body with
+                | ObligationBody.Pending reasons -> Some reasons
+                | ObligationBody.ForeignResultCoverage _ ->
+                    Map.tryFind id foreignRefusals |> Option.map _.MissingPremises
+                | _ -> None
+            reasons |> Option.map (fun reasons ->
+                { Kind = WitnessProjectionFailureKind.Settlement; Occurrence = Some id; Participants = Set.singleton id
+                  Reason = "NumericPublication: Pending claim " + info.Id + ": " + String.concat "; " reasons }))
 
     match projectDomain graph with
     | Error failures -> Error(failures @ pending)

@@ -5,6 +5,7 @@ open Xunit
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Receipts = Clef.Compiler.Nanopass.ObligationDischarge
+module BatchHost = Clef.Compiler.Utilities.HostTools
 
 /// clef #134: the editor's design-time receipts come from ObligationDischarge
 /// and carry the compiler run's reasons byte for byte.
@@ -157,6 +158,63 @@ type DesignTimeReceiptCases() =
         let decided = Receipts.designTimeReceipts DesignTimeReceiptFixture.budget [ fresh ] |> Assert.Single
         Assert.Equal(Receipts.DesignTimeVerdict.Proved, decided.Verdict)
         Assert.Equal(None, decided.Reason)
+
+    [<Fact>]
+    member _.``Batched cvc5 checks reset shared declarations and return each query's independent verdict``() =
+        let stamp = Guid.NewGuid().ToString("N")
+        let prelude = sprintf "(set-logic QF_LIA)\n; %s\n(declare-const shared Int)\n" stamp
+        let sat = prelude + "; \"__clef_query_0_0_begin\" \"__clef_query_1_0_begin\"\n(assert (= shared 0))\n(check-sat)"
+        let unsat = prelude + "(assert (< shared shared))\n(check-sat)"
+        let queries = [unsat; sat; unsat]
+        let marker, framed = BatchHost.frameQueries queries
+        List.iteri (fun ordinal _ ->
+            for side in ["begin"; "end"] do
+                let boundary = marker ordinal side
+                Assert.Contains("(echo " + boundary + ")", framed)
+                for query in queries do Assert.DoesNotContain(boundary, query)) queries
+        let answers = BatchHost.runSolverBatch queries
+        Assert.Equal<Result<string list, string> list>(
+            [Ok ["unsat"]; Ok ["sat"]; Ok ["unsat"]], queries |> List.map (fun query -> answers[query]))
+
+    [<Fact>]
+    member _.``Batched cvc5 replay preserves malformed singleton output and both independent siblings``() =
+        let prelude = sprintf "(set-logic QF_LIA)\n; %s\n" (Guid.NewGuid().ToString("N"))
+        let sat = prelude + "(assert true)\n(check-sat)"
+        let two = prelude + "(check-sat)\n(reset)\n(set-logic QF_LIA)\n(assert false)\n(check-sat)"
+        let unsat = prelude + "(assert false)\n(check-sat)"
+        let answers = BatchHost.runSolverBatch [sat; two; unsat]
+        Assert.Equal<Result<string list, string>>(Ok ["sat"], answers[sat])
+        Assert.Equal<Result<string list, string>>(Ok ["unsat"], answers[unsat])
+        Assert.Equal<Result<string list, string>>(Ok ["sat"; "unsat"], answers[two])
+        Assert.Equal<Result<string list, string>>(BatchHost.runSolver two, answers[two])
+
+    [<Fact>]
+    member _.``Mixed foreign readiness keeps independent refusals for occurrences sharing an anchor``() =
+        let hypothesis : ForeignResultHypothesis =
+            { Quote = NodeId 4; Declaration = NodeId 1; Identity = "posix-read"; Version = "profile-1"; Source = "pilot/read"
+              Lower = ForeignResultBound.Constant -1I; Upper = ForeignResultBound.Argument 0 }
+        let model : ForeignResultCoverageModel =
+            { Application = { Declaration = NodeId 1; Call = NodeId 2; Context = [NodeId 5]; Hypothesis = Some hypothesis
+                              Arguments = [{ Index = 0; Node = NodeId 3; Enclosure = ValueRange.Bounded(4I, 4I) }] }
+              Role = ForeignResultProofRole.LogicalCoverage; AbiRange = ValueRange.Bounded(-8I, 7I); ResultRange = ValueRange.Bounded(-1I, 4I)
+              Destination = ValueRange.Bounded(-8I, 7I); DestinationDeclaration = Some(NodeId 6); Abi = Some(NodeId 7)
+              AbiIdentity = None; DestinationIdentity = None }
+        let anchor = "duplicate_foreign_coverage"
+        let occurrence site source coverage =
+            NodeId site, { DesignTimeReceiptFixture.plain anchor (ObligationBody.ForeignResultCoverage coverage) with
+                             Kind = "foreign-result-coverage"; Source = source }
+        let absent = occurrence 21 "foreign.clef:1:2" { model with Application = { model.Application with Hypothesis = None } }
+        let ready = occurrence 22 "foreign.clef:2:2" model
+        let unbounded = occurrence 23 "foreign.clef:3:2" { model with AbiRange = ValueRange.Unbounded }
+        let refusals = Receipts.unavailableByOccurrence [absent; ready; unbounded]
+        Assert.Equal(2, refusals.Count)
+        Assert.False(refusals.ContainsKey(fst ready))
+        for (site, info), reason in [absent, "Foreign result behavior contract is missing"
+                                     unbounded, "Foreign result coverage has no established finite ABI enclosure"] do
+            let refusal = refusals[site]
+            Assert.Equal(anchor, refusal.Anchor)
+            Assert.Equal(info.Source, refusal.Source)
+            Assert.Equal<string list>([reason], refusal.MissingPremises)
 
     [<Fact>]
     member _.``The solver resolves the exact PATH executable before host installations``() =

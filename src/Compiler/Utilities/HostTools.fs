@@ -117,18 +117,99 @@ let private execute (solver: string) (limit: System.TimeSpan option) (text: stri
 let private solverCache =
     System.Collections.Concurrent.ConcurrentDictionary<string * string, string list>()
 
+let private tryCachedAnswer solver cacheAllowed query =
+    match (if cacheAllowed then solverCache.TryGetValue((solver, query)) else (false, Unchecked.defaultof<_>)) with
+    | true, answer -> Some answer
+    | _ -> None
+
+let private rememberAnswer solver cacheAllowed query answer =
+    if cacheAllowed then
+        answer |> Result.iter (fun lines -> solverCache.TryAdd((solver, query), lines) |> ignore)
+    answer
+
+let private runUnbounded solver query =
+    match execute solver None query with
+    | Answered answer -> answer
+    | Unavailable reason -> Error reason
+    | TimedOut -> Error "An unbounded cvc5 run cannot exceed a limit"
+
 /// The compiler run: unbounded.
 let internal runSolver (query: string) : Result<string list, string> =
     let solver, cacheAllowed = solverExecutable ()
-    match (if cacheAllowed then solverCache.TryGetValue((solver, query)) else (false, Unchecked.defaultof<_>)) with
-    | true, answer -> Ok answer
+    match tryCachedAnswer solver cacheAllowed query with
+    | Some answer -> Ok answer
+    | None -> runUnbounded solver query |> rememberAnswer solver cacheAllowed query
+
+let internal frameQueries (queries: string list) =
+    let rec freshPrefix ordinal =
+        let prefix = sprintf "__clef_query_%d_" ordinal
+        if queries |> List.exists (fun query -> query.Contains(prefix, StringComparison.Ordinal)) then
+            freshPrefix (ordinal + 1)
+        else prefix
+    let prefix = freshPrefix 0
+    let marker ordinal side = sprintf "\"%s%d_%s\"" prefix ordinal side
+    let text =
+        queries
+        |> List.mapi (fun ordinal query ->
+            sprintf "(echo %s)\n%s\n(echo %s)" (marker ordinal "begin") query (marker ordinal "end"))
+        |> String.concat "\n(reset)\n"
+    marker, text
+
+let private isVerdict = function
+    | "sat" | "unsat" | "unknown" -> true
+    | _ -> false
+
+let private isSingleAnswer = function
+    | Ok [ verdict ] -> isVerdict verdict
+    | _ -> false
+
+let private readAnswers marker count lines =
+    let rec read ordinal answers = function
+        | [] when ordinal = count -> Ok (List.rev answers)
+        | before :: verdict :: after :: rest
+            when ordinal < count && before = marker ordinal "begin" && after = marker ordinal "end" &&
+                 isVerdict verdict ->
+            read (ordinal + 1) ([verdict] :: answers) rest
+        | _ -> Error "cvc5 returned an invalid framed answer batch"
+    read 0 [] lines
+
+let private runChunk solve queries =
+    match queries with
+    | [ query ] -> [ (query, solve query) ]
     | _ ->
-        match execute solver None query with
-        | Answered (Ok answer) ->
-            if cacheAllowed then solverCache.TryAdd((solver, query), answer) |> ignore
-            Ok answer
-        | Answered (Error reason) | Unavailable reason -> Error reason
-        | TimedOut -> Error "An unbounded cvc5 run cannot exceed a limit"
+        let marker, text = frameQueries queries
+        match solve text |> Result.bind (readAnswers marker queries.Length) with
+        | Ok answers -> List.zip queries (List.map Ok answers)
+        | Error batchReason ->
+            // Replay isolates a failed member. If the failure cannot be
+            // reproduced, the batch evidence remains unavailable for every item.
+            let replay = queries |> List.map (fun query -> query, solve query)
+            if replay |> List.exists (snd >> isSingleAnswer >> not) then replay
+            else queries |> List.map (fun query -> query, Error batchReason)
+
+/// Resolve independent, single-verdict compiler queries. Chunk framing
+/// changes transport only. The caller associates answers to obligation occurrences.
+let internal runSolverBatch (queries: string list) : Map<string, Result<string list, string>> =
+    if queries.IsEmpty then Map.empty
+    else
+        let solver, cacheAllowed = solverExecutable ()
+        let hits, misses =
+            queries
+            |> List.distinct
+            |> List.map (fun query -> query, tryCachedAnswer solver cacheAllowed query)
+            |> List.partition (snd >> Option.isSome)
+        let cached = hits |> List.choose (fun (query, answer) -> answer |> Option.map (fun lines -> query, Ok lines))
+        let fresh =
+            misses
+            |> List.map fst
+            |> List.chunkBySize 64
+            |> List.map (fun chunk -> async { return runChunk (runUnbounded solver) chunk })
+            |> fun chunks -> Async.Parallel(chunks, maxDegreeOfParallelism = 4)
+            |> Async.RunSynchronously
+            |> Array.toList
+            |> List.concat
+            |> List.map (fun (query, answer) -> query, rememberAnswer solver (cacheAllowed && isSingleAnswer answer) query answer)
+        Map.ofList (cached @ fresh)
 
 let private milliseconds (span: System.TimeSpan) = int64 span.TotalMilliseconds
 
