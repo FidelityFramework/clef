@@ -83,6 +83,7 @@ let ratchet accepted proposed =
 let run args =
     match args with
     | [|"ratchet"; stable; proposed|] -> ratchet (allowance stable) (allowance proposed)
+    | [|"check"; manifest; _; "--emit-scope"|]
     | [|"check"; manifest; _|] | [|"census"; manifest|] ->
         let defines, files = inputs manifest
         let groups =
@@ -100,6 +101,8 @@ let run args =
                     let site = sites[limit]
                     eprintfn "%s(%d,%d): error CLEF001: %s allowance=%d actual=%d" file site.Line site.Column name limit sites.Length
                     valid <- false
+            if valid && args.Length = 4 then
+                for _, path in files do printfn "%s" path
             valid
     | _ -> invalidArg "args" "check <compile-inputs> <allowances> | census <compile-inputs> | ratchet <accepted> <proposed>"
 

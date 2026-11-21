@@ -15,6 +15,11 @@
     <MakeDir Directories="$(IntermediateOutputPath)" />
     <WriteLinesToFile File="$(_ClefCoreInput)" Overwrite="true" WriteOnlyWhenDifferent="true"
                       Lines="P&#x9;$(MSBuildProjectDirectory);@(_ClefCoreDefine->'D&#x9;%(Identity)');@(Compile->'F&#x9;%(FullPath)&#x9;%(Identity)&#x9;%(Link)')" />
-    <Exec Command="&quot;$(_ClefCoreDotnet)&quot; fsi --nologo --quiet --reference:&quot;$(MSBuildToolsPath)/FSharp/FSharp.Compiler.Service.dll&quot; &quot;$(_ClefCoreGuardDir)../tools/ClefCoreGuard.fsx&quot; check &quot;$(_ClefCoreInput)&quot; &quot;$(_ClefCoreGuardDir)ClefCore.allowances.tsv&quot;" />
+    <Exec Command="&quot;$(_ClefCoreDotnet)&quot; fsi --nologo --quiet --reference:&quot;$(MSBuildToolsPath)/FSharp/FSharp.Compiler.Service.dll&quot; &quot;$(_ClefCoreGuardDir)../tools/ClefCoreGuard.fsx&quot; check &quot;$(_ClefCoreInput)&quot; &quot;$(_ClefCoreGuardDir)ClefCore.allowances.tsv&quot; --emit-scope" ConsoleToMSBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_ClefCoreCheckedSource" />
+    </Exec>
+    <ItemGroup>
+      <ClefCoreVerifiedSource Include="@(_ClefCoreCheckedSource)" />
+    </ItemGroup>
   </Target>
 </Project>
