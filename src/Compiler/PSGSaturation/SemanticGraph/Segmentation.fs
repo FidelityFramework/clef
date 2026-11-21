@@ -163,6 +163,36 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
     let addRegionDependency kind consumerIdentity providerIdentity support =
         if consumerIdentity <> providerIdentity then
             deps.Add { Consumer = consumerIdentity; Provider = providerIdentity; Kind = kind; SupportNodes = support }
+    let projectedImplementation target =
+        let current = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current graph target
+        match current with
+        | Result.Ok account when account.Flows.IsEmpty && account.Joins.IsEmpty &&
+                                 (account.Participants |> List.forall (fun p -> indexed p.Node && indexed p.Group)) ->
+            match account.Values |> List.filter (fun row -> row.Occurrence = target && row.Operation = CallableAggregateOperation.Project) with
+            | [row] when row.Tag.IsNone && row.SelectedAlternative.IsNone ->
+                match row.FormationInputs, row.Alternatives, row.Selector with
+                | [construction; actual], [alt], Some { Lower = 0; UpperExclusive = 1; Storage = None; Slot = None; ByteOffset = None }
+                    when alt.Ordinal = 0 && alt.Carrier = actual && alt.Adapter.IsNone &&
+                         alt.EnvironmentValue.IsNone && alt.EnvironmentPlacement.IsNone ->
+                    let supplier = account.Values |> List.filter (fun value ->
+                        value.Occurrence = construction && value.Slot = row.Slot && value.Operation = CallableAggregateOperation.Construct)
+                    let slot = account.Slots |> List.filter (fun entry -> entry.Identity = row.Slot)
+                    let carrier = account.Carriers |> List.filter (fun entry -> entry.Occurrence = actual)
+                    let contract = account.Contracts |> List.filter (fun entry -> entry.Identity = alt.Contract)
+                    match supplier, slot, carrier, contract with
+                    | [origin], [{ Path = [CallableAggregatePathStep.RecordField _]; Contract = Result.Ok slotContract }], [code], [abi]
+                        when origin.Value = Some actual && origin.Alternatives = row.Alternatives &&
+                             slotContract = alt.Contract && code.Contract = Result.Ok alt.Contract &&
+                             code.Formation = alt.Formation && code.Kind = CallableKind.OrdinaryFlatClosure &&
+                             code.Environment.IsNone && code.EnvironmentValue.IsNone && owners.ContainsKey construction ->
+                        match abi.Participants |> List.filter (fun p -> p.Role = ParticipantRole.CallableImplementation) with
+                        | [p] when p.Group = abi.Identity && p.Ordinal = 0 && p.Node = code.Implementation &&
+                                   owners.ContainsKey p.Node -> Some code.Implementation
+                        | _ -> None
+                    | _ -> None
+                | _ -> None
+            | _ -> None
+        | _ -> None
     let rec callable seen site target =
         if Set.contains target seen then
             errors.Add(SegmentationFailure.UnresolvedCallable(site, target))
@@ -184,7 +214,13 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                 | Some known when graph.Nodes.ContainsKey known.Implementation ->
                     callable seen site known.Implementation
                     addDependency DependencyKind.CapturedEnvironment site known.EnvironmentOwner (Set.singleton known.EnvironmentOwner)
-                | _ -> errors.Add(SegmentationFailure.UnresolvedCallable(site, target))
+                | _ ->
+                    match graph.Nodes.TryFind target with
+                    | Some { Kind = SemanticKind.FieldGet _ } ->
+                        match projectedImplementation target with
+                        | Some implementation -> callable seen site implementation
+                        | None -> errors.Add(SegmentationFailure.UnresolvedCallable(site, target))
+                    | _ -> errors.Add(SegmentationFailure.UnresolvedCallable(site, target))
     if errors.Count = 0 then
         for KeyValue(id, node) in graph.Nodes do
             match node.Kind with

@@ -5,6 +5,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module AggregateAccounts = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts
 module AggregatePublication = Clef.Compiler.PSGSaturation.Publication.RevisionPublication
+module AggregateSegmentation = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation
 
 module private CallableAggregateFixture =
     let checkResult body =
@@ -76,6 +77,49 @@ let main _ =
 """
 
 type CallableAggregateCases() =
+    [<Fact>]
+    member _.``Receiving field applications depend on their own current aggregate support`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource false)
+        let facts = graph.Codata.Value
+        let required = function Result.Ok value -> value | Result.Error reason -> failwithf "%A" reason
+        let plan = AggregateSegmentation.segment graph |> required
+        let sites = graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.Application(target, _) ->
+                match graph.Nodes[target].Kind with
+                | SemanticKind.FieldGet(_, field) -> Some(field, node.Id, target)
+                | _ -> None
+            | _ -> None) |> Seq.sortBy (fun (field, _, _) -> field) |> Seq.toList
+        Assert.Equal<string list>(["Apply"; "Run"], sites |> List.map (fun (field, _, _) -> field))
+        for field, site, target in sites do
+            let account = AggregateAccounts.current graph target |> required
+            let row = account.Values |> List.filter (fun r -> r.Occurrence = target && r.Operation = CallableAggregateOperation.Project) |> List.exactlyOne
+            let alt = List.exactlyOne row.Alternatives
+            let code = account.Carriers |> List.filter (fun c -> c.Occurrence = alt.Carrier) |> List.exactlyOne
+            let abi = account.Contracts |> List.filter (fun c -> c.Identity = alt.Contract) |> List.exactlyOne
+            let impl = abi.Participants |> List.filter (fun p -> p.Role = ParticipantRole.CallableImplementation) |> List.exactlyOne
+            Assert.Equal(code.Implementation, impl.Node)
+            Assert.Equal(abi.Identity, impl.Group)
+            Assert.Equal(0, impl.Ordinal)
+            Assert.Equal(Result.Ok abi.Identity, code.Contract)
+            let consumer, provider = plan.NodeOwners[site], plan.NodeOwners[impl.Node]
+            if field = "Apply" then Assert.NotEqual<string>(consumer, provider)
+            if consumer <> provider then
+                Assert.True(plan.Dependencies |> List.exists (fun edge ->
+                    edge.Kind = AggregateSegmentation.DependencyKind.Call &&
+                    edge.Consumer = consumer && edge.Provider = provider && edge.SupportNodes = Set.singleton impl.Node))
+            let endpoint = account.Sources |> List.find (fun source -> source.Node <> site)
+            let changed = { account with Sources = account.Sources |> List.map (fun source ->
+                                            if source = endpoint then { source with Node = site } else source) }
+            let fault = { graph with Codata = lazy { facts with CallableAggregateDependencies =
+                                                                    facts.CallableAggregateDependencies.Add(target, changed) } }
+            Assert.True(AggregateAccounts.current fault target |> Result.isError)
+            match AggregateSegmentation.segment fault with
+            | Result.Error failures ->
+                Assert.Equal<AggregateSegmentation.SegmentationFailure list>(
+                    [AggregateSegmentation.SegmentationFailure.UnresolvedCallable(site, target)], failures)
+            | Result.Ok _ -> failwith "The changed source endpoint admitted its application."
+
     [<Fact>]
     member _.``Common receiving anchors retain both live names on a collision`` () =
         let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource false)
