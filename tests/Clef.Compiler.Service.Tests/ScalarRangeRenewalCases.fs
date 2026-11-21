@@ -181,16 +181,18 @@ type ScalarRangeRenewalCases() =
         let writer = graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && node.Range.Start.Line = 7 &&
             match node.Kind with SemanticKind.IndexSet _ -> true | _ -> false) |> Assert.Single
-        let fresh () = NodeId(Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId ())
+        let valueId, writeId =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> NodeId.fresh(), NodeId.fresh())
         let kind = match literal.Kind with SemanticKind.Literal(NativeLiteral.Int(_, kind)) -> kind | _ -> failwith "literal"
-        let addedValue = { literal with Id = fresh (); Kind = SemanticKind.Literal(NativeLiteral.Int(300L, kind)); ValueRange = Some(ValueRange.point 300I) }
+        let addedValue = { literal with Id = valueId; Kind = SemanticKind.Literal(NativeLiteral.Int(300L, kind)); ValueRange = Some(ValueRange.point 300I) }
         let buffer, index = match writer.Kind with SemanticKind.IndexSet(buffer, index, _) -> buffer, index | _ -> failwith "write"
-        let addedWrite = { writer with Id = fresh (); Kind = SemanticKind.IndexSet(buffer, index, addedValue.Id); Children = [buffer; index; addedValue.Id] }
+        let addedWrite = { writer with Id = writeId; Kind = SemanticKind.IndexSet(buffer, index, addedValue.Id); Children = [buffer; index; addedValue.Id] }
         let continuation = graph.Nodes.Values |> Seq.filter (fun node ->
             match node.Kind with SemanticKind.Sequential items -> List.contains writer.Id items | _ -> false) |> Assert.Single
         let items = match continuation.Kind with SemanticKind.Sequential items -> items @ [addedWrite.Id] | _ -> failwith "continuation"
         let continuation = { continuation with Kind = SemanticKind.Sequential items; Children = items }
         let nodes = graph.Nodes.Add(addedValue.Id, addedValue).Add(addedWrite.Id, addedWrite).Add(continuation.Id, continuation)
+        Assert.Equal(graph.Nodes.Count + 2, nodes.Count)
         Assert.DoesNotContain(addedWrite.Id, (ScalarRangeFixture.read graph).Sources)
         ScalarRangeFixture.expectFailure ScalarRangeFixture.changedText { graph with Nodes = nodes }
 
