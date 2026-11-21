@@ -232,19 +232,6 @@ let internal canonicalRelationIdentities
     (contracts: Map<NodeId, CallableContract>)
     (aggregateSlots: Map<NodeId, CallableAggregateSlot>)
     : Map<NodeId, string> =
-    let rec collectRefs (value: objnull) : Set<NodeId> =
-        match value with
-        | null -> Set.empty
-        | :? NodeId as id -> Set.singleton id
-        | :? NativeType | :? SourceRange | :? string -> Set.empty
-        | :? IEnumerable as items -> items |> Seq.cast<objnull> |> Seq.map collectRefs |> Set.unionMany
-        | _ ->
-            let v = value |> Option.ofObj |> Option.get
-            let ty = v.GetType()
-            if isTuple ty then tupleValues v |> Seq.map collectRefs |> Set.unionMany
-            elif isRecord ty then recordValues v |> Seq.map collectRefs |> Set.unionMany
-            elif isUnion ty then unionValues ty v |> snd |> Seq.map collectRefs |> Set.unionMany
-            else Set.empty
     let withContracts =
         contracts
         |> Map.toList
@@ -278,7 +265,16 @@ let internal canonicalRelationIdentities
         if key <> row.Identity || Map.containsKey key withContracts then
             invalidOp "A callable relation identity is misfiled or collides with another source identity."
         let refs =
-            collectRefs (box row)
+            seq {
+                yield row.Identity
+                yield! Option.toList row.Declaration
+                for fact in row.DeclarationFacts do yield fact.Identity
+                yield! row.Contract |> Result.toOption |> Option.toList
+                for participant in row.Participants do
+                    yield participant.Node
+                    yield participant.Group
+            }
+            |> Set.ofSeq
             |> Set.remove key
             |> Seq.choose withContracts.TryFind
             |> Seq.sort

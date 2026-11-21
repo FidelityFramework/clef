@@ -76,6 +76,31 @@ let main _ =
 """
 
 type CallableAggregateCases() =
+    [<Fact>]
+    member _.``Canonical slot addresses include each resolved declaration contract and participant endpoint once`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource false)
+        let original =
+            graph.Codata.Value.CallableAggregateSlots.Values
+            |> Seq.find (fun slot -> not slot.DeclarationFacts.IsEmpty)
+        let declaration, fact, contract = NodeId -1, NodeId -2, NodeId -3
+        let group, node, unresolved = NodeId -4, NodeId -5, NodeId -6
+        let participant =
+            { Node = node; Group = group; Role = ParticipantRole.AggregateSlot; Ordinal = 0 }
+        let slot =
+            { original with
+                Declaration = Some declaration
+                DeclarationFacts = [{ original.DeclarationFacts.Head with Identity = fact }]
+                Contract = Ok contract
+                Participants = [participant; participant; { participant with Node = unresolved; Group = original.Identity }] }
+        let addresses =
+            Map.ofList [ declaration, "decl"; fact, "fact"; contract, "contract"; group, "group"; node, "node" ]
+        let address (row: CallableAggregateSlot) =
+            let slots = Map.ofList [row.Identity, row]
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.canonicalRelationIdentities addresses Map.empty slots
+            |> Map.find row.Identity
+        Assert.StartsWith("callable-aggregate-slot:contract|decl|fact|group|node:", address slot)
+        Assert.StartsWith("callable-aggregate-slot:decl|fact|group|node:", address { slot with Contract = Error "pending" })
+
     [<Theory>]
     [<InlineData(256, true)>]
     [<InlineData(257, false)>]
