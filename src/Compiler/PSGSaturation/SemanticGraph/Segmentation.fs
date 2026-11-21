@@ -114,10 +114,13 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
         if not (graph.Nodes.ContainsKey id) then fail (Some id) "A declaration root is absent from the graph."
     // Module, binding, detached, and obligation addresses are independent of allocation order,
     // Elaboration.Id counters, and SourceRange line/column trivia.
+    let platformReading =
+        if errors.Count = 0 then Some (PlatformResolution.read graph) else None
     let allResolved =
-        if errors.Count > 0 then Map.empty
-        else
-            match WitnessSegmentation.canonicalAddresses graph with
+        match platformReading with
+        | None -> Map.empty
+        | Some read ->
+            match WitnessSegmentation.canonicalAddresses graph read with
             | Result.Ok resolved -> resolved
             | Result.Error cycleFailures ->
                 for nodeOpt, reason in cycleFailures do fail nodeOpt reason
@@ -234,8 +237,9 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
         for KeyValue(occurrence, origin) in codata.EnvironmentOrigins do
             if not (graph.Nodes.ContainsKey occurrence) || not (codata.EnvironmentLayouts.ContainsKey origin) then
                 errors.Add(SegmentationFailure.BrokenEnvironment(occurrence, "An environment origin has no indexed occurrence or layout."))
-    if errors.Count > 0 then Result.Error(List.ofSeq errors) else
-    try
+    match platformReading with
+    | Some read when errors.Count = 0 ->
+      try
         // Contract identities are relation citizens rather than executable nodes.
         for KeyValue(id, contract) in codata.CallableContracts do
                 let participants = contract.Participants |> List.filter (fun p -> p.Role = ParticipantRole.CallableImplementation)
@@ -390,9 +394,8 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
             graph.Platform |> Option.map (fun p -> p.PlatformId, p.SubstrateKind, p.RuntimeModel, p.Dimensions)
         let platformCensuses =
             WitnessSegmentation.platformLayoutCensus graph.Platform @
-            WitnessSegmentation.platformSpaceCensus graph
+            WitnessSegmentation.platformSpaceCensus read
         let numericResolutionSummary =
-            let read = PlatformResolution.read graph
             match read.Platform with
             | Some p when read.Findings.IsEmpty ->
                 let coreSummary =
@@ -571,5 +574,6 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                     NodeIdentities = allResolved |> Map.filter (fun id _ -> graph.Nodes.ContainsKey id)
                     NodeOwners = owners
                     NodeFingerprints = nodeFingerprints }
-    with :? InvalidOperationException as error ->
+      with :? InvalidOperationException as error ->
         Result.Error [SegmentationFailure.UnsupportedInput error.Message]
+    | _ -> Result.Error(List.ofSeq errors)

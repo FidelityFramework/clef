@@ -292,11 +292,10 @@ let internal canonicalRelationIdentities
 /// Compute range-free, NodeId-independent, Elaboration.Id-independent canonical
 /// structural addresses across the graph, disambiguating retired/detached/obligation
 /// collisions deterministically without consulting SourceRange.
-let internal canonicalAddresses (graph: SemanticGraph) : Result<Map<NodeId, string>, (NodeId option * string) list> =
+let internal canonicalAddresses (graph: SemanticGraph) (platformRead: PlatformResolution.Reading) : Result<Map<NodeId, string>, (NodeId option * string) list> =
     let cycleErrors = ResizeArray<NodeId option * string>()
     let baseAddresses = Collections.Generic.Dictionary<NodeId, string>()
     let visiting = Collections.Generic.HashSet<NodeId>()
-    let platformRead = PlatformResolution.read graph
     match platformRead.Platform with
     | Some platform when platformRead.Findings.IsEmpty ->
         match platform.Core with
@@ -555,8 +554,7 @@ let private operationInput (operation: NumericOperationWitness) =
 /// A closed typed interface for numeric declarations, including the complete
 /// offered set whose uniqueness the source recipe inspected. This does not
 /// serialize an arbitrary external graph or infer identity from physical width.
-let private tryNumericInterface (graph: SemanticGraph) (operations: NumericOperationWitness list) =
-    let read = PlatformResolution.read graph
+let private tryNumericInterface (read: PlatformResolution.Reading) (operations: NumericOperationWitness list) =
     match read.Platform |> Option.filter (fun _ -> read.Findings.IsEmpty) with
     | None -> None
     | Some platform ->
@@ -636,8 +634,7 @@ let internal platformLayoutCensus (platformOpt: PlatformContext option) : ProofS
             Kind = ProofSupportCensusKind.PlatformLayout
             Entries = entries } ]
 
-let internal platformSpaceCensus (graph: SemanticGraph) : ProofSupportCensus list =
-    let read = PlatformResolution.read graph
+let internal platformSpaceCensus (read: PlatformResolution.Reading) : ProofSupportCensus list =
     match read.Platform with
     | Some platform when read.Findings.IsEmpty && not platform.Spaces.IsEmpty ->
         let entries =
@@ -657,11 +654,13 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
     if emission.Callable.Contracts <> codata.CallableContracts ||
        emission.Callable.AggregateSlots <> codata.CallableAggregateSlots then
         invalidOp "Callable relation tables disagree with their current source codata."
+    let platformRead = PlatformResolution.read graph
     let graphAddresses =
-        match canonicalAddresses graph with
+        match canonicalAddresses graph platformRead with
         | Result.Ok addresses -> addresses
         | Result.Error errors ->
             invalidOp ("Graph has cyclic parent containment during witness segmentation: " + (errors |> List.map snd |> String.concat "; "))
+    let platformCensuses = platformLayoutCensus graph.Platform @ platformSpaceCensus platformRead
     let canonicalAllIdentities =
         graphAddresses
     let encodeProof = encoder canonicalAllIdentities
@@ -753,7 +752,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                                 | None -> support) support) supports
                     let numeric =
                         if comparisons.IsEmpty then Some (Map.empty, "", None)
-                        else tryNumericInterface graph comparisons |> Option.map (fun (ids, platformId, core) -> ids, platformId, Some core)
+                        else tryNumericInterface platformRead comparisons |> Option.map (fun (ids, platformId, core) -> ids, platformId, Some core)
                     match numeric with
                     | None -> None
                     | Some (interfaces, corePlatformId, core) ->
@@ -927,8 +926,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                                     Entries = Set.ofList (("core:" + corePlatformId) :: widthEntries @ repEntries @ interfaceEntries) } ]
                         let censuses =
                             [ if not (ownedHypotheses.IsEmpty && ownedUses.IsEmpty && ownedLinks.IsEmpty) then yield branchAbsenceCensus
-                              yield! platformLayoutCensus graph.Platform
-                              yield! platformSpaceCensus graph
+                              yield! platformCensuses
                               yield! numericCensuses ]
                             |> List.sortBy (fun c -> c.Kind, c.Identity)
                         let ownedObligationIds =
@@ -1111,7 +1109,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
             append "\n"
             append (current "Platform" (box graph.Platform))
             append "\n"
-            append (current "PlatformCensuses" (box (platformLayoutCensus graph.Platform @ platformSpaceCensus graph))))
+            append (current "PlatformCensuses" (box platformCensuses)))
         |> fun h -> CanonicalProofSupportDigest(CanonicalProofSupportDigest.DomainPrefix + h)
     let commonSupportSet =
         let ownerLabel =
