@@ -5,6 +5,7 @@ open Xunit
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Receipts = Clef.Compiler.Nanopass.ObligationDischarge
+module SolverBatch = Clef.Compiler.Nanopass.ObligationSolverBatch
 
 /// clef #134: the editor's design-time receipts come from ObligationDischarge
 /// and carry the compiler run's reasons byte for byte.
@@ -167,6 +168,45 @@ type DesignTimeReceiptCases() =
         Assert.Equal(Receipts.solverToolchainPaths.Head, Receipts.resolveSolver "" (fun path -> List.contains path Receipts.solverToolchainPaths))
         Assert.Equal(name, Receipts.resolveSolver null (fun _ -> false))
 
+/// clef #164: batched cvc5 output is attributed to queries only through their
+/// `(echo ...)` frames. These controls are pure and run no solver.
+type BatchFramingCases() =
+    let framed (index: int) (body: string list) =
+        [ SolverBatch.expectedEchoLine (SolverBatch.batchBeginMarker index) ] @ body @ [ SolverBatch.expectedEchoLine (SolverBatch.batchEndMarker index) ]
+
+    [<Fact>]
+    member _.``Framed batch queries carry exact sentinels and valid output is attributed per frame``() =
+        let expectedText =
+            "(echo \"__fidelity_batch_begin_0__\")\n(check-sat)\n(echo \"__fidelity_batch_end_0__\")\n(reset)\n\n"
+            + "(echo \"__fidelity_batch_begin_1__\")\n(check-sat)\n(echo \"__fidelity_batch_end_1__\")"
+        Assert.Equal<Result<string, string>>(Ok expectedText, SolverBatch.frameBatchQueries [ "(check-sat)"; "(check-sat)" ])
+        Assert.Equal<string list>([ "\"__fidelity_batch_begin_0__\""; "unsat"; "\"__fidelity_batch_end_0__\"" ], framed 0 [ "unsat" ])
+        let lines = framed 0 [ "unsat" ] @ framed 1 [ "sat" ]
+        Assert.Equal<Result<string list, string>>(Ok [ "unsat"; "sat" ], SolverBatch.parseFramedChunkVerdicts 2 lines)
+
+    [<Fact>]
+    member _.``Shifted verdicts with an unchanged line count are refused naming the empty frame``() =
+        // Query 0 prints nothing and query 1 prints two lines: the total number
+        // of verdict lines still equals the query count.
+        let lines = framed 0 [] @ framed 1 [ "unsat"; "sat" ]
+        Assert.Equal(2, lines |> List.filter (fun (line: string) -> not (line.Contains(SolverBatch.batchMarkerPrefix, StringComparison.Ordinal))) |> List.length)
+        Assert.Equal<Result<string list, string>>(
+            Error "Framed cvc5 output for query 0 holds 0 verdict lines; exactly one is required",
+            SolverBatch.parseFramedChunkVerdicts 2 lines)
+
+    [<Fact>]
+    member _.``Trailing output reordered frames and reserved sentinels inside a query are refused``() =
+        let valid = framed 0 [ "unsat" ] @ framed 1 [ "sat" ]
+        Assert.Equal<Result<string list, string>>(
+            Error "Framed cvc5 output has 1 trailing line(s) after the last query frame: unsat",
+            SolverBatch.parseFramedChunkVerdicts 2 (valid @ [ "unsat" ]))
+        Assert.Equal<Result<string list, string>>(
+            Error "Framed cvc5 output for query 0: expected begin sentinel \"__fidelity_batch_begin_0__\", found \"__fidelity_batch_begin_1__\"",
+            SolverBatch.parseFramedChunkVerdicts 2 (framed 1 [ "sat" ] @ framed 0 [ "unsat" ]))
+        Assert.Equal<Result<string, string>>(
+            Error "Batch query 1 contains the reserved framing sentinel prefix '__fidelity_batch_'",
+            SolverBatch.frameBatchQueries [ "(check-sat)"; "(echo \"__fidelity_batch_end_0__\")\n(check-sat)" ])
+
 [<CollectionDefinition("Solver environment", DisableParallelization = true)>]
 type SolverEnvironmentCollection() = class end
 
@@ -201,9 +241,12 @@ type SolverEnvironmentCases() =
         try
             IO.Directory.CreateDirectory spacedDir |> ignore
             let sampleTempPath = IO.Path.Combine(spacedDir, "clef-proof-sample.smt2")
-            let psi = Receipts.solverStartInfo solver sampleTempPath
+            let psi = SolverBatch.solverStartInfo solver None sampleTempPath
             Assert.Equal("", psi.Arguments)
             Assert.Equal<string list>([ "--lang"; "smt2"; sampleTempPath ], psi.ArgumentList |> Seq.toList)
+            // A per-query limit is passed as one argument and clamped to at least 1 ms.
+            let bounded = SolverBatch.solverStartInfo solver (Some (TimeSpan.FromMilliseconds 0.25)) sampleTempPath
+            Assert.Equal<string list>([ "--lang"; "smt2"; "--tlimit-per=1"; sampleTempPath ], bounded.ArgumentList |> Seq.toList)
             let obligation = DesignTimeReceiptFixture.plain ("solver_spaced_path_" + Guid.NewGuid().ToString("N")) (ObligationBody.CapacityPositive 4)
             Environment.SetEnvironmentVariable("CLEF_CVC5", solver)
             Environment.SetEnvironmentVariable("CLEF_PROOF_TEMP_DIR", spacedDir)

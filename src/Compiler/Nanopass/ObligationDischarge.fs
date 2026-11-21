@@ -24,6 +24,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
+open Clef.Compiler.Nanopass.ObligationSolverBatch
 module Published = Clef.Compiler.Baker.Ingredients.PublishedFactRows
 
 //=============================================================================
@@ -625,121 +626,12 @@ let solverToolchainPaths = Clef.Compiler.Utilities.HostTools.solverToolchainPath
 let resolveSolver (pathVariable: string | null) (exists: string -> bool) : string =
     Clef.Compiler.Utilities.HostTools.resolveSolver pathVariable exists
 
-let private solverExecutable () =
-    match System.Environment.GetEnvironmentVariable "CLEF_CVC5" with
-    | null | "" -> Clef.Compiler.Utilities.HostTools.findSolver (System.Environment.GetEnvironmentVariable "PATH"), true
-    | path -> path, false
-
-type private SolverRun =
-    | Answered of Result<string list, string>
-    | TimedOut
-    | Unavailable of string
-
-let solverStartInfo (solver: string) (tempPath: string) : System.Diagnostics.ProcessStartInfo =
-    let psi = System.Diagnostics.ProcessStartInfo(solver)
-    psi.ArgumentList.Add "--lang"
-    psi.ArgumentList.Add "smt2"
-    psi.ArgumentList.Add tempPath
-    psi.RedirectStandardOutput <- true
-    psi.RedirectStandardError <- true
-    psi.UseShellExecute <- false
-    psi
-
-/// One cvc5 process over one query, optionally bounded by a wall-clock limit.
-let private executeAt (tempDir: string) (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
-    let tempPath = Path.Combine(tempDir, sprintf "clef-proof-%s.smt2" (System.Guid.NewGuid().ToString("N")))
-    try
-        File.WriteAllText(tempPath, text + "\n")
-        let psi = solverStartInfo solver tempPath
-        use proc = new System.Diagnostics.Process(StartInfo = psi)
-        let started =
-            try
-                if proc.Start() then Ok () else Error "Failed to start cvc5 process"
-            with
-            | :? System.ComponentModel.Win32Exception as ex -> Error ex.Message
-            | :? System.UnauthorizedAccessException as ex -> Error ex.Message
-        match started with
-        | Error reason -> Unavailable (sprintf "Could not start solver '%s': %s" solver reason)
-        | Ok () ->
-            let stdoutTask = proc.StandardOutput.ReadToEndAsync()
-            let stderrTask = proc.StandardError.ReadToEndAsync()
-            let exited =
-                match limit with
-                | None -> proc.WaitForExit(); true
-                | Some limit -> proc.WaitForExit limit
-            if not exited then
-                // The process may exit between the wait and the kill; it is still past its limit.
-                try proc.Kill true with :? System.InvalidOperationException -> ()
-                proc.WaitForExit()
-                TimedOut
-            else
-                proc.WaitForExit()
-                let stdout = stdoutTask.Result
-                let stderr = stderrTask.Result
-                if proc.ExitCode <> 0 then
-                    Answered (Error (sprintf "cvc5 exited with code %d: %s" proc.ExitCode (stderr.Trim())))
-                elif not (System.String.IsNullOrWhiteSpace stderr) then
-                    Answered (Error (sprintf "cvc5 reported stderr: %s" (stderr.Trim())))
-                else
-                    stdout.Split([| '\r'; '\n' |], System.StringSplitOptions.RemoveEmptyEntries)
-                    |> Array.map (fun line -> line.Trim())
-                    |> Array.filter (fun line -> line <> "")
-                    |> Array.toList
-                    |> Ok
-                    |> Answered
-    finally
-        if File.Exists tempPath then File.Delete tempPath
-
-let private execute (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
-    let tempDir =
-        match System.Environment.GetEnvironmentVariable "CLEF_PROOF_TEMP_DIR" with
-        | null | "" -> Path.GetTempPath()
-        | value when System.String.IsNullOrWhiteSpace value -> Path.GetTempPath()
-        | value -> value
-    executeAt tempDir solver limit text
-
 /// Completed answers only. A query cut off by a budget is never recorded.
-let private solverCache =
-    System.Collections.Concurrent.ConcurrentDictionary<string * string, string list>()
-
-/// The compiler run: unbounded.
-let private runSolver (query: string) : Result<string list, string> =
-    let solver, cacheAllowed = solverExecutable ()
-    match (if cacheAllowed then solverCache.TryGetValue((solver, query)) else (false, Unchecked.defaultof<_>)) with
-    | true, answer -> Ok answer
-    | _ ->
-        match execute solver None query with
-        | Answered (Ok answer) ->
-            if cacheAllowed then solverCache.TryAdd((solver, query), answer) |> ignore
-            Ok answer
-        | Answered (Error reason) | Unavailable reason -> Error reason
-        | TimedOut -> Error "An unbounded cvc5 run cannot exceed a limit"
-
-let private milliseconds (span: System.TimeSpan) = int64 span.TotalMilliseconds
-
-/// A design-time run: every query within `PerQuery`, the run within `Total`.
-let private budgetedSolver (budget: DesignTimeBudget) =
-    let clock = System.Diagnostics.Stopwatch.StartNew()
-    let mutable unavailable = false
-    let solve query =
-        // A previously successful query does not establish that the currently
-        // configured solver is still present and executable.
-        let remaining = budget.Total - clock.Elapsed
-        if remaining <= System.TimeSpan.Zero then
-            Error (sprintf "cvc5 was not run: the design-time budget of %d ms was exhausted" (milliseconds budget.Total))
-        else
-            let solver, _ = solverExecutable ()
-            let cutByTotal = remaining < budget.PerQuery
-            match execute solver (Some (if cutByTotal then remaining else budget.PerQuery)) query with
-            | Answered answer -> answer
-            | Unavailable reason ->
-                unavailable <- true
-                Error reason
-            | TimedOut when cutByTotal ->
-                Error (sprintf "cvc5 did not answer before the design-time budget of %d ms was exhausted" (milliseconds budget.Total))
-            | TimedOut ->
-                Error (sprintf "cvc5 did not answer within the per-query limit of %d ms" (milliseconds budget.PerQuery))
-    solve, (fun () -> unavailable), (fun () -> unavailable <- false)
+let private solverCache = System.Collections.Concurrent.ConcurrentDictionary<string * string, string list>()
+let private tryCachedAnswer solver query = match solverCache.TryGetValue((solver, query)) with true, a -> Some a | false, _ -> None
+let private recordCachedAnswer solver query answer = solverCache.TryAdd((solver, query), answer) |> ignore
+let private runSolver query = runSolverWithCache tryCachedAnswer recordCachedAnswer query
+let private runSolverBatch queries = runSolverBatchWithCache tryCachedAnswer recordCachedAnswer queries
 
 //=============================================================================
 // DISCHARGE STAGES
@@ -883,39 +775,71 @@ type private Readiness = {
     Stop: (DesignTimeVerdict * string list) option
 }
 
-let private readinessWith solve overrideProjection (ob: ObligationInfo) : Readiness =
+let private stopWith verdict missing (readiness: Readiness) = { readiness with Stop = Some (verdict, missing) }
+
+/// Readiness before any solver call: either settled outright, or a conditional
+/// law whose clauses still need their SAT(not C_i) answers.
+type private ReadinessPlan =
+    | ImmediateReadiness of Readiness
+    | ConditionalReadiness of shaped: Readiness * law: ConditionalLaw * clauseRows: (int * string * string) list
+
+let private planReadiness overrideProjection (ob: ObligationInfo) : ReadinessPlan =
     let open' = { Obligation = ob; Participants = []; Ignored = []; NonVacuity = []; PremiseQueries = []; Stop = None }
-    let stop verdict missing readiness = { readiness with Stop = Some (verdict, missing) }
     match ob.Body with
-    | ObligationBody.Pending reasons -> stop (Pending reasons) reasons open'
+    | ObligationBody.Pending reasons -> ImmediateReadiness (stopWith (Pending reasons) reasons open')
     | _ ->
         match conditionalLaw overrideProjection ob with
-        | None -> open'
-        | Some (Error reason) -> stop (Pending [ reason ]) [ reason ] open'
+        | None -> ImmediateReadiness open'
+        | Some (Error reason) -> ImmediateReadiness (stopWith (Pending [ reason ]) [ reason ] open')
         | Some (Ok law) ->
-            let participants = participantsOf law
-            let ignored = ignoredOf law
-            let shaped = { open' with Participants = participants; Ignored = ignored }
-            let rec clauses acc = function
-                | [] when not ignored.IsEmpty ->
-                    stop (IgnoresParticipants ignored) [ Reason.ignoresParticipants ob ignored ] { shaped with NonVacuity = List.rev acc }
-                | [] -> { shaped with NonVacuity = List.rev acc; PremiseQueries = premiseQueriesOf ob.Id law }
-                | (clauseIndex, clause, query as row) :: rest ->
-                    match solve query with
-                    | Error reason ->
-                        stop (Undecided "psg-nonvacuity") [ reason ] { shaped with NonVacuity = List.rev acc }
-                    | Ok [ "sat" ] -> clauses (clauseReceipt ob participants row "sat" :: acc) rest
-                    | Ok [ "unsat" ] ->
-                        stop (ValidWithoutPremises(clauseIndex, clause)) [ Reason.validWithoutPremises ob clauseIndex clause ]
-                            { shaped with NonVacuity = List.rev (clauseReceipt ob participants row "unsat" :: acc) }
-                    | Ok verdicts ->
-                        stop (Undecided "psg-nonvacuity") [ Reason.clauseAnswer ob clauseIndex verdicts ]
-                            { shaped with NonVacuity = List.rev (clauseReceipt ob participants row (String.concat ", " verdicts) :: acc) }
+            let shaped = { open' with Participants = participantsOf law; Ignored = ignoredOf law }
             match clausesOf ob.Id law with
+            | Error reason -> ImmediateReadiness (stopWith (Undecided "psg-nonvacuity") [ reason ] shaped)
+            | Ok clauseRows -> ConditionalReadiness (shaped, law, clauseRows)
+
+/// The single clause-evaluation loop shared by the single and batched
+/// readiness paths: per-clause SAT(not C_i) in order, then relevance.
+let private clauseReadiness (answer: string -> Result<string list, string>) (shaped: Readiness) (law: ConditionalLaw) (clauseRows: (int * string * string) list) : Readiness =
+    let ob = shaped.Obligation
+    let participants = shaped.Participants
+    let ignored = shaped.Ignored
+    let rec clauses acc = function
+        | [] when not ignored.IsEmpty ->
+            stopWith (IgnoresParticipants ignored) [ Reason.ignoresParticipants ob ignored ] { shaped with NonVacuity = List.rev acc }
+        | [] -> { shaped with NonVacuity = List.rev acc; PremiseQueries = premiseQueriesOf ob.Id law }
+        | (clauseIndex, clause, query as row) :: rest ->
+            match answer query with
             | Error reason ->
-                stop (Undecided "psg-nonvacuity") [ reason ] shaped
-            | Ok clauseRows ->
-                clauses [] clauseRows
+                stopWith (Undecided "psg-nonvacuity") [ reason ] { shaped with NonVacuity = List.rev acc }
+            | Ok [ "sat" ] -> clauses (clauseReceipt ob participants row "sat" :: acc) rest
+            | Ok [ "unsat" ] ->
+                stopWith (ValidWithoutPremises(clauseIndex, clause)) [ Reason.validWithoutPremises ob clauseIndex clause ]
+                    { shaped with NonVacuity = List.rev (clauseReceipt ob participants row "unsat" :: acc) }
+            | Ok verdicts ->
+                stopWith (Undecided "psg-nonvacuity") [ Reason.clauseAnswer ob clauseIndex verdicts ]
+                    { shaped with NonVacuity = List.rev (clauseReceipt ob participants row (String.concat ", " verdicts) :: acc) }
+    clauses [] clauseRows
+
+let private readinessWith solve overrideProjection (ob: ObligationInfo) : Readiness =
+    match planReadiness overrideProjection ob with
+    | ImmediateReadiness readiness -> readiness
+    | ConditionalReadiness (shaped, law, clauseRows) -> clauseReadiness solve shaped law clauseRows
+
+let private readinessBatchWith
+    (solveBatch: string list -> Map<string, Result<string list, string>>)
+    (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option)
+    (obligations: ObligationInfo list) : Readiness list =
+    let plans = obligations |> List.map (planReadiness overrideProjection)
+    let allClauseQueries =
+        plans
+        |> List.collect (function
+            | ImmediateReadiness _ -> []
+            | ConditionalReadiness (_, _, clauseRows) -> clauseRows |> List.map (fun (_, _, query) -> query))
+    let resultsByQuery = solveBatch allClauseQueries
+    plans
+    |> List.map (function
+        | ImmediateReadiness readiness -> readiness
+        | ConditionalReadiness (shaped, law, clauseRows) -> clauseReadiness (batchAnswer resultsByQuery) shaped law clauseRows)
 
 let private unavailableOf (readiness: Readiness list) : UnavailableObligation list =
     readiness |> List.choose (fun r ->
@@ -962,16 +886,20 @@ let checkForeignNonVacuity (obligation: ObligationInfo) (projection: Fidelity.PS
     let law = Foreign projection
     let participants = participantsOf law
     let ignored = ignoredOf law
-    let rec loop acc = function
-        | [] when not ignored.IsEmpty -> Error (Reason.ignoresParticipants obligation ignored)
-        | [] -> Ok (List.rev acc)
-        | (clauseIndex, clause, query) :: rest ->
-            match checkNonVacuityClause obligation clauseIndex clause participants query with
-            | Ok receipt -> loop (receipt :: acc) rest
-            | Error reason -> Error reason
     match clausesOf obligation.Id law with
     | Error reason -> Error reason
-    | Ok rows -> loop [] rows
+    | Ok rows ->
+        let resultsByQuery = rows |> List.map (fun (_, _, q) -> q) |> runSolverBatch
+        let rec loop acc = function
+            | [] when not ignored.IsEmpty -> Error (Reason.ignoresParticipants obligation ignored)
+            | [] -> Ok (List.rev acc)
+            | (clauseIndex, clause, query) :: rest ->
+                match batchAnswer resultsByQuery query with
+                | Error reason -> Error reason
+                | Ok [ "sat" ] -> loop (clauseReceipt obligation participants (clauseIndex, clause, query) "sat" :: acc) rest
+                | Ok [ "unsat" ] -> Error (Reason.validWithoutPremises obligation clauseIndex clause)
+                | Ok verdicts -> Error (Reason.clauseAnswer obligation clauseIndex verdicts)
+        loop [] rows
 
 let conditionalPremisesWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<(ObligationInfo * string) list, string> =
     let rec loop acc = function
@@ -1016,7 +944,7 @@ let conditionalNonVacuity (obligations: ObligationInfo list) : Result<(Obligatio
     |> Result.map (List.map (fun (ob, _, _, _, _, query) -> ob, query))
 
 let unavailableWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : UnavailableObligation list =
-    obligations |> List.map (readinessWith runSolver overrideProjection) |> unavailableOf
+    readinessBatchWith runSolverBatch overrideProjection obligations |> unavailableOf
 
 let unavailable (obligations: ObligationInfo list) : UnavailableObligation list =
     unavailableWithOverride (fun _ -> None) obligations
@@ -1049,24 +977,36 @@ let private evidenceReceipt overrideProjection (ob: ObligationInfo) verdict =
 /// The compiler run: readiness of every obligation, then SAT(H) of every
 /// premise query, then one UNSAT(H and not C) query over the inventory.
 let dischargeWithProjectionOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
-    let readiness = obligations |> List.map (readinessWith runSolver overrideProjection)
+    let readiness = readinessBatchWith runSolverBatch overrideProjection obligations
     match readiness |> List.filter (fun r -> r.Stop.IsSome) with
     | unready when not unready.IsEmpty -> Error (unreadyReason unready)
     | _ ->
+        let allPremiseQueries = readiness |> List.collect _.PremiseQueries
+        let premiseResults = runSolverBatch allPremiseQueries
         let rec premises acc = function
             | [] -> Ok (List.rev acc |> List.concat)
             | r :: rest ->
-                match premisesWith runSolver r with
+                match premisesWith (batchAnswer premiseResults) r with
                 | Error (_, reason, _) -> Error reason
                 | Ok receipts -> premises (receipts :: acc) rest
         match premises [] readiness with
         | Error reason -> Error reason
         | Ok premises ->
             let nonVacuity = readiness |> List.collect _.NonVacuity
-            match runSolver (readySmtLibWithOverride overrideProjection obligations) with
+            // One framed query per obligation: each verdict is attributed by its
+            // frame, and cached answers are reused by `runSolverBatch` itself.
+            let singleQueries =
+                obligations |> List.map (fun ob -> readySmtLibWithOverride overrideProjection [ ob ])
+            let batchResults = runSolverBatch singleQueries
+            let rec collectVerdicts acc = function
+                | [] -> Ok (List.rev acc)
+                | query :: rest ->
+                    match batchAnswer batchResults query with
+                    | Error reason -> Error reason
+                    | Ok [ verdict ] -> collectVerdicts (verdict :: acc) rest
+                    | Ok verdicts -> Error (Reason.verdictCount 1 verdicts.Length)
+            match collectVerdicts [] singleQueries with
             | Error reason -> Error reason
-            | Ok verdicts when verdicts.Length <> obligations.Length ->
-                Error (Reason.verdictCount obligations.Length verdicts.Length)
             | Ok verdicts ->
                 let pairs = List.zip obligations verdicts
                 match pairs |> List.tryFind (fun (_, verdict) -> verdict <> "unsat") with
@@ -1087,22 +1027,59 @@ let discharge (obligations: ObligationInfo list) : Result<DischargeReceipt, stri
 /// the caller's budget. Each `Reason` is the text `discharge [obligation]`
 /// returns; a budget limit appears only where the compiler run has no limit.
 let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : ObligationReceipt list =
-    let solve, isUnavailable, clearUnavailable = budgetedSolver budget
+    let solver, _ = solverExecutable ()
+    let canBatch =
+        obligations.Length > 1 &&
+        budget.Total > System.TimeSpan.Zero &&
+        budget.PerQuery >= System.TimeSpan.FromMilliseconds 50.
+    let clock = System.Diagnostics.Stopwatch.StartNew()
+    let mutable unavailable = false
+    let warmedAnswers : Map<string, WarmEntry> =
+        if not canBatch then Map.empty
+        else
+            let allQueries =
+                obligations
+                |> List.collect (fun ob ->
+                    match ob.Body with
+                    | ObligationBody.Pending _ -> []
+                    | _ ->
+                        match conditionalLaw overrideProjection ob with
+                        | None -> [ readySmtLibWithOverride overrideProjection [ ob ] ]
+                        | Some (Error _) -> []
+                        | Some (Ok law) ->
+                            match clausesOf ob.Id law with
+                            | Error _ -> []
+                            | Ok rows ->
+                                let cQueries = rows |> List.map (fun (_, _, q) -> q)
+                                let pQueries = if (ignoredOf law).IsEmpty then premiseQueriesOf ob.Id law else []
+                                let rQueries = if (ignoredOf law).IsEmpty then [ readySmtLibWithOverride overrideProjection [ ob ] ] else []
+                                cQueries @ pQueries @ rQueries)
+                |> List.distinct
+            warmDesignTimeChunks clock solver budget.PerQuery budget.Total allQueries
+    let solveQuery query =
+        match Map.tryFind query warmedAnswers with
+        | Some (WarmAnswer answer) -> Ok answer
+        | Some (WarmRefused reason) -> Error reason
+        | Some (WarmUnavailable reason) -> unavailable <- true; Error reason
+        | None ->
+            match executeBudgeted clock budget.PerQuery budget.Total query with
+            | BudgetedResult res -> res
+            | BudgetedUnavailable reason -> unavailable <- true; Error reason
     obligations |> List.map (fun ob ->
-        clearUnavailable ()
-        let r = readinessWith solve overrideProjection ob
+        unavailable <- false
+        let r = readinessWith solveQuery overrideProjection ob
         let receipt verdict reason premises evidence =
             { ObligationId = ob.Id; Kind = ob.Kind; Source = ob.Source
-              Verdict = (if isUnavailable () then SolverUnavailable else verdict); Reason = reason
+              Verdict = (if unavailable then SolverUnavailable else verdict); Reason = reason
               Premises = premises; NonVacuity = r.NonVacuity; Participants = r.Participants
               IgnoredParticipants = r.Ignored; Evidence = evidence }
         match r.Stop with
         | Some (verdict, _) -> receipt verdict (Some (unreadyReason [ r ])) [] []
         | None ->
-            match premisesWith solve r with
+            match premisesWith solveQuery r with
             | Error (verdict, reason, premises) -> receipt verdict (Some reason) premises []
             | Ok premises ->
-                match solve (readySmtLibWithOverride overrideProjection [ ob ]) with
+                match solveQuery (readySmtLibWithOverride overrideProjection [ ob ]) with
                 | Error reason -> receipt (Undecided "psg") (Some reason) premises []
                 | Ok [ "unsat" ] -> receipt Proved None premises [ evidenceReceipt overrideProjection ob "unsat" ]
                 | Ok [ "sat" ] -> receipt Refuted (Some (Reason.notDischarged ob "sat")) premises [ evidenceReceipt overrideProjection ob "sat" ]
@@ -1184,9 +1161,7 @@ let private foreignLedgerFields (model: ForeignResultCoverageModel) =
         "trustedBase", JsonValue.Array(hypothesis @ abi)
     ]
 
-let ledgerJson (obligations: ObligationInfo list) : string =
-    let hasPending = unavailable obligations |> List.isEmpty |> not
-
+let private ledgerJsonWithPending (hasPending: bool) (obligations: ObligationInfo list) : string =
     let hasConditional =
         obligations
         |> List.exists (fun obligation ->
@@ -1257,6 +1232,10 @@ let ledgerJson (obligations: ObligationInfo list) : string =
         ]
     |> Json.serializePretty
 
+let ledgerJson (obligations: ObligationInfo list) : string =
+    let hasPending = unavailable obligations |> List.isEmpty |> not
+    ledgerJsonWithPending hasPending obligations
+
 let private unavailableJson (pending: UnavailableObligation list) =
     pending
     |> List.map (fun obligation -> JsonValue.Object [
@@ -1294,13 +1273,15 @@ let emit (inventory: Result<ObligationInfo list, string list>) : unit =
         | Error _ | Ok [] -> clear ()
         | Ok obs ->
             Directory.CreateDirectory dir |> ignore
-            File.WriteAllText(ledgerPath, ledgerJson obs)
-            match trySmtLib obs with
-            | Ok query ->
+            let pending = unavailable obs
+            File.WriteAllText(ledgerPath, ledgerJsonWithPending (not pending.IsEmpty) obs)
+            match pending with
+            | [] ->
+                let query = readySmtLib obs
                 File.Delete unavailablePath
                 File.WriteAllText(queryPath, query + "\n")
                 if isVerbose () then printfn "[CCS] Wrote obligations: 06a_obligations.json, 06b_obligations.smt2 (%d obligations)" obs.Length
-            | Error pending ->
+            | _ ->
                 File.Delete queryPath
                 File.WriteAllText(unavailablePath, unavailableJson pending)
                 if isVerbose () then printfn "[CCS] Wrote obligation ledger; query unavailable for %d pending obligations" pending.Length

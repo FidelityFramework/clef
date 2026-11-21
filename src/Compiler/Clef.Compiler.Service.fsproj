@@ -441,6 +441,7 @@
     <Compile Include="Nanopass\StringComparisons.fs" />
     <!-- Pure generated source/public mapping is needed by canonical resource proof transcription. -->
     <Compile Include="Baker\Ingredients\PublishedFactRows.fs" />
+    <Compile Include="Nanopass\ObligationSolverBatch.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->
