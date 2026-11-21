@@ -532,9 +532,9 @@ type ChildArray =
       Rewrite: Rewrite }
 
 /// Bind every child computation of an orchestration's child array to an
-/// immutable name. The bindings are sequenced, in element order, directly
-/// in place of the array's binding in its block. A child activation reads its
-/// child through that binding; the temporary descriptor array is retired.
+/// immutable name. Sequence the child bindings in element order before the
+/// original array binding. Each activation and its corresponding array
+/// element read the same bound child.
 let bindChildren (graph: SemanticGraph) (plan: ChildArrayPlan) : Result<ChildArray, Residual> =
     let residual site reason = Error { Formation = plan.Array; Site = site; Reason = reason }
     match graph.Nodes.TryFind plan.Array, graph.Nodes.TryFind plan.Tasks with
