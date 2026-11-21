@@ -445,6 +445,41 @@ let main _ = true
         let templateKeys =
             [ claim (sourceKey "numeric-carrier-coverage" parameter) "numeric-carrier-coverage" parameter
               claim (sourceKey "numeric-operation-coverage" operation) "numeric-operation-proof" operation ]
+        let role = "numeric-carrier-coverage"
+        let issue = Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId
+        let read = Clef.Compiler.Baker.Ingredients.Obligations.commonSourceClaimId
+        let site epoch =
+            Clef.Compiler.Baker.Ingredients.Obligations.declarationIdentity epoch 7L "Library.clef" ["Library"; "scale"] + "/0"
+        let at (node: SemanticNode) text =
+            { node with Metadata = node.Metadata.Add("Source.ObligationSite", MetadataValue.String text) }
+        let ordinary text = at parameter text
+        let epoch = System.Guid.Parse("12345678-9abc-def0-1234-56789abcdef0")
+        let generated = ordinary (site epoch)
+        let zero = ordinary (site System.Guid.Empty)
+        let raw = issue role generated |> Option.get
+        let canonical = issue role zero |> Option.get
+        if raw = canonical || read role raw generated <> Some canonical || read role canonical zero <> Some canonical then
+            failwith "Reading a source claim must equal issuing the same declaration and occurrence at the zero epoch"
+        if (read role templateKeys.Head parameter).IsNone then
+            failwith "The checked template's issued carrier claim lost its source reading"
+        let malformed text =
+            let subject = ordinary text
+            subject, (issue role subject |> Option.get)
+        let alphabet = epoch.ToString("N")
+        let specialized = graph.Nodes[Set.minElement instances]
+        match specialized.Metadata.TryFind SchemeMetadata.Specialization with
+        | Some(MetadataValue.Specialization _) -> ()
+        | _ -> failwith "The specialization control requires a checker-issued specialization"
+        let refusals =
+            [ "wrong role", "numeric-operation-coverage", (generated, raw)
+              "other checked occurrence", role, (operation, templateKeys.Head)
+              "specialized occurrence carrying the template site", role, (at specialized (site epoch), raw)
+              "upper-case epoch", role, malformed ("decl_" + alphabet.ToUpperInvariant() + "_7_41/0")
+              "nonhex epoch", role, malformed ("decl_g" + alphabet[1..] + "_7_41/0")
+              "short epoch", role, malformed ("decl_" + alphabet[..15] + "_7_41/0")
+              "missing epoch separator", role, malformed ("decl_" + alphabet + "!7_41/0") ]
+        for label, candidateRole, (subject, name) in refusals do
+            if (read candidateRole name subject).IsSome then failwithf "Unexpected common source claim for %s" label
         let generatedKeys = instances |> Set.toList |> List.collect (fun declaration ->
             for node in subtree declaration do
                 if node.Metadata.ContainsKey "Source.ObligationSite" || node.Metadata.ContainsKey "Source.DeclarationIncarnation" then

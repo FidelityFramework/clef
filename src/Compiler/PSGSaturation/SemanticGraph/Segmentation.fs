@@ -121,7 +121,7 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
         | None -> Map.empty
         | Some read ->
             match WitnessSegmentation.canonicalAddresses graph read with
-            | Result.Ok resolved -> resolved
+            | Result.Ok (resolved, _, _) -> resolved
             | Result.Error cycleFailures ->
                 for nodeOpt, reason in cycleFailures do fail nodeOpt reason
                 Map.empty

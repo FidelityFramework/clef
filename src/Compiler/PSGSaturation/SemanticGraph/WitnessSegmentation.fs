@@ -292,7 +292,7 @@ let internal canonicalRelationIdentities
 /// Compute range-free, NodeId-independent, Elaboration.Id-independent canonical
 /// structural addresses across the graph, disambiguating retired/detached/obligation
 /// collisions deterministically without consulting SourceRange.
-let internal canonicalAddresses (graph: SemanticGraph) (platformRead: PlatformResolution.Reading) : Result<Map<NodeId, string>, (NodeId option * string) list> =
+let internal canonicalAddresses (graph: SemanticGraph) (platformRead: PlatformResolution.Reading) =
     let cycleErrors = ResizeArray<NodeId option * string>()
     let baseAddresses = Collections.Generic.Dictionary<NodeId, string>()
     let visiting = Collections.Generic.HashSet<NodeId>()
@@ -475,7 +475,7 @@ let internal canonicalAddresses (graph: SemanticGraph) (platformRead: PlatformRe
                         let next = rest |> List.map (fun (id, info) -> id, "scc-obl:" + obligationKey refined id info)
                         refined <- List.fold (fun acc (id, value) -> Map.add id value acc) addresses next
                     rest |> List.map (fun (id, info) -> id, obligationKey refined id info) |> assign addresses |> Result.Ok
-        resolve known obligations
+        resolve known obligations |> Result.map (fun addresses -> addresses, incidentByTarget, obligations)
 
 /// Scope only domain indices. The selected row's complete value (including
 /// every participant and negative/absence observation) is encoded without
@@ -655,7 +655,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
        emission.Callable.AggregateSlots <> codata.CallableAggregateSlots then
         invalidOp "Callable relation tables disagree with their current source codata."
     let platformRead = PlatformResolution.read graph
-    let graphAddresses =
+    let graphAddresses, incoming, obligations =
         match canonicalAddresses graph platformRead with
         | Result.Ok addresses -> addresses
         | Result.Error errors ->
@@ -1042,6 +1042,56 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                 Some(resolveProofAddress node.Id + ":" + current (sprintf "Obligation[%A]" node.Id) (box info))
             | _ -> None)
         |> Seq.sort
+    let heldAnchors (accounts: Map<NodeId, CallableAggregateDependencyAccount>) =
+        accounts |> Map.values |> Seq.collect (fun account -> account.Sources |> Seq.collect (fun source -> source.Anchors))
+    let held =
+        Seq.append (heldAnchors witnessInputs.Callable.AggregateDependencies) (heldAnchors localCodata.CallableAggregateDependencies)
+        |> Set.ofSeq
+    let commonAnchors =
+        if held.IsEmpty then Map.empty else
+        obligations
+        |> List.filter (fun (_, info) -> held.Contains info.Id)
+        |> List.groupBy (fun (_, info) -> info.Id)
+        |> List.choose (function
+            | raw, [target, info] when info.Kind = "numeric-carrier-coverage" &&
+                                      Clef.Compiler.Baker.Ingredients.NumericValues.owned graph.Nodes[target] ->
+                let rows = incoming |> Map.tryFind target |> Option.defaultValue [] |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains)
+                match rows with
+                | [edge] when edge.Class = EdgeClass.Obligation && edge.Ordinal = 0 ->
+                    let origins = edge.Sources |> List.choose (fun id ->
+                        graph.Nodes.TryFind id |> Option.bind (fun node ->
+                            Clef.Compiler.Baker.Ingredients.Obligations.commonSourceClaimId info.Kind raw node
+                            |> Option.map (fun name -> id, name)))
+                    match origins with
+                    | [origin, name] ->
+                        emission.Numeric.Values.TryFind origin |> Option.bind (fun carrier ->
+                            if carrier.Site = origin && carrier.Obligations = [target] &&
+                               Set.toList carrier.Participants = edge.Sources &&
+                               Clef.Compiler.Baker.Ingredients.NumericValues.coverage carrier = Some info.Body then
+                                Some (name, (raw, carrier.Participants))
+                            else None)
+                    | _ -> None
+                | _ -> None
+            | _ -> None)
+        |> List.groupBy fst
+        |> List.choose (function
+            | common, [_, (raw, participants)] when raw = common || not (held.Contains common) ->
+                Some (raw, (participants, common))
+            | _ -> None)
+        |> Map.ofList
+    let readAccounts (accounts: Map<NodeId, CallableAggregateDependencyAccount>) =
+        if commonAnchors.IsEmpty then accounts else
+        let readSource (source: CallableAggregateSourceIncidence) =
+            match graph.Nodes.TryFind source.Node |> Option.bind (fun node -> node.Metadata.TryFind ObligationMetadata.Anchors) with
+            | Some (MetadataValue.StringList current) when current = source.Anchors ->
+                let anchors =
+                    current |> List.map (fun raw ->
+                        match commonAnchors.TryFind raw with
+                        | Some (participants, common) when participants.Contains source.Node -> common
+                        | _ -> raw)
+                { source with Anchors = anchors }
+            | _ -> source
+        accounts |> Map.map (fun _ account -> { account with Sources = List.map readSource account.Sources })
     let contractInterfacesAll =
         emission.Callable.Contracts |> Map.map (fun _ contract ->
             { contract with
@@ -1068,9 +1118,17 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
             append "\n"
             appendJoined "|" append (executableNodes ())
             append "\n"
-            append (current "WitnessInputs" (box { witnessInputs with Callable = { witnessInputs.Callable with Contracts = contractInterfacesAll } }))
+            let callable =
+                { witnessInputs.Callable with
+                    Contracts = contractInterfacesAll
+                    AggregateDependencies = readAccounts witnessInputs.Callable.AggregateDependencies }
+            let facts =
+                { localCodata with
+                    CallableContracts = contractInterfacesAll
+                    CallableAggregateDependencies = readAccounts localCodata.CallableAggregateDependencies }
+            append (current "WitnessInputs" (box { witnessInputs with Callable = callable }))
             append "\n"
-            append (current "LocalCodata" (box { localCodata with CallableContracts = contractInterfacesAll }))
+            append (current "LocalCodata" (box facts))
             append "\n"
             append (current "Platform" (box graph.Platform))
             append "\n"

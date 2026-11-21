@@ -77,6 +77,108 @@ let main _ =
 
 type CallableAggregateCases() =
     [<Fact>]
+    member _.``Common receiving anchors retain both live names on a collision`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource false)
+        let facts = graph.Codata.Value
+        let emission = facts.WitnessEmission.Value
+        let role = "numeric-carrier-coverage"
+        let holders =
+            facts.CallableAggregateDependencies |> Map.values
+            |> Seq.collect (fun account -> account.Sources)
+            |> Seq.choose (fun source ->
+                match source.Anchors with [name] -> Some (source.Node, name) | _ -> None)
+            |> Seq.distinct |> Seq.toList
+        let (left, leftRaw), (right, rightRaw) =
+            match holders with [a; b] -> a, b | rows -> failwithf "Expected two receiving source claims: %A" rows
+        Assert.NotEqual<string>(leftRaw, rightRaw)
+        let issue = Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId
+        let owner holder raw =
+            let target =
+                graph.Nodes.Values |> Seq.filter (fun node ->
+                    match node.Kind with SemanticKind.Obligation info -> info.Id = raw && info.Kind = role | _ -> false)
+                |> Seq.exactlyOne
+            let edge = graph.Edges |> List.filter (fun row -> row.Role = EdgeRole.Constrains && row.Target = target.Id) |> List.exactlyOne
+            Assert.Equal(EdgeClass.Obligation, edge.Class)
+            Assert.Equal(0, edge.Ordinal)
+            let carrier = emission.Numeric.Values.Values |> Seq.filter (fun row ->
+                row.Obligations = [target.Id] && row.Participants.Contains holder &&
+                Set.toList row.Participants = edge.Sources && issue role graph.Nodes[row.Site] = Some raw) |> Seq.exactlyOne
+            carrier.Site, target.Id
+        let originLeft, claimLeft = owner left leftRaw
+        let originRight, claimRight = owner right rightRaw
+        Assert.NotEqual(originLeft, originRight)
+        Assert.NotEqual(claimLeft, claimRight)
+        let site epoch =
+            Clef.Compiler.Baker.Ingredients.Obligations.declarationIdentity epoch 7L "receiving.clef" ["main"] + "/0"
+        let firstEpoch = System.Guid.Parse("11111111-1111-1111-1111-111111111111")
+        let secondEpoch = System.Guid.Parse("22222222-2222-2222-2222-222222222222")
+        let collide otherEpoch =
+            let bind producer target epoch =
+                let origin = graph.Nodes[producer]
+                let cell = graph.Nodes[target]
+                let info = match cell.Kind with SemanticKind.Obligation value -> value | _ -> failwith "Expected a checked claim"
+                let origin = { origin with Metadata = origin.Metadata.Add("Source.ObligationSite", MetadataValue.String (site epoch)) }
+                let newName = issue role origin |> Option.get
+                let canonical = Clef.Compiler.Baker.Ingredients.Obligations.commonSourceClaimId role newName origin |> Option.get
+                newName, canonical, origin, { cell with Kind = SemanticKind.Obligation { info with Id = newName } }
+            let nameA, commonA, originA, cellA = bind originLeft claimLeft firstEpoch
+            let nameB, commonB, originB, cellB = bind originRight claimRight otherEpoch
+            Assert.NotEqual<string>(nameA, nameB)
+            Assert.Equal(commonA, commonB)
+            Assert.Equal((otherEpoch = System.Guid.Empty), (nameB = commonA))
+            let names = Map.ofList [leftRaw, nameA; rightRaw, nameB]
+            let accounts =
+                facts.CallableAggregateDependencies |> Map.map (fun _ account ->
+                    let sources =
+                        account.Sources |> List.map (fun source ->
+                            let anchors = source.Anchors |> List.map (fun raw -> names.TryFind raw |> Option.defaultValue raw)
+                            { source with Anchors = anchors })
+                    { account with Sources = sources })
+            let nodes = [originA; cellA; originB; cellB] |> List.fold (fun current node -> Map.add node.Id node current) graph.Nodes
+            let reanchor (nodes: Map<NodeId, SemanticNode>) (holder, oldName, newName) =
+                let node = nodes[holder]
+                match node.Metadata.TryFind ObligationMetadata.Anchors with
+                | Some(MetadataValue.StringList anchors) when List.contains oldName anchors ->
+                    let anchors = anchors |> List.map (fun name -> if name = oldName then newName else name)
+                    nodes.Add(holder, { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList anchors) })
+                | _ -> failwith "Receiving account is detached from holder metadata"
+            let nodes = List.fold reanchor nodes [left, leftRaw, nameA; right, rightRaw, nameB]
+            { graph with Nodes = nodes; Codata = lazy { facts with CallableAggregateDependencies = accounts } },
+            { emission with Callable = { emission.Callable with AggregateDependencies = accounts } }
+        let digest graph (reading: WitnessEmissionProjection) suppressed =
+            // The writer erases carrier obligation pointers from the common preimage.
+            // Clearing one pointer suspends its claim qualification while its raw name stays held.
+            let values = reading.Numeric.Values |> Map.map (fun id row ->
+                if List.contains id suppressed then { row with Obligations = [] } else row)
+            let reading = { reading with Numeric = { reading.Numeric with Values = values } }
+            let result = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project graph reading facts.WitnessLiveScope.Value
+            (result.Regions |> List.find (fun region -> region.Identity = "common")).SemanticRealizationDigest
+        let pair, reading = collide secondEpoch
+        let raw = digest pair reading [originLeft; originRight]
+        Assert.NotEqual(raw, digest pair reading [originLeft])
+        Assert.NotEqual(raw, digest pair reading [originRight])
+        Assert.Equal(raw, digest pair reading [])
+        let twin, reading = collide System.Guid.Empty
+        Assert.Equal(digest twin reading [originLeft; originRight], digest twin reading [originRight])
+        let alien =
+            facts.CallableAggregateDependencies.Keys |> Seq.find (fun id ->
+                id <> right && not (emission.Numeric.Values[originLeft].Participants.Contains id))
+        let misplaced =
+            facts.CallableAggregateDependencies |> Map.map (fun _ account ->
+                let sources =
+                    account.Sources |> List.map (fun source ->
+                        if source.Node = left then { source with Node = alien } else source)
+                { account with Sources = sources })
+        let foreign = graph.Nodes[alien]
+        let foreign = { foreign with Metadata = foreign.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList [leftRaw]) }
+        let misplacedGraph =
+            { graph with Nodes = graph.Nodes.Add(alien, foreign)
+                         Codata = lazy { facts with CallableAggregateDependencies = misplaced } }
+        let misplacedReading = { emission with Callable = { emission.Callable with AggregateDependencies = misplaced } }
+        Assert.NotEqual(digest graph emission [originLeft; originRight], digest graph emission [originRight])
+        Assert.Equal(digest misplacedGraph misplacedReading [originLeft; originRight], digest misplacedGraph misplacedReading [originRight])
+
+    [<Fact>]
     member _.``Canonical slot addresses include each resolved declaration contract and participant endpoint once`` () =
         let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource false)
         let original =

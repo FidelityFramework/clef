@@ -92,17 +92,29 @@ let annotateSourceClaims (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, Semant
                     Some(current, (children @ rest, seen, current)))
         |> Seq.fold (fun _ current -> current) current) nodes
 
-/// Encode the canonical source claim without a lossy hash. This is a symbol
-/// in the existing obligation ledger, not a second identity registry.
-let sourceClaimId (role: string) (subject: SemanticNode) : string option =
+let private claimAtSite role (site: string) =
+    "claim_" + System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(site + ":" + role))
+
+let private sourceSite (subject: SemanticNode) =
     match subject.Metadata.TryFind SchemeMetadata.Specialization, subject.Metadata.TryFind "Source.ObligationSite" with
     // Generated specializations have their own trace and transient claims.
     // They cannot inherit the template's claim identity. Stable specialization
     // identities and differential proof reuse remain part of D5.
     | Some(MetadataValue.Specialization _), _ -> None
-    | _, Some(MetadataValue.String site) ->
-        Some("claim_" + System.Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(site + ":" + role)))
+    | _, Some(MetadataValue.String site) -> Some site
     | _ -> None
+
+/// Encode the exact source lifetime and role for the obligation ledger.
+let sourceClaimId role subject = sourceSite subject |> Option.map (claimAtSite role)
+
+/// Read only an already-bound source claim for the common realization.
+let internal commonSourceClaimId role raw subject =
+    sourceSite subject |> Option.bind (fun site ->
+        let hex c = ('0' <= c && c <= '9') || ('a' <= c && c <= 'f')
+        if String.length site > 38 && site[..4] = "decl_" && site[37] = '_' &&
+           String.forall hex site[5..36] && claimAtSite role site = raw then
+            Some (claimAtSite role ("decl_" + String.replicate 32 "0" + site[37..]))
+        else None)
 
 let describe (content: string) : string =
     match content with
