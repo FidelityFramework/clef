@@ -32,7 +32,7 @@ let inputs manifest =
     defines, files
 
 let scan defines (file, path) =
-    let tokenizer = FSharpSourceTokenizer(defines, Some path, None, None)
+    let tokenizer = FSharpSourceTokenizer("COMPILED" :: defines, Some path, None, None)
     let mutable state = FSharpTokenizerLexState.Initial
     let mutable previous : (string * int * int) list = []
     [ for lineNumber, line in File.ReadLines(path) |> Seq.indexed do
