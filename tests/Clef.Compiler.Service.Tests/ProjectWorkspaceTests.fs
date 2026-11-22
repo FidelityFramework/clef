@@ -1158,3 +1158,43 @@ let kernel: ElementKernel = { Compute=calculate; Shape={Elements=64;Grain=16} }
         Assert.NotEqual(oldVersion, newVersion)
         Assert.Equal("StackOnly", newName)
         Assert.False(newHeap)
+
+    [<Fact>]
+    member _.``Project phase sink records reached phases without changing checked results``() =
+        use files = new WorkspaceFiles()
+        let quiet = ProjectChecker.checkProject files.Project |> WorkspaceCases.need
+        let observed = ResizeArray<NativeService.CheckPhaseEvent>()
+        let checkedProject = ProjectChecker.checkProjectWithPhaseSink observed.Add files.Project |> WorkspaceCases.need
+
+        let completed phase outcome =
+            [ NativeService.CheckPhaseEvent.PhaseStarted phase
+              NativeService.CheckPhaseEvent.PhaseCompleted(phase, outcome) ]
+        let expected =
+            [ yield! completed NativeService.CheckPhase.ProgramStorage NativeService.CheckPhaseOutcome.Completed
+              yield! completed NativeService.CheckPhase.MemoryAndBoundarySettlement NativeService.CheckPhaseOutcome.Completed
+              yield! completed NativeService.CheckPhase.FinalGraphReadiness NativeService.CheckPhaseOutcome.Completed
+              yield! completed NativeService.CheckPhase.ObligationPublication NativeService.CheckPhaseOutcome.Accepted ]
+        Assert.Equal<NativeService.CheckPhaseEvent list>(expected, List.ofSeq observed)
+        Assert.False(ProjectChecker.hasErrors checkedProject, String.concat "\n" (ProjectChecker.getErrorMessages checkedProject))
+        Assert.True(quiet.InputFiles = checkedProject.InputFiles)
+        Assert.True(quiet.ParseErrors = checkedProject.ParseErrors)
+        Assert.True(quiet.CheckResult.Diagnostics = checkedProject.CheckResult.Diagnostics)
+
+        let graphFacts (project: ProjectCheckResult) =
+            let graph = project.CheckResult.Graph
+            let anchor id = (Map.find id graph.Nodes).Range
+            let nodes =
+                graph.Nodes |> Map.toList |> List.map (fun (_, node) ->
+                    let kind =
+                        match node.Kind with
+                        | SemanticKind.Obligation claim ->
+                            // Independent cold checks mint distinct declaration and claim identities.
+                            Choice1Of2 (claim.Kind, claim.Logic, claim.Statement, claim.Source, claim.Refs, claim.Body)
+                        | kind -> Choice2Of2 kind
+                    node.Range, node.Type, node.IsReachable, kind)
+            let roots = graph.DeclarationRoots |> List.map (fun (id, role) -> anchor id, role)
+            let incidence =
+                graph.Edges |> List.map (fun edge -> edge.Class, edge.Ordinal, List.map anchor edge.Sources, anchor edge.Target)
+            roots, nodes, incidence
+        Assert.False(Map.isEmpty quiet.CheckResult.Graph.Nodes)
+        Assert.True(graphFacts quiet = graphFacts checkedProject)

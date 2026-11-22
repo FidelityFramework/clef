@@ -960,15 +960,47 @@ let private unusedBindingDiagnostics (ownedSources: Set<string>) (graph: Semanti
         |> Seq.distinctBy (fun diagnostic -> diagnostic.Range)
         |> Seq.toList
 
+[<RequireQualifiedAccess>]
+type CheckPhase =
+    | ProgramStorage
+    | MemoryAndBoundarySettlement
+    | FinalGraphReadiness
+    | ObligationPublication
+    | CheckedWitnessPreparation
+
+/// Only a stage's own Result distinguishes Accepted from Refused.
+[<RequireQualifiedAccess>]
+type CheckPhaseOutcome =
+    | Completed
+    | Accepted
+    | Refused
+
+/// Host diagnostics for one check. An interrupted stage has no completion.
+[<RequireQualifiedAccess>]
+type CheckPhaseEvent =
+    | PhaseStarted of CheckPhase
+    | PhaseCompleted of CheckPhase * CheckPhaseOutcome
+
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
-let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) (ownedSources: Set<string>) (libraryOutput: bool) (libraryExports: Set<NodeId>) : CheckResult =
+let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) (ownedSources: Set<string>) (libraryOutput: bool) (libraryExports: Set<NodeId>) : CheckResult =
     // Host-only diagnosis of source settlement; never changes the graph or
     // supplies semantic evidence. Disabled unless explicitly requested.
     let phaseTimer = System.Diagnostics.Stopwatch.StartNew()
     let tracePhase name =
         if System.Environment.GetEnvironmentVariable("CLEF_PHASE_TIMING") = "1" then
             System.Console.Error.WriteLine("[CCS phase] {0} {1:F3}s", name, phaseTimer.Elapsed.TotalSeconds)
+    let startPhase phase =
+        match phaseSink with
+        | Some emit -> emit (CheckPhaseEvent.PhaseStarted phase)
+        | None -> ()
+    let completePhase phase outcome =
+        match phaseSink with
+        | Some emit -> emit (CheckPhaseEvent.PhaseCompleted (phase, outcome))
+        | None -> ()
+    let outcomeOf = function
+        | Result.Ok _ -> CheckPhaseOutcome.Accepted
+        | Result.Error _ -> CheckPhaseOutcome.Refused
     tracePhase "source-input"
     let declRoots, retainedDeclarations =
         findDeclarationRoots libraryOutput libraryExports builder.Nodes topLevelNodes
@@ -1545,16 +1577,22 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.normalize finalGraph
     // The aggregate owner may complete a union after initial meet derivation.
     let finalGraph = Meets.renewUnionTagReads platformContext finalGraph
+    startPhase CheckPhase.ProgramStorage
     // Inventory consumes the aggregate owner's final physical extents.
     let programInventory = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle finalGraph
     tracePhase "program-storage"
     let finalGraph =
         let facts = finalGraph.Codata.Value
         { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
+    // Deferred Codata is measured in the stage where existing code forces it.
+    completePhase CheckPhase.ProgramStorage CheckPhaseOutcome.Completed
+    startPhase CheckPhase.MemoryAndBoundarySettlement
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.establishRegionImports finalGraph
     let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
+    completePhase CheckPhase.MemoryAndBoundarySettlement CheckPhaseOutcome.Completed
+    startPhase CheckPhase.FinalGraphReadiness
     // Native entry plans consume the boundary owner's admitted declaration,
     // ABI and loading rows. Settle once after those rows exist, before witness
     // scope preparation; earlier ordinary representation owners do not read them.
@@ -1567,12 +1605,15 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SSAAssignment.normalize finalGraph
     let storagePremiseDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.premiseGuard finalGraph
+    completePhase CheckPhase.FinalGraphReadiness CheckPhaseOutcome.Completed
+    startPhase CheckPhase.ObligationPublication
     let obligationCompleteness =
         Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.completeness finalGraph
     let obligationInventory =
         if obligationCompleteness.IsEmpty then Result.Ok(ObligationDischarge.ofGraph finalGraph)
         else Result.Error(obligationCompleteness |> List.map _.Reason)
     ObligationDischarge.emit obligationInventory
+    completePhase CheckPhase.ObligationPublication (outcomeOf obligationInventory)
     tracePhase "obligations"
 
     // Publication retains the exact prepared input roots, including collection
@@ -1585,7 +1626,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         // to an emitter without declared physical facts.
         if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else
-            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare finalGraph with
+            startPhase CheckPhase.CheckedWitnessPreparation
+            let preparation = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare finalGraph
+            completePhase CheckPhase.CheckedWitnessPreparation (outcomeOf preparation)
+            match preparation with
             | Result.Ok admitted -> admitted, []
             | Result.Error failures ->
                 finalGraph, Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics finalGraph failures
@@ -2938,7 +2982,7 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
         let reported = solveAndGetDiagnostics finalEnv !(env.Constraints) @ List.rev !(env.Diagnostics)
         let diagnostics = reported @ residualDiagnostics builder reported
 
-        buildResult builder nodes Map.empty diagnostics None Set.empty false Set.empty
+        buildResult None builder nodes Map.empty diagnostics None Set.empty false Set.empty
 
     //-------------------------------------------------------------------------
     // Type Checking: Module or Namespace Level
@@ -3030,17 +3074,10 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
         let reported = solved @ List.rev !(initialEnv.Diagnostics)
         let diagnostics = reported @ residualDiagnostics builder reported
 
-        buildResult builder allNodes modulePaths diagnostics None Set.empty false Set.empty
+        buildResult None builder allNodes modulePaths diagnostics None Set.empty false Set.empty
     )
 
-/// Check multiple parsed implementation files together with optional platform context.
-/// Files are processed in order, with earlier files' bindings available to later files.
-/// This is essential for multi-file compilation where dependencies must be loaded first.
-/// After checking, reachability analysis prunes the graph to only what's used.
-///
-/// platformContext: Optional platform context. When Some, enables entry point elaboration
-/// for freestanding builds (adds _start wrapper that calls main).
-let checkParsedInputsWithDeclarations (inputs: ParsedInput list) (platformContext: PlatformContext option) (ownedSources: Set<string>) (librarySources: Set<string> option) (identities: Map<SourceRange, string> option) : CheckResult =
+let internal checkParsedInputsWithDeclarationsAndPhaseSink phaseSink (inputs: ParsedInput list) (platformContext: PlatformContext option) (ownedSources: Set<string>) (librarySources: Set<string> option) (identities: Map<SourceRange, string> option) : CheckResult =
     Clef.Compiler.CheckExecution.synchronized (fun () ->
         let initialEnv = createTypeEnv()
         let builder = NodeBuilder()
@@ -3095,6 +3132,7 @@ let checkParsedInputsWithDeclarations (inputs: ParsedInput list) (platformContex
         let allDiagnostics = reported @ residualDiagnostics builder reported
 
         buildResult
+            phaseSink
             builder
             allNodes
             modulePaths
@@ -3104,6 +3142,16 @@ let checkParsedInputsWithDeclarations (inputs: ParsedInput list) (platformContex
             librarySources.IsSome
             sourceContext.LibraryExports.Value
     )
+
+/// Check multiple parsed implementation files together with optional platform context.
+/// Files are processed in order, with earlier files' bindings available to later files.
+/// This is essential for multi-file compilation where dependencies must be loaded first.
+/// After checking, reachability analysis prunes the graph to only what's used.
+///
+/// platformContext: Optional platform context. When Some, enables entry point elaboration
+/// for freestanding builds (adds _start wrapper that calls main).
+let checkParsedInputsWithDeclarations inputs platformContext ownedSources librarySources identities =
+    checkParsedInputsWithDeclarationsAndPhaseSink None inputs platformContext ownedSources librarySources identities
 
 /// Existing callers retain executable inference and open a fresh source epoch.
 let checkParsedInputsWithPlatformAndSources inputs platformContext ownedSources =

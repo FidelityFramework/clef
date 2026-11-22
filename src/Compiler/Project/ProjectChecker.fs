@@ -215,7 +215,7 @@ module ProjectChecker =
         Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None; SequenceRangeProvenance = None; RangeContextFacts = None
     }
 
-    let private checkPreparedWithIdentity identify (prepared: PreparedProject) : ProjectCheckResult =
+    let private checkPreparedWithIdentity identify phaseSink (prepared: PreparedProject) : ProjectCheckResult =
         Clef.Compiler.CheckExecution.synchronized (fun () ->
             let projectMemoryPolicy =
                 prepared.Inputs
@@ -238,7 +238,7 @@ module ProjectChecker =
                     // Complete parsing is the observation boundary, independent
                     // of whether the subsequent semantic check succeeds.
                     let identities = identify |> Option.map (fun observe -> observe units)
-                    checkParsedInputsWithDeclarations (List.map snd units)
+                    checkParsedInputsWithDeclarationsAndPhaseSink phaseSink (List.map snd units)
                         (buildPlatformContext prepared.Options prepared.PlatformTarget prepared.PlatformSources projectMemoryPolicy)
                         (ownedApplicationSources prepared.Options)
                         (ownedLibrarySources prepared.Options) identities
@@ -248,16 +248,23 @@ module ProjectChecker =
               PlatformTarget = prepared.PlatformTarget; ParseErrors = errors })
 
     let internal checkPreparedWithDeclarations identify prepared =
-        checkPreparedWithIdentity (Some identify) prepared
+        checkPreparedWithIdentity (Some identify) None prepared
 
     /// Stateless checks open a fresh declaration epoch in the source checker.
-    let internal checkPrepared prepared = checkPreparedWithIdentity None prepared
+    let internal checkPrepared prepared = checkPreparedWithIdentity None None prepared
+
+    let private checkProjectWith phaseSink fidprojPath volatileContent =
+        prepare fidprojPath volatileContent |> Result.map (checkPreparedWithIdentity None phaseSink)
 
     /// Existing synchronous API uses the same immutable capture and process gate.
     let checkProjectWithVolatile fidprojPath volatileContent : Result<ProjectCheckResult, string> =
-        prepare fidprojPath volatileContent |> Result.map checkPrepared
+        checkProjectWith None fidprojPath volatileContent
 
     let checkProject fidprojPath = checkProjectWithVolatile fidprojPath Map.empty
+
+    /// Observe the host phases reached during this synchronous project check.
+    let checkProjectWithPhaseSink (emit: CheckPhaseEvent -> unit) (fidprojPath: string) : Result<ProjectCheckResult, string> =
+        checkProjectWith (Some emit) fidprojPath Map.empty
 
     /// Get diagnostics for a specific file from a checked project.
     let getDiagnosticsForFile (result: ProjectCheckResult) (filePath: string): SGDiag.Diagnostic list =
