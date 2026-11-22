@@ -204,37 +204,32 @@ let dimensional (enrichId: int) (name: string, (site: SemanticNode, left: Semant
       NewEdges = [ constrains [ site.Id; left.Id; right.Id ] node ]
       Annotated = [] }
 
-/// storage-reservation, view-containment, terminator-sentinel: one triple per
-/// text, S_f = every reachable node of the text. Every term is a fact of the
-/// text itself, so the triple is node-level. The first participant supplies
-/// the source position.
+/// The literal proof owner supplies every non-identity fact, both at birth and on re-entry.
+let literalClaimFacts name content source : ObligationInfo list =
+    let len = byteLength content
+    let storage = len + 1
+    let storageClaim =
+        { Id = sprintf "storage_%s" name; Kind = "storage-reservation"; Logic = "QF_LIA"
+          Statement = sprintf "storage for %s is exactly its logical length %d plus one terminator byte (%d = %d + 1)" (describe content) len storage len
+          Source = source; Refs = [ "CWE-131" ]; Body = ObligationBody.StorageReservation (len, storage) }
+    let viewClaim =
+        { Id = sprintf "view_%s" name; Kind = "view-containment"; Logic = "QF_LIA"
+          Statement = sprintf "the view handed to write() for %s is exactly %d bytes and strictly inside its %d-byte storage (the terminator is never written)" (describe content) len storage
+          Source = source; Refs = [ "CWE-787" ]; Body = ObligationBody.ViewContainment (len, len, storage) }
+    let sentinelClaim =
+        { Id = sprintf "sentinel_%s" name; Kind = "terminator-sentinel"; Logic = "QF_BV"
+          Statement = sprintf "the final storage byte of %s is the 0x00 terminator" (describe content)
+          Source = source; Refs = [ "CWE-170" ]; Body = ObligationBody.NulSentinel 0 }
+    [storageClaim; viewClaim; sentinelClaim]
+
+/// One node-level triple per exact text, sourced by its ordered literal participants.
 let literalTriple (enrichId: int) (name: string, (content: string, participants: SemanticNode list)) : Enrichment =
     match participants with
     | [] -> Enrichment.empty
     | subject :: _ ->
-    let len = byteLength content
-    let storage = len + 1
-    let born = fmtRange subject.Range
-    let mk = obligationNode subject enrichId
-    let storageN =
-        mk { Id = sprintf "storage_%s" name; Kind = "storage-reservation"; Logic = "QF_LIA"
-             Statement = sprintf "storage for %s is exactly its logical length %d plus one terminator byte (%d = %d + 1)" (describe content) len storage len
-             Source = born; Refs = [ "CWE-131" ]; Body = ObligationBody.StorageReservation (len, storage) }
-    let viewN =
-        mk { Id = sprintf "view_%s" name; Kind = "view-containment"; Logic = "QF_LIA"
-             Statement = sprintf "the view handed to write() for %s is exactly %d bytes and strictly inside its %d-byte storage (the terminator is never written)" (describe content) len storage
-             Source = born; Refs = [ "CWE-787" ]; Body = ObligationBody.ViewContainment (len, len, storage) }
-    let sentinelN =
-        mk { Id = sprintf "sentinel_%s" name; Kind = "terminator-sentinel"; Logic = "QF_BV"
-             Statement = sprintf "the final storage byte of %s is the 0x00 terminator" (describe content)
-             Source = born; Refs = [ "CWE-170" ]; Body = ObligationBody.NulSentinel 0 }
-    let sources = participants |> List.map (fun n -> n.Id)
-    { NewNodes = [ storageN; viewN; sentinelN ]
-      NewEdges =
-        [ constrains sources storageN
-          constrains sources viewN
-          constrains sources sentinelN ]
-      Annotated = [] }
+        let claims = literalClaimFacts name content (fmtRange subject.Range) |> List.map (obligationNode subject enrichId)
+        let sources = participants |> List.map _.Id
+        { NewNodes = claims; NewEdges = claims |> List.map (constrains sources); Annotated = [] }
 
 /// A literal resides in named immutable program storage: the space
 /// declaration, its selected descriptor and designation are the sources.

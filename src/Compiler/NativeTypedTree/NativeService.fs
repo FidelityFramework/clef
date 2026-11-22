@@ -1197,17 +1197,22 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph, rangeDiagnostics = RangeAnalysis.run platformContext finalGraph
     tracePhase "ranges"
     let formatted = BakerSaturation.formatIntegers finalGraph
-    let finalGraph, rangeDiagnostics =
-        if obj.ReferenceEquals(finalGraph, formatted) then finalGraph, rangeDiagnostics
+    let finalGraph, rangeDiagnostics, literalProofDiagnostics =
+        if obj.ReferenceEquals(finalGraph, formatted) then finalGraph, rangeDiagnostics, []
         else
             let newNodes = formatted.Nodes.Keys |> Seq.filter (fun id -> not (finalGraph.Nodes.ContainsKey id)) |> Seq.toList
             let formatted = Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable formatted
-            let formatted = NodeProofs.create formatted newNodes
+            let formatted, proofDiagnostics =
+                match NodeProofs.tryExtend formatted newNodes with
+                | Result.Ok current -> current, []
+                | Result.Error failure ->
+                    formatted, Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics formatted [failure]
             let formatted = Clef.Compiler.Nanopass.SequenceEvaluation.normalize formatted
             let formatted = Clef.Compiler.Nanopass.EagerDemand.normalize formatted
             let formatted = Clef.Compiler.Nanopass.OrdinaryDemand.normalize formatted
             let formatted = Clef.Compiler.Nanopass.StringBorrows.normalize formatted
-            RangeAnalysis.run platformContext formatted
+            let checkedGraph, diagnostics = RangeAnalysis.run platformContext formatted
+            checkedGraph, diagnostics, proofDiagnostics
     let byteGraph, stringByteDiagnostics = Clef.Compiler.Nanopass.StringByteStorage.normalize finalGraph
     // New copy loops and their read/write dependencies participate in the same
     // range fixed point. Replace preliminary diagnostics and invalidated tables;
@@ -1302,7 +1307,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read finalGraph).Findings.IsEmpty
     let sourceAdmitted =
         selectedDeclarationAdmitted &&
-        ((taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ bindingDemandDiagnostics @ staticLayoutDiagnostics @ stringByteDiagnostics)
+        ((taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ bindingDemandDiagnostics @ staticLayoutDiagnostics @ literalProofDiagnostics @ stringByteDiagnostics)
          |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error)
          |> not)
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
@@ -1625,7 +1630,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ asyncAndRegions.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ mutableCellResidenceDiagnostics @ aggregateDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ asyncAndRegions.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ mutableCellResidenceDiagnostics @ aggregateDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ literalProofDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

@@ -308,6 +308,74 @@ module private LazyStringOriginFixture =
 
 type IntrinsicWriteCases() =
     [<Theory>]
+    [<InlineData(false, false)>]
+    [<InlineData(false, true)>]
+    [<InlineData(true, false)>]
+    [<InlineData(true, true)>]
+    member _.``Equal text born during integer formatting joins the source literal's ordered proof triple`` (generatedFirst: bool, demanded: bool) =
+        let consumer =
+            if demanded then
+                """let consume (first: string) (second: string) =
+    let captured () = write first
+    apply captured
+    write second
+    0"""
+            else "let consume (first: string) (second: string) = 0"
+        let actuals = if generatedFirst then "(Format.int 7) \"7\"" else "\"7\" (Format.int 7)"
+        let source =
+            String.concat "\n"
+                [ "module WriteFixture"
+                  "let write (s: string) ="
+                  "    let _ = Sys.write 1 s.Bytes s.Length"
+                  "    ()"
+                  "let apply (action: unit -> unit) = action ()"
+                  consumer
+                  "[<EntryPoint>]"
+                  "let main _ = consume " + actuals
+                  "" ]
+        let graph, _ = IntrinsicWriteFixture.graphAndProjectionOfSource source
+        let participants =
+            IntrinsicWriteFixture.occurrences graph "7" |> Set.toList
+            |> List.sortBy (fun id -> graph.Nodes[id].Range.Start.Column)
+        Assert.Equal(2, participants.Length)
+        let first, second = graph.Nodes[participants[0]], graph.Nodes[participants[1]]
+        Assert.Equal(first.Range.File, second.Range.File)
+        Assert.Equal(first.Range.Start.Line, second.Range.Start.Line)
+        Assert.True(first.Range.Start.Column < second.Range.Start.Column)
+        Assert.Equal((if demanded then 2 else 0), (IntrinsicWriteFixture.writeCalls graph).Length)
+        let pool = graph.StaticStringPool |> Option.bind (fun p -> p.Entries |> List.tryFind (fun e -> e.Content = "7"))
+        Assert.Equal<NodeId list option>((if demanded then Some participants else None), pool |> Option.map _.NodeIds)
+
+        let incident = IntrinsicWriteFixture.literalProofs graph "7"
+        Assert.True(incident.Length = 3, sprintf "Expected one storage/view/sentinel triple for the two reachable '7' occurrences; found %d obligation edges." incident.Length)
+        let prepared = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare graph
+                       |> Result.defaultWith (fun failures -> failwithf "Witness preparation refused: %A" failures)
+        let dispatch = prepared.Codata.Value.ProofDispatch.Value
+        let expected =
+            [ "storage_7", "storage-reservation", ObligationBody.StorageReservation(1, 2)
+              "view_7", "view-containment", ObligationBody.ViewContainment(1, 1, 2)
+              "sentinel_7", "terminator-sentinel", ObligationBody.NulSentinel 0 ]
+        let claims = dispatch.Required |> List.filter (fun (_, info) ->
+            incident |> List.exists (fun (observed, _) -> observed.Id = info.Id))
+        Assert.Equal<(string * string * ObligationBody) list>(expected, claims |> List.map (fun (_, info) -> info.Id, info.Kind, info.Body))
+        let portableId (NodeId value) = Fidelity.PSG.NodeId value
+        let published = prepared.Codata.Value.WitnessPublishedRows.Value
+        for target, info in claims do
+            let edge = graph.Edges |> List.filter (fun row -> row.Target = target) |> Assert.Single
+            Assert.Equal(EdgeClass.Obligation, edge.Class)
+            Assert.Equal(EdgeRole.Constrains, edge.Role)
+            Assert.Equal(0, edge.Ordinal)
+            Assert.Equal<NodeId list>(participants, edge.Sources)
+            Assert.Equal(first.Range, graph.Nodes[target].Range)
+            Assert.Equal(sprintf "%s:%d:%d" first.Range.File first.Range.Start.Line first.Range.Start.Column, info.Source)
+            Assert.Equal<NodeId list list>([participants], dispatch.SourceGroups[target])
+            Assert.Equal<Fidelity.PSG.NodeId list list>([List.map portableId participants], published.ObligationSources[portableId target])
+            for id in participants do
+                match graph.Nodes[id].Metadata.TryFind ObligationMetadata.Anchors with
+                | Some(MetadataValue.StringList anchors) -> Assert.Equal(1, anchors |> List.filter ((=) info.Id) |> List.length)
+                | _ -> failwith "A current literal participant has no proof anchor inventory."
+
+    [<Theory>]
     [<InlineData("literal")>]
     [<InlineData("conditional")>]
     [<InlineData("forwarded")>]
