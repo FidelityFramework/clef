@@ -41,7 +41,13 @@ module SourceResolutionError =
             $"Dependency '{name}' declares no local path; there is no package registry to resolve it. Declare its 'path' in the .fidproj dependencies."
 
 module SourceResolver =
+    type SourceMembership = {
+        Direct: string list
+        Dependencies: string list
+    }
+
     type ResolvedSources = {
+        Membership: SourceMembership
         SourcePaths: string list
         /// The selected platform's own transitive source closure, excluding
         /// unrelated workload dependencies and application-owned sources.
@@ -188,7 +194,8 @@ module SourceResolver =
                     | None when options.PlatformMetadata.IsSome -> Ok (Set.ofList sources)
                     | None -> Ok Set.empty
                 platformSources |> Result.map (fun platformSources ->
-                    { SourcePaths = sources
+                    { Membership = { Direct = projectSources; Dependencies = dependencySources }
+                      SourcePaths = sources
                       PlatformSourcePaths = platformSources
                       LinkedLibraries = List.distinct (options.LinkedLibraries @ dependencyLibraries) })
 
