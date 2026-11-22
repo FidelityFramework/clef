@@ -4468,77 +4468,79 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                     [ platform.Node, Set.singleton platform.Node, $"FS9220: SharedBufferPlacement finding for subject '{subj}' has no matching placement owner: {f.Message}" ])
                         [], [], Enrichment.empty, missingRegionErrors @ (List.rev findingErrors) @ errors
                     else
-                        let bareObs = BAREWire.Platform.Obligations.sharedBufferObligations barePlatform placementsArr
-                        let obCitizens, obEnrich, obOwnerErrors =
-                            bareObs
-                            |> Array.map (fun ob ->
-                                let ownersResult =
-                                    match ob.Form.Kind with
-                                    | BAREWire.Platform.FormKind.SharedBufferSpaceExtent ->
-                                        let matched =
-                                            descriptors.SharedBufferPlacements
-                                            |> List.filter (fun sp -> Array.contains sp.Placement.Name ob.Form.Names)
-                                        let expectedCount = (Array.distinct ob.Form.Names).Length
-                                        match matched with
-                                        | primarySp :: _ when matched.Length = expectedCount -> Ok (primarySp, matched)
+                        let materializeDuties (active: Declarations.DeclaredSharedBufferPlacement list) =
+                            let activePlacements = active |> List.map _.Placement |> List.toArray
+                            let bareObs = BAREWire.Platform.Obligations.sharedBufferObligations barePlatform activePlacements
+                            let obCitizens, obEnrich, obOwnerErrors =
+                                bareObs
+                                |> Array.map (fun ob ->
+                                    let ownersResult =
+                                        match ob.Form.Kind with
+                                        | BAREWire.Platform.FormKind.SharedBufferSpaceExtent ->
+                                            let matched =
+                                                active
+                                                |> List.filter (fun sp -> Array.contains sp.Placement.Name ob.Form.Names)
+                                            let expectedCount = (Array.distinct ob.Form.Names).Length
+                                            match matched with
+                                            | primarySp :: _ when matched.Length = expectedCount -> Ok (primarySp, matched)
+                                            | _ ->
+                                                Error $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' has incomplete or missing placement owners."
                                         | _ ->
-                                            Error $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' has incomplete or missing placement owners."
-                                    | _ ->
-                                        let matched =
-                                            descriptors.SharedBufferPlacements
-                                            |> List.filter (fun sp ->
-                                                ob.Source = (platform.Id + ":" + sp.Placement.Name) ||
-                                                ob.Source = sp.Placement.Name)
-                                        match matched with
-                                        | [ uniqueSp ] -> Ok (uniqueSp, [ uniqueSp ])
-                                        | [] ->
-                                            Error $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' has no matching placement owner."
-                                        | _ ->
-                                            Error $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' matches multiple placement owners."
-                                match ownersResult with
-                                | Error errMsg ->
-                                    [], Enrichment.empty, [ (platform.Node, Set.singleton platform.Node, errMsg) ]
-                                | Ok (primarySp, owners) ->
-                                    match graph.Nodes.TryFind primarySp.DescriptorBinding with
-                                    | None ->
-                                        [], Enrichment.empty, [ (platform.Node, Set.singleton platform.Node, $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' has no matching placement owner node.") ]
-                                    | Some ownerNode ->
-                                        let info : ObligationInfo =
-                                            { Id = ob.Id
-                                              Kind = ob.Kind
-                                              Logic = ob.Logic
-                                              Statement = ob.Statement
-                                              Source = ob.Source
-                                              Refs = Array.toList ob.Refs
-                                              Body = ObligationBody.SharedBufferPlacementObligation ob }
-                                        let citizen = Ingredients.ownedObligationNode retained ownerNode enrichId info
-                                        let supportNodes =
-                                            owners
-                                            |> List.collect (fun sp ->
-                                                let sNode = platform.Spaces |> List.tryFind (fun s -> s.Name = sp.Placement.SpaceDescriptor.Space) |> Option.map _.Node |> Option.toList
-                                                let bNode =
-                                                    platform.Buffers
-                                                    |> List.tryFind (fun b ->
-                                                        b.Space = sp.Placement.SpaceDescriptor.Space &&
-                                                        (b.Name = sp.Placement.ViewLayout.Schema || b.Schema = sp.Placement.ViewLayout.Schema) &&
-                                                        b.Capacity >= int64 sp.Placement.SpaceDescriptor.RegionByteExtent)
-                                                    |> Option.map _.Node
-                                                    |> Option.toList
-                                                let rNodes =
-                                                    descriptors.SharedBufferRegions
-                                                    |> List.tryFind (fun sr -> sr.Descriptor.Placement = sp.Placement.Name)
-                                                    |> Option.map (fun sr -> sr.Identity :: sr.DescriptorBinding :: sr.Node :: sr.Participants)
-                                                    |> Option.defaultValue []
-                                                sp.Identity :: sp.DescriptorBinding :: sp.SpaceDescriptorNode :: sp.StructDescriptorNode :: sp.ViewDescriptorNode :: sNode @ bNode @ rNodes @ sp.Participants)
-                                            |> List.distinct
-                                        let enrich = { NewNodes = [citizen]; Annotated = []; NewEdges = [constrains supportNodes citizen] }
-                                        let keys =
-                                            owners
-                                            |> List.map (fun sp -> (sp.Placement.Name, ob.Form.Kind), citizen.Id)
-                                        keys, enrich, [])
-                            |> Array.fold (fun (pairs, accEnrich, accErrs) (newPairs, enrich, errs) ->
-                                newPairs @ pairs, Enrichment.combine accEnrich enrich, errs @ accErrs) ([], Enrichment.empty, [])
-                        let citizenByPlacementAndForm = Map.ofList obCitizens
+                                            let matched =
+                                                active
+                                                |> List.filter (fun sp ->
+                                                    ob.Source = (platform.Id + ":" + sp.Placement.Name) ||
+                                                    ob.Source = sp.Placement.Name)
+                                            match matched with
+                                            | [ uniqueSp ] -> Ok (uniqueSp, [ uniqueSp ])
+                                            | [] ->
+                                                Error $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' has no matching placement owner."
+                                            | _ ->
+                                                Error $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' matches multiple placement owners."
+                                    match ownersResult with
+                                    | Error errMsg ->
+                                        [], Enrichment.empty, [ (platform.Node, Set.singleton platform.Node, errMsg) ]
+                                    | Ok (primarySp, owners) ->
+                                        match graph.Nodes.TryFind primarySp.DescriptorBinding with
+                                        | None ->
+                                            [], Enrichment.empty, [ (platform.Node, Set.singleton platform.Node, $"FS9220: SharedBufferPlacement obligation '{ob.Id}' from source '{ob.Source}' has no matching placement owner node.") ]
+                                        | Some ownerNode ->
+                                            let info : ObligationInfo =
+                                                { Id = ob.Id
+                                                  Kind = ob.Kind
+                                                  Logic = ob.Logic
+                                                  Statement = ob.Statement
+                                                  Source = ob.Source
+                                                  Refs = Array.toList ob.Refs
+                                                  Body = ObligationBody.SharedBufferPlacementObligation ob }
+                                            let citizen = Ingredients.ownedObligationNode retained ownerNode enrichId info
+                                            let supportNodes =
+                                                owners
+                                                |> List.collect (fun sp ->
+                                                    let sNode = platform.Spaces |> List.tryFind (fun s -> s.Name = sp.Placement.SpaceDescriptor.Space) |> Option.map _.Node |> Option.toList
+                                                    let bNode =
+                                                        platform.Buffers
+                                                        |> List.tryFind (fun b ->
+                                                            b.Space = sp.Placement.SpaceDescriptor.Space &&
+                                                            (b.Name = sp.Placement.ViewLayout.Schema || b.Schema = sp.Placement.ViewLayout.Schema) &&
+                                                            b.Capacity >= int64 sp.Placement.SpaceDescriptor.RegionByteExtent)
+                                                        |> Option.map _.Node
+                                                        |> Option.toList
+                                                    let rNodes =
+                                                        descriptors.SharedBufferRegions
+                                                        |> List.tryFind (fun sr -> sr.Descriptor.Placement = sp.Placement.Name)
+                                                        |> Option.map (fun sr -> sr.Identity :: sr.DescriptorBinding :: sr.Node :: sr.Participants)
+                                                        |> Option.defaultValue []
+                                                    sp.Identity :: sp.DescriptorBinding :: sp.SpaceDescriptorNode :: sp.StructDescriptorNode :: sp.ViewDescriptorNode :: sNode @ bNode @ rNodes @ sp.Participants)
+                                                |> List.distinct
+                                            let enrich = { NewNodes = [citizen]; Annotated = []; NewEdges = [constrains supportNodes citizen] }
+                                            let keys =
+                                                owners
+                                                |> List.map (fun sp -> (sp.Placement.Name, ob.Form.Kind), citizen.Id)
+                                            keys, enrich, [])
+                                |> Array.fold (fun (pairs, accEnrich, accErrs) (newPairs, enrich, errs) ->
+                                    newPairs @ pairs, Enrichment.combine accEnrich enrich, errs @ accErrs) ([], Enrichment.empty, [])
+                            Map.ofList obCitizens, obEnrich, obOwnerErrors
                         let reachableBodyNodes =
                             graph.Nodes.Values
                             |> Seq.filter (fun n ->
@@ -4838,17 +4840,10 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                         (b.Name = sp.Placement.ViewLayout.Schema || b.Schema = sp.Placement.ViewLayout.Schema) &&
                                         b.Capacity >= int64 sp.Placement.SpaceDescriptor.RegionByteExtent)
                                 let regionOpt = descriptors.SharedBufferRegions |> List.tryFind (fun sr -> sr.Descriptor.Placement = sp.Placement.Name)
-                                let obLookup formKind = citizenByPlacementAndForm.TryFind (sp.Placement.Name, formKind)
-                                match resolvedStructOpt, spaceOpt, bufferOpt, regionOpt,
-                                      obLookup BAREWire.Platform.FormKind.SharedBufferExtent,
-                                      obLookup BAREWire.Platform.FormKind.SharedBufferLayout,
-                                      obLookup BAREWire.Platform.FormKind.SharedBufferLifetime,
-                                      obLookup BAREWire.Platform.FormKind.SharedBufferExclusivity,
-                                      obLookup BAREWire.Platform.FormKind.SharedBufferSpaceExtent with
-                                | None, _, _, _, _, _, _, _, _ ->
+                                match resolvedStructOpt, spaceOpt, bufferOpt, regionOpt with
+                                | None, _, _, _ ->
                                     pAcc, vAcc, usedSites, (sp.DescriptorBinding, Set.ofList sp.Participants, $"FS9220: SharedBufferPlacement '{sp.Placement.Name}' StructLayout '{structName}' lacks a unique resolved Clef record type definition.") :: errAcc
-                                | Some (nominalId, defNode), Some space, Some buffer, Some region,
-                                  Some extentObId, Some layoutObId, Some lifetimeObId, Some exclusivityObId, Some spaceExtentObId ->
+                                | Some (nominalId, defNode), Some space, Some buffer, Some region ->
                                     let thisPlacementAcquireIds =
                                         allPlacementAcquireCallIds
                                         |> Map.tryFind sp.Placement.Name
@@ -4904,6 +4899,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                         match rawFactsRes with
                                         | Error reason ->
                                             pAcc, vAcc, usedSites, (sp.DescriptorBinding, Set.ofList sp.Participants, reason) :: errAcc
+                                        | Ok _ when not hasActiveUse -> pAcc, vAcc, usedSites, errAcc
                                         | Ok rawFacts ->
                                             let declParent = graph.Nodes.TryFind sp.DescriptorBinding |> Option.bind _.Parent
                                             let normalizedFacts =
@@ -4914,7 +4910,6 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                         match fact.Parent with
                                                         | Some p when Map.containsKey p rawFacts || Some p = declParent -> fact
                                                         | _ -> { fact with Parent = None })
-                                            let placementObligations = [ layoutObId; extentObId; spaceExtentObId; lifetimeObId; exclusivityObId ]
                                             let requiredPlacementNodes =
                                                 [ sp.Identity; sp.DescriptorBinding; spaceNode; bufferSchemaNode
                                                   sp.SpaceDescriptorNode; sp.StructDescriptorNode; sp.ViewDescriptorNode; region.Node ]
@@ -4927,7 +4922,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                           Node = n
                                                           Ordinal = ord
                                                           Group = sp.Identity }))
-                                            let placementRow : BoundarySharedBufferPlacementDeclaration =
+                                            let placementRow (layout, extent, spaceExtent, lifetime, exclusivity) : BoundarySharedBufferPlacementDeclaration =
                                                 { Identity = sp.Identity
                                                   Declaration = sp.DescriptorBinding
                                                   SpaceNode = spaceNode
@@ -4941,14 +4936,14 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                   BufferSchema = Declarations.bufferSchema buffer
                                                   RegionDescriptor = region.Descriptor
                                                   Placement = sp.Placement
-                                                  Obligations = placementObligations
+                                                  Obligations = [layout; extent; spaceExtent; lifetime; exclusivity]
                                                   DeclarationFacts = normalizedFacts
                                                   Participants = placementParticipants }
                                             match candidateAcquireCalls, structTypedAccessNodes with
                                             | [], [] ->
-                                                placementRow :: pAcc, vAcc, usedSites, errAcc
+                                                pAcc, vAcc, usedSites, errAcc
                                             | [], badSite :: _ ->
-                                                placementRow :: pAcc, vAcc, usedSites, (badSite.Id, Set.ofList (badSite.Id :: sp.Participants), "FS9222: SharedBufferViewUse projection must originate from a reachable [<FidelityExtern>] region acquisition call.") :: errAcc
+                                                (sp, placementRow) :: pAcc, vAcc, usedSites, (badSite.Id, Set.ofList (badSite.Id :: sp.Participants), "FS9222: SharedBufferViewUse projection must originate from a reachable [<FidelityExtern>] region acquisition call.") :: errAcc
                                             | _ ->
                                                 let isExclusiveOrigin (cNodeId: NodeId) (origins: Set<NodeId>) =
                                                     origins.Contains cNodeId &&
@@ -4978,7 +4973,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                             not (candidateAcquireCalls |> List.exists (fun (cNode, _, _, _) -> isExclusiveOrigin cNode.Id origins)))
                                                 match unrootedStructAccessOpt with
                                                 | Some badNode ->
-                                                    placementRow :: pAcc, vAcc, usedSites, (badNode.Id, Set.ofList (badNode.Id :: sp.Participants), "FS9222: SharedBufferViewUse projection must originate from a reachable [<FidelityExtern>] region acquisition call.") :: errAcc
+                                                    (sp, placementRow) :: pAcc, vAcc, usedSites, (badNode.Id, Set.ofList (badNode.Id :: sp.Participants), "FS9222: SharedBufferViewUse projection must originate from a reachable [<FidelityExtern>] region acquisition call.") :: errAcc
                                                 | None ->
                                                     let isReadOnlyPlacement =
                                                         sp.Placement.SpaceDescriptor.Access = "ReadOnly" ||
@@ -5485,23 +5480,23 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                                 elif not foreignUsesBracketed then
                                                                     vAccG, Set.union usedG groupUsed, (siteNodeId, Set.ofList (siteNodeId :: acquireCallId :: foreignUseCallIds @ syncCallIds @ sp.Participants), "FS9222: SharedBufferViewUse foreign use call is not bracketed by a dominating [<FidelityExtern>] sync call.") :: errG
                                                                 else
-                                                                    let requiredUseNodes =
-                                                                        (siteNodeId :: sp.Identity :: acquireCallId :: (Option.toList releaseCallOpt) @
-                                                                         syncCallIds @ foreignUseCallIds @ viewProjIds @ writeProjIds @
-                                                                         [ extentObId; layoutObId; lifetimeObId; exclusivityObId; spaceExtentObId ])
-                                                                        |> List.distinct
-                                                                    let useParticipants =
-                                                                        ParticipantEvidence.Established (
-                                                                            requiredUseNodes
-                                                                            |> List.mapi (fun ord n ->
-                                                                                let role =
-                                                                                    if n = sp.Identity then ParticipantRole.ReadOnlyBufferDeclaration
-                                                                                    elif n = acquireCallId then ParticipantRole.ReadOnlyBufferCall
-                                                                                    elif Some n = releaseCallOpt then ParticipantRole.ReadOnlyBufferRetirement
-                                                                                    elif List.contains n (viewProjIds @ writeProjIds) then ParticipantRole.Source
-                                                                                    else ParticipantRole.Site
-                                                                                { Role = role; Node = n; Ordinal = ord; Group = siteNodeId }))
-                                                                    let viewRow : BoundarySharedBufferViewUse =
+                                                                    let viewRow (layoutObId, extentObId, spaceExtentObId, lifetimeObId, exclusivityObId) : BoundarySharedBufferViewUse =
+                                                                        let requiredUseNodes =
+                                                                            (siteNodeId :: sp.Identity :: acquireCallId :: (Option.toList releaseCallOpt) @
+                                                                             syncCallIds @ foreignUseCallIds @ viewProjIds @ writeProjIds @
+                                                                             [ extentObId; layoutObId; lifetimeObId; exclusivityObId; spaceExtentObId ])
+                                                                            |> List.distinct
+                                                                        let useParticipants =
+                                                                            ParticipantEvidence.Established (
+                                                                                requiredUseNodes
+                                                                                |> List.mapi (fun ord n ->
+                                                                                    let role =
+                                                                                        if n = sp.Identity then ParticipantRole.ReadOnlyBufferDeclaration
+                                                                                        elif n = acquireCallId then ParticipantRole.ReadOnlyBufferCall
+                                                                                        elif Some n = releaseCallOpt then ParticipantRole.ReadOnlyBufferRetirement
+                                                                                        elif List.contains n (viewProjIds @ writeProjIds) then ParticipantRole.Source
+                                                                                        else ParticipantRole.Site
+                                                                                    { Role = role; Node = n; Ordinal = ord; Group = siteNodeId }))
                                                                         { Site = siteNodeId
                                                                           PlacementDeclaration = sp.Identity
                                                                           RegionAcquisitionCall = acquireCallId
@@ -5525,9 +5520,9 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                                                           ExclusivityObligation = exclusivityObId
                                                                           SpaceExtentObligation = spaceExtentObId
                                                                           Participants = useParticipants }
-                                                                    viewRow :: vAccG, Set.union usedG groupUsed, errG)
+                                                                    (sp, viewRow) :: vAccG, Set.union usedG groupUsed, errG)
                                                             (vAcc, usedSites, errAcc)
-                                                    placementRow :: pAcc, vAccNext, usedSitesNext, errAccNext
+                                                    (sp, placementRow) :: pAcc, vAccNext, usedSitesNext, errAccNext
                                 | _ ->
                                     pAcc, vAcc, usedSites, (sp.DescriptorBinding, Set.ofList sp.Participants, "SharedBufferPlacement lacks a resolved space, buffer schema, region descriptor, or obligation citizen.") :: errAcc)
                                 ([], [], Set.empty, [])
@@ -5548,11 +5543,29 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                     if isAnySharedBufferStructType graph descriptors cNode.Type || takesSharedBufferStruct || isDeclaredRegionRole then
                                         Some (cNode.Id, Set.ofList (cNode.Id :: cBind :: cArgs), "FS9222: SharedBufferPlacement [<FidelityExtern>] call must participate in a settled SharedBufferViewUse.")
                                     else None)
-                        let allSharedErrors = obOwnerErrors @ unconsumedCallErrors @ buildErrors
+                        let allSharedErrors = unconsumedCallErrors @ buildErrors
                         if not allSharedErrors.IsEmpty then
                             [], [], Enrichment.empty, allSharedErrors @ errors
                         else
-                            List.rev placementsOut, List.rev viewsOut, obEnrich, errors
+                            let active = List.rev placementsOut
+                            let citizens, enrichment, ownerErrors = materializeDuties (List.map fst active)
+                            let idsFor (sp: Declarations.DeclaredSharedBufferPlacement) =
+                                let find kind = Map.tryFind (sp.Placement.Name, kind) citizens
+                                match find BAREWire.Platform.FormKind.SharedBufferLayout, find BAREWire.Platform.FormKind.SharedBufferExtent,
+                                      find BAREWire.Platform.FormKind.SharedBufferSpaceExtent, find BAREWire.Platform.FormKind.SharedBufferLifetime,
+                                      find BAREWire.Platform.FormKind.SharedBufferExclusivity with
+                                | Some layout, Some extent, Some spaceExtent, Some lifetime, Some exclusivity ->
+                                    Ok (layout, extent, spaceExtent, lifetime, exclusivity)
+                                | _ -> Error (sp.DescriptorBinding, Set.ofList sp.Participants, "SharedBufferPlacement lacks a resolved obligation citizen.")
+                            let rec complete acc rows =
+                                match rows with
+                                | [] -> Ok (List.rev acc)
+                                | (sp, emit) :: tail ->
+                                    idsFor sp |> Result.bind (fun ids -> complete (emit ids :: acc) tail)
+                            match ownerErrors, complete [] active, complete [] (List.rev viewsOut) with
+                            | [], Ok placements, Ok views -> placements, views, enrichment, errors
+                            | _ :: _, _, _ -> [], [], Enrichment.empty, ownerErrors @ errors
+                            | _, Error reason, _ | _, _, Error reason -> [], [], Enrichment.empty, reason :: errors
     let domain =
         { ResourceEvidence = resourceEvidence
           Premises = boundaryPremises; Platform = Ingredients.boundaryPlatformPremise graph; Meets = graph.Codata.Value.Meets

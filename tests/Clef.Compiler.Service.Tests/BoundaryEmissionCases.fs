@@ -3869,12 +3869,13 @@ let main _ =
             Assert.True(okRev.Emission.Boundary.Calls.ContainsKey revViewUse.RegionAcquisitionCall)
         | Error failures ->
             Assert.Empty(failures)
-        let sharedClaims =
-            Clef.Compiler.Nanopass.ObligationDischarge.ofGraph okRes.Graph
+        let sharedClaimsOf graph =
+            Clef.Compiler.Nanopass.ObligationDischarge.ofGraph graph
             |> List.filter (fun ob ->
                 match ob.Body with
                 | ObligationBody.SharedBufferPlacementObligation _ -> true
                 | _ -> false)
+        let sharedClaims = sharedClaimsOf okRes.Graph
         Assert.Equal(5, sharedClaims.Length)
         let dischargeRes = Clef.Compiler.Nanopass.ObligationDischarge.discharge sharedClaims
         Assert.True(Result.isOk dischargeRes)
@@ -3890,22 +3891,25 @@ let main _ =
         | Error reason ->
             Assert.Equal("", reason)
 
-        // Unused placement check: compiling an unrelated main against the same authoritySource + ringPlacementDescriptor without calling acquisition extern succeeds with SharedBufferViewUses.IsEmpty = true
-        let unusedRes =
-            runCase (fun s ->
-                let idx = s.IndexOf("[<EntryPoint>]")
-                let prefix = if idx >= 0 then s.Substring(0, idx) else s
-                prefix + "[<EntryPoint>]\nlet main _ = 0\n")
+        // Both roots check the same declaration. Only the explicit call can admit its duties.
+        let withRingHelper entry (source: string) =
+            source.Replace("[<EntryPoint>]\nlet main _ =", "let exerciseRing () =") +
+                "\n[<EntryPoint>]\nlet main _ = " + entry + "\n"
+        let unusedRes = runCase (withRingHelper "0")
+        let calledRes = runCase (withRingHelper "exerciseRing ()")
+        DimensionalCases.noErrors calledRes
+        Assert.Equal<string list>(sharedClaims |> List.map _.Id, sharedClaimsOf calledRes.Graph |> List.map _.Id)
         DimensionalCases.noErrors unusedRes
+        Assert.Empty(sharedClaimsOf unusedRes.Graph)
         let unusedProj = BoundaryEmissionFixture.project unusedRes.Graph
-        Assert.Single(unusedProj.SharedBufferPlacements.Values) |> ignore
+        Assert.Empty(unusedProj.SharedBufferPlacements.Values)
         Assert.True(unusedProj.SharedBufferViewUses.IsEmpty)
         let unusedRevRes = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish unusedRes.Graph
         Assert.True(Result.isOk unusedRevRes)
         match unusedRevRes with
         | Ok unusedRev ->
             Assert.Empty(Fidelity.PSG.Integrity.check unusedRev)
-            Assert.Single(unusedRev.Emission.Boundary.SharedBufferPlacements.Values) |> ignore
+            Assert.Empty(unusedRev.Emission.Boundary.SharedBufferPlacements.Values)
             Assert.True(unusedRev.Emission.Boundary.SharedBufferViewUses.IsEmpty)
         | Error failures ->
             Assert.Empty(failures)
@@ -3918,22 +3922,22 @@ let main _ =
         let crossModuleUnusedRes =
             SourcePlatformFixture.checkProjectWithMemoryPolicy "stack_only" [ ("SharedBufferFixture.clef", libPlacementSource) ] authoritySource "module ConsumerApp\n\n[<EntryPoint>]\nlet main _ = 0\n"
         DimensionalCases.noErrors crossModuleUnusedRes
+        Assert.Empty(sharedClaimsOf crossModuleUnusedRes.Graph)
         let crossModuleUnusedProj = BoundaryEmissionFixture.project crossModuleUnusedRes.Graph
-        Assert.Single(crossModuleUnusedProj.SharedBufferPlacements.Values) |> ignore
+        Assert.Empty(crossModuleUnusedProj.SharedBufferPlacements.Values)
         Assert.True(crossModuleUnusedProj.SharedBufferViewUses.IsEmpty)
         let crossModuleUnusedRevRes = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish crossModuleUnusedRes.Graph
         Assert.True(Result.isOk crossModuleUnusedRevRes)
         match crossModuleUnusedRevRes with
         | Ok crossUnusedRev ->
             Assert.Empty(Fidelity.PSG.Integrity.check crossUnusedRev)
-            Assert.Single(crossUnusedRev.Emission.Boundary.SharedBufferPlacements.Values) |> ignore
+            Assert.Empty(crossUnusedRev.Emission.Boundary.SharedBufferPlacements.Values)
             Assert.True(crossUnusedRev.Emission.Boundary.SharedBufferViewUses.IsEmpty)
         | Error failures ->
             Assert.Empty(failures)
 
         // Positive multi-placement sharing the same RingSlot record type (F3)
-        let multiPlacementRes =
-            runCase (fun s ->
+        let multiPlacementSource (s: string) =
                 let idx = s.IndexOf("[<EntryPoint>]")
                 let auxDecls =
                     """
@@ -4030,7 +4034,13 @@ let main _ =
     if vA + vB = 0 then 0 else 1
 """
                 let prefix = if idx >= 0 then s.Substring(0, idx) else s
-                prefix + auxDecls)
+                prefix + auxDecls
+        let multiPlacementRes = runCase multiPlacementSource
+        let ambiguousAcquire =
+            runCase (fun source ->
+                (multiPlacementSource source).Replace("Acquire = \"SharedBufferFixture.mmapRingAux\"", "Acquire = \"SharedBufferFixture.mmapRing\""))
+        Assert.Contains(BoundaryEmissionFixture.rejected ambiguousAcquire.Graph, fun row ->
+            row.Reason.Contains "FS9220: shared-buffer region descriptor call-role binding is shared across placements")
         DimensionalCases.noErrors multiPlacementRes
         let multiProj = BoundaryEmissionFixture.project multiPlacementRes.Graph
         Assert.Equal(2, multiProj.SharedBufferPlacements.Count)
