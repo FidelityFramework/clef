@@ -247,6 +247,13 @@ let premises (graph: SemanticGraph) =
 let row role ordinal sources target =
     { Class = EdgeClass.Boundary; Role = role; Ordinal = ordinal; Sources = sources; Target = target }
 
+let domainRow anchor (domain: BoundaryDomain) =
+    row (EdgeRole.BoundaryDomain domain) 0 (Map.keys domain.Premises |> Seq.toList) anchor
+
+let domainRewrite anchor (domain: BoundaryDomain) =
+    { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0
+      Sources = Map.keys domain.Premises |> Seq.toList; Target = anchor }
+
 let importRow (import: BoundaryImport) =
     row (EdgeRole.BoundaryImport import) 0
         (import.Scope :: import.Binding :: import.DeclarationPath @ (import.Parameters |> List.map fst) @ Set.toList import.Participants) import.Identity

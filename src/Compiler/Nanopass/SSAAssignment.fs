@@ -15,6 +15,7 @@ open System
 open System.Collections
 open System.Reflection
 open Microsoft.FSharp.Reflection
+open Clef.Compiler.Baker.Ingredients
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
@@ -160,6 +161,42 @@ let rec private remapValue (remap: NodeId -> NodeId) (ty: Type) (value: objnull)
 let private remapTyped<'T> (remap: NodeId -> NodeId) (value: 'T) : 'T =
     remapValue remap typeof<'T> (box value) |> unbox<'T>
 
+let private remapEdges remap (edges: Hyperedge list) =
+    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+    let domainRows (edge: Hyperedge) =
+        let target = edge.Target
+        match edge.Role with
+        | EdgeRole.BoundaryDomain d -> Some (Boundaries.domainRow target d, Boundaries.domainRewrite target d)
+        | EdgeRole.NumericDomain d -> Some (NumericValues.domainRow target d, NumericValues.domainRewrite target d)
+        | EdgeRole.MemoryDomain d -> Some (MemoryValues.domainRow target d, MemoryValues.domainRewrite target d)
+        | EdgeRole.SpatialModuleDomain d -> Some (SpatialValues.domainRow target d, SpatialValues.domainRewrite target d)
+        | _ -> None
+    let mapped = remapTyped<Hyperedge list> remap edges
+    let domains =
+        (Map.empty, edges, mapped)
+        |||> List.fold2 (fun domains original current ->
+            match domainRows original with
+            | Some (row, rewrite) when key row = key original ->
+                match domainRows current with
+                | Some (nextRow, nextRewrite) ->
+                    Map.change original.Target (function
+                        | None -> Some (Some (row, rewrite, nextRow, nextRewrite))
+                        | Some _ -> Some None) domains
+                | None -> domains
+            | _ -> domains)
+    let reorder (current: Hyperedge) (expected: Hyperedge) =
+        if current.Class = expected.Class && current.Role = expected.Role &&
+           current.Ordinal = expected.Ordinal && current.Target = expected.Target &&
+           List.sort current.Sources = List.sort expected.Sources then
+            { current with Sources = expected.Sources }
+        else current
+    (edges, mapped)
+    ||> List.map2 (fun original current ->
+        match Map.tryFind original.Target domains with
+        | Some (Some (row, _, next, _)) when key original = key row -> reorder current next
+        | Some (Some (_, rewrite, _, next)) when key original = key rewrite -> reorder current next
+        | _ -> current)
+
 let rec private remapGraph (remap: NodeId -> NodeId) (graph: SemanticGraph) : SemanticGraph =
     { graph with
         Nodes = remapTyped<Map<NodeId, SemanticNode>> remap graph.Nodes
@@ -171,7 +208,7 @@ let rec private remapGraph (remap: NodeId -> NodeId) (graph: SemanticGraph) : Se
         LiteralStorage = remapTyped<Map<NodeId, LiteralStorage>> remap graph.LiteralStorage
         Escaping = lazy (remapTyped<Map<NodeId, string>> remap graph.Escaping.Value)
         Codata = lazy (remapTyped<Codata> remap graph.Codata.Value)
-        Edges = remapTyped<Hyperedge list> remap graph.Edges
+        Edges = remapEdges remap graph.Edges
         WitnessProvenance =
             graph.WitnessProvenance
             |> Option.map (fun p -> { PreparedRoots = remapGraph remap p.PreparedRoots })

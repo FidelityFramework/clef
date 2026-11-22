@@ -346,8 +346,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
                     | ParticipantEvidence.Established rows -> rows |> List.map _.Node |> List.distinct
                     | ParticipantEvidence.Pending early -> early.Derived |> List.map _.Node |> List.distinct
                 let expected =
-                    [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 (Map.keys domain.Premises |> Seq.toList) domainRow.Target
-                     { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = Map.keys domain.Premises |> Seq.toList; Target = domainRow.Target }]
+                    [Ingredients.domainRow domainRow.Target domain; Ingredients.domainRewrite domainRow.Target domain]
                     @ (domain.Declarations |> List.map Declarations.row)
                     @ (resourceDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity))
                     @ (writableDeclarations |> List.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity))

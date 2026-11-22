@@ -135,11 +135,143 @@ module private LibraryClaimCases =
         pending claim
         claim
 
+    let incidence (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+
+    let receivingEdit () =
+        use files = new WorkspaceFiles(scratchRoot = Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/scratch/issue148-selective-source"))
+        let app = "[package]\nname = \"App\"\n[compilation]\ntarget = \"cpu\"\n[build]\noutput_kind = \"console\"\nsources = [\"App.clef\"]\n"
+        configurePlatform files |> ignore
+        selectPlatform files app true
+        let platform = Path.Combine(files.Directory, "Platform.clef")
+        File.WriteAllText(platform,
+            SourcePlatformFixture.authority.Replace("Representations = [| ",
+                "Representations = [| { Name = \"int8\"; Capability = \"native\"; Family = \"int\"; Bits = 8; MinMagnitude = \"-128\"; MaxMagnitude = \"127\"; Boundary = \"wrap\" }; "))
+        let source = """
+module ReceivingAggregate
+type Holder = { Apply: bool -> bool }
+type Outer = { Run: Holder -> bool }
+let first (value: bool) = value
+let run (holder: Holder) = holder.Apply true
+
+[<EntryPoint>]
+let main _ =
+    let outer = { Run = run }
+    if outer.Run { Apply = first } then 12 / 3 else 1
+"""
+        let comment = source + "// Stable trailing source comment.\n"
+        let workspace = ProjectWorkspace<ProjectCheckResult>(files.Project, id)
+        let capture (text: string) =
+            File.WriteAllText(files.Source, text)
+            check files text workspace
+        let advance baseline candidate =
+            let graph, schedule, recipes =
+                Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.rebuildSelective baseline candidate |> WorkspaceCases.need
+            Assert.Empty recipes.Recipes
+            graph, schedule
+        try
+            let initial = capture source
+            let unchanged, _ = advance initial (capture comment)
+            let previous = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare unchanged |> WorkspaceCases.need
+            let candidate = capture (comment.Replace("12 / 3", "12 / 4"))
+            let reconciled, schedule = advance previous candidate
+            previous, candidate, reconciled, schedule
+        finally WorkspaceCases.close workspace
+
 [<CollectionDefinition("ProjectWorkspace", DisableParallelization = true)>]
 type ProjectWorkspaceCollection() = class end
 
 [<Collection("ProjectWorkspace"); Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProjectWorkspace")>]
 type ProjectWorkspaceTests() =
+    [<Fact>]
+    member _.``A revised divisor publishes all ordered domain companions and keeps the two startup claim roles``() =
+        let _, candidate, graph, _ = LibraryClaimCases.receivingEdit ()
+        let ready = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare graph |> WorkspaceCases.need
+        Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish ready |> WorkspaceCases.need |> ignore
+        let remap id = graph.Codata.Value.SSAAssignment.Value.NodeRemap[id]
+        let domainKeys (edge: Hyperedge) =
+            match edge.Role with
+            | EdgeRole.BoundaryDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | EdgeRole.MemoryDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | EdgeRole.NumericDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | EdgeRole.SpatialModuleDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | _ -> None
+        let domains = candidate.Edges |> List.filter (domainKeys >> Option.isSome)
+        Assert.Equal(4, domains.Length)
+        for original in domains do
+            let target = remap original.Target
+            let domain = graph.Edges |> List.filter (fun edge -> edge.Target = target && (domainKeys edge).IsSome) |> Assert.Single
+            let expected = (domainKeys domain).Value
+            Assert.False(List.map remap original.Sources = expected, "This edit must exercise an actual order change.")
+            Assert.Equal<NodeId list>(expected, domain.Sources)
+            let companion = graph.Edges |> List.filter (fun edge -> edge.Target = target && edge.Role = EdgeRole.EnrichedWith) |> Assert.Single
+            Assert.Equal<NodeId list>(expected, companion.Sources)
+            let fault = { graph with Edges = graph.Edges |> List.map (fun edge ->
+                                        if LibraryClaimCases.incidence edge = LibraryClaimCases.incidence companion then { edge with Sources = List.head expected :: expected } else edge) }
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare fault with
+            | Ok _ -> failwithf "Admitted a duplicate in %A's rewrite relation." domain.Class
+            | Error failures ->
+                let reason =
+                    match domain.Role with
+                    | EdgeRole.BoundaryDomain _ -> "BoundaryEmission: The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent."
+                    | EdgeRole.NumericDomain _ -> "NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent."
+                    | EdgeRole.MemoryDomain _ -> "MemoryPublication: The memory operation, complete participants or source rewrite record is inconsistent."
+                    | EdgeRole.SpatialModuleDomain _ -> "SpatialPublication: The complete spatial plan, participants, proof census or source rewrite record is inconsistent."
+                    | _ -> failwith "Expected a source domain."
+                Assert.Contains(failures, fun (failure: WitnessProjectionFailure) ->
+                    failure.Occurrence = Some target && failure.Reason = reason)
+        let plan = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read ready |> Option.get
+        let claims = [ for kind, site in ["ProgramEntryCall", plan.EntryCall; "ProgramInitialization", plan.Spine] do
+                          let role = "numeric-carrier-coverage/" + kind
+                          let carrier = ready.Codata.Value.WitnessEmission.Value.Numeric.Values[site]
+                          let target = Assert.Single carrier.Obligations
+                          let info = match ready.Nodes[target].Kind with SemanticKind.Obligation ob -> ob | _ -> failwith "Expected a source claim."
+                          let issue = Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId
+                          let common = Clef.Compiler.Baker.Ingredients.Obligations.commonSourceClaimId
+                          let source = ready.Nodes[plan.SourceBinding]
+                          Assert.Equal(Some info.Id, issue role source)
+                          let edge = ready.Edges |> List.filter (fun row -> row.Target = target && row.Role = EdgeRole.Constrains) |> Assert.Single
+                          Assert.Equal<NodeId list>(Set.toList carrier.Participants, edge.Sources)
+                          Assert.True((common role info.Id source).IsSome)
+                          Assert.True((common role info.Id ready.Nodes[plan.SourceLambda]).IsNone)
+                          Assert.True((common "numeric-carrier-coverage" info.Id source).IsNone)
+                          Assert.True((common role (info.Id + "0") source).IsNone)
+                          yield info.Id ]
+        Assert.Equal(2, (List.distinct claims).Length)
+
+    [<Fact>]
+    member _.``A numeric premise remapping onto an unmapped key keeps its duplicate incidence and is refused``() =
+        let previous, candidate, current, schedule = LibraryClaimCases.receivingEdit ()
+        let plan = current.Codata.Value.SSAAssignment.Value
+        let row, domain = candidate.Edges |> List.choose (fun row ->
+            match row.Role with EdgeRole.NumericDomain domain -> Some(row, domain) | _ -> None) |> Assert.Single
+        let id = domain.Premises.Keys |> Seq.find (fun id -> not (candidate.Nodes.ContainsKey plan.NodeRemap[id]))
+        let collision = plan.NodeRemap[id]
+        let changed = { domain with Premises = domain.Premises.Add(collision, domain.Premises[id]) }
+        let domainRow = Clef.Compiler.Baker.Ingredients.NumericValues.domainRow
+        let rewrite = Clef.Compiler.Baker.Ingredients.NumericValues.domainRewrite
+        let corrupt edge =
+            if LibraryClaimCases.incidence edge = LibraryClaimCases.incidence row then domainRow row.Target changed
+            elif LibraryClaimCases.incidence edge = LibraryClaimCases.incidence (rewrite row.Target domain) then rewrite row.Target changed
+            else edge
+        let fault = { candidate with Edges = candidate.Edges |> List.map corrupt }
+        let retained =
+            schedule.Receipt.Alignment
+            |> Map.toSeq
+            |> Seq.choose (fun (oldId, candidateId) ->
+                if plan.NodeRemap.TryFind candidateId = Some oldId then Some candidateId else None)
+            |> Set.ofSeq
+        let rebuilt, actualPlan =
+            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign previous schedule.Receipt.Alignment retained fault
+        let actualRemap = actualPlan.NodeRemap
+        Assert.Equal(collision, actualRemap[id])
+        let actual = rebuilt.Edges |> List.filter (fun edge -> edge.Target = actualRemap[row.Target] &&
+                                                               match edge.Role with EdgeRole.NumericDomain _ -> true | _ -> false) |> Assert.Single
+        Assert.Equal(2, actual.Sources |> List.filter ((=) collision) |> List.length)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project rebuilt with
+        | Ok _ -> failwith "Admitted the collapsed numeric premise."
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Occurrence = Some actual.Target &&
+                                                                     failure.Reason = "NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent.")
+
     [<Theory>]
     [<InlineData("windows", "win32", "x86_64-pc-windows-msvc", true)>]
     [<InlineData("windows", "win32", "x86_64-unknown-linux-gnu", false)>]

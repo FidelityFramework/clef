@@ -1049,6 +1049,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
         |> Set.ofSeq
     let commonAnchors =
         if held.IsEmpty then Map.empty else
+        let coverageSource = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.coverageSource graph
         obligations
         |> List.filter (fun (_, info) -> held.Contains info.Id)
         |> List.groupBy (fun (_, info) -> info.Id)
@@ -1060,7 +1061,8 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                 | [edge] when edge.Class = EdgeClass.Obligation && edge.Ordinal = 0 ->
                     let origins = edge.Sources |> List.choose (fun id ->
                         graph.Nodes.TryFind id |> Option.bind (fun node ->
-                            Clef.Compiler.Baker.Ingredients.Obligations.commonSourceClaimId info.Kind raw node
+                            let role, subject = coverageSource node
+                            Clef.Compiler.Baker.Ingredients.Obligations.commonSourceClaimId role raw subject
                             |> Option.map (fun name -> id, name)))
                     match origins with
                     | [origin, name] ->

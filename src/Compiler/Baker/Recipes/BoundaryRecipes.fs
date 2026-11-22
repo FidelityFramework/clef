@@ -5615,10 +5615,8 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
     let evidenceNodes = function
         | ParticipantEvidence.Established rows -> rows |> List.map _.Node |> List.distinct
         | ParticipantEvidence.Pending early -> early.Derived |> List.map _.Node |> List.distinct
-    let sources = Map.keys domain.Premises |> Seq.toList
     let rows =
-        [Ingredients.row (EdgeRole.BoundaryDomain domain) 0 sources anchor.Id
-         { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
+        [Ingredients.domainRow anchor.Id domain; Ingredients.domainRewrite anchor.Id domain]
         @ (resourceDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
         @ (writableDeclarations.Values |> Seq.map (fun row -> Ingredients.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity) |> Seq.toList)
         @ (writableUses.Values |> Seq.map(fun row->Ingredients.row (EdgeRole.BoundaryWritableBufferUse row) 0 (Set.toList row.Participants) row.Call) |> Seq.toList)

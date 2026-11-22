@@ -56,8 +56,21 @@ let private requiredSites (graph: SemanticGraph) =
         | _ -> None) |> Seq.toList
     required, indices
 
-let private coverageId (node: SemanticNode) =
-    sourceClaimId "numeric-carrier-coverage" node
+/// The two generated startup occurrences share a declaration and have distinct typed roles.
+let internal coverageSource (graph: SemanticGraph) =
+    let plan = ProgramInitialization.read graph
+    fun (node: SemanticNode) ->
+        match plan with
+        | Some startup when (node.Id = startup.EntryCall || node.Id = startup.Spine) &&
+                            not (node.Metadata.ContainsKey "Source.ObligationSite" ||
+                                 node.Metadata.ContainsKey SchemeMetadata.Specialization) ->
+            let role = if node.Id = startup.EntryCall then "ProgramEntryCall" else "ProgramInitialization"
+            "numeric-carrier-coverage/" + role, graph.Nodes[startup.SourceBinding]
+        | _ -> "numeric-carrier-coverage", node
+
+let private coverageId source (node: SemanticNode) =
+    let role, subject = source node
+    sourceClaimId role subject
     |> Option.defaultValue ($"numeric_carrier_{NodeId.value node.Id}")
 
 let private indexId (node: SemanticNode) =
@@ -387,6 +400,7 @@ let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inherite
             | None -> Error "The real scalar carrier has no unique source width declaration."
         | Some(NTUKind.NTUposit _) -> Error "The posit carrier requires its exact source format identity; IEEE width alone cannot authorize a posit representation."
         | _ -> Error "The required scalar carrier has no source settlement rule."
+    let coverageId = coverageId (coverageSource graph)
     let pendingCoverage id reason =
         match Types.tryGetNTUKind graph.Nodes[id].Type with
         | Some kind when NTUKind.isInteger kind ->
@@ -575,6 +589,7 @@ let elaborate graph = elaborateWithRangeReview false false false None None graph
 /// be accepted. Deleting a requirement row together with its claim cannot make
 /// the surviving ledger appear complete.
 let completeness (graph: SemanticGraph) : (NodeId * string) list =
+    let coverageId = coverageId (coverageSource graph)
     let required, indices = requiredSites graph
     let foreignApplications = RangeAnalysis.foreignResultApplications graph graph.RangeContextFacts
     let values =
