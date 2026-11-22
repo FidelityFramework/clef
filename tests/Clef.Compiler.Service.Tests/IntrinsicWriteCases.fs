@@ -307,6 +307,61 @@ module private LazyStringOriginFixture =
               parse source "intrinsic-write.clef" ] (Some platform)
 
 type IntrinsicWriteCases() =
+    [<Fact>]
+    member _.``Integer formatting distinguishes withdrawn demand, changed callee and unsupported range``() =
+        let check formatter caller width =
+            let source = String.concat "\n" [
+                "let ordinary (_: int) = \"ordinary\""
+                "let mutable touched = 0"
+                "let provider flag ="
+                "    touched <- 1"
+                "    3 + (if flag then 0 else " + width + ")"
+                "let sibling flag = 99 + (if flag then 0 else 0)"
+                "let mutable first = \"\""
+                "let mutable second = \"\""
+                "let consumeFirst flag ="
+                "    first <- " + formatter + " (provider flag)"
+                "    touched"
+                "let neutralFirst (_: bool) = 0"
+                "let consumeOther flag ="
+                "    second <- Format.int (sibling flag)"
+                "    touched"
+                "[<EntryPoint>]"
+                "let main _ = " + caller + " true + consumeOther false" ]
+            let result = DimensionalCases.check source
+            DimensionalCases.noErrors result
+            result.Graph
+        let emitted (graph: SemanticGraph) =
+            graph.Nodes.Values |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Literal (NativeLiteral.String text) when text = "3" || text = "99" -> Some text
+                | _ -> None) |> Seq.sort |> Seq.toList
+        let refused formatter caller width reachable range reason =
+            let graph = check formatter caller width
+            Assert.Equal<string list>(["99"], emitted graph)
+            let site, actual =
+                graph.Nodes.Values |> Seq.choose (fun node ->
+                    match node.Kind with
+                    | SemanticKind.Application(callee, [arg]) ->
+                        match graph.Nodes[callee].Kind with
+                        | SemanticKind.Intrinsic { Module = IntrinsicModule.Format; Operation = "int" } when formatter = "Format.int" -> Some(node, arg)
+                        | SemanticKind.VarRef("ordinary", Some _) when formatter = "ordinary" -> Some(node, arg)
+                        | _ -> None
+                    | _ -> None) |> Assert.Single
+            Assert.Equal(reachable, site.IsReachable)
+            Assert.Equal<ValueRange option>(range, graph.Nodes[actual].ValueRange)
+            let recipes = Clef.Compiler.Nanopass.BakerSaturation.formatIntegerRecipes graph
+            Assert.False(recipes.Recipes.ContainsKey site.Id)
+            match (recipes.Diagnostics |> List.find (fun row -> row.NodeId = site.Id)).Result with
+            | Clef.Compiler.Nanopass.Recipe.NotApplicable actualReason -> Assert.Equal<string>(reason, actualReason)
+            | other -> failwithf "Expected the formatter to decline this occurrence, got %A" other
+        let active () = Assert.Equal<string list>(["3"; "99"], check "Format.int" "consumeFirst" "0" |> emitted)
+        active ()
+        refused "Format.int" "neutralFirst" "0" false None "Integer formatting application is unreachable."
+        refused "ordinary" "consumeFirst" "0" true (Some (ValueRange.Bounded(3I, 3I))) "Not an integer formatting application."
+        refused "Format.int" "consumeFirst" "400" true (Some (ValueRange.Bounded(3I, 403I))) "Integer formatting has no admitted finite source range."
+        active ()
+
     [<Theory>]
     [<InlineData(false, false)>]
     [<InlineData(false, true)>]

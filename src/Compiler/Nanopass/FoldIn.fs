@@ -420,7 +420,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         Types = SemanticGraph.mkTypesIndex nodesWithParents
         Platform = graph.Platform
         ModuleClassifications = SemanticGraph.mkModuleClassifications nodesWithParents
-        // Fold-in runs before the range pass; the pass fills this on the final graph.
+        // A structural fold invalidates range facts. Range analysis fills them on the receiving graph.
         FieldRanges = lazy Map.empty
         RangeContextFacts = None
         ElementRanges = lazy Map.empty

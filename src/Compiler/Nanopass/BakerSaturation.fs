@@ -722,21 +722,37 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
 let fanOut (graph: SemanticGraph) : RecipeSet =
     FanOut.fanOut "Saturation" needsSaturationBasic createSaturationRecipe graph
 
-/// Range-dependent string construction stays in the existing Baker recipe
-/// owner, before string storage and borrow settlement consume the result.
-let formatIntegers (graph: SemanticGraph) : SemanticGraph =
-    let create (node: SemanticNode) (graph: SemanticGraph) =
+type private FormatIntegerRefusal =
+    | NotFormatCallee
+    | UnreachableFormatCall
+    | NoAdmittedRange
+
+/// Collect the receiving graph's integer formatting recipes and their eligibility diagnostics.
+let internal formatIntegerRecipes (graph: SemanticGraph) : RecipeSet =
+    let classify (node: SemanticNode) (graph: SemanticGraph) =
         match node.Kind with
-        | SemanticKind.Application(callee, [argument]) when node.IsReachable ->
+        | SemanticKind.Application(callee, [argument]) ->
             match graph.Nodes.TryFind callee with
             | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Format; Operation = "int" } } ->
-                let ctx = mkContext node.Range node.Type graph.Platform "Format.int" node.Id
-                match StringRecipes.tryFormatInteger ctx graph argument with
-                | Some result -> toRecipeResult node.Id "Format.int" [] result
-                | None -> NotApplicable "Integer formatting has no admitted finite source range."
-            | _ -> NotApplicable "Not an integer formatting application."
-        | _ -> NotApplicable "Not an integer formatting application."
-    let recipes = FanOut.fanOut "Format.int" needsSaturationBasic create graph
+                if not node.IsReachable then Error UnreachableFormatCall
+                else
+                    let ctx = mkContext node.Range node.Type graph.Platform "Format.int" node.Id
+                    match StringRecipes.tryFormatInteger ctx graph argument with
+                    | Some result -> Ok (toRecipeResult node.Id "Format.int" [] result)
+                    | None -> Error NoAdmittedRange
+            | _ -> Error NotFormatCallee
+        | _ -> Error NotFormatCallee
+    let create node graph =
+        match classify node graph with
+        | Ok result -> result
+        | Error NotFormatCallee -> NotApplicable "Not an integer formatting application."
+        | Error UnreachableFormatCall -> NotApplicable "Integer formatting application is unreachable."
+        | Error NoAdmittedRange -> NotApplicable "Integer formatting has no admitted finite source range."
+    FanOut.fanOut "Format.int" needsSaturationBasic create graph
+
+/// Range-dependent string construction precedes string storage and borrow settlement.
+let formatIntegers (graph: SemanticGraph) : SemanticGraph =
+    let recipes = formatIntegerRecipes graph
     if recipes.Recipes.IsEmpty then graph else FoldIn.foldIn recipes graph
 
 /// Selective rebuild keeps the complete graph available to recipes, while
