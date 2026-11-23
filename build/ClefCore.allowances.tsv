@@ -1,6 +1,3 @@
-Baker/Ingredients/Boundaries.fs	FSharpType	1
-Baker/Ingredients/Boundaries.fs	FSharpValue	1
-Baker/Ingredients/Boundaries.fs	Microsoft.FSharp.Reflection	2
 Baker/Ingredients/CompilerOwnedEntries.fs	ConditionalWeakTable	1
 Baker/Recipes/BoundaryRecipes.fs	ConditionalWeakTable	3
 Baker/Recipes/StringComparisonRecipes.fs	ConditionalWeakTable	2

@@ -283,6 +283,14 @@ let main _ =
     0
 """
         let _, _, collection, _, enumBinding, loop = Consumption.verify graph raw (Consumption.rawLoops raw |> Assert.Single)
+        let whileLoop = graph.Nodes[loop]
+        match whileLoop.Kind with
+        | SemanticKind.WhileLoop(guard, body) ->
+            let display = sprintf "WhileLoop(%d, %d)" (NodeId.value guard) (NodeId.value body)
+            Assert.Equal(display, SemanticKind.describe whileLoop.Kind)
+        | _ -> failwith "Expected the settled iteration while-loop."
+        let premise = Clef.Compiler.Baker.Ingredients.Boundaries.premise whileLoop
+        Assert.Equal("WhileLoop", premise.Shape.Form)
         let operandEffects =
             match graph.Nodes[collection].Kind with SemanticKind.Sequential [effect; _] -> effect | kind -> failwithf "Lost collection evaluation: %A" kind
         let rec descendants seen id =

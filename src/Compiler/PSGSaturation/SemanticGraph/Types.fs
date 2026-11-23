@@ -928,89 +928,92 @@ and MemberKind =
     | Event
 
 module SemanticKind =
-    let describe = function
-        | SemanticKind.Binding(name, _, _, _) -> sprintf "Binding(%s)" name
-        | SemanticKind.Application(func, _) -> sprintf "Application(%d)" (NodeId.value func)
-        | SemanticKind.Lambda(_, body, _, _, _) -> sprintf "Lambda(%d)" (NodeId.value body)
+    let private render includePayload = function
+        | SemanticKind.Binding(name, _, _, _) -> if includePayload then sprintf "Binding(%s)" name else "Binding"
+        | SemanticKind.Application(func, _) -> if includePayload then sprintf "Application(%d)" (NodeId.value func) else "Application"
+        | SemanticKind.Lambda(_, body, _, _, _) -> if includePayload then sprintf "Lambda(%d)" (NodeId.value body) else "Lambda"
         | SemanticKind.Literal _ -> "Literal"
-        | SemanticKind.VarRef(name, _) -> sprintf "VarRef(%s)" name
-        | SemanticKind.Match(scrutinee, _) -> sprintf "Match(%d)" (NodeId.value scrutinee)
-        | SemanticKind.CaseElimination(scrutinee, _) -> sprintf "CaseElimination(%d)" (NodeId.value scrutinee)
+        | SemanticKind.VarRef(name, _) -> if includePayload then sprintf "VarRef(%s)" name else "VarRef"
+        | SemanticKind.Match(scrutinee, _) -> if includePayload then sprintf "Match(%d)" (NodeId.value scrutinee) else "Match"
+        | SemanticKind.CaseElimination(scrutinee, _) -> if includePayload then sprintf "CaseElimination(%d)" (NodeId.value scrutinee) else "CaseElimination"
         | SemanticKind.Sequential _ -> "Sequential"
-        | SemanticKind.WhileLoop(guard, body) -> sprintf "WhileLoop(%d, %d)" (NodeId.value guard) (NodeId.value body)
-        | SemanticKind.ContinuationDispatch(selector, _, otherwise) -> sprintf "ContinuationDispatch(%d, %d)" (NodeId.value selector) (NodeId.value otherwise)
-        | SemanticKind.FrameRead(frame, slot) -> sprintf "FrameRead(%d, %d)" (NodeId.value frame) (NodeId.value slot)
-        | SemanticKind.FrameBorrow(frame, slot) -> sprintf "FrameBorrow(%d, %d)" (NodeId.value frame) (NodeId.value slot)
-        | SemanticKind.FrameWrite(frame, slot, value) -> sprintf "FrameWrite(%d, %d, %d)" (NodeId.value frame) (NodeId.value slot) (NodeId.value value)
-        | SemanticKind.ContinuationStorage owner -> sprintf "ContinuationStorage(%d)" (NodeId.value owner)
-        | SemanticKind.ContinuationAllocate owner -> sprintf "ContinuationAllocate(%d)" (NodeId.value owner)
-        | SemanticKind.AggregateStorage source -> sprintf "AggregateStorage(%d)" (NodeId.value source)
-        | SemanticKind.DUInitialize(destination, caseName, caseIndex, _) -> sprintf "DUInitialize(%d, %s#%d)" (NodeId.value destination) caseName caseIndex
-        | SemanticKind.ClosureValue(implementation, environment) -> sprintf "ClosureValue(%d, %d)" (NodeId.value implementation) (NodeId.value environment)
-        | SemanticKind.EnvironmentCreate(owner, _) -> sprintf "EnvironmentCreate(%d)" (NodeId.value owner)
-        | SemanticKind.EnvironmentAllocate owner -> sprintf "EnvironmentAllocate(%d)" (NodeId.value owner)
-        | SemanticKind.EnvironmentReference callable -> sprintf "EnvironmentReference(%d)" (NodeId.value callable)
-        | SemanticKind.EnvironmentRead(environment, slot) -> sprintf "EnvironmentRead(%d, %d)" (NodeId.value environment) (NodeId.value slot)
-        | SemanticKind.EnvironmentBorrow(environment, slot) -> sprintf "EnvironmentBorrow(%d, %d)" (NodeId.value environment) (NodeId.value slot)
-        | SemanticKind.EnvironmentWrite(environment, slot, value) -> sprintf "EnvironmentWrite(%d, %d, %d)" (NodeId.value environment) (NodeId.value slot) (NodeId.value value)
-        | SemanticKind.ForLoop(var, _, _, _, _) -> sprintf "ForLoop(%s)" var
-        | SemanticKind.ForEach(var, _, _, _) -> sprintf "ForEach(%s)" var
-        | SemanticKind.IfThenElse(guard, thenBranch, _) -> sprintf "IfThenElse(%d, %d)" (NodeId.value guard) (NodeId.value thenBranch)
-        | SemanticKind.Require(condition, diagnostic) -> sprintf "Require(%d, %s)" (NodeId.value condition) diagnostic
-        | SemanticKind.TryWith(body, handler) -> sprintf "TryWith(%d, %d)" (NodeId.value body) (NodeId.value handler)
-        | SemanticKind.TryFinally(body, cleanup) -> sprintf "TryFinally(%d, %d)" (NodeId.value body) (NodeId.value cleanup)
+        | SemanticKind.WhileLoop(guard, body) -> if includePayload then sprintf "WhileLoop(%d, %d)" (NodeId.value guard) (NodeId.value body) else "WhileLoop"
+        | SemanticKind.ContinuationDispatch(selector, _, otherwise) -> if includePayload then sprintf "ContinuationDispatch(%d, %d)" (NodeId.value selector) (NodeId.value otherwise) else "ContinuationDispatch"
+        | SemanticKind.FrameRead(frame, slot) -> if includePayload then sprintf "FrameRead(%d, %d)" (NodeId.value frame) (NodeId.value slot) else "FrameRead"
+        | SemanticKind.FrameBorrow(frame, slot) -> if includePayload then sprintf "FrameBorrow(%d, %d)" (NodeId.value frame) (NodeId.value slot) else "FrameBorrow"
+        | SemanticKind.FrameWrite(frame, slot, value) -> if includePayload then sprintf "FrameWrite(%d, %d, %d)" (NodeId.value frame) (NodeId.value slot) (NodeId.value value) else "FrameWrite"
+        | SemanticKind.ContinuationStorage owner -> if includePayload then sprintf "ContinuationStorage(%d)" (NodeId.value owner) else "ContinuationStorage"
+        | SemanticKind.ContinuationAllocate owner -> if includePayload then sprintf "ContinuationAllocate(%d)" (NodeId.value owner) else "ContinuationAllocate"
+        | SemanticKind.AggregateStorage source -> if includePayload then sprintf "AggregateStorage(%d)" (NodeId.value source) else "AggregateStorage"
+        | SemanticKind.DUInitialize(destination, caseName, caseIndex, _) -> if includePayload then sprintf "DUInitialize(%d, %s#%d)" (NodeId.value destination) caseName caseIndex else "DUInitialize"
+        | SemanticKind.ClosureValue(implementation, environment) -> if includePayload then sprintf "ClosureValue(%d, %d)" (NodeId.value implementation) (NodeId.value environment) else "ClosureValue"
+        | SemanticKind.EnvironmentCreate(owner, _) -> if includePayload then sprintf "EnvironmentCreate(%d)" (NodeId.value owner) else "EnvironmentCreate"
+        | SemanticKind.EnvironmentAllocate owner -> if includePayload then sprintf "EnvironmentAllocate(%d)" (NodeId.value owner) else "EnvironmentAllocate"
+        | SemanticKind.EnvironmentReference callable -> if includePayload then sprintf "EnvironmentReference(%d)" (NodeId.value callable) else "EnvironmentReference"
+        | SemanticKind.EnvironmentRead(environment, slot) -> if includePayload then sprintf "EnvironmentRead(%d, %d)" (NodeId.value environment) (NodeId.value slot) else "EnvironmentRead"
+        | SemanticKind.EnvironmentBorrow(environment, slot) -> if includePayload then sprintf "EnvironmentBorrow(%d, %d)" (NodeId.value environment) (NodeId.value slot) else "EnvironmentBorrow"
+        | SemanticKind.EnvironmentWrite(environment, slot, value) -> if includePayload then sprintf "EnvironmentWrite(%d, %d, %d)" (NodeId.value environment) (NodeId.value slot) (NodeId.value value) else "EnvironmentWrite"
+        | SemanticKind.ForLoop(var, _, _, _, _) -> if includePayload then sprintf "ForLoop(%s)" var else "ForLoop"
+        | SemanticKind.ForEach(var, _, _, _) -> if includePayload then sprintf "ForEach(%s)" var else "ForEach"
+        | SemanticKind.IfThenElse(guard, thenBranch, _) -> if includePayload then sprintf "IfThenElse(%d, %d)" (NodeId.value guard) (NodeId.value thenBranch) else "IfThenElse"
+        | SemanticKind.Require(condition, diagnostic) -> if includePayload then sprintf "Require(%d, %s)" (NodeId.value condition) diagnostic else "Require"
+        | SemanticKind.TryWith(body, handler) -> if includePayload then sprintf "TryWith(%d, %d)" (NodeId.value body) (NodeId.value handler) else "TryWith"
+        | SemanticKind.TryFinally(body, cleanup) -> if includePayload then sprintf "TryFinally(%d, %d)" (NodeId.value body) (NodeId.value cleanup) else "TryFinally"
         | SemanticKind.RecordExpr _ -> "RecordExpr"
-        | SemanticKind.UnionCase(caseName, caseIndex, _) -> sprintf "UnionCase(%s#%d)" caseName caseIndex
-        | SemanticKind.DUGetTag(duValue, _) -> sprintf "DUGetTag(%d)" (NodeId.value duValue)
-        | SemanticKind.DUEliminate(duValue, caseIndex, caseName, _) -> sprintf "DUEliminate(%d, %s#%d)" (NodeId.value duValue) caseName caseIndex
-        | SemanticKind.DUConstruct(caseName, caseIndex, _, _) -> sprintf "DUConstruct(%s#%d)" caseName caseIndex
+        | SemanticKind.UnionCase(caseName, caseIndex, _) -> if includePayload then sprintf "UnionCase(%s#%d)" caseName caseIndex else "UnionCase"
+        | SemanticKind.DUGetTag(duValue, _) -> if includePayload then sprintf "DUGetTag(%d)" (NodeId.value duValue) else "DUGetTag"
+        | SemanticKind.DUEliminate(duValue, caseIndex, caseName, _) -> if includePayload then sprintf "DUEliminate(%d, %s#%d)" (NodeId.value duValue) caseName caseIndex else "DUEliminate"
+        | SemanticKind.DUConstruct(caseName, caseIndex, _, _) -> if includePayload then sprintf "DUConstruct(%s#%d)" caseName caseIndex else "DUConstruct"
         | SemanticKind.TupleExpr _ -> "TupleExpr"
         | SemanticKind.ArrayExpr _ -> "ArrayExpr"
-        | SemanticKind.ArrayAllocate count -> sprintf "ArrayAllocate(%d)" (NodeId.value count)
+        | SemanticKind.ArrayAllocate count -> if includePayload then sprintf "ArrayAllocate(%d)" (NodeId.value count) else "ArrayAllocate"
         | SemanticKind.ListExpr _ -> "ListExpr"
-        | SemanticKind.FieldGet(expr, fieldName) -> sprintf "FieldGet(%d, %s)" (NodeId.value expr) fieldName
-        | SemanticKind.StringByteBorrow source -> sprintf "StringByteBorrow(%d)" (NodeId.value source)
-        | SemanticKind.FieldSet(expr, fieldName, value) -> sprintf "FieldSet(%d, %s, %d)" (NodeId.value expr) fieldName (NodeId.value value)
-        | SemanticKind.IndexGet(expr, index) -> sprintf "IndexGet(%d, %d)" (NodeId.value expr) (NodeId.value index)
-        | SemanticKind.IndexSet(expr, index, value) -> sprintf "IndexSet(%d, %d, %d)" (NodeId.value expr) (NodeId.value index) (NodeId.value value)
-        | SemanticKind.NamedIndexedPropertySet(expr, propName, index, value) -> sprintf "NamedIndexedPropertySet(%d, %s, %d, %d)" (NodeId.value expr) propName (NodeId.value index) (NodeId.value value)
-        | SemanticKind.TypeAnnotation(expr, _) -> sprintf "TypeAnnotation(%d)" (NodeId.value expr)
-        | SemanticKind.Upcast(expr, _) -> sprintf "Upcast(%d)" (NodeId.value expr)
-        | SemanticKind.Downcast(expr, _) -> sprintf "Downcast(%d)" (NodeId.value expr)
-        | SemanticKind.TypeTest(expr, _) -> sprintf "TypeTest(%d)" (NodeId.value expr)
-        | SemanticKind.AddressOf(expr, isByref) -> sprintf "AddressOf(%d, byref=%b)" (NodeId.value expr) isByref
-        | SemanticKind.CellAddress binding -> sprintf "CellAddress(%d)" (NodeId.value binding)
-        | SemanticKind.ElementAddress(buffer, index) -> sprintf "ElementAddress(%d, %d)" (NodeId.value buffer) (NodeId.value index)
-        | SemanticKind.FieldAddress(receiver, field) -> sprintf "FieldAddress(%d, %s)" (NodeId.value receiver) field
-        | SemanticKind.Reborrow reference -> sprintf "Reborrow(%d)" (NodeId.value reference)
-        | SemanticKind.Deref expr -> sprintf "Deref(%d)" (NodeId.value expr)
-        | SemanticKind.Set(target, value) -> sprintf "Set(%d, %d)" (NodeId.value target) (NodeId.value value)
-        | SemanticKind.PlatformBinding name -> sprintf "PlatformBinding(%s)" name
-        | SemanticKind.Intrinsic { FullName = fullName } -> sprintf "Intrinsic(%s)" fullName
-        | SemanticKind.TraitCall(memberName, _, arg) -> sprintf "TraitCall(%s, %d)" memberName (NodeId.value arg)
-        | SemanticKind.Quote(expr, isTyped) -> sprintf "Quote(%d, typed=%b)" (NodeId.value expr) isTyped
+        | SemanticKind.FieldGet(expr, fieldName) -> if includePayload then sprintf "FieldGet(%d, %s)" (NodeId.value expr) fieldName else "FieldGet"
+        | SemanticKind.StringByteBorrow source -> if includePayload then sprintf "StringByteBorrow(%d)" (NodeId.value source) else "StringByteBorrow"
+        | SemanticKind.FieldSet(expr, fieldName, value) -> if includePayload then sprintf "FieldSet(%d, %s, %d)" (NodeId.value expr) fieldName (NodeId.value value) else "FieldSet"
+        | SemanticKind.IndexGet(expr, index) -> if includePayload then sprintf "IndexGet(%d, %d)" (NodeId.value expr) (NodeId.value index) else "IndexGet"
+        | SemanticKind.IndexSet(expr, index, value) -> if includePayload then sprintf "IndexSet(%d, %d, %d)" (NodeId.value expr) (NodeId.value index) (NodeId.value value) else "IndexSet"
+        | SemanticKind.NamedIndexedPropertySet(expr, propName, index, value) -> if includePayload then sprintf "NamedIndexedPropertySet(%d, %s, %d, %d)" (NodeId.value expr) propName (NodeId.value index) (NodeId.value value) else "NamedIndexedPropertySet"
+        | SemanticKind.TypeAnnotation(expr, _) -> if includePayload then sprintf "TypeAnnotation(%d)" (NodeId.value expr) else "TypeAnnotation"
+        | SemanticKind.Upcast(expr, _) -> if includePayload then sprintf "Upcast(%d)" (NodeId.value expr) else "Upcast"
+        | SemanticKind.Downcast(expr, _) -> if includePayload then sprintf "Downcast(%d)" (NodeId.value expr) else "Downcast"
+        | SemanticKind.TypeTest(expr, _) -> if includePayload then sprintf "TypeTest(%d)" (NodeId.value expr) else "TypeTest"
+        | SemanticKind.AddressOf(expr, isByref) -> if includePayload then sprintf "AddressOf(%d, byref=%b)" (NodeId.value expr) isByref else "AddressOf"
+        | SemanticKind.CellAddress binding -> if includePayload then sprintf "CellAddress(%d)" (NodeId.value binding) else "CellAddress"
+        | SemanticKind.ElementAddress(buffer, index) -> if includePayload then sprintf "ElementAddress(%d, %d)" (NodeId.value buffer) (NodeId.value index) else "ElementAddress"
+        | SemanticKind.FieldAddress(receiver, field) -> if includePayload then sprintf "FieldAddress(%d, %s)" (NodeId.value receiver) field else "FieldAddress"
+        | SemanticKind.Reborrow reference -> if includePayload then sprintf "Reborrow(%d)" (NodeId.value reference) else "Reborrow"
+        | SemanticKind.Deref expr -> if includePayload then sprintf "Deref(%d)" (NodeId.value expr) else "Deref"
+        | SemanticKind.Set(target, value) -> if includePayload then sprintf "Set(%d, %d)" (NodeId.value target) (NodeId.value value) else "Set"
+        | SemanticKind.PlatformBinding name -> if includePayload then sprintf "PlatformBinding(%s)" name else "PlatformBinding"
+        | SemanticKind.Intrinsic { FullName = fullName } -> if includePayload then sprintf "Intrinsic(%s)" fullName else "Intrinsic"
+        | SemanticKind.TraitCall(memberName, _, arg) -> if includePayload then sprintf "TraitCall(%s, %d)" memberName (NodeId.value arg) else "TraitCall"
+        | SemanticKind.Quote(expr, isTyped) -> if includePayload then sprintf "Quote(%d, typed=%b)" (NodeId.value expr) isTyped else "Quote"
         | SemanticKind.ObjectExpr _ -> "ObjectExpr"
-        | SemanticKind.ModuleDef(name, _) -> sprintf "ModuleDef(%s)" name
-        | SemanticKind.TypeDef(name, _, _) -> sprintf "TypeDef(%s)" name
-        | SemanticKind.MemberDef(name, _, _) -> sprintf "MemberDef(%s)" name
+        | SemanticKind.ModuleDef(name, _) -> if includePayload then sprintf "ModuleDef(%s)" name else "ModuleDef"
+        | SemanticKind.TypeDef(name, _, _) -> if includePayload then sprintf "TypeDef(%s)" name else "TypeDef"
+        | SemanticKind.MemberDef(name, _, _) -> if includePayload then sprintf "MemberDef(%s)" name else "MemberDef"
         | SemanticKind.InterpolatedString _ -> "InterpolatedString"
-        | SemanticKind.PatternBinding name -> sprintf "PatternBinding(%s)" name
-        | SemanticKind.LazyExpr(body, _) -> sprintf "LazyExpr(%d)" (NodeId.value body)
-        | SemanticKind.LazyForce lazyValue -> sprintf "LazyForce(%d)" (NodeId.value lazyValue)
-        | SemanticKind.EagerExpr operand -> sprintf "EagerExpr(%d)" (NodeId.value operand)
-        | SemanticKind.LazyValue(thunk, environment) -> sprintf "LazyValue(%d, %d)" (NodeId.value thunk) (NodeId.value environment)
-        | SemanticKind.LazyEnvironment(owner, _) -> sprintf "LazyEnvironment(%d)" (NodeId.value owner)
-        | SemanticKind.LazyAllocate owner -> sprintf "LazyAllocate(%d)" (NodeId.value owner)
-        | SemanticKind.LazyEnvironmentReference lazyValue -> sprintf "LazyEnvironmentReference(%d)" (NodeId.value lazyValue)
-        | SemanticKind.LazyRead(environment, slot) -> sprintf "LazyRead(%d, %d)" (NodeId.value environment) (NodeId.value slot)
-        | SemanticKind.LazyBorrow(environment, slot) -> sprintf "LazyBorrow(%d, %d)" (NodeId.value environment) (NodeId.value slot)
-        | SemanticKind.LazyWrite(environment, slot, value) -> sprintf "LazyWrite(%d, %d, %d)" (NodeId.value environment) (NodeId.value slot) (NodeId.value value)
-        | SemanticKind.SeqExpr(body, _) -> sprintf "SeqExpr(%d)" (NodeId.value body)
-        | SemanticKind.Yield value -> sprintf "Yield(%d)" (NodeId.value value)
-        | SemanticKind.YieldBang seq -> sprintf "YieldBang(%d)" (NodeId.value seq)
-        | SemanticKind.TupleGet(tuple, index) -> sprintf "TupleGet(%d, %d)" (NodeId.value tuple) index
-        | SemanticKind.Error message -> sprintf "Error(%s)" message
-        | SemanticKind.Obligation { Id = obligationId } -> sprintf "Obligation(%s)" obligationId
+        | SemanticKind.PatternBinding name -> if includePayload then sprintf "PatternBinding(%s)" name else "PatternBinding"
+        | SemanticKind.LazyExpr(body, _) -> if includePayload then sprintf "LazyExpr(%d)" (NodeId.value body) else "LazyExpr"
+        | SemanticKind.LazyForce lazyValue -> if includePayload then sprintf "LazyForce(%d)" (NodeId.value lazyValue) else "LazyForce"
+        | SemanticKind.EagerExpr operand -> if includePayload then sprintf "EagerExpr(%d)" (NodeId.value operand) else "EagerExpr"
+        | SemanticKind.LazyValue(thunk, environment) -> if includePayload then sprintf "LazyValue(%d, %d)" (NodeId.value thunk) (NodeId.value environment) else "LazyValue"
+        | SemanticKind.LazyEnvironment(owner, _) -> if includePayload then sprintf "LazyEnvironment(%d)" (NodeId.value owner) else "LazyEnvironment"
+        | SemanticKind.LazyAllocate owner -> if includePayload then sprintf "LazyAllocate(%d)" (NodeId.value owner) else "LazyAllocate"
+        | SemanticKind.LazyEnvironmentReference lazyValue -> if includePayload then sprintf "LazyEnvironmentReference(%d)" (NodeId.value lazyValue) else "LazyEnvironmentReference"
+        | SemanticKind.LazyRead(environment, slot) -> if includePayload then sprintf "LazyRead(%d, %d)" (NodeId.value environment) (NodeId.value slot) else "LazyRead"
+        | SemanticKind.LazyBorrow(environment, slot) -> if includePayload then sprintf "LazyBorrow(%d, %d)" (NodeId.value environment) (NodeId.value slot) else "LazyBorrow"
+        | SemanticKind.LazyWrite(environment, slot, value) -> if includePayload then sprintf "LazyWrite(%d, %d, %d)" (NodeId.value environment) (NodeId.value slot) (NodeId.value value) else "LazyWrite"
+        | SemanticKind.SeqExpr(body, _) -> if includePayload then sprintf "SeqExpr(%d)" (NodeId.value body) else "SeqExpr"
+        | SemanticKind.Yield value -> if includePayload then sprintf "Yield(%d)" (NodeId.value value) else "Yield"
+        | SemanticKind.YieldBang seq -> if includePayload then sprintf "YieldBang(%d)" (NodeId.value seq) else "YieldBang"
+        | SemanticKind.TupleGet(tuple, index) -> if includePayload then sprintf "TupleGet(%d, %d)" (NodeId.value tuple) index else "TupleGet"
+        | SemanticKind.Error message -> if includePayload then sprintf "Error(%s)" message else "Error"
+        | SemanticKind.Obligation { Id = obligationId } -> if includePayload then sprintf "Obligation(%s)" obligationId else "Obligation"
+
+    let describe kind = render true kind
+    let internal caseName kind = render false kind
 
 //-------------------------------------------------------------------------
 // Program Hypergraph: the edge set (F) and its annotation (beta)
