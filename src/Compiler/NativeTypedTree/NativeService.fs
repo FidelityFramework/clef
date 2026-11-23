@@ -1080,29 +1080,19 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
         else Clef.Compiler.Nanopass.ProgramInitialization.normalizeOwned ownedSources roots graph
 
     // Phase 4: Reachability analysis
-    // Use soft-delete (mark IsReachable = false) or hard prune based on config.
-    // The tier 2 nanopass follows the first marking: every node is new to it.
-    let reachableGraph =
-        if PhaseConfig.useSoftDeleteReachability() then
-            let markedGraph = markUnreachable graph
-            let markedGraph = NodeProofs.create markedGraph (Map.keys markedGraph.Nodes)
-            let markedGraph = Clef.Compiler.Nanopass.ProgramInitializationOrder.birth markedGraph
-            emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability markedGraph diagnostics
-            markedGraph
-        else
-            let prunedGraph = pruneUnreachable graph
-            let prunedGraph = NodeProofs.create prunedGraph (Map.keys prunedGraph.Nodes)
-            let prunedGraph = Clef.Compiler.Nanopass.ProgramInitializationOrder.birth prunedGraph
-            emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability prunedGraph diagnostics
-            prunedGraph
+    let markedGraph =
+        if PhaseConfig.useSoftDeleteReachability() then markUnreachable graph
+        else pruneUnreachable graph
 
     // Extern bodies are declarations rather than executable initializers, and
     // closed callback factories have already been replaced by proved entries.
-    // Reject zero construction in the remaining executable source before any
-    // representation rewrite can retire the source occurrence or its type.
-    let boundaryValueDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryValues.diagnostics reachableGraph
+    let boundaryValueDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryValues.diagnostics markedGraph
 
-    let reachableGraph = Clef.Compiler.Nanopass.DeadBodies.normalizeWith RecipeSerialization.emitDeadBodyRecipes reachableGraph
+    // Settle constant exclusions before a branch can earn a literal obligation.
+    let reachableGraph = Clef.Compiler.Nanopass.DeadBodies.normalizeWith RecipeSerialization.emitDeadBodyRecipes markedGraph
+    let reachableGraph = NodeProofs.create reachableGraph (Map.keys reachableGraph.Nodes)
+    let reachableGraph = Clef.Compiler.Nanopass.ProgramInitializationOrder.birth reachableGraph
+    emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability reachableGraph diagnostics
 
     //=========================================================================
     // Four-Pass Elaboration Pipeline (January 2026)

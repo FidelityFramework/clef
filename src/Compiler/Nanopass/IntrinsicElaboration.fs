@@ -135,8 +135,8 @@ let private createIntrinsicRecipe (node: SemanticNode) (graph: SemanticGraph) : 
 /// Run Pass 1: Intrinsic Fan-Out
 /// Identifies intrinsics needing elaboration and creates recipes in parallel.
 let fanOut (graph: SemanticGraph) : RecipeSet =
-    // Use closures to capture the graph for predicate and recipe creation
-    let shouldElaborate node = needsIntrinsicElaboration node graph
+    // The settled target cone admits execution. The graph still supplies declaration support.
+    let shouldElaborate (node: SemanticNode) = node.IsReachable && needsIntrinsicElaboration node graph
     let createRecipe node _graph = createIntrinsicRecipe node graph
     FanOut.fanOut "Intrinsic" shouldElaborate createRecipe graph
 

@@ -57,6 +57,36 @@ module private NestedMatch =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "NestedMatch")>]
 type NestedMatchCases() =
+    [<Fact>]
+    member _.``Only a demanded match receives its Baker decision``() =
+        let inspect demand =
+            let graph = NestedMatch.check ("let private classify (x: int) =\n    match x with\n    | 5 -> 1\n    | _ -> 0\nlet observed = " + demand)
+            let classify =
+                graph.Nodes.Values |> Seq.filter (fun node ->
+                    match node.Kind with SemanticKind.Binding("classify", _, _, _) -> true | _ -> false) |> Assert.Single
+            let lambda = graph.Nodes[Assert.Single classify.Children]
+            match lambda.Children with
+            | [_; body] -> graph, graph.Nodes[body]
+            | children -> failwithf "Expected classify parameter and body, got %A" children
+
+        let dormant, original = inspect "0"
+        Assert.False(original.IsReachable)
+        Assert.True(match original.Kind with SemanticKind.Match _ -> true | _ -> false)
+        Assert.DoesNotContain(dormant.Nodes.Values, fun node ->
+            node.Range = original.Range && match node.Kind with SemanticKind.IfThenElse _ | SemanticKind.Sequential _ -> true | _ -> false)
+
+        let called, body = inspect "classify 5"
+        Assert.Equal(original.Range, body.Range)
+        Assert.True(body.IsReachable)
+        match body.Kind with
+        | SemanticKind.Sequential [snapshot; decision] ->
+            let snapshot, decision = called.Nodes[snapshot], called.Nodes[decision]
+            Assert.True(snapshot.IsReachable && snapshot.Range = body.Range)
+            Assert.True(match snapshot.Kind with SemanticKind.Binding _ -> true | _ -> false)
+            Assert.True(decision.IsReachable && decision.Range = body.Range)
+            Assert.True(match decision.Kind with SemanticKind.IfThenElse(_, _, Some _) -> true | _ -> false)
+        | kind -> failwithf "Expected the reachable match snapshot and decision, got %A" kind
+
     [<Theory>]
     [<InlineData("None", 0L)>]
     [<InlineData("Some None", 1L)>]

@@ -1098,7 +1098,7 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
         | ty -> failwithf "Unresolved lambda metadata crossed the checker boundary: %s" (formatType ty)
 
     "selected match payload and source binding carry resolved dimensions", fun () ->
-        let result = check "type Quantity<[<Measure>] 'u> = Quantity of float<'u>\nlet length = match Quantity 1.0<m> with Quantity value -> value\n"
+        let result = check "type Quantity<[<Measure>] 'u> = Quantity of float<'u>\nlet length = match Quantity 1.0<m> with Quantity value -> value\n[<EntryPoint>]\nlet main _ =\n    ignore length\n    0\n"
         noErrors result
         let binding, payloadType = result.Graph.Nodes.Values |> Seq.pick (fun node ->
             match node.Kind, node.Children with

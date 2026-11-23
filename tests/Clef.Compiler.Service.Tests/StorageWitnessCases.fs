@@ -36,6 +36,38 @@ let main _ = consume "first" "second" + consume "first" "first"
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "StorageWitness")>]
 type StorageWitnessCases() =
+    [<Fact>]
+    member _.``Only the demanded branch literal owns storage view and sentinel claims``() =
+        let claims =
+            Set.ofList [ "storage_dormantbranchprooftext", "storage-reservation"
+                         "view_dormantbranchprooftext", "view-containment"
+                         "sentinel_dormantbranchprooftext", "terminator-sentinel" ]
+        let claimIds = Set.map fst claims
+        for demanded, condition in [false, "false"; true, "true"] do
+            let source =
+                "module ReachableRecipeControl\n\nlet private consume (_: string) = 1\n\n[<EntryPoint>]\nlet main _ =\n    if "
+                + condition + " then consume \"DormantBranchProofText\" else 0\n"
+            let parsed =
+                match parseStringWithDefaults source "ReachableRecipeControl.clef" with
+                | ParseSuccess input -> input
+                | ParseError errors -> failwithf "Branch fixture failed to parse: %A" errors
+            let result = checkParsedInputsWithPlatform [parsed] None
+            DimensionalCases.noErrors result
+            let graph = result.Graph
+            let literal =
+                graph.Nodes.Values |> Seq.filter (fun node ->
+                    match node.Kind with SemanticKind.Literal (NativeLiteral.String "DormantBranchProofText") -> true | _ -> false) |> Assert.Single
+            Assert.Equal(demanded, literal.IsReachable)
+            let expected = if demanded then claims else Set.empty
+            Assert.Equal<Set<string>>(Set.map fst expected, PoolInventoryFixture.currentAnchors graph literal.Id)
+            let resident =
+                graph.Nodes.Values |> Seq.choose (fun node ->
+                    match node.Kind with
+                    | SemanticKind.Obligation info when claimIds.Contains info.Id -> Some(info.Id, info.Kind)
+                    | _ -> None) |> Seq.toList
+            Assert.Equal(expected.Count, resident.Length)
+            Assert.Equal<Set<string * string>>(expected, Set.ofList resident)
+
     [<Theory>]
     [<InlineData("source")>]
     [<InlineData("target")>]
