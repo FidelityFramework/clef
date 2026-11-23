@@ -57,9 +57,9 @@ let private sourceRelation owner (edge: Hyperedge) : Result<SourceRangeRelation,
         | EdgeRole.KernelIngress ingress -> Ok(SourceRangeRelationKind.KernelIngress ingress)
         | EdgeRole.BoundaryDeclaration declaration -> Ok(SourceRangeRelationKind.BoundaryDeclaration declaration)
         | role ->
-            let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
-            if fields.Length = 0 then Ok(SourceRangeRelationKind.Named case.Name)
-            else Error(owner + " incidence has an unsupported payload: " + case.Name + ".")
+            let struct (caseName, hasPayload) = EdgeRole.caseAndPayload role
+            if not hasPayload then Ok(SourceRangeRelationKind.Named caseName)
+            else Error(owner + " incidence has an unsupported payload: " + caseName + ".")
     kind |> Result.map (fun kind ->
         { Class = edge.Class; Kind = kind; Ordinal = edge.Ordinal; Sources = edge.Sources; Target = edge.Target })
 
@@ -292,9 +292,9 @@ let finiteCellRelations (graph: SemanticGraph) : Result<FiniteCellSourceRelation
             | EdgeRole.SuspensionResume state -> Ok(FiniteCellRelationKind.SuspensionResume state)
             | EdgeRole.SuspensionResumeAction state -> Ok(FiniteCellRelationKind.SuspensionResumeAction state)
             | role ->
-                let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
-                if fields.Length = 0 then Ok(FiniteCellRelationKind.Named case.Name)
-                else Error("Finite-cell source incidence has an unsupported payload: " + case.Name + ".")
+                let struct (caseName, hasPayload) = EdgeRole.caseAndPayload role
+                if not hasPayload then Ok(FiniteCellRelationKind.Named caseName)
+                else Error("Finite-cell source incidence has an unsupported payload: " + caseName + ".")
         match state, kind with
         | Error reason, _ | _, Error reason -> Error reason
         | Ok rows, Ok kind ->

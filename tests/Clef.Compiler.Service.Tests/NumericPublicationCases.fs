@@ -649,6 +649,48 @@ let main _ = 0
             Assert.Empty premise.Shape.Text
             Assert.Empty premise.Shape.Numbers
 
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Numeric source incidence preserves case tags and refuses unsupported payloads`` finiteCell =
+        let graph = NumericCaptureFixture.contextGraph.Value
+        let target = (NumericCaptureFixture.binding "main" graph).Id
+        let source = (NumericCaptureFixture.binding "double" graph).Id
+        let sources = [source; target; source]
+        let bare = { Class = EdgeClass.Structural; Role = EdgeRole.Callee; Ordinal = 5; Sources = sources; Target = target }
+        let unsupported = { bare with Role = EdgeRole.StringComparisonConstruction true }
+        if finiteCell then
+            let finite = { bare with Class = EdgeClass.Range; Role = EdgeRole.FiniteCellRange; Ordinal = 0 }
+            let finiteRow : FiniteCellSourceRelation =
+                { Class = finite.Class; Kind = FiniteCellRelationKind.Named "FiniteCellRange"; Ordinal = finite.Ordinal
+                  Sources = finite.Sources; Target = finite.Target }
+            let named =
+                { finiteRow with Class = bare.Class; Kind = FiniteCellRelationKind.Named "Callee"; Ordinal = bare.Ordinal }
+            let read edges = Clef.Compiler.Baker.Ingredients.NumericValues.finiteCellRelations { graph with Edges = edges }
+            Assert.Equal<Result<FiniteCellSourceRelation list option, string>>(
+                Ok (Some [named; finiteRow; named]), read [bare; finite; bare])
+            Assert.Equal<Result<FiniteCellSourceRelation list option, string>>(
+                Error "Finite-cell source incidence has an unsupported payload: StringComparisonConstruction.",
+                read [finite; unsupported])
+        else
+            let suspension = { bare with Class = EdgeClass.Suspension; Role = EdgeRole.SuspensionCut 17; Ordinal = 2 }
+            let named : SourceRangeRelation =
+                { Class = bare.Class; Kind = SourceRangeRelationKind.Named "Callee"; Ordinal = bare.Ordinal
+                  Sources = sources; Target = target }
+            let actual =
+                { named with Class = suspension.Class; Kind = SourceRangeRelationKind.SuspensionCut 17; Ordinal = suspension.Ordinal }
+            let read edges = Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations { graph with Edges = edges }
+            Assert.Equal<Result<SourceRangeRelation list, string>>(
+                Ok [named; actual; { named with Ordinal = 1 }; named],
+                read [bare; suspension; { bare with Ordinal = 1 }; bare])
+            Assert.Equal<Result<SourceRangeRelation list, string>>(
+                Error "Invocation-context incidence has an unsupported payload: StringComparisonConstruction.",
+                read [bare; unsupported])
+            let struct (caseName, hasPayload) = EdgeRole.caseAndPayload suspension.Role
+            Assert.Equal("SuspensionCut", caseName)
+            Assert.True(hasPayload)
+            Assert.Equal("SuspensionCut(17)", EdgeRole.describe suspension.Role)
+
     [<Fact>]
     member _.``String length uses its source held carrier and retained exact extent`` () =
         let graph, boundary = IntrinsicWriteFixture.admitted ()

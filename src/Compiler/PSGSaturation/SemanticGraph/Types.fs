@@ -2898,194 +2898,211 @@ type EdgeRole =
     | BoundaryClosedEntry of BoundaryClosedEntry
 
 module EdgeRole =
-    let describe = function
-        | EdgeRole.NumericDomain _ -> "NumericDomain"
-        | EdgeRole.NumericCarrier _ -> "NumericCarrier"
-        | EdgeRole.NumericProof _ -> "NumericProof"
-        | EdgeRole.NumericOperation _ -> "NumericOperation"
-        | EdgeRole.NumericOperationProof _ -> "NumericOperationProof"
-        | EdgeRole.NumericIndexTransport _ -> "NumericIndexTransport"
-        | EdgeRole.MemoryDomain _ -> "MemoryDomain"
-        | EdgeRole.MemoryOperation _ -> "MemoryOperation"
-        | EdgeRole.MemoryArrayCopy _ -> "MemoryArrayCopy"
-        | EdgeRole.ArrayAllocationConstruction _ -> "ArrayAllocationConstruction"
-        | EdgeRole.ArrayCopyConstruction _ -> "ArrayCopyConstruction"
-        | EdgeRole.MemoryProof _ -> "MemoryProof"
-        | EdgeRole.MemoryAccessGuard -> "MemoryAccessGuard"
-        | EdgeRole.SpatialModuleDomain _ -> "SpatialModuleDomain"
-        | EdgeRole.HardwareModule _ -> "HardwareModule"
-        | EdgeRole.KernelModule _ -> "KernelModule"
-        | EdgeRole.KernelIngress _ -> "KernelIngress"
-        | EdgeRole.SpatialProof _ -> "SpatialProof"
-        | EdgeRole.BoundaryDeclaration _ -> "BoundaryDeclaration"
-        | EdgeRole.BoundaryDomain _ -> "BoundaryDomain"
-        | EdgeRole.BoundaryResourceDeclaration _ -> "BoundaryResourceDeclaration"
-        | EdgeRole.BoundaryWritableBufferDeclaration _ -> "BoundaryWritableBufferDeclaration"
-        | EdgeRole.BoundaryWritableBufferUse _ -> "BoundaryWritableBufferUse"
-        | EdgeRole.BoundaryReadOnlyBufferDeclaration _ -> "BoundaryReadOnlyBufferDeclaration"
-        | EdgeRole.BoundaryReadOnlyBufferUse _ -> "BoundaryReadOnlyBufferUse"
-        | EdgeRole.BoundaryBorrowedResultViewDeclaration _ -> "BoundaryBorrowedResultViewDeclaration"
-        | EdgeRole.BoundaryBorrowedResultViewUse _ -> "BoundaryBorrowedResultViewUse"
-        | EdgeRole.BoundaryBufferAbsence _ -> "BoundaryBufferAbsence"
-        | EdgeRole.BoundaryCountedEntryArray _ -> "BoundaryCountedEntryArray"
-        | EdgeRole.BoundaryResourceAccess _ -> "BoundaryResourceAccess"
-        | EdgeRole.BoundaryImport _ -> "BoundaryImport"
-        | EdgeRole.BoundaryCall _ -> "BoundaryCall"
-        | EdgeRole.BoundaryOperand _ -> "BoundaryOperand"
-        | EdgeRole.BoundaryAdaptation _ -> "BoundaryAdaptation"
-        | EdgeRole.BoundaryCoverage _ -> "BoundaryCoverage"
-        | EdgeRole.BoundaryProof _ -> "BoundaryProof"
-        | EdgeRole.StringByteView _ -> "StringByteView"
-        | EdgeRole.StringExtent _ -> "StringExtent"
-        | EdgeRole.StringBorrowHistory _ -> "StringBorrowHistory"
-        | EdgeRole.LiteralStorageHistory _ -> "LiteralStorageHistory"
-        | EdgeRole.StringComparisonConstruction _ -> "StringComparisonConstruction"
-        | EdgeRole.StringLengthComparison _ -> "StringLengthComparison"
-        | EdgeRole.IntrinsicWriteAbi _ -> "IntrinsicWriteAbi"
-        | EdgeRole.IntrinsicWriteImport _ -> "IntrinsicWriteImport"
-        | EdgeRole.IntrinsicWriteCall _ -> "IntrinsicWriteCall"
-        | EdgeRole.IntrinsicWriteOperand _ -> "IntrinsicWriteOperand"
-        | EdgeRole.IntrinsicWriteProof _ -> "IntrinsicWriteProof"
-        | EdgeRole.EagerDemand _ -> "EagerDemand"
-        | EdgeRole.EagerDemandPending -> "EagerDemandPending"
-        | EdgeRole.StringByteStorage _ -> "StringByteStorage"
-        | EdgeRole.StringByteRead -> "StringByteRead"
-        | EdgeRole.StringByteRange _ -> "StringByteRange"
-        | EdgeRole.StringByteSnapshot -> "StringByteSnapshot"
-        | EdgeRole.StringCheckedConstruction _ -> "StringCheckedConstruction"
-        | EdgeRole.StringToBytesSnapshot -> "StringToBytesSnapshot"
-        | EdgeRole.StringAscii -> "StringAscii"
-        | EdgeRole.StringUtf8Constant _ -> "StringUtf8Constant"
-        | EdgeRole.LoopInduction _ -> "LoopInduction"
-        | EdgeRole.LoopAccumulation -> "LoopAccumulation"
-        | EdgeRole.SequencePullBound -> "SequencePullBound"
-        | EdgeRole.SequencePullComposition _ -> "SequencePullComposition"
-        | EdgeRole.SequenceAccumulation -> "SequenceAccumulation"
-        | EdgeRole.LoopRangePending _ -> "LoopRangePending"
-        | EdgeRole.Callee -> "Callee"
-        | EdgeRole.Argument -> "Argument"
-        | EdgeRole.Parameter -> "Parameter"
-        | EdgeRole.Body -> "Body"
-        | EdgeRole.Scrutinee -> "Scrutinee"
-        | EdgeRole.CaseBinding -> "CaseBinding"
-        | EdgeRole.CaseGuard -> "CaseGuard"
-        | EdgeRole.CaseBody -> "CaseBody"
-        | EdgeRole.Guard -> "Guard"
-        | EdgeRole.ThenBranch -> "ThenBranch"
-        | EdgeRole.ElseBranch -> "ElseBranch"
-        | EdgeRole.LoopStart -> "LoopStart"
-        | EdgeRole.LoopFinish -> "LoopFinish"
-        | EdgeRole.Collection -> "Collection"
-        | EdgeRole.Handler -> "Handler"
-        | EdgeRole.Cleanup -> "Cleanup"
-        | EdgeRole.Element -> "Element"
-        | EdgeRole.FieldValue -> "FieldValue"
-        | EdgeRole.CopyFrom -> "CopyFrom"
-        | EdgeRole.Payload -> "Payload"
-        | EdgeRole.ArenaHint -> "ArenaHint"
-        | EdgeRole.AssignTarget -> "AssignTarget"
-        | EdgeRole.AssignValue -> "AssignValue"
-        | EdgeRole.Subject -> "Subject"
-        | EdgeRole.Index -> "Index"
-        | EdgeRole.Member -> "Member"
-        | EdgeRole.Operand -> "Operand"
-        | EdgeRole.InterpolationPart -> "InterpolationPart"
-        | EdgeRole.Attached -> "Attached"
-        | EdgeRole.Definition -> "Definition"
-        | EdgeRole.TypeDefinition -> "TypeDefinition"
-        | EdgeRole.IntrinsicImplementation -> "IntrinsicImplementation"
-        | EdgeRole.Symbol -> "Symbol"
-        | EdgeRole.EnrichedWith -> "EnrichedWith"
-        | EdgeRole.ProgramInitialization -> "ProgramInitialization"
-        | EdgeRole.ProgramInitializationPending _ -> "ProgramInitializationPending"
-        | EdgeRole.ProgramInitializer -> "ProgramInitializer"
-        | EdgeRole.ProgramUnitActivation -> "ProgramUnitActivation"
-        | EdgeRole.ProgramEntryCall -> "ProgramEntryCall"
-        | EdgeRole.ProgramValueIntent -> "ProgramValueIntent"
-        | EdgeRole.ProgramValue -> "ProgramValue"
-        | EdgeRole.ProgramActivationCall -> "ProgramActivationCall"
-        | EdgeRole.ProgramActivationCoverage -> "ProgramActivationCoverage"
-        | EdgeRole.SequenceInputBorrow -> "SequenceInputBorrow"
-        | EdgeRole.CallableInvocationBorrow -> "CallableInvocationBorrow"
-        | EdgeRole.BranchOccurrence -> "BranchOccurrence"
-        | EdgeRole.CaptureOrigin -> "CaptureOrigin"
-        | EdgeRole.EnvironmentCapture _ -> "EnvironmentCapture"
-        | EdgeRole.EnvironmentInitializer -> "EnvironmentInitializer"
-        | EdgeRole.EnvironmentFormal -> "EnvironmentFormal"
-        | EdgeRole.LazyInstance -> "LazyInstance"
-        | EdgeRole.LazyCapture _ -> "LazyCapture"
-        | EdgeRole.LazyMemoization -> "LazyMemoization"
-        | EdgeRole.LazyResultDestination -> "LazyResultDestination"
-        | EdgeRole.LazyResultCall -> "LazyResultCall"
-        | EdgeRole.LazyResidence -> "LazyResidence"
-        | EdgeRole.LazyLayout -> "LazyLayout"
-        | EdgeRole.EnvironmentResidence -> "EnvironmentResidence"
-        | EdgeRole.EnvironmentReservation _ -> "EnvironmentReservation"
-        | EdgeRole.ProgramInitializationOrder _ -> "ProgramInitializationOrder"
-        | EdgeRole.ProgramInitializationOrderHistory _ -> "ProgramInitializationOrderHistory"
-        | EdgeRole.EnvironmentResultDestination -> "EnvironmentResultDestination"
-        | EdgeRole.EnvironmentResultCall -> "EnvironmentResultCall"
-        | EdgeRole.SequenceCaptureFormation -> "SequenceCaptureFormation"
-        | EdgeRole.SequenceCaptureInitializer _ -> "SequenceCaptureInitializer"
-        | EdgeRole.SequenceEnvironmentBorrow -> "SequenceEnvironmentBorrow"
-        | EdgeRole.SequenceResultCapture -> "SequenceResultCapture"
-        | EdgeRole.Delimiter -> "Delimiter"
-        | EdgeRole.DelegationOrigin -> "DelegationOrigin"
-        | EdgeRole.IteratorCurrentAdmitted -> "IteratorCurrentAdmitted"
-        | EdgeRole.SequenceElementAdmission -> "SequenceElementAdmission"
-        | EdgeRole.SequenceElementOwner -> "SequenceElementOwner"
-        | EdgeRole.SequenceElementPayload -> "SequenceElementPayload"
-        | EdgeRole.SequenceElementUnknown -> "SequenceElementUnknown"
-        | EdgeRole.SequencePullBody -> "SequencePullBody"
-        | EdgeRole.SequenceInitialize -> "SequenceInitialize"
-        | EdgeRole.SequenceFamilyLayout -> "SequenceFamilyLayout"
-        | EdgeRole.SequenceFamilyCurrent -> "SequenceFamilyCurrent"
-        | EdgeRole.SequenceTemplateCopy -> "SequenceTemplateCopy"
-        | EdgeRole.SequenceEffectUnknown -> "SequenceEffectUnknown"
-        | EdgeRole.SuspensionCut state -> sprintf "SuspensionCut(%d)" state
-        | EdgeRole.SuspensionLiveAcross -> "SuspensionLiveAcross"
-        | EdgeRole.SuspensionResume state -> sprintf "SuspensionResume(%d)" state
-        | EdgeRole.SuspensionResumeAction state -> sprintf "SuspensionResumeAction(%d)" state
-        | EdgeRole.SuspensionCompleted -> "SuspensionCompleted"
-        | EdgeRole.EvaluationOperand _ -> "EvaluationOperand"
-        | EdgeRole.EvaluationFlow _ -> "EvaluationFlow"
-        | EdgeRole.EvaluationCapture -> "EvaluationCapture"
-        | EdgeRole.EvaluationRoot -> "EvaluationRoot"
-        | EdgeRole.EvaluationPending residual -> sprintf "EvaluationPending(%s)" (EvaluationResidual.describe residual)
-        | EdgeRole.ContinuationCase state -> sprintf "ContinuationCase(%d)" state
-        | EdgeRole.MatchRequirement -> "MatchRequirement"
-        | EdgeRole.ContinuationDefault -> "ContinuationDefault"
-        | EdgeRole.FrameSlot -> "FrameSlot"
-        | EdgeRole.ContinuationValue -> "ContinuationValue"
-        | EdgeRole.ContinuationSlotAccess -> "ContinuationSlotAccess"
-        | EdgeRole.ContinuationRegion -> "ContinuationRegion"
-        | EdgeRole.ContinuationBorrow -> "ContinuationBorrow"
-        | EdgeRole.AggregateCopy -> "AggregateCopy"
-        | EdgeRole.AggregateSnapshot -> "AggregateSnapshot"
-        | EdgeRole.SequenceTemplateBorrow -> "SequenceTemplateBorrow"
-        | EdgeRole.SequenceProgramBorrow -> "SequenceProgramBorrow"
-        | EdgeRole.SequenceSlotBorrow -> "SequenceSlotBorrow"
-        | EdgeRole.Resides -> "Resides"
-        | EdgeRole.Constrains -> "Constrains"
-        | EdgeRole.CallableReferenceOrigin -> "CallableReferenceOrigin"
-        | EdgeRole.CaptureReferenceOrigin -> "CaptureReferenceOrigin"
-        | EdgeRole.LoopLinearRecurrence -> "LoopLinearRecurrence"
-        | EdgeRole.EnvironmentInvocation -> "EnvironmentInvocation"
-        | EdgeRole.SequenceProgramStorage -> "SequenceProgramStorage"
-        | EdgeRole.SchemeSpecialization -> "SchemeSpecialization"
-        | EdgeRole.LazyEffectRange -> "LazyEffectRange"
-        | EdgeRole.OrdinaryUnusedFormal -> "OrdinaryUnusedFormal"
-        | EdgeRole.OrdinaryUnusedActual -> "OrdinaryUnusedActual"
-        | EdgeRole.OrdinaryUnusedBindingInitializer -> "OrdinaryUnusedBindingInitializer"
-        | EdgeRole.OrdinaryInactiveImplementation -> "OrdinaryInactiveImplementation"
-        | EdgeRole.OrdinaryBindingDemand _ -> "OrdinaryBindingDemand"
-        | EdgeRole.OrdinaryBindingDemandPending _ -> "OrdinaryBindingDemandPending"
-        | EdgeRole.OrdinaryBindingDemandHistory _ -> "OrdinaryBindingDemandHistory"
-        | EdgeRole.FiniteCellRange -> "FiniteCellRange"
-        | EdgeRole.BoundaryEntry _ -> "BoundaryEntry"
-        | EdgeRole.BoundaryCallbackInvocation _ -> "BoundaryCallbackInvocation"
-        | EdgeRole.BoundaryCallbackAbsence _ -> "BoundaryCallbackAbsence"
-        | EdgeRole.BoundaryClosedEntry _ -> "BoundaryClosedEntry"
+    [<Struct>]
+    type private DescriptionDetail =
+        | NameOnly
+        | StateLabel of state: int
+        | PendingEvaluation of residual: EvaluationResidual
+
+    let private classify = function
+        | EdgeRole.NumericDomain _ -> struct ("NumericDomain", true, NameOnly)
+        | EdgeRole.NumericCarrier _ -> struct ("NumericCarrier", true, NameOnly)
+        | EdgeRole.NumericProof _ -> struct ("NumericProof", true, NameOnly)
+        | EdgeRole.NumericOperation _ -> struct ("NumericOperation", true, NameOnly)
+        | EdgeRole.NumericOperationProof _ -> struct ("NumericOperationProof", true, NameOnly)
+        | EdgeRole.NumericIndexTransport _ -> struct ("NumericIndexTransport", true, NameOnly)
+        | EdgeRole.MemoryDomain _ -> struct ("MemoryDomain", true, NameOnly)
+        | EdgeRole.MemoryOperation _ -> struct ("MemoryOperation", true, NameOnly)
+        | EdgeRole.MemoryArrayCopy _ -> struct ("MemoryArrayCopy", true, NameOnly)
+        | EdgeRole.ArrayAllocationConstruction _ -> struct ("ArrayAllocationConstruction", true, NameOnly)
+        | EdgeRole.ArrayCopyConstruction _ -> struct ("ArrayCopyConstruction", true, NameOnly)
+        | EdgeRole.MemoryProof _ -> struct ("MemoryProof", true, NameOnly)
+        | EdgeRole.MemoryAccessGuard -> struct ("MemoryAccessGuard", false, NameOnly)
+        | EdgeRole.SpatialModuleDomain _ -> struct ("SpatialModuleDomain", true, NameOnly)
+        | EdgeRole.HardwareModule _ -> struct ("HardwareModule", true, NameOnly)
+        | EdgeRole.KernelModule _ -> struct ("KernelModule", true, NameOnly)
+        | EdgeRole.KernelIngress _ -> struct ("KernelIngress", true, NameOnly)
+        | EdgeRole.SpatialProof _ -> struct ("SpatialProof", true, NameOnly)
+        | EdgeRole.BoundaryDeclaration _ -> struct ("BoundaryDeclaration", true, NameOnly)
+        | EdgeRole.BoundaryDomain _ -> struct ("BoundaryDomain", true, NameOnly)
+        | EdgeRole.BoundaryResourceDeclaration _ -> struct ("BoundaryResourceDeclaration", true, NameOnly)
+        | EdgeRole.BoundaryWritableBufferDeclaration _ -> struct ("BoundaryWritableBufferDeclaration", true, NameOnly)
+        | EdgeRole.BoundaryWritableBufferUse _ -> struct ("BoundaryWritableBufferUse", true, NameOnly)
+        | EdgeRole.BoundaryReadOnlyBufferDeclaration _ -> struct ("BoundaryReadOnlyBufferDeclaration", true, NameOnly)
+        | EdgeRole.BoundaryReadOnlyBufferUse _ -> struct ("BoundaryReadOnlyBufferUse", true, NameOnly)
+        | EdgeRole.BoundaryBorrowedResultViewDeclaration _ -> struct ("BoundaryBorrowedResultViewDeclaration", true, NameOnly)
+        | EdgeRole.BoundaryBorrowedResultViewUse _ -> struct ("BoundaryBorrowedResultViewUse", true, NameOnly)
+        | EdgeRole.BoundaryBufferAbsence _ -> struct ("BoundaryBufferAbsence", true, NameOnly)
+        | EdgeRole.BoundaryCountedEntryArray _ -> struct ("BoundaryCountedEntryArray", true, NameOnly)
+        | EdgeRole.BoundaryResourceAccess _ -> struct ("BoundaryResourceAccess", true, NameOnly)
+        | EdgeRole.BoundaryImport _ -> struct ("BoundaryImport", true, NameOnly)
+        | EdgeRole.BoundaryCall _ -> struct ("BoundaryCall", true, NameOnly)
+        | EdgeRole.BoundaryOperand _ -> struct ("BoundaryOperand", true, NameOnly)
+        | EdgeRole.BoundaryAdaptation _ -> struct ("BoundaryAdaptation", true, NameOnly)
+        | EdgeRole.BoundaryCoverage _ -> struct ("BoundaryCoverage", true, NameOnly)
+        | EdgeRole.BoundaryProof _ -> struct ("BoundaryProof", true, NameOnly)
+        | EdgeRole.StringByteView _ -> struct ("StringByteView", true, NameOnly)
+        | EdgeRole.StringExtent _ -> struct ("StringExtent", true, NameOnly)
+        | EdgeRole.StringBorrowHistory _ -> struct ("StringBorrowHistory", true, NameOnly)
+        | EdgeRole.LiteralStorageHistory _ -> struct ("LiteralStorageHistory", true, NameOnly)
+        | EdgeRole.StringComparisonConstruction _ -> struct ("StringComparisonConstruction", true, NameOnly)
+        | EdgeRole.StringLengthComparison _ -> struct ("StringLengthComparison", true, NameOnly)
+        | EdgeRole.IntrinsicWriteAbi _ -> struct ("IntrinsicWriteAbi", true, NameOnly)
+        | EdgeRole.IntrinsicWriteImport _ -> struct ("IntrinsicWriteImport", true, NameOnly)
+        | EdgeRole.IntrinsicWriteCall _ -> struct ("IntrinsicWriteCall", true, NameOnly)
+        | EdgeRole.IntrinsicWriteOperand _ -> struct ("IntrinsicWriteOperand", true, NameOnly)
+        | EdgeRole.IntrinsicWriteProof _ -> struct ("IntrinsicWriteProof", true, NameOnly)
+        | EdgeRole.EagerDemand _ -> struct ("EagerDemand", true, NameOnly)
+        | EdgeRole.EagerDemandPending -> struct ("EagerDemandPending", false, NameOnly)
+        | EdgeRole.StringByteStorage _ -> struct ("StringByteStorage", true, NameOnly)
+        | EdgeRole.StringByteRead -> struct ("StringByteRead", false, NameOnly)
+        | EdgeRole.StringByteRange _ -> struct ("StringByteRange", true, NameOnly)
+        | EdgeRole.StringByteSnapshot -> struct ("StringByteSnapshot", false, NameOnly)
+        | EdgeRole.StringCheckedConstruction _ -> struct ("StringCheckedConstruction", true, NameOnly)
+        | EdgeRole.StringToBytesSnapshot -> struct ("StringToBytesSnapshot", false, NameOnly)
+        | EdgeRole.StringAscii -> struct ("StringAscii", false, NameOnly)
+        | EdgeRole.StringUtf8Constant _ -> struct ("StringUtf8Constant", true, NameOnly)
+        | EdgeRole.LoopInduction _ -> struct ("LoopInduction", true, NameOnly)
+        | EdgeRole.LoopAccumulation -> struct ("LoopAccumulation", false, NameOnly)
+        | EdgeRole.SequencePullBound -> struct ("SequencePullBound", false, NameOnly)
+        | EdgeRole.SequencePullComposition _ -> struct ("SequencePullComposition", true, NameOnly)
+        | EdgeRole.SequenceAccumulation -> struct ("SequenceAccumulation", false, NameOnly)
+        | EdgeRole.LoopRangePending _ -> struct ("LoopRangePending", true, NameOnly)
+        | EdgeRole.Callee -> struct ("Callee", false, NameOnly)
+        | EdgeRole.Argument -> struct ("Argument", false, NameOnly)
+        | EdgeRole.Parameter -> struct ("Parameter", false, NameOnly)
+        | EdgeRole.Body -> struct ("Body", false, NameOnly)
+        | EdgeRole.Scrutinee -> struct ("Scrutinee", false, NameOnly)
+        | EdgeRole.CaseBinding -> struct ("CaseBinding", false, NameOnly)
+        | EdgeRole.CaseGuard -> struct ("CaseGuard", false, NameOnly)
+        | EdgeRole.CaseBody -> struct ("CaseBody", false, NameOnly)
+        | EdgeRole.Guard -> struct ("Guard", false, NameOnly)
+        | EdgeRole.ThenBranch -> struct ("ThenBranch", false, NameOnly)
+        | EdgeRole.ElseBranch -> struct ("ElseBranch", false, NameOnly)
+        | EdgeRole.LoopStart -> struct ("LoopStart", false, NameOnly)
+        | EdgeRole.LoopFinish -> struct ("LoopFinish", false, NameOnly)
+        | EdgeRole.Collection -> struct ("Collection", false, NameOnly)
+        | EdgeRole.Handler -> struct ("Handler", false, NameOnly)
+        | EdgeRole.Cleanup -> struct ("Cleanup", false, NameOnly)
+        | EdgeRole.Element -> struct ("Element", false, NameOnly)
+        | EdgeRole.FieldValue -> struct ("FieldValue", false, NameOnly)
+        | EdgeRole.CopyFrom -> struct ("CopyFrom", false, NameOnly)
+        | EdgeRole.Payload -> struct ("Payload", false, NameOnly)
+        | EdgeRole.ArenaHint -> struct ("ArenaHint", false, NameOnly)
+        | EdgeRole.AssignTarget -> struct ("AssignTarget", false, NameOnly)
+        | EdgeRole.AssignValue -> struct ("AssignValue", false, NameOnly)
+        | EdgeRole.Subject -> struct ("Subject", false, NameOnly)
+        | EdgeRole.Index -> struct ("Index", false, NameOnly)
+        | EdgeRole.Member -> struct ("Member", false, NameOnly)
+        | EdgeRole.Operand -> struct ("Operand", false, NameOnly)
+        | EdgeRole.InterpolationPart -> struct ("InterpolationPart", false, NameOnly)
+        | EdgeRole.Attached -> struct ("Attached", false, NameOnly)
+        | EdgeRole.Definition -> struct ("Definition", false, NameOnly)
+        | EdgeRole.TypeDefinition -> struct ("TypeDefinition", false, NameOnly)
+        | EdgeRole.IntrinsicImplementation -> struct ("IntrinsicImplementation", false, NameOnly)
+        | EdgeRole.Symbol -> struct ("Symbol", false, NameOnly)
+        | EdgeRole.EnrichedWith -> struct ("EnrichedWith", false, NameOnly)
+        | EdgeRole.ProgramInitialization -> struct ("ProgramInitialization", false, NameOnly)
+        | EdgeRole.ProgramInitializationPending _ -> struct ("ProgramInitializationPending", true, NameOnly)
+        | EdgeRole.ProgramInitializer -> struct ("ProgramInitializer", false, NameOnly)
+        | EdgeRole.ProgramUnitActivation -> struct ("ProgramUnitActivation", false, NameOnly)
+        | EdgeRole.ProgramEntryCall -> struct ("ProgramEntryCall", false, NameOnly)
+        | EdgeRole.ProgramValueIntent -> struct ("ProgramValueIntent", false, NameOnly)
+        | EdgeRole.ProgramValue -> struct ("ProgramValue", false, NameOnly)
+        | EdgeRole.ProgramActivationCall -> struct ("ProgramActivationCall", false, NameOnly)
+        | EdgeRole.ProgramActivationCoverage -> struct ("ProgramActivationCoverage", false, NameOnly)
+        | EdgeRole.SequenceInputBorrow -> struct ("SequenceInputBorrow", false, NameOnly)
+        | EdgeRole.CallableInvocationBorrow -> struct ("CallableInvocationBorrow", false, NameOnly)
+        | EdgeRole.BranchOccurrence -> struct ("BranchOccurrence", false, NameOnly)
+        | EdgeRole.CaptureOrigin -> struct ("CaptureOrigin", false, NameOnly)
+        | EdgeRole.EnvironmentCapture _ -> struct ("EnvironmentCapture", true, NameOnly)
+        | EdgeRole.EnvironmentInitializer -> struct ("EnvironmentInitializer", false, NameOnly)
+        | EdgeRole.EnvironmentFormal -> struct ("EnvironmentFormal", false, NameOnly)
+        | EdgeRole.LazyInstance -> struct ("LazyInstance", false, NameOnly)
+        | EdgeRole.LazyCapture _ -> struct ("LazyCapture", true, NameOnly)
+        | EdgeRole.LazyMemoization -> struct ("LazyMemoization", false, NameOnly)
+        | EdgeRole.LazyResultDestination -> struct ("LazyResultDestination", false, NameOnly)
+        | EdgeRole.LazyResultCall -> struct ("LazyResultCall", false, NameOnly)
+        | EdgeRole.LazyResidence -> struct ("LazyResidence", false, NameOnly)
+        | EdgeRole.LazyLayout -> struct ("LazyLayout", false, NameOnly)
+        | EdgeRole.EnvironmentResidence -> struct ("EnvironmentResidence", false, NameOnly)
+        | EdgeRole.EnvironmentReservation _ -> struct ("EnvironmentReservation", true, NameOnly)
+        | EdgeRole.ProgramInitializationOrder _ -> struct ("ProgramInitializationOrder", true, NameOnly)
+        | EdgeRole.ProgramInitializationOrderHistory _ -> struct ("ProgramInitializationOrderHistory", true, NameOnly)
+        | EdgeRole.EnvironmentResultDestination -> struct ("EnvironmentResultDestination", false, NameOnly)
+        | EdgeRole.EnvironmentResultCall -> struct ("EnvironmentResultCall", false, NameOnly)
+        | EdgeRole.SequenceCaptureFormation -> struct ("SequenceCaptureFormation", false, NameOnly)
+        | EdgeRole.SequenceCaptureInitializer _ -> struct ("SequenceCaptureInitializer", true, NameOnly)
+        | EdgeRole.SequenceEnvironmentBorrow -> struct ("SequenceEnvironmentBorrow", false, NameOnly)
+        | EdgeRole.SequenceResultCapture -> struct ("SequenceResultCapture", false, NameOnly)
+        | EdgeRole.Delimiter -> struct ("Delimiter", false, NameOnly)
+        | EdgeRole.DelegationOrigin -> struct ("DelegationOrigin", false, NameOnly)
+        | EdgeRole.IteratorCurrentAdmitted -> struct ("IteratorCurrentAdmitted", false, NameOnly)
+        | EdgeRole.SequenceElementAdmission -> struct ("SequenceElementAdmission", false, NameOnly)
+        | EdgeRole.SequenceElementOwner -> struct ("SequenceElementOwner", false, NameOnly)
+        | EdgeRole.SequenceElementPayload -> struct ("SequenceElementPayload", false, NameOnly)
+        | EdgeRole.SequenceElementUnknown -> struct ("SequenceElementUnknown", false, NameOnly)
+        | EdgeRole.SequencePullBody -> struct ("SequencePullBody", false, NameOnly)
+        | EdgeRole.SequenceInitialize -> struct ("SequenceInitialize", false, NameOnly)
+        | EdgeRole.SequenceFamilyLayout -> struct ("SequenceFamilyLayout", false, NameOnly)
+        | EdgeRole.SequenceFamilyCurrent -> struct ("SequenceFamilyCurrent", false, NameOnly)
+        | EdgeRole.SequenceTemplateCopy -> struct ("SequenceTemplateCopy", false, NameOnly)
+        | EdgeRole.SequenceEffectUnknown -> struct ("SequenceEffectUnknown", false, NameOnly)
+        | EdgeRole.SuspensionCut state -> struct ("SuspensionCut", true, StateLabel state)
+        | EdgeRole.SuspensionLiveAcross -> struct ("SuspensionLiveAcross", false, NameOnly)
+        | EdgeRole.SuspensionResume state -> struct ("SuspensionResume", true, StateLabel state)
+        | EdgeRole.SuspensionResumeAction state -> struct ("SuspensionResumeAction", true, StateLabel state)
+        | EdgeRole.SuspensionCompleted -> struct ("SuspensionCompleted", false, NameOnly)
+        | EdgeRole.EvaluationOperand _ -> struct ("EvaluationOperand", true, NameOnly)
+        | EdgeRole.EvaluationFlow _ -> struct ("EvaluationFlow", true, NameOnly)
+        | EdgeRole.EvaluationCapture -> struct ("EvaluationCapture", false, NameOnly)
+        | EdgeRole.EvaluationRoot -> struct ("EvaluationRoot", false, NameOnly)
+        | EdgeRole.EvaluationPending residual -> struct ("EvaluationPending", true, PendingEvaluation residual)
+        | EdgeRole.ContinuationCase state -> struct ("ContinuationCase", true, StateLabel state)
+        | EdgeRole.MatchRequirement -> struct ("MatchRequirement", false, NameOnly)
+        | EdgeRole.ContinuationDefault -> struct ("ContinuationDefault", false, NameOnly)
+        | EdgeRole.FrameSlot -> struct ("FrameSlot", false, NameOnly)
+        | EdgeRole.ContinuationValue -> struct ("ContinuationValue", false, NameOnly)
+        | EdgeRole.ContinuationSlotAccess -> struct ("ContinuationSlotAccess", false, NameOnly)
+        | EdgeRole.ContinuationRegion -> struct ("ContinuationRegion", false, NameOnly)
+        | EdgeRole.ContinuationBorrow -> struct ("ContinuationBorrow", false, NameOnly)
+        | EdgeRole.AggregateCopy -> struct ("AggregateCopy", false, NameOnly)
+        | EdgeRole.AggregateSnapshot -> struct ("AggregateSnapshot", false, NameOnly)
+        | EdgeRole.SequenceTemplateBorrow -> struct ("SequenceTemplateBorrow", false, NameOnly)
+        | EdgeRole.SequenceProgramBorrow -> struct ("SequenceProgramBorrow", false, NameOnly)
+        | EdgeRole.SequenceSlotBorrow -> struct ("SequenceSlotBorrow", false, NameOnly)
+        | EdgeRole.Resides -> struct ("Resides", false, NameOnly)
+        | EdgeRole.Constrains -> struct ("Constrains", false, NameOnly)
+        | EdgeRole.CallableReferenceOrigin -> struct ("CallableReferenceOrigin", false, NameOnly)
+        | EdgeRole.CaptureReferenceOrigin -> struct ("CaptureReferenceOrigin", false, NameOnly)
+        | EdgeRole.LoopLinearRecurrence -> struct ("LoopLinearRecurrence", false, NameOnly)
+        | EdgeRole.EnvironmentInvocation -> struct ("EnvironmentInvocation", false, NameOnly)
+        | EdgeRole.SequenceProgramStorage -> struct ("SequenceProgramStorage", false, NameOnly)
+        | EdgeRole.SchemeSpecialization -> struct ("SchemeSpecialization", false, NameOnly)
+        | EdgeRole.LazyEffectRange -> struct ("LazyEffectRange", false, NameOnly)
+        | EdgeRole.OrdinaryUnusedFormal -> struct ("OrdinaryUnusedFormal", false, NameOnly)
+        | EdgeRole.OrdinaryUnusedActual -> struct ("OrdinaryUnusedActual", false, NameOnly)
+        | EdgeRole.OrdinaryUnusedBindingInitializer -> struct ("OrdinaryUnusedBindingInitializer", false, NameOnly)
+        | EdgeRole.OrdinaryInactiveImplementation -> struct ("OrdinaryInactiveImplementation", false, NameOnly)
+        | EdgeRole.OrdinaryBindingDemand _ -> struct ("OrdinaryBindingDemand", true, NameOnly)
+        | EdgeRole.OrdinaryBindingDemandPending _ -> struct ("OrdinaryBindingDemandPending", true, NameOnly)
+        | EdgeRole.OrdinaryBindingDemandHistory _ -> struct ("OrdinaryBindingDemandHistory", true, NameOnly)
+        | EdgeRole.FiniteCellRange -> struct ("FiniteCellRange", false, NameOnly)
+        | EdgeRole.BoundaryEntry _ -> struct ("BoundaryEntry", true, NameOnly)
+        | EdgeRole.BoundaryCallbackInvocation _ -> struct ("BoundaryCallbackInvocation", true, NameOnly)
+        | EdgeRole.BoundaryCallbackAbsence _ -> struct ("BoundaryCallbackAbsence", true, NameOnly)
+        | EdgeRole.BoundaryClosedEntry _ -> struct ("BoundaryClosedEntry", true, NameOnly)
+
+    let internal caseAndPayload role =
+        let struct (caseName, hasPayload, _) = classify role
+        struct (caseName, hasPayload)
+
+    let describe role =
+        let struct (caseName, _, detail) = classify role
+        match detail with
+        | NameOnly -> caseName
+        | StateLabel state -> sprintf "%s(%d)" caseName state
+        | PendingEvaluation residual -> sprintf "%s(%s)" caseName (EvaluationResidual.describe residual)
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
