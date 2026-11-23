@@ -692,6 +692,26 @@ let main _ = 0
             Assert.Equal("SuspensionCut(17)", EdgeRole.describe suspension.Role)
 
     [<Fact>]
+    member _.``String origin incidence keeps recorded occurrences and refuses an unsupported payload`` () =
+        let graph = NumericCaptureFixture.contextGraph.Value
+        let target = (NumericCaptureFixture.binding "main" graph).Id
+        let source = (NumericCaptureFixture.binding "double" graph).Id
+        let sources = [source; target; source]
+        let bare = { Class = EdgeClass.Structural; Role = EdgeRole.Callee; Ordinal = 5; Sources = sources; Target = target }
+        let continuation = { bare with Class = EdgeClass.Reference; Role = EdgeRole.ContinuationCase 7; Ordinal = 2 }
+        let named : StringOriginRelation =
+            { Recorded = true; Class = bare.Class; Flavor = StringOriginRelationKind.Named "Callee"
+              Ordinal = bare.Ordinal; Sources = sources; Target = target }
+        let typed = { named with Class = continuation.Class; Flavor = StringOriginRelationKind.ContinuationCase 7; Ordinal = continuation.Ordinal }
+        let read edges =
+            Clef.Compiler.Baker.Ingredients.StringOrigins.relations { graph with Edges = edges }
+            |> Result.map (List.filter (fun row -> row.Recorded))
+        Assert.Equal<Result<StringOriginRelation list, string>>(Ok [named; typed; named], read [bare; continuation; bare])
+        let unsupported = { bare with Role = EdgeRole.StringComparisonConstruction true }
+        Assert.Equal<Result<StringOriginRelation list, string>>(
+            Error "A string origin has an unsupported recorded incidence payload: StringComparisonConstruction.", read [bare; unsupported])
+
+    [<Fact>]
     member _.``String length uses its source held carrier and retained exact extent`` () =
         let graph, boundary = IntrinsicWriteFixture.admitted ()
         let numeric = NumericPublication.project graph |> function Ok value -> value | Error failures -> failwithf "%A" failures

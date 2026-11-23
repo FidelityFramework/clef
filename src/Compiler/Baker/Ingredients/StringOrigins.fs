@@ -3,7 +3,6 @@
 /// This records facts; it grants no protocol, residence or borrow proof.
 module Clef.Compiler.Baker.Ingredients.StringOrigins
 
-open Microsoft.FSharp.Reflection
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 let sourceNode (node: SemanticNode) = not (node.Metadata.ContainsKey "Baker.BoundaryOwned")
@@ -49,9 +48,9 @@ let relations (graph: SemanticGraph) : Result<StringOriginRelation list, string>
             | EdgeRole.BoundaryDeclaration value -> Ok (Some(StringOriginRelationKind.BoundaryImplementation value.Implementation))
             | EdgeRole.ContinuationCase value when incidence -> Ok (Some(StringOriginRelationKind.ContinuationCase value))
             | role when not recorded || incidence || selected role ->
-                let case, fields = FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
-                if fields.Length = 0 then Ok (Some(StringOriginRelationKind.Named case.Name))
-                else Error ("A string origin has an unsupported recorded incidence payload: " + case.Name + ".")
+                let struct (caseName, hasPayload) = EdgeRole.caseAndPayload role
+                if not hasPayload then Ok (Some(StringOriginRelationKind.Named caseName))
+                else Error ("A string origin has an unsupported recorded incidence payload: " + caseName + ".")
             | _ -> Ok None
         match state, flavor with
         | Error reason, _ | _, Error reason -> Error reason
