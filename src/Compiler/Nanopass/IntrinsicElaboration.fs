@@ -154,6 +154,11 @@ let fanOutReached reached graph = fanOutUsing (FanOut.fanOutAt reached) graph
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     FoldIn.foldIn recipeSet graph
 
+let internal foldInReached reached recipes graph =
+    let struct (folded, changed) = FoldIn.foldInWithReachabilityChange recipes graph
+    if changed then Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachableWithScope folded
+    else folded, reached
+
 //-------------------------------------------------------------------------
 // Entry Point Elaboration (Graph-Level Transformation)
 //-------------------------------------------------------------------------

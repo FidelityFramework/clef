@@ -205,7 +205,7 @@ let private parentLinkedMaps =
     System.Runtime.CompilerServices.ConditionalWeakTable<Map<NodeId, SemanticNode>, obj>()
 let private linkedSentinel = obj()
 
-let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
+let internal foldInWithReachabilityChange (recipeSet: RecipeSet) (graph: SemanticGraph) =
     let replacementMap = recipeSet.ReplacementMap
     let nonIdentityReplacements = replacementMap |> Map.filter (fun k v -> k <> v)
     let hasNonIdentity = not nonIdentityReplacements.IsEmpty
@@ -216,7 +216,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         not graph.Layouts.IsValueCreated && graph.StaticStringPool.IsNone && graph.LiteralStorage.IsEmpty &&
         not graph.Escaping.IsValueCreated && not graph.Codata.IsValueCreated &&
         graph.WitnessProvenance.IsNone && graph.SequenceRangeProvenance.IsNone
-    if isIdentityFoldIn then graph
+    if isIdentityFoldIn then struct (graph, false)
     else
     let historical (edge: Hyperedge) =
         edge.Class = EdgeClass.Provenance &&
@@ -344,7 +344,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
             | _ -> false))
     let canIncrementalParentLink =
         not hasNonIdentity && alreadyParentLinked && not touchesModuleDef
-    let nodesWithParents =
+    let struct (nodesWithParents, relinked) =
         if canIncrementalParentLink then
             newNodesFromRecipes
             |> Map.fold (fun acc parentId parentNode ->
@@ -373,6 +373,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
                     | None -> acc'
                 ) acc
             ) newNodes
+            |> fun nodes -> struct (nodes, false)
         else
             let lexicalParents =
                 newNodes.Values |> Seq.collect (fun node ->
@@ -381,21 +382,21 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
                     | _, SemanticKind.ModuleDef(_, members) -> members |> Seq.map (fun memberId -> memberId, node.Id)
                     | _ -> Seq.empty) |> Map.ofSeq
             newNodes
-            |> Map.fold (fun acc parentId parentNode ->
+            |> Map.fold (fun state parentId parentNode ->
                 (match parentNode.Metadata.TryFind SchemeMetadata.HistoricalOnly with
                  | Some(MetadataValue.Bool true) -> []
                  | _ -> parentNode.Children)
-                |> List.fold (fun acc' childId ->
-                    match Map.tryFind childId acc' with
+                |> List.fold (fun (struct (nodes, _) as state) childId ->
+                    match Map.tryFind childId nodes with
                     | Some (childNode: SemanticNode) ->
                         let lexicalParent = lexicalParents.TryFind childId |> Option.defaultValue parentId
-                        if childNode.Parent = Some lexicalParent then acc'
+                        if childNode.Parent = Some lexicalParent then state
                         else
                             let updatedChild: SemanticNode = { childNode with Parent = Some lexicalParent }
-                            Map.add childId updatedChild acc'
-                    | None -> acc'
-                ) acc
-            ) newNodes
+                            struct (Map.add childId updatedChild nodes, true)
+                    | None -> state
+                ) state
+            ) (struct (newNodes, false))
     parentLinkedMaps.AddOrUpdate(nodesWithParents, linkedSentinel)
     
     // Update declaration roots if any were replaced
@@ -465,14 +466,9 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         SequenceRangeProvenance = None
     }
 
-    // NOTE: Reachability validation removed (Feb 2026)
-    // Rationale: Two-pass reachability architecture
-    //   - First pass marks what to transform (efficiency)
-    //   - FoldIn applies transformations (trusts recipe creation)
-    //   - Final pass re-establishes truth after transformations (source of truth)
-    // Mid-flight validation created paradox: two definitions of "reachable"
-    //   - PSG marks module bodies as reachable (151 nodes)
-    //   - Children traversal from entry only reaches 30 nodes
-    // Solution: Trust recipe creation, validate once at end
+    // The incremental linker only visits recipe-created nodes; an empty recipe cannot relink that branch.
+    struct (resultGraph, relinked || hasNonIdentity || not recipeSet.Recipes.IsEmpty)
 
-    resultGraph
+let foldIn recipeSet graph =
+    let struct (folded, _) = foldInWithReachabilityChange recipeSet graph
+    folded

@@ -1108,7 +1108,7 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
     RecipeSerialization.emitIntrinsicDiagnostics intrinsicRecipes.Diagnostics  // Artifact 02a
 
     // Pass 2: Intrinsic Fold-In - Build PSG₁ with intrinsic elaborations
-    let psg1 = IntrinsicElaboration.foldIn intrinsicRecipes reachableGraph
+    let psg1, bakerSites = IntrinsicElaboration.foldInReached reached intrinsicRecipes reachableGraph
     if PhaseConfig.shouldEmit() then
         emitPhaseIfEnabled PhaseTypes.PhaseId.BakerModuleInit psg1 diagnostics  // Artifact 03
 
@@ -1117,7 +1117,7 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
     let psg1WithDeclRoots = psg1
 
     // Pass 3: Saturation Fan-Out - Create Baker decomposition recipes
-    let saturationRecipes = BakerSaturation.fanOut psg1WithDeclRoots
+    let saturationRecipes = BakerSaturation.fanOutScopes bakerSites psg1WithDeclRoots
     RecipeSerialization.emitSaturationRecipes saturationRecipes  // Artifact 04
     RecipeSerialization.emitSaturationDiagnostics saturationRecipes.Diagnostics  // Artifact 04a
 
