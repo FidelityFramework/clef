@@ -36,6 +36,7 @@ type SegmentationPlan =
       Dependencies: RegionDependency list
       SupportEdges: SupportEdge list
       NodeIdentities: Map<NodeId, string>
+      CallableRelationIdentities: Map<NodeId, string>
       NodeOwners: Map<NodeId, string>
       NodeFingerprints: Map<NodeId, string> }
 
@@ -608,6 +609,7 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                     Dependencies = settledDependencies
                     SupportEdges = settledSupports
                     NodeIdentities = allResolved |> Map.filter (fun id _ -> graph.Nodes.ContainsKey id)
+                    CallableRelationIdentities = allResolved |> Map.filter (fun id _ -> codata.CallableContracts.ContainsKey id || codata.CallableAggregateSlots.ContainsKey id)
                     NodeOwners = owners
                     NodeFingerprints = nodeFingerprints }
       with :? InvalidOperationException as error ->

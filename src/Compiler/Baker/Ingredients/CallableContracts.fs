@@ -221,25 +221,53 @@ let signature (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
         })
     | _ -> None
 
-let agrees (signature: Signature) (contract: CallableContract) =
+let private ordered same left right =
+    List.length left = List.length right && List.forall2 same left right
+
+/// The only identity in a settled representation is its source-owned callable component slot.
+let rec private agreesOnSlots previousSlot previous current =
+    let same = agreesOnSlots previousSlot
+    let named compare (oldName, oldValue) (name, value) = oldName = name && compare oldValue value
+    match previous, current with
+    | ValueRepresentation.Scalar a, ValueRepresentation.Scalar b -> a = b
+    | ValueRepresentation.Tag a, ValueRepresentation.Tag b -> a = b
+    | ValueRepresentation.Buffer(n,a), ValueRepresentation.Buffer(m,b) -> n = m && same a b
+    | ValueRepresentation.Record(a,placement), ValueRepresentation.Record(b,currentPlacement) ->
+        placement = currentPlacement && ordered (named same) a b
+    | ValueRepresentation.Union(a,placement), ValueRepresentation.Union(b,currentPlacement) ->
+        placement = currentPlacement && ordered (named (ordered same)) a b
+    | ValueRepresentation.CallableComponent(old, data), ValueRepresentation.CallableComponent(id, currentData) ->
+        previousSlot old = Some id && same data currentData
+    | _ -> false
+
+let private agreesUsing same (signature: Signature) (contract: CallableContract) =
     contract.Kind = signature.Kind && contract.Convention = signature.Convention &&
     contract.ParameterTypes = signature.Parameters && contract.ResultType = signature.Result &&
     contract.EnvironmentBytes = signature.EnvironmentBytes && contract.OmittedParameters = signature.Omitted &&
-    contract.ParameterRepresentations = signature.ParameterRepresentations &&
-    contract.ResultRepresentation = signature.ResultRepresentation
+    ordered (fun (ordinal, old) (currentOrdinal, current) -> ordinal = currentOrdinal && same old current)
+        contract.ParameterRepresentations signature.ParameterRepresentations &&
+    same contract.ResultRepresentation signature.ResultRepresentation
+
+let agrees signature contract = agreesUsing (=) signature contract
 
 /// One implementation's convention is reusable at its aliases. Unifying two
 /// different implementations additionally requires the receiving-family recipe
 /// to settle their physical components; equal source signatures alone do not.
-let tryIdentity graph layouts (contracts: Map<NodeId, CallableContract>) (carrier: CallableCarrier) =
+let private tryIdentityUsing implementation agreesSignature graph layouts (contracts: Map<NodeId, CallableContract>) (carrier: CallableCarrier) =
     signature graph layouts carrier |> Option.bind (fun signature ->
         let candidates = contracts |> Map.toSeq |> Seq.choose (fun (key, contract) ->
-            if key = contract.Identity && agrees signature contract &&
+            if key = contract.Identity && agreesSignature signature contract &&
                (contract.Participants |> List.exists (fun participant ->
                 participant.Role = ParticipantRole.CallableImplementation &&
-                participant.Node = carrier.Implementation && participant.Group = contract.Identity))
+                implementation participant.Node = Some carrier.Implementation && participant.Group = contract.Identity))
             then Some contract else None) |> Seq.toList
         match candidates with [contract] -> Some contract.Identity | _ -> None)
+
+let tryIdentityAcross implementation previousSlot graph layouts contracts carrier =
+    tryIdentityUsing implementation (agreesUsing (agreesOnSlots previousSlot)) graph layouts contracts carrier
+
+let tryIdentity graph layouts contracts carrier =
+    tryIdentityUsing Some agrees graph layouts contracts carrier
 
 let assign graph layouts contracts (carrier: CallableCarrier) =
     let contract =

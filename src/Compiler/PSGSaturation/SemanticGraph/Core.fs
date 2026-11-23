@@ -27,9 +27,63 @@ module SemanticGraph =
 
     let maxNodeId (graph: SemanticGraph) = maxNodeIdIn graph.Nodes graph.Edges
 
+    /// Read every currently occupied structural and settled callable-relation identity.
+    let internal maxOccupiedNodeId (graph: SemanticGraph) =
+        let codata = graph.Codata.Value
+        let includeKey maximum id _ = max maximum (NodeId.value id)
+        let maximum = maxNodeId graph
+        let maximum = Map.fold includeKey maximum codata.CallableContracts
+        Map.fold includeKey maximum codata.CallableAggregateSlots
+
+    /// Read the settled high-water mark: current occupied structural and typed
+    /// relation keys plus any already-owned SSA high-water.
+    let private maxSettledNodeId (graph: SemanticGraph) =
+        let codata = graph.Codata.Value
+        let occupied = maxOccupiedNodeId graph
+        match codata.SSAAssignment with
+        | Some plan -> max occupied plan.NodeHighWater
+        | None -> occupied
+
+    let private withReservation maximum work =
+        Clef.Compiler.CheckExecution.enrich (NodeId.withReservation maximum) work
+
     /// Protect the complete allocating operation, including reentrant checks.
+    /// Reserves structural identities. Nested calls retain any wider active reservation.
     let withEnrichment (graph: SemanticGraph) work =
-        Clef.Compiler.CheckExecution.enrich (NodeId.withReservation (maxNodeId graph)) work
+        withReservation (maxNodeId graph) work
+
+    /// Protect the complete allocating operation on a settled graph, reserving above
+    /// current structural and typed relation keys plus any already-owned SSA high-water.
+    let withSettledEnrichment (graph: SemanticGraph) work =
+        withReservation (maxSettledNodeId graph) work
+
+    /// Validate callable relation identities against the complete physical node
+    /// map (including obligations), callable contracts, and callable aggregate
+    /// slots without rescanning physical nodes or forcing lazy graph codata.
+    let validateTypedIdentities
+        (nodes: Map<NodeId, SemanticNode>)
+        (contracts: Map<NodeId, CallableContract>)
+        (aggregateSlots: Map<NodeId, CallableAggregateSlot>)
+        : Result<unit, (NodeId * string) list> =
+        let relationReason =
+            "A callable relation identity is misfiled or collides with another source identity."
+        let contractErrors =
+            contracts
+            |> Map.fold (fun acc key (contract: CallableContract) ->
+                if key <> contract.Identity || Map.containsKey key nodes then
+                    (key, relationReason) :: acc
+                else
+                    acc) []
+        let allErrors =
+            aggregateSlots
+            |> Map.fold (fun acc key (slot: CallableAggregateSlot) ->
+                if key <> slot.Identity || Map.containsKey key nodes || Map.containsKey key contracts then
+                    (key, relationReason) :: acc
+                else
+                    acc) contractErrors
+        match allErrors with
+        | [] -> Result.Ok ()
+        | errors -> Result.Error (List.rev errors)
 
     /// Map every type carried by a node, including metadata consumed by lowering.
     /// Updating only node.Type leaves closures, patterns and witnesses unresolved.

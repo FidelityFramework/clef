@@ -18,6 +18,7 @@ open Microsoft.FSharp.Reflection
 open Clef.Compiler.Baker.Ingredients
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 let nodeOf (SSAId(n, _)) = n
 let ordinalOf (SSAId(_, k)) = k
@@ -243,11 +244,8 @@ let private orderedReachableNodes (graph: SemanticGraph) : (NodeId * SemanticNod
     |> List.filter (fun (_, node) -> node.IsReachable && isAssignableNode node)
     |> List.sortBy (fun (id, _) -> NodeId.value id)
 
-let private maxGraphNodeId (graph: SemanticGraph) : int =
-    if graph.Nodes.IsEmpty then
-        0
-    else
-        graph.Nodes.Keys |> Seq.map NodeId.value |> Seq.max
+let private occupiedHighWater (graph: SemanticGraph) : int =
+    max 0 (Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxOccupiedNodeId graph)
 
 /// Full-compilation cold-start SSA assignment pass.
 let normalize (graph: SemanticGraph) : SemanticGraph =
@@ -261,80 +259,142 @@ let normalize (graph: SemanticGraph) : SemanticGraph =
         graph.Nodes.Keys
         |> Seq.map (fun id -> id, id)
         |> Map.ofSeq
+    let codata = graph.Codata.Value
     let plan : SSAAssignmentPlan =
         { Assignments = assignments
-          NodeHighWater = maxGraphNodeId graph
+          NodeHighWater = occupiedHighWater graph
           NodeRemap = identityRemap
           RetainedNodes = Set.empty
           ReassignedNodes = assignedIds }
-    let codata = graph.Codata.Value
     { graph with Codata = lazy { codata with SSAAssignment = Some plan } }
+
+[<RequireQualifiedAccess>]
+type ReconciliationFailure =
+    | MissingBaselinePlan
+    | MissingRetainedAssignment of NodeId
+    | MissingRetainedCorrespondence of NodeId
+    | AmbiguousRetainedCorrespondence of Diagnostic
+    | InvalidReturnedIdentities of (NodeId * string) list
 
 /// Cone-scoped selective-rebuild SSA reconciliation and assignment.
 /// Retained structure outside the delta cone keeps its baseline `NodeId`s and
 /// `SSAId(node, ordinal)` assignments across the graph and codata; affected or
-/// newly elaborated nodes advance monotonically above `baselinePlan.NodeHighWater`
-/// without reusing prior identifiers.
-let reconcileAndAssign
+/// newly elaborated nodes advance above the prior high-water mark and any
+/// relation identities held in place.
+let private reconcileAndAssignCore
+    transportCallableRelations
     (baseline: SemanticGraph)
+    (baselinePlan: SSAAssignmentPlan)
     (alignment: Map<NodeId, NodeId>)
     (retainedCandidateNodes: Set<NodeId>)
     (candidate: SemanticGraph)
-    : SemanticGraph * SSAAssignmentPlan =
-    let baselineWithPlan =
-        match baseline.Codata.Value.SSAAssignment with
-        | Some _ -> baseline
-        | None -> normalize baseline
-    let baselinePlan = baselineWithPlan.Codata.Value.SSAAssignment.Value
+    : Result<SemanticGraph * SSAAssignmentPlan, ReconciliationFailure> =
+    let baselineFacts = baseline.Codata.Value
+    let candidateFacts = candidate.Codata.Value
+    let sameIdentityClass baseId candId =
+        (baseline.Nodes.ContainsKey baseId && candidate.Nodes.ContainsKey candId)
+        || (transportCallableRelations &&
+            ((baselineFacts.CallableContracts.ContainsKey baseId && candidateFacts.CallableContracts.ContainsKey candId)
+             || (baselineFacts.CallableAggregateSlots.ContainsKey baseId && candidateFacts.CallableAggregateSlots.ContainsKey candId)))
     let candToBase =
         alignment
         |> Map.fold (fun acc baseId candId ->
-            if Set.contains candId retainedCandidateNodes && baselineWithPlan.Nodes.ContainsKey baseId then
-                Map.add candId baseId acc
+            if Set.contains candId retainedCandidateNodes && sameIdentityClass baseId candId then
+                let correspondence = if Map.containsKey candId acc then None else Some baseId
+                Map.add candId correspondence acc
             else
                 acc) Map.empty
-    let initialHighWater = max baselinePlan.NodeHighWater (maxGraphNodeId baselineWithPlan)
-    let orderedCandIds =
-        candidate.Nodes.Keys
-        |> Seq.sortBy NodeId.value
-        |> Seq.toList
-    let nodeRemap, finalHighWater, retainedReconciled =
-        orderedCandIds
-        |> List.fold (fun (remap: Map<NodeId, NodeId>, highWater: int, retainedSet: Set<NodeId>) candId ->
-            match candToBase.TryFind candId with
-            | Some baseId ->
-                Map.add candId baseId remap, max highWater (NodeId.value baseId), Set.add baseId retainedSet
-            | None ->
-                let nextId = highWater + 1
-                let freshNodeId = NodeId nextId
-                Map.add candId freshNodeId remap, nextId, retainedSet)
-            (Map.empty, initialHighWater, Set.empty)
-    let remapNodeId (id: NodeId) : NodeId =
-        match nodeRemap.TryFind id with
-        | Some mapped -> mapped
-        | None -> id
-    let remappedGraph = remapGraph remapNodeId candidate
-    let reachable = orderedReachableNodes remappedGraph
-    let assignments, retainedAssigned, reassigned =
-        reachable
-        |> List.fold (fun (acc: Map<NodeId, SSAId list>, ret: Set<NodeId>, reas: Set<NodeId>) (id, node) ->
-            if Set.contains id retainedReconciled then
-                let slots =
+    // A region selected for retention already owns its exact SSA family.
+    // Check that authority before remapping the graph or creating any families.
+    let reachable = orderedReachableNodes candidate
+    let retainedRefusal =
+        retainedCandidateNodes
+        |> Seq.tryPick (fun source ->
+            match candToBase.TryFind source with
+            | None -> Some(ReconciliationFailure.MissingRetainedCorrespondence source)
+            | Some None ->
+                let range = candidate.Nodes.TryFind source |> Option.map _.Range |> Option.defaultValue dummyRange
+                Some(ReconciliationFailure.AmbiguousRetainedCorrespondence
+                    { Severity = NativeDiagnosticSeverity.Error
+                      Code = "CCS8407"
+                      Message = "The retained occurrence has more than one admissible baseline identity."
+                      Range = range
+                      RelatedNodes = [source]
+                      Reachability = ReachabilityContext.Unknown })
+            | Some (Some id) ->
+                match candidate.Nodes.TryFind source with
+                | Some node when node.IsReachable && isAssignableNode node ->
                     match baselinePlan.Assignments.TryFind id with
-                    | Some existing when not existing.IsEmpty -> existing
-                    | _ -> slotsForNode id node
-                Map.add id slots acc, Set.add id ret, reas
+                    | Some (_ :: _) -> None
+                    | _ -> Some(ReconciliationFailure.MissingRetainedAssignment id)
+                | _ -> None)
+    match retainedRefusal with
+    | Some failure -> Result.Error failure
+    | None ->
+        // Temporary source coordinates do not contribute to destination history.
+        // A callable identity left in place is an occupied destination coordinate.
+        let initialHighWater =
+            max baselinePlan.NodeHighWater (occupiedHighWater baseline)
+        let assign (remap, highWater, retainedSet) candId =
+            match candToBase.TryFind candId with
+            | Some (Some baseId) ->
+                Map.add candId baseId remap, highWater, Set.add baseId retainedSet
+            | _ ->
+                let nextId = highWater + 1
+                Map.add candId (NodeId nextId) remap, nextId, retainedSet
+        let relationRemap, relationHighWater =
+            let ids = Seq.append candidateFacts.CallableContracts.Keys candidateFacts.CallableAggregateSlots.Keys
+            if transportCallableRelations then
+                let remap, highWater, _ =
+                    ids
+                    |> Seq.sortBy NodeId.value
+                    |> Seq.fold assign (Map.empty, initialHighWater, Set.empty)
+                remap, highWater
             else
-                let slots = slotsForNode id node
-                Map.add id slots acc, ret, Set.add id reas)
-            (Map.empty, Set.empty, Set.empty)
-    let plan : SSAAssignmentPlan =
-        { Assignments = assignments
-          NodeHighWater = finalHighWater
-          NodeRemap = nodeRemap
-          RetainedNodes = retainedAssigned
-          ReassignedNodes = reassigned }
-    let codata = remappedGraph.Codata.Value
-    let reconciledGraph =
-        { remappedGraph with Codata = lazy { codata with SSAAssignment = Some plan } }
-    reconciledGraph, plan
+                let occupied = ids |> Seq.fold (fun highWater id -> max highWater (NodeId.value id)) initialHighWater
+                Map.empty, occupied
+        let nodeRemap, finalHighWater, retainedReconciled =
+            candidate.Nodes.Keys
+            |> Seq.sortBy NodeId.value
+            |> Seq.fold assign (Map.empty, relationHighWater, Set.empty)
+        let remapNodeId (id: NodeId) : NodeId =
+            match nodeRemap.TryFind id with
+            | Some mapped -> mapped
+            | None -> relationRemap.TryFind id |> Option.defaultValue id
+        let assignments, retainedAssigned, reassigned =
+            reachable
+            |> List.fold (fun (acc, retained, fresh) (source, node) ->
+                let id = nodeRemap[source]
+                if Set.contains id retainedReconciled then
+                    Map.add id baselinePlan.Assignments[id] acc, Set.add id retained, fresh
+                else
+                    Map.add id (slotsForNode id node) acc, retained, Set.add id fresh)
+                (Map.empty, Set.empty, Set.empty)
+        let plan : SSAAssignmentPlan =
+            { Assignments = assignments
+              NodeHighWater = finalHighWater
+              NodeRemap = nodeRemap
+              RetainedNodes = retainedAssigned
+              ReassignedNodes = reassigned }
+        let remappedGraph = remapGraph remapNodeId candidate
+        let codata = remappedGraph.Codata.Value
+        match Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.validateTypedIdentities
+                  remappedGraph.Nodes codata.CallableContracts codata.CallableAggregateSlots with
+        | Result.Error failures -> Result.Error(ReconciliationFailure.InvalidReturnedIdentities failures)
+        | Result.Ok () ->
+            let reconciledGraph =
+                { remappedGraph with Codata = lazy { codata with SSAAssignment = Some plan } }
+            Result.Ok(reconciledGraph, plan)
+
+let private reconcileExistingPlan transportCallableRelations (baseline: SemanticGraph) alignment retainedCandidateNodes candidate =
+    match baseline.Codata.Value.SSAAssignment with
+    | Some plan -> reconcileAndAssignCore transportCallableRelations baseline plan alignment retainedCandidateNodes candidate
+    | None -> Result.Error ReconciliationFailure.MissingBaselinePlan
+
+/// Reassign structural occurrences and keep existing callable relation identities.
+let reconcileAndAssign baseline alignment retainedCandidateNodes candidate =
+    reconcileExistingPlan false baseline alignment retainedCandidateNodes candidate
+
+/// Transport callable identities using the selective schedule's checked alignment.
+let internal reconcileAndAssignWithCallableRelations baseline alignment retainedCandidateNodes candidate =
+    reconcileExistingPlan true baseline alignment retainedCandidateNodes candidate

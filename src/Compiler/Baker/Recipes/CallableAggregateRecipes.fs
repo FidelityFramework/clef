@@ -389,6 +389,11 @@ let private resultRetirement (graph:SemanticGraph) (receiving:Callbacks.Optional
         | _ -> Error "Returned optional backing requires one caller instance, one exact receiver and no other uses."
     | _ -> Error "Returned optional backing requires one exact receiving use and its original construction."
 
+let tryPreviousSlotIdentity aggregateType path (previous: Map<NodeId, CallableAggregateSlot>) =
+    match previous.Values |> Seq.filter (fun row -> row.AggregateType = aggregateType && row.Path = path) |> Seq.toList with
+    | [row] -> Some row.Identity
+    | _ -> None
+
 /// Resolve direct fields/payloads with one closed formation per component.
 /// Wider families remain residuals until their source selector/adapter/storage
 /// recipes can establish the complete protocol. No old account supplies facts.
@@ -439,8 +444,7 @@ let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: Sem
                     match contracts with
                     | [identity] -> Ok identity
                     | _ -> Error "No callable is present in this union payload; no receiving convention has been manufactured."
-                let previous = inputs.PreviousSlots.Values |> Seq.filter (fun row -> row.AggregateType = aggregateType && row.Path = path) |> Seq.toList
-                let identity = match previous with [row] -> row.Identity | _ -> NodeId.fresh()
+                let identity = tryPreviousSlotIdentity aggregateType path inputs.PreviousSlots |> Option.defaultWith NodeId.fresh
                 let slot : CallableAggregateSlot = {
                     Identity = identity; AggregateType = aggregateType; Declaration = specification.Declaration
                     DeclarationFacts = declarationFacts

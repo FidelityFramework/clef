@@ -423,7 +423,7 @@ type SelectiveRebuildCases() =
 
     [<Fact>]
     member _.``NodeId reset and renumbering preserve declaration fingerprints retention and empty recipe scheduling``() =
-        let baseline = SelectiveRebuildFixture.graph 0
+        let baseline = SelectiveRebuildFixture.graph 0 |> Clef.Compiler.Nanopass.SSAAssignment.normalize
         NodeId.reset()
         let candidate = SelectiveRebuildFixture.graph 1000
         let _, schedule, recipes = Rebuild.rebuildSelective baseline candidate |> SelectiveRebuildFixture.admitted
@@ -470,6 +470,61 @@ type SelectiveRebuildCases() =
         match Rebuild.rebuildSelective { baseline with Nodes = Map.empty } baseline with
         | Result.Error Rebuild.RebuildFailure.MissingBaseline -> ()
         | result -> failwithf "Expected a missing baseline refusal: %A" result
+
+        let baselineWithAssignment = Clef.Compiler.Nanopass.SSAAssignment.normalize baseline
+        match Rebuild.rebuildSelective baseline baselineWithAssignment with
+        | Result.Error(Rebuild.RebuildFailure.InvalidBaseline
+            [Segments.SegmentationFailure.InvalidGraph(None, "The accepted baseline graph has no SSA assignment plan.")]) -> ()
+        | result -> failwithf "Expected refusal of a missing SSA plan: %A" result
+
+        let codata = baselineWithAssignment.Codata.Value
+        let plan = codata.SSAAssignment.Value
+        let retained = NodeId 21
+        Assert.NotEmpty(plan.Assignments[retained])
+        let incomplete = { plan with Assignments = plan.Assignments.Remove retained }
+        let prior = { baselineWithAssignment with Codata = lazy { codata with SSAAssignment = Some incomplete } }
+        match Rebuild.rebuildSelective prior baselineWithAssignment with
+        | Result.Error(Rebuild.RebuildFailure.InvalidBaseline
+            [Segments.SegmentationFailure.InvalidGraph(Some occurrence, "The accepted baseline lacks the exact SSA assignment for a retained occurrence.")]) ->
+            Assert.Equal(retained, occurrence)
+        | result -> failwithf "Expected refusal of a missing retained assignment: %A" result
+
+        let retainedWithoutAlignment =
+            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign baselineWithAssignment Map.empty (Set.singleton retained) baselineWithAssignment
+        match retainedWithoutAlignment with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingRetainedCorrespondence occurrence) ->
+            Assert.Equal(retained, occurrence)
+        | result -> failwithf "Expected refusal of missing retained correspondence: %A" result
+
+    [<Fact>]
+    member _.``SSA reconciliation reports CCS8407 for ambiguous retained correspondence``() =
+        let baseline = SelectiveRebuildFixture.graph 0 |> Clef.Compiler.Nanopass.SSAAssignment.normalize
+        let incoming = SelectiveRebuildFixture.graph 1000
+        let retained = NodeId 21
+        let competing = NodeId 13
+        let current = NodeId 1021
+        let node = incoming.Nodes[current]
+        let range = { node.Range with File = "retained-correspondence.clef" }
+        let candidate = { incoming with Nodes = incoming.Nodes.Add(current, { node with Range = range }) }
+        let family = baseline.Codata.Value.SSAAssignment.Value.Assignments
+        Assert.NotEmpty(family[retained])
+        Assert.NotEmpty(family[competing])
+        let scope = Set.singleton current
+        let alignment = Map.ofList [retained, current]
+        let _, exact = Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign baseline alignment scope candidate |> SelectiveRebuildFixture.admitted
+        Assert.Equal(retained, exact.NodeRemap[current])
+        Assert.True(exact.Assignments[retained] = family[retained])
+
+        let ambiguous = alignment.Add(competing, current)
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign baseline ambiguous scope candidate with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.AmbiguousRetainedCorrespondence diagnostic) ->
+            Assert.Equal("CCS8407", diagnostic.Code)
+            Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error,
+                         Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.Diagnostic.effectiveSeverity diagnostic)
+            Assert.Equal("The retained occurrence has more than one admissible baseline identity.", diagnostic.Message)
+            Assert.Equal(range, diagnostic.Range)
+            Assert.Equal<NodeId list>([current], diagnostic.RelatedNodes)
+        | result -> failwithf "Expected a hard diagnostic for ambiguous retained correspondence: %A" result
 
     [<Theory>]
     [<InlineData("address")>]
@@ -518,6 +573,18 @@ type SelectiveRebuildCases() =
             Assert.Equal(Rebuild.RegionDisposition.Reelaborate, SelectiveRebuildFixture.disposition name schedule)
         Assert.Equal(Rebuild.RegionDisposition.Retained, SelectiveRebuildFixture.disposition "sibling" schedule)
         Assert.Empty schedule.Receipt.Cone.AffectedCone
+
+        let assignedBaseline = SelectiveRebuildFixture.graph 897 |> Clef.Compiler.Nanopass.SSAAssignment.normalize
+        let site = NodeId 3
+        Assert.True(assignedBaseline.Nodes.ContainsKey identity)
+        Assert.False(candidate.Nodes.ContainsKey identity)
+        Segments.segment assignedBaseline |> SelectiveRebuildFixture.admitted |> ignore
+        let alignment = Map.ofList [identity, site]
+        let retained = Set.singleton site
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign assignedBaseline alignment retained candidate with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities failures) ->
+            Assert.Contains((identity, "A callable relation identity is misfiled or collides with another source identity."), failures)
+        | result -> failwithf "Expected SSA to refuse overlapping retained and callable identities: %A" result
 
     [<Fact>]
     member _.``Memory domain support changes invalidate its consumer without changing the executable shadow cone``() =

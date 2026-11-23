@@ -244,8 +244,19 @@ type ProjectWorkspaceTests() =
         let plan = current.Codata.Value.SSAAssignment.Value
         let row, domain = candidate.Edges |> List.choose (fun row ->
             match row.Role with EdgeRole.NumericDomain domain -> Some(row, domain) | _ -> None) |> Assert.Single
-        let id = domain.Premises.Keys |> Seq.find (fun id -> not (candidate.Nodes.ContainsKey plan.NodeRemap[id]))
-        let collision = plan.NodeRemap[id]
+        let retained =
+            schedule.Receipt.Alignment
+            |> Map.toSeq
+            |> Seq.choose (fun (oldId, candidateId) ->
+                if plan.NodeRemap.TryFind candidateId = Some oldId then Some candidateId else None)
+            |> Set.ofSeq
+        // The fault runs through physical reconciliation, so use that exact
+        // allocation plan to choose its unmapped collision coordinate.
+        let _, physicalPlan =
+            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign previous schedule.Receipt.Alignment retained candidate
+            |> WorkspaceCases.need
+        let id = domain.Premises.Keys |> Seq.find (fun id -> not (candidate.Nodes.ContainsKey physicalPlan.NodeRemap[id]))
+        let collision = physicalPlan.NodeRemap[id]
         let changed = { domain with Premises = domain.Premises.Add(collision, domain.Premises[id]) }
         let domainRow = Clef.Compiler.Baker.Ingredients.NumericValues.domainRow
         let rewrite = Clef.Compiler.Baker.Ingredients.NumericValues.domainRewrite
@@ -254,14 +265,10 @@ type ProjectWorkspaceTests() =
             elif LibraryClaimCases.incidence edge = LibraryClaimCases.incidence (rewrite row.Target domain) then rewrite row.Target changed
             else edge
         let fault = { candidate with Edges = candidate.Edges |> List.map corrupt }
-        let retained =
-            schedule.Receipt.Alignment
-            |> Map.toSeq
-            |> Seq.choose (fun (oldId, candidateId) ->
-                if plan.NodeRemap.TryFind candidateId = Some oldId then Some candidateId else None)
-            |> Set.ofSeq
         let rebuilt, actualPlan =
-            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign previous schedule.Receipt.Alignment retained fault
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign previous schedule.Receipt.Alignment retained fault with
+            | Result.Ok result -> result
+            | Result.Error failure -> failwithf "Expected checked SSA reconciliation: %A" failure
         let actualRemap = actualPlan.NodeRemap
         Assert.Equal(collision, actualRemap[id])
         let actual = rebuilt.Edges |> List.filter (fun edge -> edge.Target = actualRemap[row.Target] &&

@@ -566,7 +566,10 @@ module private AsyncAndRegionFixture =
         let every = graph.Nodes |> Map.keys |> Set.ofSeq
         let retained = Set.difference every cone
         let alignment = retained |> Seq.map (fun id -> id, id) |> Map.ofSeq
-        let reconciled, plan = Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph
+        let reconciled, plan =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+            | Result.Ok result -> result
+            | Result.Error failure -> failwithf "Expected checked SSA reconciliation: %A" failure
         let current (id: NodeId) = plan.NodeRemap[id]
         // The plan carries one high-water mark, NodeHighWater, and an SSA
         // value is SSAId(node, ordinal). The prior register high-water mark is

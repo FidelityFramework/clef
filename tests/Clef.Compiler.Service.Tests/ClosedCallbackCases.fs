@@ -501,11 +501,9 @@ type ClosedCallbackTests() =
         let retainedWithout0 = (graph.Nodes |> Map.keys |> Set.ofSeq).Remove(NodeId 0)
         let identityAlignWithout0 = retainedWithout0 |> Seq.map (fun id -> id, id) |> Map.ofSeq
         let shiftedGraph, shiftPlan =
-            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign
-                graph
-                identityAlignWithout0
-                retainedWithout0
-                graph
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph identityAlignWithout0 retainedWithout0 graph with
+            | Result.Ok result -> result
+            | Result.Error failure -> failwithf "Expected checked SSA reconciliation: %A" failure
         let temp0 = shiftPlan.NodeRemap[NodeId 0]
         Assert.False(shiftedGraph.Nodes.ContainsKey(NodeId 0))
         let unretainedNode0 =
@@ -522,11 +520,9 @@ type ClosedCallbackTests() =
         let alignBackToBaseline = identityAlignWithout0.Add(NodeId 0, temp0)
         let retainedCandidateIds = retainedWithout0.Add(temp0)
         let reconciledWithNode0, reconciledPlan =
-            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign
-                graph
-                alignBackToBaseline
-                retainedCandidateIds
-                candidateWithUnretained0
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignBackToBaseline retainedCandidateIds candidateWithUnretained0 with
+            | Result.Ok result -> result
+            | Result.Error failure -> failwithf "Expected checked SSA reconciliation: %A" failure
         let remappedNode0 = reconciledPlan.NodeRemap[NodeId 0]
         Assert.NotEqual(NodeId 0, remappedNode0)
         Assert.Equal(NodeId 0, reconciledPlan.NodeRemap[temp0])

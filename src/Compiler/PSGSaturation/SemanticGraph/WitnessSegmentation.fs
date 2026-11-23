@@ -236,8 +236,6 @@ let internal canonicalRelationIdentities
         contracts
         |> Map.toList
         |> List.map (fun (key, row) ->
-            if key <> row.Identity || nodeAddresses.ContainsKey key then
-                invalidOp "A callable relation identity is misfiled or collides with another source identity."
             let implName =
                 row.Participants
                 |> List.filter (fun p -> p.Role = ParticipantRole.CallableImplementation && p.Group = row.Identity && p.Ordinal = 0)
@@ -262,8 +260,6 @@ let internal canonicalRelationIdentities
     aggregateSlots
     |> Map.toList
     |> List.map (fun (key, row) ->
-        if key <> row.Identity || Map.containsKey key withContracts then
-            invalidOp "A callable relation identity is misfiled or collides with another source identity."
         let refs =
             seq {
                 yield row.Identity
@@ -357,9 +353,12 @@ let internal canonicalAddresses (graph: SemanticGraph) (platformRead: PlatformRe
             computed
     for id, _ in nonObligations do
         rawAddress id |> ignore
-    if cycleErrors.Count > 0 then
-        Result.Error(List.ofSeq cycleErrors)
-    else
+    if cycleErrors.Count > 0 then Result.Error(List.ofSeq cycleErrors) else
+    let codata = graph.Codata.Value
+    match Core.SemanticGraph.validateTypedIdentities graph.Nodes codata.CallableContracts codata.CallableAggregateSlots with
+    | Result.Error failures ->
+        Result.Error(failures |> List.map (fun (id, reason) -> Some id, reason))
+    | Result.Ok () ->
         // Disambiguate any non-obligation nodes sharing a raw address (e.g. retired
         // unreachable fold-in nodes or detached comparison prefixes) without SourceRange.
         let shapeTag (node: SemanticNode) =
