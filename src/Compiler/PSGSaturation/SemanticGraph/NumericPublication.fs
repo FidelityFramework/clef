@@ -249,3 +249,12 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
         | failures, _ when not failures.IsEmpty -> Error(failures @ pending)
         | _, _ :: _ -> Error pending
         | _, [] -> Ok projection
+
+/// Carries the projection outcome together with its exact checked input.
+[<NoEquality; NoComparison>]
+type internal ProjectionCheck =
+    private ProjectionCheck of SemanticGraph * Result<NumericWitnessProjection, WitnessProjectionFailure list>
+
+let internal check graph = ProjectionCheck(graph, project graph)
+
+let internal checkedInput (ProjectionCheck(graph, result)) = graph, result

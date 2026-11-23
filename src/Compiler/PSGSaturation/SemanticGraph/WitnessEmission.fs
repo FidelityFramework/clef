@@ -307,9 +307,10 @@ let private project graph =
         | Error failures -> Error failures
     let storage = StorageWitness.project graph
     let boundary = BoundaryEmission.project graph
-    let numeric = NumericPublication.project graph
+    let checkedNumeric = NumericPublication.check graph
+    let _, numeric = NumericPublication.checkedInput checkedNumeric
     let memory = MemoryPublication.project graph
-    let spatial = SpatialPublication.project graph
+    let spatial = SpatialPublication.projectWithNumeric checkedNumeric
     match ordinary, callable, storage, boundary, numeric, memory, spatial with
     | Ok ordinary, Ok callable, Ok storage, Ok boundary, Ok numeric, Ok memory, Ok spatial when exported.IsEmpty ->
         Ok { Ordinary = ordinary; Callable = callable; Storage = storage; Boundary = boundary; Numeric = numeric; Memory = memory; Spatial = spatial }

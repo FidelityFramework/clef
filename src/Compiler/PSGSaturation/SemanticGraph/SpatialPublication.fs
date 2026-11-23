@@ -29,7 +29,7 @@ let private hardwareProofsAgree (proofs: SpatialProof list) (plan: HardwareModul
     actual=(expected |> List.map Some) &&
     (plan.ResetFields |> List.forall (fun field -> plan.Participants.Contains field.Literal))
 
-let project (graph: SemanticGraph) : Result<SpatialModuleProjection, WitnessProjectionFailure list> =
+let private projectCore (readNumeric: unit -> Result<NumericWitnessProjection, WitnessProjectionFailure list>) (graph: SemanticGraph) : Result<SpatialModuleProjection, WitnessProjectionFailure list> =
     let reject site participants reason =
         Error
             [
@@ -44,7 +44,7 @@ let project (graph: SemanticGraph) : Result<SpatialModuleProjection, WitnessProj
     match domains with
     | [anchor,domain] ->
         let participants = Map.keys domain.Premises |> Set.ofSeq
-        match NumericPublication.project graph with
+        match readNumeric () with
         | Error failures -> Error failures
         | Ok numeric ->
         if domain.Premises <> Spatial.premises graph || domain.SourceFiles <> Spatial.sourceFiles graph || domain.Platform <> Boundary.platformPremise graph.Platform ||
@@ -123,3 +123,11 @@ let project (graph: SemanticGraph) : Result<SpatialModuleProjection, WitnessProj
                      MetadataOnly=declarations |> List.fold (fun ids (_,_,metadata,_,_) -> Set.union ids metadata) Set.empty
                      ByScope=declarations |> List.groupBy (fun (_,scope,_,_,_) -> scope) |> List.map (fun (scope,plans) -> scope,plans |> List.map (fun (site,_,_,_,_) -> site)) |> Map.ofList }
     | _ -> reject None Set.empty "Exactly one source SpatialSettlement domain is required before witnessing."
+
+/// Read the graph and its Numeric result from the same projection check.
+let internal projectWithNumeric checkedNumeric =
+    let graph, numeric = NumericPublication.checkedInput checkedNumeric
+    projectCore (fun () -> numeric) graph
+
+let project graph =
+    projectCore (fun () -> NumericPublication.project graph) graph
