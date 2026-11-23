@@ -365,7 +365,7 @@ let findMissingIntrinsicImplementations (graph: SemanticGraph) : (string * strin
 
 /// Soft-delete: mark unreachable nodes but preserve structure.
 /// FAILS if any intrinsic is missing its implementation function - this is a fatal error.
-let markUnreachable (graph: SemanticGraph) : SemanticGraph =
+let markUnreachableWithScope (graph: SemanticGraph) : SemanticGraph * Set<NodeId> =
     // Check for missing implementation functions - this is a HARD ERROR
     let missingImplementations = findMissingIntrinsicImplementations graph
     if not (List.isEmpty missingImplementations) then
@@ -384,14 +384,16 @@ let markUnreachable (graph: SemanticGraph) : SemanticGraph =
 
     let reachable = computeReachable graph (graph.DeclarationRoots |> List.map fst)
     if graph.Nodes |> Map.forall (fun id node -> node.IsReachable = Set.contains id reachable) then
-        graph
+        graph, reachable
     else
         let updatedNodes =
             graph.Nodes
             |> Map.map (fun id node ->
                 { node with IsReachable = Set.contains id reachable })
 
-        { graph with Nodes = updatedNodes }
+        { graph with Nodes = updatedNodes }, reachable
+
+let markUnreachable graph = markUnreachableWithScope graph |> fst
 
 /// A conservative, read-only description of the part of a reachable graph
 /// connected to a change. It does not authorize reuse of analysis results.
@@ -631,9 +633,11 @@ let getReachabilityStats (graph: SemanticGraph) : int * int =
 /// declaration phase needs the graph's non-executable participants. Preserve
 /// that structure with the same reachability marks as ordinary soft deletion;
 /// this does not turn declaration membership into an execution root.
-let pruneUnreachable (graph: SemanticGraph) : SemanticGraph =
-    if not graph.Edges.IsEmpty || graph.Platform.IsSome then markUnreachable graph
+let pruneUnreachableWithScope (graph: SemanticGraph) : SemanticGraph * Set<NodeId> =
+    if not graph.Edges.IsEmpty || graph.Platform.IsSome then markUnreachableWithScope graph
     else
         let reachable = computeReachable graph (graph.DeclarationRoots |> List.map fst)
         { graph with
-            Nodes = graph.Nodes |> Map.filter (fun id _ -> Set.contains id reachable) }
+            Nodes = graph.Nodes |> Map.filter (fun id _ -> Set.contains id reachable) }, reachable
+
+let pruneUnreachable graph = pruneUnreachableWithScope graph |> fst

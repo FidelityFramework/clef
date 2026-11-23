@@ -58,6 +58,23 @@ module private NestedMatch =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "NestedMatch")>]
 type NestedMatchCases() =
     [<Fact>]
+    member _.``Scoped fan out inspects only scheduled sites and can read the standing graph``() =
+        let graph = NestedMatch.check "let private held (x: int) = x\nlet observed = 3"
+        let target = NestedMatch.binding "observed" graph
+        let support =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                match node.Kind with SemanticKind.Binding("held", _, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.False(support.IsReachable)
+        let classify (node: SemanticNode) =
+            Assert.Equal(target.Id, node.Id)
+            true
+        let create (_: SemanticNode) (standing: SemanticGraph) =
+            Assert.Equal(support.Id, standing.Nodes[support.Id].Id)
+            Clef.Compiler.Nanopass.Recipe.NotApplicable "Scoped traversal fixture"
+        let result = Clef.Compiler.Nanopass.FanOut.fanOutAt (Set.singleton target.Id) "Scoped fixture" classify create graph
+        Assert.Equal<NodeId list>([target.Id], result.Diagnostics |> List.map _.NodeId)
+
+    [<Fact>]
     member _.``Only a demanded match receives its Baker decision``() =
         let inspect demand =
             let graph = NestedMatch.check ("let private classify (x: int) =\n    match x with\n    | 5 -> 1\n    | _ -> 0\nlet observed = " + demand)

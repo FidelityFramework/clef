@@ -43,15 +43,14 @@ type RecipeCreator = SemanticNode -> SemanticGraph -> RecipeCreationResult
 /// Returns: RecipeSet containing all recipes AND diagnostics (artifact 2 or 4)
 let private fanOutCore
     (kind: string)
+    (nodes: SemanticNode seq)
     (shouldElaborate: SemanticNode -> bool)
     (createRecipe: RecipeCreator)
     (graph: SemanticGraph)
     : RecipeSet =
 
-    // Find all nodes that need elaboration (reachability-agnostic)
     let nodesToElaborate =
-        graph.Nodes
-        |> Map.toSeq |> Seq.map snd
+        nodes
         |> Seq.filter (fun node -> shouldElaborate node)
         |> List.ofSeq
 
@@ -95,5 +94,12 @@ let private fanOutCore
             Diagnostics = diagnostics
         }
 
-let fanOut kind shouldElaborate createRecipe graph =
-  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> fanOutCore kind shouldElaborate createRecipe graph)
+let fanOut kind shouldElaborate createRecipe (graph: SemanticGraph) =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () ->
+      fanOutCore kind graph.Nodes.Values shouldElaborate createRecipe graph)
+
+/// Admit only the supplied sites. Recipes still read their support from the standing graph.
+let fanOutAt (sites: Set<NodeId>) kind shouldElaborate createRecipe (graph: SemanticGraph) =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () ->
+      let nodes = sites |> Seq.choose graph.Nodes.TryFind
+      fanOutCore kind nodes shouldElaborate createRecipe graph)

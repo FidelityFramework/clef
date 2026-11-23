@@ -1080,17 +1080,17 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
         else Clef.Compiler.Nanopass.ProgramInitialization.normalizeOwned ownedSources roots graph
 
     // Phase 4: Reachability analysis
-    let markedGraph =
-        if PhaseConfig.useSoftDeleteReachability() then markUnreachable graph
-        else pruneUnreachable graph
+    let markedGraph, markedScope =
+        if PhaseConfig.useSoftDeleteReachability() then markUnreachableWithScope graph
+        else pruneUnreachableWithScope graph
 
     // Extern bodies are declarations rather than executable initializers, and
     // closed callback factories have already been replaced by proved entries.
     let boundaryValueDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryValues.diagnostics markedGraph
 
     // Settle constant exclusions before a branch can earn a literal obligation.
-    let reachableGraph = Clef.Compiler.Nanopass.DeadBodies.normalizeWith RecipeSerialization.emitDeadBodyRecipes markedGraph
-    let reachableGraph = NodeProofs.create reachableGraph (Map.keys reachableGraph.Nodes)
+    let reachableGraph, reached = Clef.Compiler.Nanopass.DeadBodies.normalizeReachedWith RecipeSerialization.emitDeadBodyRecipes (markedGraph, markedScope)
+    let reachableGraph = NodeProofs.create reachableGraph reached
     let reachableGraph = Clef.Compiler.Nanopass.ProgramInitializationOrder.birth reachableGraph
     emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability reachableGraph diagnostics
 
@@ -1103,7 +1103,7 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
     //=========================================================================
 
     // Pass 1: Intrinsic Fan-Out - Create intrinsic elaboration recipes
-    let intrinsicRecipes = IntrinsicElaboration.fanOut reachableGraph
+    let intrinsicRecipes = IntrinsicElaboration.fanOutReached reached reachableGraph
     RecipeSerialization.emitIntrinsicRecipes intrinsicRecipes  // Artifact 02
     RecipeSerialization.emitIntrinsicDiagnostics intrinsicRecipes.Diagnostics  // Artifact 02a
 

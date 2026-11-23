@@ -8,8 +8,8 @@
 /// Demand decides the pool and residence. It does not decide whether a proof
 /// exists.
 ///
-/// The pass receives the new nodes as a value -- at the first reachability
-/// marking, every node of the graph -- and reads no store. Today it creates
+/// The pass receives the supplied source occurrences. Initial birth receives
+/// the reached work set after constant branch exclusion. The pass creates
 /// the storage, view and sentinel proofs of the reachable string literals among
 /// them: one triple for each text, with every reachable node of that text a
 /// participant. Every term of those statements is a fact of the literal's text.

@@ -3,10 +3,11 @@ module Clef.Compiler.Nanopass.DeadBodies
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Nanopass.Recipe
+module Reachability = Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
 module Recipes = Clef.Compiler.Baker.Recipes.DeadBodyRecipes
 
-let fanOut graph =
-    FanOut.fanOut "Source.dead-body" (fun node -> node.IsReachable && match node.Kind with SemanticKind.IfThenElse _ | SemanticKind.WhileLoop _ -> true | _ -> false) (fun node current ->
+let private fanOutUsing select graph =
+    select "Source.dead-body" (fun node -> node.IsReachable && match node.Kind with SemanticKind.IfThenElse _ | SemanticKind.WhileLoop _ -> true | _ -> false) (fun node current ->
         match Recipes.replacement current node with
         | None -> NotApplicable "No current constant exclusion"
         | Some selection ->
@@ -14,10 +15,22 @@ let fanOut graph =
                            NewNodes=Recipes.materialize node selection; NewEdges=[]
                            ElaborationKind="Baker"; ElaborationSource="Source.dead-body"}) graph
 
-let normalizeWith emit graph =
-    let recipes = fanOut graph
+let fanOut graph = fanOutUsing FanOut.fanOut graph
+
+let private foldChanged emit graph recipes =
     emit recipes
-    if recipes.Recipes.IsEmpty then graph else
-    FoldIn.foldIn recipes graph |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable
+    if recipes.Recipes.IsEmpty then None
+    else Some (FoldIn.foldIn recipes graph)
+
+let normalizeWith emit graph =
+    foldChanged emit graph (fanOut graph)
+    |> Option.map Reachability.markUnreachable
+    |> Option.defaultValue graph
+
+let normalizeReachedWith emit (graph, reached) =
+    let recipes = fanOutUsing (FanOut.fanOutAt reached) graph
+    match foldChanged emit graph recipes with
+    | None -> graph, reached
+    | Some folded -> Reachability.markUnreachableWithScope folded
 
 let normalize graph = normalizeWith ignore graph
