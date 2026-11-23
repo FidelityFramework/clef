@@ -52,6 +52,8 @@ let private isLeafType (ty: Type) =
     || ty = typeof<Fidelity.PSG.PlatformWidths>
     || ty = typeof<SSAAssignmentPlan>
 
+// Legacy CLR reflection. The self-hosting core requires typed SSA correspondence.
+// https://forge.spkez.dev/FidelityFramework/clef/issues/175#issuecomment-11812
 let rec private remapValue (remap: NodeId -> NodeId) (ty: Type) (value: objnull) : objnull =
     match value with
     | null -> null
