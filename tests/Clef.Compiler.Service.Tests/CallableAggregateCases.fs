@@ -832,6 +832,62 @@ let main _ =
         Assert.Same(graph.Edges, unchanged.Edges)
 
     [<Fact>]
+    member _.``Selective SSA refuses a sole predecessor from another source occurrence`` () =
+        let source = CallableAggregateFixture.receivingSource false
+        let baseline = CallableAggregateFixture.check source
+        let candidate =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment baseline
+                (fun () -> CallableAggregateFixture.check source)
+        let result =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.rebuildSelective baseline candidate
+        let returned, schedule, _ =
+            match result with
+            | Ok rebuilt -> rebuilt
+            | Error refusal -> failwithf "The checked graph pair was refused: %A" refusal
+        let prior = baseline.Codata.Value.SSAAssignment.Value
+        let incoming = candidate.Codata.Value.SSAAssignment.Value
+        let old, current =
+            schedule.Receipt.Alignment
+            |> Map.toSeq
+            |> Seq.find (fun (old, current) ->
+                prior.Assignments.ContainsKey old && incoming.Assignments.ContainsKey current)
+        let other =
+            prior.Assignments |> Map.toSeq |> Seq.pick (fun (id, family) ->
+                match baseline.Nodes.TryFind id with
+                | Some node when id <> old && node.IsReachable && not family.IsEmpty -> Some id
+                | _ -> None)
+        let address = schedule.Candidate.NodeIdentities[current]
+        Assert.Equal(address, schedule.Baseline.NodeIdentities[old])
+        Assert.NotEqual(address, schedule.Baseline.NodeIdentities[other])
+        Assert.NotEqual(old, current)
+        let actual = returned.Codata.Value.SSAAssignment.Value
+        Assert.Equal(old, actual.NodeRemap[current])
+        Assert.Contains(old, actual.RetainedNodes)
+        Assert.Equal<SSAId list>(prior.Assignments[old], actual.Assignments[old])
+
+        let reconcile previous receiving =
+            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign
+                baseline (Map.ofList [previous, current]) (Set.singleton current) receiving
+        match reconcile old candidate with
+        | Ok (_, plan) -> Assert.Equal<SSAId list>(prior.Assignments[old], plan.Assignments[old])
+        | Error refusal -> failwithf "The exact predecessor was refused: %A" refusal
+        match reconcile other candidate with
+        | Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingRetainedCorrespondence id) ->
+            Assert.Equal(current, id)
+        | _ -> failwith "The other source occurrence must be refused before SSA allocation."
+
+        let missing = NodeId(-1)
+        Assert.False(candidate.Nodes.ContainsKey missing)
+        let badNode = { candidate.Nodes[current] with Children = missing :: candidate.Nodes[current].Children }
+        let badCandidate = { candidate with Nodes = candidate.Nodes.Add(current, badNode) }
+        match reconcile old badCandidate with
+        | Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidCorrespondenceCandidate
+                    [Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationFailure.InvalidGraph(Some id, reason)]) ->
+            Assert.Equal(current, id)
+            Assert.Equal("A structural or reference target is absent from the graph.", reason)
+        | _ -> failwith "Malformed candidate structure must preserve the graph-level refusal."
+
+    [<Fact>]
     member _.``Scoped receiving renewal preserves unchanged families and replaces a changed signature`` () =
         let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource false)
         let facts = graph.Codata.Value

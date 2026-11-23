@@ -18,6 +18,7 @@ open Microsoft.FSharp.Reflection
 open Clef.Compiler.Baker.Ingredients
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 let nodeOf (SSAId(n, _)) = n
@@ -276,7 +277,23 @@ type ReconciliationFailure =
     | MissingRetainedAssignment of NodeId
     | MissingRetainedCorrespondence of NodeId
     | AmbiguousRetainedCorrespondence of Diagnostic
+    | InvalidCorrespondenceBaseline of SegmentationFailure list
+    | InvalidCorrespondenceCandidate of SegmentationFailure list
     | InvalidReturnedIdentities of (NodeId * string) list
+
+let private uncheckedPhysicalCorrespondence baseline candidate (correspondences: Map<NodeId, NodeId option>) =
+    if correspondences.IsEmpty then None
+    else
+        match physicalOccurrenceAddresses baseline, physicalOccurrenceAddresses candidate with
+        | Result.Error failures, _ -> Some(ReconciliationFailure.InvalidCorrespondenceBaseline failures)
+        | _, Result.Error failures -> Some(ReconciliationFailure.InvalidCorrespondenceCandidate failures)
+        | Result.Ok prior, Result.Ok current ->
+            correspondences
+            |> Map.toSeq
+            |> Seq.tryPick (fun (receiving, predecessor) ->
+                let address = predecessor |> Option.bind prior.TryFind
+                if address.IsSome && address = current.TryFind receiving then None
+                else Some(ReconciliationFailure.MissingRetainedCorrespondence receiving))
 
 /// Cone-scoped selective-rebuild SSA reconciliation and assignment.
 /// Retained structure outside the delta cone keeps its baseline `NodeId`s and
@@ -330,7 +347,11 @@ let private reconcileAndAssignCore
                     | Some (_ :: _) -> None
                     | _ -> Some(ReconciliationFailure.MissingRetainedAssignment id)
                 | _ -> None)
-    match retainedRefusal with
+    let refusal =
+        retainedRefusal |> Option.orElseWith (fun () ->
+            if transportCallableRelations then None
+            else uncheckedPhysicalCorrespondence baseline candidate candToBase)
+    match refusal with
     | Some failure -> Result.Error failure
     | None ->
         // Temporary source coordinates do not contribute to destination history.
@@ -397,6 +418,7 @@ let private reconcileExistingPlan transportCallableRelations (baseline: Semantic
 let reconcileAndAssign baseline alignment retainedCandidateNodes candidate =
     reconcileExistingPlan false baseline alignment retainedCandidateNodes candidate
 
-/// Transport callable identities using the selective schedule's checked alignment.
-let internal reconcileAndAssignWithCallableRelations baseline alignment retainedCandidateNodes candidate =
+/// Transport identities from the checked pair and its actual scoped Baker result.
+let internal reconcileAndAssignWithCallableRelations scoped retainedCandidateNodes =
+    let baseline, candidate, alignment, _ = scopedRebuildInputs scoped
     reconcileExistingPlan true baseline alignment retainedCandidateNodes candidate

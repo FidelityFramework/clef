@@ -111,50 +111,19 @@ let private shadowView (graph: SemanticGraph) (plan: SegmentationPlan) (canonica
     { graph with Nodes = nodes; Edges = edges
                  DeclarationRoots = graph.DeclarationRoots |> List.map (fun (id, flavor) -> translate id, flavor) }
 
-let private alignRelations (baseline: SemanticGraph) (candidate: SemanticGraph)
-                           (oldPlan: SegmentationPlan) (newPlan: SegmentationPlan) (physical: Map<NodeId, NodeId>) =
-    let prior = baseline.Codata.Value
-    let current = candidate.Codata.Value
-    let unique pairs =
-        pairs |> Seq.groupBy fst |> Seq.choose (fun (_, values) ->
-            match Seq.toList values with [pair] -> Some pair | _ -> None) |> Map.ofSeq
-    let slots =
-        current.CallableAggregateSlots |> Map.toSeq |> Seq.choose (fun (id, slot) ->
-            let previous = Clef.Compiler.Baker.Recipes.CallableAggregateRecipes.tryPreviousSlotIdentity
-                                slot.AggregateType slot.Path prior.CallableAggregateSlots
-            previous |> Option.bind (fun old ->
-                if oldPlan.CallableRelationIdentities.ContainsKey old && newPlan.CallableRelationIdentities.ContainsKey id
-                then Some(old, id) else None))
-        |> unique
-    let contracts =
-        current.CallableCarriers.Values
-        |> Seq.choose (fun carrier -> carrier.Contract |> Result.toOption |> Option.map (fun id -> id, carrier))
-        |> Seq.groupBy fst
-        |> Seq.choose (fun (id, occurrences) ->
-            let previous = occurrences |> Seq.map (fun (_, carrier) ->
-                Clef.Compiler.Baker.Ingredients.CallableContracts.tryIdentityAcross physical.TryFind slots.TryFind candidate
-                    current.EnvironmentLayouts prior.CallableContracts carrier) |> Seq.distinct |> Seq.toList
-            match previous, newPlan.CallableRelationIdentities.TryFind id with
-            | [Some old], Some address when oldPlan.CallableRelationIdentities.TryFind old = Some address -> Some(old, id)
-            | _ -> None)
-    Seq.append contracts (Map.toSeq slots) |> unique
-
-let scheduleRebuild (baseline: SemanticGraph) (candidate: SemanticGraph) : Result<RebuildSchedule, RebuildFailure> =
+let private scheduleCheckedRebuild (baseline: SemanticGraph) (candidate: SemanticGraph) =
     if baseline.Nodes.IsEmpty then Result.Error RebuildFailure.MissingBaseline else
-    match segment baseline, segment candidate with
-    | Result.Error failures, _ -> Result.Error(RebuildFailure.InvalidBaseline failures)
-    | _, Result.Error failures -> Result.Error(RebuildFailure.InvalidCandidate failures)
-    | Result.Ok oldPlan, Result.Ok newPlan ->
+    match checkRebuildPair baseline candidate with
+    | Result.Error (RebuildPairFailure.Baseline failures) -> Result.Error(RebuildFailure.InvalidBaseline failures)
+    | Result.Error (RebuildPairFailure.Candidate failures) -> Result.Error(RebuildFailure.InvalidCandidate failures)
+    | Result.Ok pair ->
+        let oldPlan, newPlan, alignment, relations = rebuildPairPlans pair
         let addresses =
             Seq.append oldPlan.NodeIdentities.Values newPlan.NodeIdentities.Values |> Set.ofSeq
         let canonical = addresses |> Seq.mapi (fun index identity -> identity, NodeId(index + 1)) |> Map.ofSeq
         let oldView = shadowView baseline oldPlan canonical
         let newView = shadowView candidate newPlan canonical
         let cone = Reachability.computeShadowCone oldView newView
-        let newByAddress = newPlan.NodeIdentities |> Map.toSeq |> Seq.map (fun (id, address) -> address, id) |> Map.ofSeq
-        let alignment =
-            oldPlan.NodeIdentities |> Map.toSeq |> Seq.choose (fun (id, address) ->
-                newByAddress.TryFind address |> Option.map (fun target -> id, target)) |> Map.ofSeq
         let touched = Set.unionMany [cone.AffectedCone; cone.NewlyLitNodes; cone.ExtinguishedNodes]
         let overlaps (plan: SegmentationPlan) (region: Region) =
             region.Members |> Seq.exists (fun id -> touched.Contains canonical[plan.NodeIdentities[id]])
@@ -205,9 +174,14 @@ let scheduleRebuild (baseline: SemanticGraph) (candidate: SemanticGraph) : Resul
                         NewlyLitNodes = transport newPlan cone.NewlyLitNodes
                         ExtinguishedNodes = transport oldPlan cone.ExtinguishedNodes
                         RetainedReachable = transport newPlan cone.RetainedReachable }
-        Result.Ok { Baseline = oldPlan; Candidate = newPlan; Regions = dispositions; Scopes = scopes
-                    RelationAlignment = alignRelations baseline candidate oldPlan newPlan alignment
-                    Receipt = { Alignment = alignment; Cone = receipt; InvalidatedRegions = invalid } }
+        let schedule =
+            { Baseline = oldPlan; Candidate = newPlan; Regions = dispositions; Scopes = scopes
+              RelationAlignment = relations
+              Receipt = { Alignment = alignment; Cone = receipt; InvalidatedRegions = invalid } }
+        Result.Ok(schedule, pair)
+
+let scheduleRebuild baseline candidate =
+    scheduleCheckedRebuild baseline candidate |> Result.map fst
 
 let private retainedCandidateNodes (alignment: Map<NodeId, NodeId>) (schedule: RebuildSchedule) (graph: SemanticGraph) : Set<NodeId> =
     let affected = schedule.Receipt.Cone.AffectedCone
@@ -265,35 +239,20 @@ let private retainedCandidateNodes (alignment: Map<NodeId, NodeId>) (schedule: R
 /// Unchanged structure outside the delta cone retains its baseline NodeIds and
 /// SSA assignments; re-elaborated or newly introduced nodes advance monotonically.
 let rebuildSelective baseline candidate =
-    scheduleRebuild baseline candidate
-    |> Result.bind (fun schedule ->
+    scheduleCheckedRebuild baseline candidate
+    |> Result.bind (fun (schedule, pair) ->
         Core.SemanticGraph.withSettledEnrichment baseline (fun () ->
             Core.SemanticGraph.withSettledEnrichment candidate (fun () ->
-                let recipes = Clef.Compiler.Nanopass.BakerSaturation.fanOutScopes schedule.Scopes candidate
-                let refusal =
-                    recipes.Diagnostics |> List.tryPick (fun diagnostic ->
-                        match diagnostic.Result with
-                        | Clef.Compiler.Nanopass.Recipe.CreationFailed(reason, _) -> Some(RebuildFailure.RecipeRefused(diagnostic.NodeId, reason))
-                        | _ -> None)
-                match refusal with
-                | Some refusal -> Result.Error refusal
-                | None ->
-                    let saturated =
-                        if recipes.Recipes.IsEmpty then candidate
-                        else Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes candidate
-                    let candidateFacts = candidate.Codata.Value
-                    let saturatedFacts = saturated.Codata.Value
-                    if (not candidateFacts.CallableContracts.IsEmpty && saturatedFacts.CallableContracts.IsEmpty)
-                       || (not candidateFacts.CallableAggregateSlots.IsEmpty && saturatedFacts.CallableAggregateSlots.IsEmpty) then
-                        let reason = "Scoped Baker folding requires callable settlement before returning a graph."
-                        Result.Error(RebuildFailure.InvalidReturnedGraph [SegmentationFailure.InvalidGraph(None, reason)])
-                    else
-                    let relations =
-                        if recipes.Recipes.IsEmpty then schedule.RelationAlignment
-                        else alignRelations baseline saturated schedule.Baseline schedule.Candidate schedule.Receipt.Alignment
-                    let alignment = Map.fold (fun acc old current -> Map.add old current acc) schedule.Receipt.Alignment relations
+                match settleRebuildScopes pair schedule.Scopes with
+                | Result.Error (ScopedSettlementFailure.RecipeRefused(id, reason)) ->
+                    Result.Error(RebuildFailure.RecipeRefused(id, reason))
+                | Result.Error ScopedSettlementFailure.MissingCallableSettlement ->
+                    let reason = "Scoped Baker folding requires callable settlement before returning a graph."
+                    Result.Error(RebuildFailure.InvalidReturnedGraph [SegmentationFailure.InvalidGraph(None, reason)])
+                | Result.Ok (scoped, recipes) ->
+                    let _, saturated, alignment, relations = scopedRebuildInputs scoped
                     let retained = retainedCandidateNodes alignment schedule saturated
-                    match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssignWithCallableRelations baseline alignment retained saturated with
+                    match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssignWithCallableRelations scoped retained with
                     | Result.Error Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingBaselinePlan ->
                         let reason = "The accepted baseline graph has no SSA assignment plan."
                         Result.Error(RebuildFailure.InvalidBaseline [SegmentationFailure.InvalidGraph(None, reason)])
@@ -305,6 +264,10 @@ let rebuildSelective baseline candidate =
                         Result.Error(RebuildFailure.InvalidCandidate [SegmentationFailure.InvalidGraph(Some id, reason)])
                     | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.AmbiguousRetainedCorrespondence diagnostic) ->
                         Result.Error(RebuildFailure.SSAAssignmentRefused diagnostic)
+                    | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidCorrespondenceBaseline failures) ->
+                        Result.Error(RebuildFailure.InvalidBaseline failures)
+                    | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidCorrespondenceCandidate failures) ->
+                        Result.Error(RebuildFailure.InvalidCandidate failures)
                     | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities failures) ->
                         let invalid =
                             failures

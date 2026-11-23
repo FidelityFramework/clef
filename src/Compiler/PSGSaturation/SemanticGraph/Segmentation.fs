@@ -104,15 +104,33 @@ let private isCrossCallableProvenanceRole (role: EdgeRole) =
     | EdgeRole.EnrichedWith -> true
     | _ -> false
 
-let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailure list> =
-    let errors = ResizeArray<SegmentationFailure>()
-    let fail id reason = errors.Add(SegmentationFailure.InvalidGraph(id, reason))
-    for KeyValue(id, node) in graph.Nodes do
-        if node.Id <> id then fail (Some id) "The graph node is filed under a different identity."
+let private ambiguousAddresses (addresses: Map<NodeId, string>) =
+    addresses
+    |> Map.toList
+    |> List.groupBy snd
+    |> List.choose (fun (address, entries) ->
+        if entries.Length > 1 then Some address else None)
+
+let private structuralFailures (graph: SemanticGraph) =
+    [ for KeyValue(id, node) in graph.Nodes do
+        if node.Id <> id then
+            yield SegmentationFailure.InvalidGraph(Some id, "The graph node is filed under a different identity.")
         for target in node.Children @ Option.toList node.Parent @ (kindEdges id node.Kind |> List.collect (fun edge -> edge.Target :: edge.Sources)) do
-            if not (graph.Nodes.ContainsKey target) then fail (Some id) "A structural or reference target is absent from the graph."
-    for id, _ in graph.DeclarationRoots do
-        if not (graph.Nodes.ContainsKey id) then fail (Some id) "A declaration root is absent from the graph."
+            if not (graph.Nodes.ContainsKey target) then
+                yield SegmentationFailure.InvalidGraph(Some id, "A structural or reference target is absent from the graph.")
+      for id, _ in graph.DeclarationRoots do
+        if not (graph.Nodes.ContainsKey id) then
+            yield SegmentationFailure.InvalidGraph(Some id, "A declaration root is absent from the graph.") ]
+
+// The existing legacy projection can signal unsupported input from its encoder.
+let private readLegacyProjection read =
+    try read ()
+    with :? InvalidOperationException as error ->
+        Result.Error [SegmentationFailure.UnsupportedInput error.Message]
+
+let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailure list> =
+    let errors = ResizeArray<SegmentationFailure>(structuralFailures graph)
+    let fail id reason = errors.Add(SegmentationFailure.InvalidGraph(id, reason))
     // Module, binding, detached, and obligation addresses are independent of allocation order,
     // Elaboration.Id counters, and SourceRange line/column trivia.
     let platformReading =
@@ -121,14 +139,16 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
         match platformReading with
         | None -> Map.empty
         | Some read ->
-            match WitnessSegmentation.canonicalAddresses graph read with
+            match readLegacyProjection (fun () ->
+                WitnessSegmentation.canonicalAddresses graph read
+                |> Result.mapError (List.map SegmentationFailure.InvalidGraph)) with
             | Result.Ok (resolved, _, _) -> resolved
-            | Result.Error cycleFailures ->
-                for nodeOpt, reason in cycleFailures do fail nodeOpt reason
+            | Result.Error failures ->
+                for failure in failures do errors.Add failure
                 Map.empty
     let names = allResolved |> Map.filter (fun id _ -> graph.Nodes.ContainsKey id)
-    for identity, group in allResolved |> Map.toList |> List.groupBy snd do
-        if group.Length <> 1 then errors.Add(SegmentationFailure.AmbiguousIdentity identity)
+    for identity in ambiguousAddresses allResolved do
+        errors.Add(SegmentationFailure.AmbiguousIdentity identity)
     // Every top-level declaration owns its local storage. Module containers and
     // off-spine Obligation citizens do not own sibling declarations.
     let rec owner seen id =
@@ -276,7 +296,7 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                 errors.Add(SegmentationFailure.BrokenEnvironment(occurrence, "An environment origin has no indexed occurrence or layout."))
     match platformReading with
     | Some read when errors.Count = 0 ->
-      try
+      readLegacyProjection (fun () ->
         // Contract identities are relation citizens rather than executable nodes.
         for KeyValue(id, contract) in codata.CallableContracts do
                 let participants = contract.Participants |> List.filter (fun p -> p.Role = ParticipantRole.CallableImplementation)
@@ -611,7 +631,122 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                     NodeIdentities = allResolved |> Map.filter (fun id _ -> graph.Nodes.ContainsKey id)
                     CallableRelationIdentities = allResolved |> Map.filter (fun id _ -> codata.CallableContracts.ContainsKey id || codata.CallableAggregateSlots.ContainsKey id)
                     NodeOwners = owners
-                    NodeFingerprints = nodeFingerprints }
-      with :? InvalidOperationException as error ->
-        Result.Error [SegmentationFailure.UnsupportedInput error.Message]
+                    NodeFingerprints = nodeFingerprints })
     | _ -> Result.Error(List.ofSeq errors)
+
+let private alignRelations (baseline: SemanticGraph) (candidate: SemanticGraph)
+                           (oldPlan: SegmentationPlan) (newPlan: SegmentationPlan) (physical: Map<NodeId, NodeId>) =
+    let prior = baseline.Codata.Value
+    let current = candidate.Codata.Value
+    let unique pairs =
+        pairs |> Seq.groupBy fst |> Seq.choose (fun (_, values) ->
+            match Seq.toList values with [pair] -> Some pair | _ -> None) |> Map.ofSeq
+    let slots =
+        current.CallableAggregateSlots |> Map.toSeq |> Seq.choose (fun (id, slot) ->
+            let previous = Clef.Compiler.Baker.Recipes.CallableAggregateRecipes.tryPreviousSlotIdentity
+                                slot.AggregateType slot.Path prior.CallableAggregateSlots
+            previous |> Option.bind (fun old ->
+                if oldPlan.CallableRelationIdentities.ContainsKey old && newPlan.CallableRelationIdentities.ContainsKey id
+                then Some(old, id) else None))
+        |> unique
+    let contracts =
+        current.CallableCarriers.Values
+        |> Seq.choose (fun carrier -> carrier.Contract |> Result.toOption |> Option.map (fun id -> id, carrier))
+        |> Seq.groupBy fst
+        |> Seq.choose (fun (id, occurrences) ->
+            let previous = occurrences |> Seq.map (fun (_, carrier) ->
+                Clef.Compiler.Baker.Ingredients.CallableContracts.tryIdentityAcross physical.TryFind slots.TryFind candidate
+                    current.EnvironmentLayouts prior.CallableContracts carrier) |> Seq.distinct |> Seq.toList
+            match previous, newPlan.CallableRelationIdentities.TryFind id with
+            | [Some old], Some address when oldPlan.CallableRelationIdentities.TryFind old = Some address -> Some(old, id)
+            | _ -> None)
+    Seq.append contracts (Map.toSeq slots) |> unique
+
+[<RequireQualifiedAccess>]
+type internal RebuildPairFailure =
+    | Baseline of SegmentationFailure list
+    | Candidate of SegmentationFailure list
+
+type internal CheckedRebuildPair =
+    private
+        { Baseline: SemanticGraph
+          Candidate: SemanticGraph
+          BaselinePlan: SegmentationPlan
+          CandidatePlan: SegmentationPlan
+          Alignment: Map<NodeId, NodeId>
+          RelationAlignment: Map<NodeId, NodeId> }
+
+let internal checkRebuildPair baseline candidate =
+    match segment baseline, segment candidate with
+    | Result.Error failures, _ -> Result.Error(RebuildPairFailure.Baseline failures)
+    | _, Result.Error failures -> Result.Error(RebuildPairFailure.Candidate failures)
+    | Result.Ok oldPlan, Result.Ok newPlan ->
+        let newByAddress =
+            newPlan.NodeIdentities |> Map.toSeq |> Seq.map (fun (id, address) -> address, id) |> Map.ofSeq
+        let alignment =
+            oldPlan.NodeIdentities |> Map.toSeq |> Seq.choose (fun (id, address) ->
+                newByAddress.TryFind address |> Option.map (fun target -> id, target)) |> Map.ofSeq
+        Result.Ok
+            { Baseline = baseline; Candidate = candidate
+              BaselinePlan = oldPlan; CandidatePlan = newPlan
+              Alignment = alignment
+              RelationAlignment = alignRelations baseline candidate oldPlan newPlan alignment }
+
+let internal rebuildPairPlans (pair: CheckedRebuildPair) =
+    pair.BaselinePlan, pair.CandidatePlan, pair.Alignment, pair.RelationAlignment
+
+[<RequireQualifiedAccess>]
+type internal ScopedSettlementFailure =
+    | RecipeRefused of NodeId * string
+    | MissingCallableSettlement
+
+type internal ScopedRebuildPair =
+    private
+        { Baseline: SemanticGraph
+          Receiving: SemanticGraph
+          Alignment: Map<NodeId, NodeId>
+          RelationAlignment: Map<NodeId, NodeId> }
+
+/// Bind the receiving graph by running the existing scoped Baker operation on
+/// the checked candidate and the scopes selected by Rebuild.
+let internal settleRebuildScopes (pair: CheckedRebuildPair) scopes =
+    let recipes = Clef.Compiler.Nanopass.BakerSaturation.fanOutScopes scopes pair.Candidate
+    let refusal =
+        recipes.Diagnostics |> List.tryPick (fun diagnostic ->
+            match diagnostic.Result with
+            | Clef.Compiler.Nanopass.Recipe.CreationFailed(reason, _) ->
+                Some(ScopedSettlementFailure.RecipeRefused(diagnostic.NodeId, reason))
+            | _ -> None)
+    match refusal with
+    | Some failure -> Result.Error failure
+    | None ->
+        let receiving =
+            if recipes.Recipes.IsEmpty then pair.Candidate
+            else Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes pair.Candidate
+        let before = pair.Candidate.Codata.Value
+        let after = receiving.Codata.Value
+        if (not before.CallableContracts.IsEmpty && after.CallableContracts.IsEmpty)
+           || (not before.CallableAggregateSlots.IsEmpty && after.CallableAggregateSlots.IsEmpty) then
+            Result.Error ScopedSettlementFailure.MissingCallableSettlement
+        else
+            let relations =
+                if recipes.Recipes.IsEmpty then pair.RelationAlignment
+                else alignRelations pair.Baseline receiving pair.BaselinePlan pair.CandidatePlan pair.Alignment
+            let alignment = relations |> Map.fold (fun acc old current -> Map.add old current acc) pair.Alignment
+            Result.Ok ({ Baseline = pair.Baseline; Receiving = receiving
+                         Alignment = alignment; RelationAlignment = relations }, recipes)
+
+let internal scopedRebuildInputs (pair: ScopedRebuildPair) =
+    pair.Baseline, pair.Receiving, pair.Alignment, pair.RelationAlignment
+
+/// Physical-only reconciliation uses the same source address author as segment.
+let internal physicalOccurrenceAddresses graph =
+    match structuralFailures graph with
+    | [] ->
+        readLegacyProjection (fun () ->
+            WitnessSegmentation.canonicalAddresses graph (PlatformResolution.read graph)
+            |> Result.mapError (List.map SegmentationFailure.InvalidGraph)
+            |> Result.map (fun (addresses, _, _) ->
+                let ambiguous = ambiguousAddresses addresses |> Set.ofList
+                addresses |> Map.filter (fun id address -> graph.Nodes.ContainsKey id && not (ambiguous.Contains address))))
+    | failures -> Result.Error failures
