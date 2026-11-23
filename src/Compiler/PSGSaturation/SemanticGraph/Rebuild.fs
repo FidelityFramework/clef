@@ -256,6 +256,10 @@ let private retainedCandidateNodes (alignment: Map<NodeId, NodeId>) (schedule: R
                             acc
             | _ -> acc) Set.empty
 
+/// Program Hypergraph §5.1 defines scoped evaluation and witness authorization.
+/// https://clef-lang.com/spec/draft/program-hypergraph/#51-scoped-re-evaluation-and-witness-authorization
+/// The shadow pass selects the reachable causal cone before Baker runs pure
+/// nanopasses. The existing fan-out and fold-in compose their authored results.
 /// Only admitted scopes enter Baker fan-out. Retained nodes stay in the full
 /// graph for recipe lookups and fold-in; there is no reduced-graph fallback.
 /// Unchanged structure outside the delta cone retains its baseline NodeIds and
