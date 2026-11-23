@@ -129,6 +129,21 @@ type EnrichmentInfo = {
     Id: int
 }
 
+[<RequireQualifiedAccess>]
+type internal MatchPosition = Scrutinee | DecisionRoot
+
+let private matchPositionKey = function
+    | MatchPosition.Scrutinee -> "Match.Scrutinee"
+    | MatchPosition.DecisionRoot -> "Match.DecisionRoot"
+
+let internal markMatchPosition role (node: SemanticNode) =
+    { node with Metadata = Map.add (matchPositionKey role) (MetadataValue.Bool true) node.Metadata }
+
+let internal hasMatchPosition role (node: SemanticNode) =
+    match node.Metadata.TryFind(matchPositionKey role) with
+    | Some (MetadataValue.Bool true) -> true
+    | _ -> false
+
 /// Alias for backward compatibility
 type ElaborationInfo = EnrichmentInfo
 

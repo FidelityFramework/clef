@@ -328,6 +328,14 @@ let internal canonicalAddresses (graph: SemanticGraph) (platformRead: PlatformRe
                 | Some parent ->
                     let prefix = rawAddress parent.Id
                     match node.Kind, parent.Kind with
+                    | SemanticKind.Binding(_, false, false, None), SemanticKind.Sequential [binding; decision]
+                        when binding = id && parent.Children = [binding; decision] && node.Children.Length = 1 &&
+                             Elaboration.hasMatchPosition Elaboration.MatchPosition.Scrutinee node &&
+                             Elaboration.hasMatchPosition Elaboration.MatchPosition.DecisionRoot parent &&
+                             (match Elaboration.tryGetInfo node, Elaboration.tryGetInfo parent with
+                              | Some a, Some b -> a = b && a.Kind = Elaboration.ElaborationKind.Baker && a.For = "Match"
+                              | _ -> false) ->
+                        prefix + "/match-scrutinee@0"
                     | (SemanticKind.Binding _ | SemanticKind.ModuleDef _ | SemanticKind.TypeDef _ | SemanticKind.MemberDef _), SemanticKind.ModuleDef _ ->
                         prefix + "/" + nodeLabel node
                     | (SemanticKind.Binding _ | SemanticKind.ModuleDef _ | SemanticKind.TypeDef _ | SemanticKind.MemberDef _), _ ->

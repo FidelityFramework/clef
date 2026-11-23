@@ -14,6 +14,7 @@ open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 
+open Clef.Compiler.PSGSaturation.SemanticGraph
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Recipes.Decomposition
 open Clef.Compiler.Baker.Ingredients.SaturationCombinators
@@ -34,12 +35,16 @@ let private toSaturationState (ctx: Context) : SaturationState =
       Platform = ctx.Platform }
 
 /// Run a saturation parser and convert to Decomposition.Result
-let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
+let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId * NodeId>) : Result =
     let initialState = toSaturationState ctx
     let result, nodes = run initialState parser
     match result with
-    | Matched resultNodeId ->
-        mkResultNoShadow nodes resultNodeId []
+    | Matched (resultNodeId, snapshot) ->
+        let marked = nodes |> List.map (fun node ->
+            if node.Id = snapshot then Elaboration.markMatchPosition Elaboration.MatchPosition.Scrutinee node
+            elif node.Id = resultNodeId then Elaboration.markMatchPosition Elaboration.MatchPosition.DecisionRoot node
+            else node)
+        mkResultNoShadow marked resultNodeId []
     | NoMatch reason ->
         mkFailedResult ctx.InspiringNode ("Saturation failed: " + reason)
 
@@ -449,7 +454,8 @@ let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGr
         let! snapshot = letBind name scrutinee scrutineeType
         let! input = varRef name (Some snapshot) scrutineeType
         let! decision = remaining input cases
-        return! evaluateBefore [snapshot] decision resultType
+        let! root = evaluateBefore [snapshot] decision resultType
+        return root, snapshot
     }
 
 /// Every match uses the same ordered, selected-scope source algorithm.
