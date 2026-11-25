@@ -866,13 +866,14 @@ let main _ =
         Assert.Equal<SSAId list>(prior.Assignments[old], actual.Assignments[old])
 
         let reconcile previous receiving =
-            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign
+            DimensionalCases.reconcileCheckedPhysical
                 baseline (Map.ofList [previous, current]) (Set.singleton current) receiving
         match reconcile old candidate with
         | Ok (_, plan) -> Assert.Equal<SSAId list>(prior.Assignments[old], plan.Assignments[old])
         | Error refusal -> failwithf "The exact predecessor was refused: %A" refusal
         match reconcile other candidate with
-        | Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingRetainedCorrespondence id) ->
+        | Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Correspondence
+                    (Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.PhysicalCorrespondenceFailure.MissingRetainedCorrespondence id)) ->
             Assert.Equal(current, id)
         | _ -> failwith "The other source occurrence must be refused before SSA allocation."
 
@@ -881,8 +882,9 @@ let main _ =
         let badNode = { candidate.Nodes[current] with Children = missing :: candidate.Nodes[current].Children }
         let badCandidate = { candidate with Nodes = candidate.Nodes.Add(current, badNode) }
         match reconcile old badCandidate with
-        | Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidCorrespondenceCandidate
-                    [Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationFailure.InvalidGraph(Some id, reason)]) ->
+        | Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Correspondence
+                    (Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.PhysicalCorrespondenceFailure.InvalidCandidate
+                        [Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationFailure.InvalidGraph(Some id, reason)])) ->
             Assert.Equal(current, id)
             Assert.Equal("A structural or reference target is absent from the graph.", reason)
         | _ -> failwith "Malformed candidate structure must preserve the graph-level refusal."

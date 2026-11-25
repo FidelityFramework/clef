@@ -4,11 +4,12 @@
 /// In the Fidelity architecture, Alex witnesses values directly from published
 /// `NodeId`s and ordinals (`Alex.Traversal.Values.value nodeId k = V(NodeId.value nodeId, k)`).
 /// Where graph structure is unchanged (outside the delta cone in selective rebuild),
-/// `reconcileAndAssign` retains the baseline `NodeId`s and `SSAId(node, ordinal)`
-/// assignments across the graph and its codata; where structure is affected or newly
-/// elaborated, `NodeId`s and `SSAId(node, ordinal)` assignments advance monotonically
-/// above the baseline high-water mark without reuse; and a full release rebuild
-/// (`normalize`) starts cold from the freshly reset graph without carrying prior state.
+/// checked selective SSA reconciliation retains the baseline `NodeId`s and
+/// `SSAId(node, ordinal)` assignments across the graph and its codata; where
+/// structure is affected or newly elaborated, `NodeId`s and `SSAId(node, ordinal)`
+/// assignments advance monotonically above the baseline high-water mark without
+/// reuse; and a full release rebuild (`normalize`) starts cold from the freshly
+/// reset graph without carrying prior state.
 module Clef.Compiler.Nanopass.SSAAssignment
 
 open Clef.Compiler.Baker.Ingredients
@@ -492,7 +493,7 @@ let private syncCallableContracts
                                         (Result.Ok Map.empty)
                                     |> Result.map (fun updatedDeps ->
                                         { remappedPreContracts with
-                                            Codata = lazy { currCodata with CallableContracts = updatedContracts; CallableAggregateDependencies = updatedDeps } }))))))
+                                            Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata { currCodata with CallableContracts = updatedContracts; CallableAggregateDependencies = updatedDeps } }))))))
 
 let internal remapGraph (remap: NodeId -> NodeId) (graph: SemanticGraph) : Result<SemanticGraph, NodeId * string> =
     validatePreRemapCurrency graph
@@ -690,31 +691,13 @@ let normalize (graph: SemanticGraph) : SemanticGraph =
           NodeRemap = identityRemap
           RetainedNodes = Set.empty
           ReassignedNodes = assignedIds }
-    { graph with Codata = lazy { codata with SSAAssignment = Some plan } }
+    { graph with Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata { codata with SSAAssignment = Some plan } }
 
 [<RequireQualifiedAccess>]
-type ReconciliationFailure =
+type internal ReconciliationFailure =
     | MissingBaselinePlan
     | MissingRetainedAssignment of NodeId
-    | MissingRetainedCorrespondence of NodeId
-    | AmbiguousRetainedCorrespondence of Diagnostic
-    | InvalidCorrespondenceBaseline of SegmentationFailure list
-    | InvalidCorrespondenceCandidate of SegmentationFailure list
     | InvalidReturnedIdentities of (NodeId * string) list
-
-let private uncheckedPhysicalCorrespondence baseline candidate (correspondences: Map<NodeId, NodeId option>) =
-    if correspondences.IsEmpty then None
-    else
-        match physicalOccurrenceAddresses baseline, physicalOccurrenceAddresses candidate with
-        | Result.Error failures, _ -> Some(ReconciliationFailure.InvalidCorrespondenceBaseline failures)
-        | _, Result.Error failures -> Some(ReconciliationFailure.InvalidCorrespondenceCandidate failures)
-        | Result.Ok prior, Result.Ok current ->
-            correspondences
-            |> Map.toSeq
-            |> Seq.tryPick (fun (receiving, predecessor) ->
-                let address = predecessor |> Option.bind prior.TryFind
-                if address.IsSome && address = current.TryFind receiving then None
-                else Some(ReconciliationFailure.MissingRetainedCorrespondence receiving))
 
 /// Cone-scoped selective-rebuild SSA reconciliation and assignment.
 /// Retained structure outside the delta cone keeps its baseline `NodeId`s and
@@ -725,54 +708,25 @@ let private reconcileAndAssignCore
     transportCallableRelations
     (baseline: SemanticGraph)
     (baselinePlan: SSAAssignmentPlan)
-    (alignment: Map<NodeId, NodeId>)
-    (retainedCandidateNodes: Set<NodeId>)
+    (checkedCandToBase: Map<NodeId, NodeId>)
     (candidate: SemanticGraph)
     : Result<SemanticGraph * SSAAssignmentPlan, ReconciliationFailure> =
-    let baselineFacts = baseline.Codata.Value
     let candidateFacts = candidate.Codata.Value
-    let sameIdentityClass baseId candId =
-        (baseline.Nodes.ContainsKey baseId && candidate.Nodes.ContainsKey candId)
-        || (transportCallableRelations &&
-            ((baselineFacts.CallableContracts.ContainsKey baseId && candidateFacts.CallableContracts.ContainsKey candId)
-             || (baselineFacts.CallableAggregateSlots.ContainsKey baseId && candidateFacts.CallableAggregateSlots.ContainsKey candId)))
-    let candToBase =
-        alignment
-        |> Map.fold (fun acc baseId candId ->
-            if Set.contains candId retainedCandidateNodes && sameIdentityClass baseId candId then
-                let correspondence = if Map.containsKey candId acc then None else Some baseId
-                Map.add candId correspondence acc
-            else
-                acc) Map.empty
     // A region selected for retention already owns its exact SSA family.
-    // Check that authority before remapping the graph or creating any families.
+    // Correspondence and CCS8407 were validated by Segmentation before minting
+    // the checked pair; verify baseline SSA family presence before remapping.
     let reachable = orderedReachableNodes candidate
     let retainedRefusal =
-        retainedCandidateNodes
-        |> Seq.tryPick (fun source ->
-            match candToBase.TryFind source with
-            | None -> Some(ReconciliationFailure.MissingRetainedCorrespondence source)
-            | Some None ->
-                let range = candidate.Nodes.TryFind source |> Option.map _.Range |> Option.defaultValue dummyRange
-                Some(ReconciliationFailure.AmbiguousRetainedCorrespondence
-                    { Severity = NativeDiagnosticSeverity.Error
-                      Code = "CCS8407"
-                      Message = "The retained occurrence has more than one admissible baseline identity."
-                      Range = range
-                      RelatedNodes = [source]
-                      Reachability = ReachabilityContext.Unknown })
-            | Some (Some id) ->
-                match candidate.Nodes.TryFind source with
-                | Some node when node.IsReachable && isAssignableNode node ->
-                    match baselinePlan.Assignments.TryFind id with
-                    | Some (_ :: _) -> None
-                    | _ -> Some(ReconciliationFailure.MissingRetainedAssignment id)
-                | _ -> None)
-    let refusal =
-        retainedRefusal |> Option.orElseWith (fun () ->
-            if transportCallableRelations then None
-            else uncheckedPhysicalCorrespondence baseline candidate candToBase)
-    match refusal with
+        checkedCandToBase
+        |> Map.toSeq
+        |> Seq.tryPick (fun (source, id) ->
+            match candidate.Nodes.TryFind source with
+            | Some node when node.IsReachable && isAssignableNode node ->
+                match baselinePlan.Assignments.TryFind id with
+                | Some (_ :: _) -> None
+                | _ -> Some(ReconciliationFailure.MissingRetainedAssignment id)
+            | _ -> None)
+    match retainedRefusal with
     | Some failure -> Result.Error failure
     | None ->
         // Temporary source coordinates do not contribute to destination history.
@@ -780,10 +734,10 @@ let private reconcileAndAssignCore
         let initialHighWater =
             max baselinePlan.NodeHighWater (occupiedHighWater baseline)
         let assign (remap, highWater, retainedSet) candId =
-            match candToBase.TryFind candId with
-            | Some (Some baseId) ->
+            match checkedCandToBase.TryFind candId with
+            | Some baseId ->
                 Map.add candId baseId remap, highWater, Set.add baseId retainedSet
-            | _ ->
+            | None ->
                 let nextId = highWater + 1
                 Map.add candId (NodeId nextId) remap, nextId, retainedSet
         let relationRemap, relationHighWater =
@@ -829,19 +783,21 @@ let private reconcileAndAssignCore
             | Result.Error failures -> Result.Error(ReconciliationFailure.InvalidReturnedIdentities failures)
             | Result.Ok () ->
                 let reconciledGraph =
-                    { remappedGraph with Codata = lazy { codata with SSAAssignment = Some plan } }
+                    { remappedGraph with Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata { codata with SSAAssignment = Some plan } }
                 Result.Ok(reconciledGraph, plan)
 
-let private reconcileExistingPlan transportCallableRelations (baseline: SemanticGraph) alignment retainedCandidateNodes candidate =
+let private reconcileExistingPlan transportCallableRelations (baseline: SemanticGraph) checkedCandToBase candidate =
     match baseline.Codata.Value.SSAAssignment with
-    | Some plan -> reconcileAndAssignCore transportCallableRelations baseline plan alignment retainedCandidateNodes candidate
+    | Some plan -> reconcileAndAssignCore transportCallableRelations baseline plan checkedCandToBase candidate
     | None -> Result.Error ReconciliationFailure.MissingBaselinePlan
 
-/// Reassign structural occurrences and keep existing callable relation identities.
-let reconcileAndAssign baseline alignment retainedCandidateNodes candidate =
-    reconcileExistingPlan false baseline alignment retainedCandidateNodes candidate
+/// Reassign structural occurrences from a checked physical correspondence pair
+/// while keeping existing callable relation identities in place.
+let internal reconcileCheckedPhysical (checkedPair: CheckedPhysicalPair) =
+    let baseline, candidate, checkedCandToBase = checkedPhysicalInputs checkedPair
+    reconcileExistingPlan false baseline checkedCandToBase candidate
 
 /// Transport identities from the checked pair and its actual scoped Baker result.
-let internal reconcileAndAssignWithCallableRelations scoped retainedCandidateNodes =
-    let baseline, candidate, alignment, _ = scopedRebuildInputs scoped
-    reconcileExistingPlan true baseline alignment retainedCandidateNodes candidate
+let internal reconcileAndAssignWithCallableRelations (scoped: ScopedRebuildPair) =
+    let baseline, candidate, checkedCandToBase, _ = scopedRebuildInputs scoped
+    reconcileExistingPlan true baseline checkedCandToBase candidate

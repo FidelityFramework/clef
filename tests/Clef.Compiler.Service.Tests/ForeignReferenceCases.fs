@@ -2845,7 +2845,7 @@ let useSecond () =
         let alignment = allNodes |> Seq.map (fun id -> id, id) |> Map.ofSeq
 
         let reconciled, plan =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+            match DimensionalCases.reconcileCheckedPhysical graph alignment retained graph with
             | Result.Ok pair -> pair
             | Result.Error failure -> failwithf "Non-monotone resource SSA remap refused: %A" failure
 

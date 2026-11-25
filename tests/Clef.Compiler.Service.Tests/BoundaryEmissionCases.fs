@@ -4324,7 +4324,7 @@ let main _ =
             let retained = Set.difference allNodes toReassign
             let alignment = allNodes |> Seq.map (fun id -> id, id) |> Map.ofSeq
             let reconciled, plan =
-                match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+                match DimensionalCases.reconcileCheckedPhysical graph alignment retained graph with
                 | Result.Ok pair -> pair
                 | Result.Error failure -> failwithf "%s: non-monotone SSA remap refused: %A" label failure
             let remappedDomain =

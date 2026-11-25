@@ -1573,7 +1573,7 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
     tracePhase "program-storage"
     let finalGraph =
         let facts = finalGraph.Codata.Value
-        { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
+        { finalGraph with Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata { facts with ProgramStorage = programInventory } }
     // Deferred Codata is measured in the stage where existing code forces it.
     completePhase CheckPhase.ProgramStorage CheckPhaseOutcome.Completed
     startPhase CheckPhase.MemoryAndBoundarySettlement
@@ -1589,7 +1589,7 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let finalGraph =
         let facts = finalGraph.Codata.Value
-        { finalGraph with Codata = lazy { facts with FunctionPointers = functionPointers } }
+        { finalGraph with Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata { facts with FunctionPointers = functionPointers } }
     let finalGraph, aggregateAccountResiduals =
         if not physicalAdmitted || finalGraph.Platform.IsNone then finalGraph, []
         else Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts finalGraph

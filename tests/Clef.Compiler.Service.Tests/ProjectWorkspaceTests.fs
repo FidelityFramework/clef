@@ -253,7 +253,7 @@ type ProjectWorkspaceTests() =
         // The fault runs through physical reconciliation, so use that exact
         // allocation plan to choose its unmapped collision coordinate.
         let _, physicalPlan =
-            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign previous schedule.Receipt.Alignment retained candidate
+            DimensionalCases.reconcileCheckedPhysical previous schedule.Receipt.Alignment retained candidate
             |> WorkspaceCases.need
         let id = domain.Premises.Keys |> Seq.find (fun id -> not (candidate.Nodes.ContainsKey physicalPlan.NodeRemap[id]))
         let collision = physicalPlan.NodeRemap[id]
@@ -266,7 +266,7 @@ type ProjectWorkspaceTests() =
             else edge
         let fault = { candidate with Edges = candidate.Edges |> List.map corrupt }
         let rebuilt, actualPlan =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign previous schedule.Receipt.Alignment retained fault with
+            match DimensionalCases.reconcileCheckedPhysical previous schedule.Receipt.Alignment retained fault with
             | Result.Ok result -> result
             | Result.Error failure -> failwithf "Expected checked SSA reconciliation: %A" failure
         let actualRemap = actualPlan.NodeRemap
@@ -1409,7 +1409,7 @@ let kernelB: ElementKernelB = { Compute = mulCalc; Shape = { Elements = 64; Grai
         let retained = Set.difference allIds toReassign
         let alignment = allIds |> Seq.map (fun id -> id, id) |> Map.ofSeq
         let reconciledKg, kPlan =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign kg alignment retained kg with
+            match DimensionalCases.reconcileCheckedPhysical kg alignment retained kg with
             | Result.Ok pair -> pair
             | Result.Error failure -> failwithf "Non-monotone kernel SSA remap refused: %A" failure
         for name, sources in
@@ -1476,8 +1476,8 @@ let kernelB: ElementKernelB = { Compute = mulCalc; Shape = { Elements = 64; Grai
             let cod = kg.Codata.Value
             let badContract = { targetContract with Participants = nonSourceParts @ reversedSources }
             { kg with Codata = lazy { cod with CallableContracts = cod.CallableContracts.Add(targetContractId, badContract) } }
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign kg Map.empty Set.empty preFaultedContractGraph with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical kg Map.empty Set.empty preFaultedContractGraph with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Equal("SSAAssignment: Callable contract participants are not canonical before SSA remapping.", reason)
         | other -> failwithf "Expected direct SSA refusal on non-canonical CallableContract participants, got %A" other
         // (c) Exact-reason negative: ambiguous duplicate CallableCarrier with conflicting signature for one contract is refused directly by SSA.
@@ -1489,8 +1489,527 @@ let kernelB: ElementKernelB = { Compute = mulCalc; Shape = { Elements = 64; Grai
         let ambiguousCarrierGraph =
             let cod = kg.Codata.Value
             { kg with Codata = lazy { cod with CallableCarriers = cod.CallableCarriers.Add(syntheticCarrierKey, conflictingCarrier) } }
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign kg Map.empty Set.empty ambiguousCarrierGraph with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical kg Map.empty Set.empty ambiguousCarrierGraph with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Equal("SSAAssignment: Ambiguous callable carrier for implementation during SSA remapping.", reason)
         | other -> failwithf "Expected direct SSA refusal on ambiguous CallableCarrier, got %A" other
         ignore sampleCarrierKey
+
+    [<Fact>]
+    member _.``clef #175: repeated real A->B->C selective rebuilds preserve callable relation identities, aggregate slots, subsequent native mints, and reject changed support``() =
+        use files = new WorkspaceFiles()
+        let app = "[package]\nname = \"App\"\n[compilation]\ntarget = \"cpu\"\n[build]\noutput_kind = \"console\"\nsources = [\"App.clef\"]\n"
+        let configureDir (dirFiles: WorkspaceFiles) =
+            LibraryClaimCases.configurePlatform dirFiles |> ignore
+            LibraryClaimCases.selectPlatform dirFiles app true
+            let platformPath = Path.Combine(dirFiles.Directory, "Platform.clef")
+            File.WriteAllText(platformPath,
+                SourcePlatformFixture.authority.Replace("Representations = [| ",
+                    "Representations = [| { Name = \"int8\"; Capability = \"native\"; Family = \"int\"; Bits = 8; MinMagnitude = \"-128\"; MaxMagnitude = \"127\"; Boundary = \"wrap\" }; "))
+        configureDir files
+        // Candidate check for the same project file path, using a fresh independent ProjectWorkspace per check
+        // (zero shared workspace session, lineage, or epoch state across revisions).
+        let captureRevision (text: string) =
+            let workspace = ProjectWorkspace<ProjectCheckResult>(files.Project, id)
+            try
+                NodeId.reset()
+                File.WriteAllText(files.Source, text)
+                LibraryClaimCases.check files text workspace
+            finally
+                WorkspaceCases.close workspace
+        // Completely isolated source-only cold oracle in its own fresh WorkspaceFiles directory and ProjectWorkspace.
+        let captureIndependentCold (text: string) =
+            use coldFiles = new WorkspaceFiles()
+            configureDir coldFiles
+            let workspace = ProjectWorkspace<ProjectCheckResult>(coldFiles.Project, id)
+            try
+                NodeId.reset()
+                File.WriteAllText(coldFiles.Source, text)
+                LibraryClaimCases.check coldFiles text workspace
+            finally
+                WorkspaceCases.close workspace
+        let sourceA = """
+module RepeatedSelective175
+type Holder = { Apply: bool -> bool }
+type Outer = { Run: Holder -> bool }
+type ToggleA = { FlipA: bool -> bool }
+type ToggleB = { FlipB: bool -> bool }
+let first (value: bool) = value
+let run (holder: Holder) = holder.Apply true
+let toggleA (flag: bool) = if flag then false else true
+let toggleB (flag: bool) = if flag then true else false
+
+[<EntryPoint>]
+let main _ =
+    let outer = { Run = run }
+    let tA = { FlipA = toggleA }
+    let tB = { FlipB = toggleB }
+    if outer.Run { Apply = first } && tA.FlipA false && tB.FlipB true then 12 / 3 else 1
+"""
+        let sourceB = sourceA.Replace("let toggleA (flag: bool) = if flag then false else true", "let toggleA (flag: bool) = if flag then true else false")
+        let sourceC = sourceB.Replace("let toggleB (flag: bool) = if flag then true else false", "let toggleB (flag: bool) = if flag then false else true")
+        let advance baseline candidate =
+            let graph, schedule, recipes =
+                Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.rebuildSelective baseline candidate |> WorkspaceCases.need
+            Assert.Empty recipes.Recipes
+            graph, schedule
+        let validateAndPublish (g: SemanticGraph) =
+            let cod = g.Codata.Value
+            Assert.True(
+                Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.validateTypedIdentities
+                    g.Nodes cod.CallableContracts cod.CallableAggregateSlots
+                |> Result.isOk)
+            let prepared = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare g |> WorkspaceCases.need
+            let rev = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish prepared |> WorkspaceCases.need
+            let defects = Fidelity.PSG.Integrity.check rev
+            Assert.True(defects.IsEmpty, Fidelity.PSG.Integrity.describe defects)
+            let aggDefects = Fidelity.PSG.Integrity.callableAggregates rev
+            Assert.True(aggDefects.IsEmpty, Fidelity.PSG.Integrity.describe aggDefects)
+            prepared, rev
+        let canonicalDutySummary (g: SemanticGraph) (rev: Fidelity.PSG.Revision) =
+            let normalizeRange (r: SourceRange) =
+                { r with File = Path.GetFileName r.File |> Option.ofObj |> Option.defaultValue r.File }
+            let rangeOf id = g.Nodes.TryFind id |> Option.map (fun n -> normalizeRange n.Range)
+            let claims =
+                rev.CurrentClaims.Values
+                |> Seq.map (fun c -> c.Kind, c.Logic, c.Statement)
+                |> Seq.sort |> Seq.toList
+            let obligations =
+                g.Nodes.Values
+                |> Seq.choose (fun n ->
+                    match n.Kind with
+                    | SemanticKind.Obligation ob -> Some (normalizeRange n.Range, ob.Kind, ob.Logic, ob.Statement, ob.Body)
+                    | _ -> None)
+                |> Seq.sort |> Seq.toList
+            let carriers =
+                rev.Emission.Numeric.Values.Values
+                |> Seq.map (fun v -> v.Slot, v.Range)
+                |> Seq.sort |> Seq.toList
+            let operations =
+                rev.Emission.Numeric.Operations.Values
+                |> Seq.map (fun o -> o.Kind, o.Form, o.OperationCarrier, o.Result.Slot)
+                |> Seq.sort |> Seq.toList
+            let contracts =
+                g.Codata.Value.CallableContracts.Values
+                |> Seq.map (fun c ->
+                    let implRange =
+                        c.Participants
+                        |> List.tryPick (fun p -> if p.Role = ParticipantRole.CallableImplementation then rangeOf p.Node else None)
+                    c.Kind, c.Convention, c.ParameterRepresentations.Length, implRange)
+                |> Seq.sort |> Seq.toList
+            let slots =
+                g.Codata.Value.CallableAggregateSlots.Values
+                |> Seq.map (fun s -> s.AggregateType, s.Path, s.Declaration |> Option.bind rangeOf, s.Contract |> Result.isOk)
+                |> Seq.sort |> Seq.toList
+            let valuesCount = g.Codata.Value.CallableAggregateValues.Count
+            claims, obligations, carriers, operations, contracts, slots, valuesCount
+        let contractByBindingName (g: SemanticGraph) (bindingName: string) =
+            let bindingNode =
+                g.Nodes.Values |> Seq.pick (fun n ->
+                    match n.Kind with
+                    | SemanticKind.Binding(name, _, _, _) when name = bindingName -> Some n
+                    | _ -> None)
+            let lambdaId = Assert.Single bindingNode.Children
+            g.Codata.Value.CallableContracts
+            |> Map.toSeq
+            |> Seq.pick (fun (cid, c) ->
+                if c.Participants |> List.exists (fun p -> p.Role = ParticipantRole.CallableImplementation && p.Node = lambdaId) then
+                    Some (cid, c)
+                else None)
+        let slotByTypeName (g: SemanticGraph) (typeName: string) =
+            g.Codata.Value.CallableAggregateSlots
+            |> Map.toSeq
+            |> Seq.pick (fun (sid, s) ->
+                let matches =
+                    s.Declaration
+                    |> Option.bind g.Nodes.TryFind
+                    |> Option.exists (fun n -> match n.Kind with SemanticKind.TypeDef(name, _, _) -> name = typeName | _ -> false)
+                if matches then Some (sid, s) else None)
+        let relationSupportFingerprints (plan: Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationPlan) =
+            plan.SupportEdges
+            |> List.filter (fun s -> s.Domain = "Relation")
+            |> List.map (fun s -> s.Consumer, s.Identity, s.Fingerprint)
+            |> List.sort
+        let proofDigests (plan: Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationPlan) =
+            plan.Regions |> Map.map (fun _ r -> r.CanonicalProofSupportDigest)
+
+        // 1. Real A -> B -> C repeated selective rebuilds compared against completely isolated cold workspaces.
+        let coldA = captureRevision sourceA
+        let graphA, _ = validateAndPublish coldA
+        let planA = graphA.Codata.Value.SSAAssignment.Value
+
+        let coldB = captureRevision sourceB
+        let isolatedColdB = captureIndependentCold sourceB
+        let _, revIsolatedColdB = validateAndPublish isolatedColdB
+        let warmB, scheduleB = advance graphA coldB
+        let preparedWarmB, revWarmB = validateAndPublish warmB
+        let planB = warmB.Codata.Value.SSAAssignment.Value
+        Assert.True(planB.NodeHighWater > planA.NodeHighWater)
+        Assert.Equal(canonicalDutySummary isolatedColdB revIsolatedColdB, canonicalDutySummary preparedWarmB revWarmB)
+
+        let coldC = captureRevision sourceC
+        let isolatedColdC = captureIndependentCold sourceC
+        let _, revIsolatedColdC = validateAndPublish isolatedColdC
+        let warmC, scheduleC = advance preparedWarmB coldC
+        let preparedWarmC, revWarmC = validateAndPublish warmC
+        let planC = warmC.Codata.Value.SSAAssignment.Value
+        Assert.True(planC.NodeHighWater > planB.NodeHighWater)
+        Assert.Equal(canonicalDutySummary isolatedColdC revIsolatedColdC, canonicalDutySummary preparedWarmC revWarmC)
+
+        // Verify genuinely retained same-class contracts ("first", "run") keep exact A identities through B and C,
+        // while edited "toggleA" advances above A's high-water in B (and is retained in C),
+        // and edited "toggleB" is retained in B and advances strictly above B's high-water in C without reuse.
+        for retainedFn in [ "first"; "run" ] do
+            let cidA, _ = contractByBindingName graphA retainedFn
+            let cidB, _ = contractByBindingName warmB retainedFn
+            let cidC, _ = contractByBindingName warmC retainedFn
+            Assert.Equal(cidA, cidB)
+            Assert.Equal(cidA, cidC)
+            Assert.True(scheduleB.RelationAlignment.ContainsKey cidA)
+            Assert.True(scheduleC.RelationAlignment.ContainsKey cidB)
+        let toggleACidA, _ = contractByBindingName graphA "toggleA"
+        let toggleACidB, _ = contractByBindingName warmB "toggleA"
+        let toggleACidC, _ = contractByBindingName warmC "toggleA"
+        Assert.NotEqual(toggleACidA, toggleACidB)
+        Assert.True(NodeId.value toggleACidB > planA.NodeHighWater, "Re-elaborated toggleA contract must advance above A high-water.")
+        Assert.Equal(toggleACidB, toggleACidC)
+        let toggleBCidA, _ = contractByBindingName graphA "toggleB"
+        let toggleBCidB, _ = contractByBindingName warmB "toggleB"
+        let toggleBCidC, _ = contractByBindingName warmC "toggleB"
+        Assert.Equal(toggleBCidA, toggleBCidB)
+        Assert.NotEqual(toggleBCidB, toggleBCidC)
+        Assert.True(NodeId.value toggleBCidC > planB.NodeHighWater, "Re-elaborated toggleB contract must advance above B high-water.")
+
+        // Verify populated aggregate slots ("Holder", "Outer") keep exact A identities through B and C
+        // with both Declaration and Contract roles present and populated CallableAggregateValues.
+        for aggType in [ "Holder"; "Outer" ] do
+            let sidA, slotA = slotByTypeName graphA aggType
+            let sidB, slotB = slotByTypeName warmB aggType
+            let sidC, slotC = slotByTypeName warmC aggType
+            Assert.Equal(sidA, sidB)
+            Assert.Equal(sidA, sidC)
+            Assert.True(slotA.Declaration.IsSome && slotB.Declaration = slotA.Declaration && slotC.Declaration = slotA.Declaration)
+            Assert.True(slotA.Contract |> Result.isOk)
+            Assert.Equal(slotA.Contract, slotB.Contract)
+            Assert.Equal(slotA.Contract, slotC.Contract)
+            let contractId = slotC.Contract |> Result.defaultWith failwith
+            Assert.True(warmC.Codata.Value.CallableContracts.ContainsKey contractId)
+            Assert.True(slotC.Participants |> List.exists (fun p -> p.Role = ParticipantRole.CallableContract && p.Node = contractId))
+            Assert.True(slotC.Participants |> List.exists (fun p -> Some p.Node = slotC.Declaration))
+            Assert.True(
+                warmC.Codata.Value.CallableAggregateValues.Values
+                |> Seq.exists (fun rows -> rows |> List.exists (fun r -> r.Slot = sidC && not r.Alternatives.IsEmpty)))
+        // Also verify ToggleA/ToggleB slots keep exact identities, Declaration & Contract roles,
+        // and coherent CallableAggregateValues whose alternative contracts stay retained in main across A -> B -> C
+        // (cutoff soundness: editing toggleA/toggleB bodies without changing their bool -> bool interface
+        // advances toggleA/toggleB implementation contracts above high-water while keeping main's slot carriers retained).
+        let slotAlternativeContracts (g: SemanticGraph) (sid: NodeId) =
+            g.Codata.Value.CallableAggregateValues.Values
+            |> Seq.collect id
+            |> Seq.filter (fun r -> r.Slot = sid)
+            |> Seq.collect (fun r -> r.Alternatives |> Seq.map _.Contract)
+            |> Set.ofSeq
+        for toggleType in [ "ToggleA"; "ToggleB" ] do
+            let sidA, slotA = slotByTypeName graphA toggleType
+            let sidB, slotB = slotByTypeName warmB toggleType
+            let sidC, slotC = slotByTypeName warmC toggleType
+            Assert.Equal(sidA, sidB)
+            Assert.Equal(sidB, sidC)
+            Assert.True(slotA.Declaration.IsSome && slotB.Declaration = slotA.Declaration && slotC.Declaration = slotA.Declaration)
+            Assert.True(slotA.Contract |> Result.isOk)
+            Assert.Equal(slotA.Contract, slotB.Contract)
+            Assert.Equal(slotB.Contract, slotC.Contract)
+            let slotContractId = slotC.Contract |> Result.defaultWith failwith
+            Assert.True(warmB.Codata.Value.CallableContracts.ContainsKey slotContractId)
+            Assert.True(warmC.Codata.Value.CallableContracts.ContainsKey slotContractId)
+            Assert.True(slotC.Participants |> List.exists (fun p -> p.Role = ParticipantRole.CallableContract && p.Node = slotContractId))
+            Assert.True(slotC.Participants |> List.exists (fun p -> Some p.Node = slotC.Declaration))
+            Assert.Contains(slotContractId, slotAlternativeContracts warmB sidB)
+            Assert.Contains(slotContractId, slotAlternativeContracts warmC sidC)
+
+        // Exact in-session bindings: every carrier contract and aggregate value slot resolves inside warmC.
+        for KeyValue(_, carrier) in warmC.Codata.Value.CallableCarriers do
+            match carrier.Contract with
+            | Result.Ok cid -> Assert.True(warmC.Codata.Value.CallableContracts.ContainsKey cid)
+            | Result.Error _ -> ()
+        Assert.Empty(Set.intersect (graphA.Nodes.Keys |> Set.ofSeq) planC.ReassignedNodes)
+        Assert.Empty(Set.intersect (warmB.Nodes.Keys |> Set.ofSeq) planC.ReassignedNodes)
+
+        // 2. Cutoff-key soundness controls (B1 & M1):
+        //    (a) Positional operand reorder (12 / 3 -> 3 / 12 AND direct NumericOperation.Sources operand swap)
+        //        changes Relation support fingerprints and CanonicalProofSupportDigest (never false retention).
+        let baseSegC = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment warmC |> WorkspaceCases.need
+        let flippedDivSource = sourceC.Replace("12 / 3", "3 / 12")
+        let flippedDivCold = captureRevision flippedDivSource
+        let flippedDivSeg = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment flippedDivCold |> WorkspaceCases.need
+        let coldCSeg = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment coldC |> WorkspaceCases.need
+        Assert.NotEqual<(string * string * string) list>(relationSupportFingerprints coldCSeg, relationSupportFingerprints flippedDivSeg)
+        let flippedSchedule =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.scheduleRebuild coldC flippedDivCold |> WorkspaceCases.need
+        Assert.True(
+            flippedSchedule.Regions.Values |> Seq.exists ((=) Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.RegionDisposition.Reelaborate),
+            "Reordering positional operands (12 / 3 -> 3 / 12) must schedule re-elaboration.")
+        // Direct operand-position swap on NumericOperation.Sources alone (role payload unchanged) still changes Relation fingerprint.
+        let numOpEdge =
+            warmC.Edges |> List.find (fun e ->
+                match e.Role with
+                | EdgeRole.NumericOperation op when op.Operands.Length = 2 && e.Sources.Length >= 3 && e.Sources[1] <> e.Sources[2] -> true
+                | _ -> false)
+        let swappedOpSources = numOpEdge.Sources[0] :: numOpEdge.Sources[2] :: numOpEdge.Sources[1] :: (numOpEdge.Sources |> List.skip 3)
+        let swappedNumOpGraph =
+            { warmC with
+                Edges = warmC.Edges |> List.map (fun e -> if obj.ReferenceEquals(e, numOpEdge) then { e with Sources = swappedOpSources } else e) }
+        let swappedNumOpSeg = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment swappedNumOpGraph |> WorkspaceCases.need
+        Assert.NotEqual<(string * string * string) list>(relationSupportFingerprints baseSegC, relationSupportFingerprints swappedNumOpSeg)
+
+        //    (b) Positional Constrains head reorder (swapping leading proof.Site at index 0 with a tail participant
+        //        while leaving ObligationInfo and domain rows unchanged) changes BOTH Relation fingerprint and CanonicalProofSupportDigest.
+        let constrainsEdge =
+            warmC.Edges |> List.find (fun e ->
+                e.Role = EdgeRole.Constrains
+                && e.Sources.Length >= 2
+                && e.Sources[0] <> e.Sources[1]
+                && warmC.Edges |> List.exists (fun d ->
+                    match d.Role with
+                    | EdgeRole.NumericDomain dom ->
+                        dom.OperationProofs |> List.exists (fun p -> p.Obligation = e.Target && p.Site = e.Sources[0])
+                    | _ -> false))
+        let movedHeadSources = constrainsEdge.Sources[1] :: constrainsEdge.Sources[0] :: (constrainsEdge.Sources |> List.skip 2)
+        let movedHeadGraph =
+            { warmC with
+                Edges = warmC.Edges |> List.map (fun e -> if obj.ReferenceEquals(e, constrainsEdge) then { e with Sources = movedHeadSources } else e) }
+        let movedHeadSeg = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment movedHeadGraph |> WorkspaceCases.need
+        Assert.NotEqual<(string * string * string) list>(relationSupportFingerprints baseSegC, relationSupportFingerprints movedHeadSeg)
+        Assert.NotEqual<Map<string, CanonicalProofSupportDigest>>(proofDigests baseSegC, proofDigests movedHeadSeg)
+
+        //    (c) Changing a CallableContract's Source participant set changes BOTH CallableContracts support fingerprint
+        //        and the detached:node: canonical address in WitnessSegmentation.
+        let numericDomainAnchor (g: SemanticGraph) =
+            g.Edges |> List.pick (fun e -> match e.Role with EdgeRole.NumericDomain _ -> Some e.Target | _ -> None)
+        let anchorC = numericDomainAnchor warmC
+        let contractCid, sampleSrcContract =
+            warmC.Codata.Value.CallableContracts
+            |> Map.toSeq
+            |> Seq.find (fun (_, c) -> c.Participants |> List.exists (fun p -> p.Role = ParticipantRole.Source && p.Node = anchorC))
+        let shrunkContract =
+            { sampleSrcContract with
+                Participants = sampleSrcContract.Participants |> List.filter (fun p -> not (p.Role = ParticipantRole.Source && p.Node = anchorC)) }
+        let changedContractGraph =
+            let cod = warmC.Codata.Value
+            { warmC with Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata { cod with CallableContracts = cod.CallableContracts.Add(contractCid, shrunkContract) } }
+        let changedContractSeg = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment changedContractGraph |> WorkspaceCases.need
+        let contractSupportFingerprints (plan: Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationPlan) =
+            plan.SupportEdges |> List.filter (fun s -> s.Domain = "CallableContracts") |> List.map (fun s -> s.Consumer, s.Identity, s.Fingerprint) |> List.sort
+        Assert.NotEqual<(string * string * string) list>(contractSupportFingerprints baseSegC, contractSupportFingerprints changedContractSeg)
+        let baseCanonAddrs, _, _ =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.canonicalAddresses
+                warmC (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read warmC)
+            |> WorkspaceCases.need
+        let changedCanonAddrs, _, _ =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.canonicalAddresses
+                changedContractGraph (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read changedContractGraph)
+            |> WorkspaceCases.need
+        let baseAnchorAddr = baseCanonAddrs[anchorC]
+        let changedAnchorAddr = changedCanonAddrs[anchorC]
+        Assert.StartsWith("detached:node:", baseAnchorAddr, StringComparison.Ordinal)
+        Assert.NotEqual<string>(baseAnchorAddr, changedAnchorAddr)
+
+        //    (d) Fault-injection control proving why ParticipantRole.Source ordinal normalization and set-tail
+        //        canonicalization are required on real shifted preparedWarmB -> coldC:
+        //        Because toggleA was reassigned above planA.NodeHighWater in warmB while coldC starts from low IDs,
+        //        raw unnormalized Source ordinals on the detached NumericDomain anchor differ between preparedWarmB and coldC,
+        //        and raw NodeId-ordered set tails on NumericDomain edges differ in canonical address order unless canonicalized.
+        let warmBSeg = Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment preparedWarmB |> WorkspaceCases.need
+        let unnormalizedAnchorSignature (g: SemanticGraph) (seg: Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationPlan) =
+            let anchorId = numericDomainAnchor g
+            g.Codata.Value.CallableContracts.Values
+            |> Seq.collect (fun contract ->
+                let owner =
+                    contract.Participants
+                    |> List.filter (fun p -> p.Role = ParticipantRole.CallableImplementation)
+                    |> List.choose (fun p -> seg.NodeIdentities.TryFind p.Node)
+                    |> List.sort |> String.concat "|"
+                contract.Participants
+                |> Seq.filter (fun p -> p.Node = anchorId)
+                |> Seq.map (fun p -> owner, contract.Kind, contract.Convention, p.Role, p.Ordinal))
+            |> Seq.sort |> Seq.toList
+        Assert.NotEqual<(string * CallableKind * CallableConvention * ParticipantRole * int) list>(
+            unnormalizedAnchorSignature preparedWarmB warmBSeg,
+            unnormalizedAnchorSignature coldC coldCSeg)
+        Assert.Equal<string option>(
+            warmBSeg.NodeIdentities.TryFind (numericDomainAnchor preparedWarmB),
+            coldCSeg.NodeIdentities.TryFind (numericDomainAnchor coldC))
+        let rawCarrierTails (g: SemanticGraph) (seg: Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationPlan) =
+            g.Edges
+            |> List.choose (fun e ->
+                match e.Role with
+                | EdgeRole.NumericCarrier _ ->
+                    Some (seg.NodeIdentities.TryFind e.Target, e.Sources |> List.choose seg.NodeIdentities.TryFind)
+                | _ -> None)
+            |> List.sort
+        let sortedCarrierTails (g: SemanticGraph) (seg: Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationPlan) =
+            rawCarrierTails g seg |> List.map (fun (t, ss) -> t, List.sort ss) |> List.sort
+        Assert.NotEqual<(string option * string list) list>(
+            rawCarrierTails preparedWarmB warmBSeg,
+            rawCarrierTails coldC coldCSeg)
+        Assert.Equal<(string option * string list) list>(
+            sortedCarrierTails preparedWarmB warmBSeg,
+            sortedCarrierTails coldC coldCSeg)
+
+        // 3. Subsequent native mint through production Core.SemanticGraph.withEnrichment:
+        //    - First verify real returned warmC keeps materialized codata and production withEnrichment reserves above planC.NodeHighWater.
+        //    - Second verify adjacent occupied relation at structuralMax + 1 is reserved by production withEnrichment
+        //      (materialized codata) and by withSettledEnrichment (unforced lazy codata), while fault-injection removing
+        //      the occupied-identity reservation (structural-only NodeId.withReservation) reproduces the exact collision
+        //      in validateTypedIdentities and Segmentation.segment.
+        Assert.True(warmC.Codata.IsValueCreated, "Selective rebuild must return materialized codata so production withEnrichment reserves settled identities.")
+        NodeId.reset()
+        let realWarmCMint =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment warmC (fun () -> NodeId.fresh())
+        Assert.True(
+            NodeId.value realWarmCMint > max (Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeId warmC) planC.NodeHighWater,
+            sprintf "Expected production withEnrichment on real warmC to mint above settled high-water %d, got %A" planC.NodeHighWater realWarmCMint)
+        let structuralMax = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeId warmC
+        let adjacentRelationId = NodeId (structuralMax + 1)
+        Assert.False(warmC.Nodes.ContainsKey adjacentRelationId)
+        Assert.False(warmC.Codata.Value.CallableContracts.ContainsKey adjacentRelationId)
+        Assert.False(warmC.Codata.Value.CallableAggregateSlots.ContainsKey adjacentRelationId)
+        let sampleContract = warmC.Codata.Value.CallableContracts.Values |> Seq.head
+        let adjacentContract =
+            { sampleContract with
+                Identity = adjacentRelationId
+                Participants =
+                    sampleContract.Participants |> List.map (fun p ->
+                        let node = if p.Node = sampleContract.Identity then adjacentRelationId else p.Node
+                        { p with Node = node; Group = adjacentRelationId }) }
+        let adjacentCodata =
+            let cod = warmC.Codata.Value
+            let tightPlan = { planC with NodeHighWater = structuralMax }
+            { cod with CallableContracts = cod.CallableContracts.Add(adjacentRelationId, adjacentContract); SSAAssignment = Some tightPlan }
+        let adjacentGraph =
+            { warmC with Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata adjacentCodata }
+        Assert.Equal(structuralMax + 1, Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxOccupiedNodeId adjacentGraph)
+        Assert.True(
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.validateTypedIdentities
+                adjacentGraph.Nodes adjacentGraph.Codata.Value.CallableContracts adjacentGraph.Codata.Value.CallableAggregateSlots
+            |> Result.isOk)
+        // Positive control 1: production Core.SemanticGraph.withEnrichment reserves above adjacent occupied relation at structuralMax + 1.
+        NodeId.reset()
+        let safeMint =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment adjacentGraph (fun () -> NodeId.fresh())
+        Assert.True(NodeId.value safeMint > structuralMax + 1, sprintf "Expected production withEnrichment mint > %d, got %A" (structuralMax + 1) safeMint)
+        let sampleNode = adjacentGraph.Nodes.Values |> Seq.head
+        let safeNode = { sampleNode with Id = safeMint; Kind = SemanticKind.Literal NativeLiteral.Unit; Children = []; Parent = None; IsReachable = false }
+        let afterSafeMint = { adjacentGraph with Nodes = adjacentGraph.Nodes.Add(safeMint, safeNode) }
+        Assert.True(
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.validateTypedIdentities
+                afterSafeMint.Nodes afterSafeMint.Codata.Value.CallableContracts afterSafeMint.Codata.Value.CallableAggregateSlots
+            |> Result.isOk)
+        // Positive control 2: withSettledEnrichment reserves even when codata is an unforced lazy thunk (Rebuild.fs:244-245 path).
+        let unforcedAdjacentGraph = { warmC with Codata = lazy adjacentCodata }
+        Assert.False(unforcedAdjacentGraph.Codata.IsValueCreated)
+        NodeId.reset()
+        let settledLazyMint =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withSettledEnrichment unforcedAdjacentGraph (fun () -> NodeId.fresh())
+        Assert.True(NodeId.value settledLazyMint > structuralMax + 1)
+        // Fault-injection negative: removing occupied-identity reservation (structural-only reservation) mints structuralMax + 1 and collides.
+        NodeId.reset()
+        let collidingMint =
+            Clef.Compiler.CheckExecution.enrich (NodeId.withReservation structuralMax) (fun () -> NodeId.fresh())
+        Assert.Equal(adjacentRelationId, collidingMint)
+        let collidingNode = { safeNode with Id = collidingMint }
+        let afterCollision = { adjacentGraph with Nodes = adjacentGraph.Nodes.Add(collidingMint, collidingNode) }
+        match Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.validateTypedIdentities
+                  afterCollision.Nodes afterCollision.Codata.Value.CallableContracts afterCollision.Codata.Value.CallableAggregateSlots with
+        | Result.Error failures ->
+            Assert.Contains((adjacentRelationId, "A callable relation identity is misfiled or collides with another source identity."), failures)
+        | Result.Ok () -> failwith "Structural-only mint collision with adjacent relation was admitted by validateTypedIdentities."
+        match Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.segment afterCollision with
+        | Result.Error failures ->
+            Assert.Contains(
+                Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.SegmentationFailure.InvalidGraph(
+                    Some adjacentRelationId,
+                    "A callable relation identity is misfiled or collides with another source identity."),
+                failures)
+        | Result.Ok _ -> failwith "Structural-only mint collision with adjacent relation was admitted by Segmentation.segment."
+
+        // 4. Fault-injection negative (removing callable-relation transport):
+        //    When a candidate callable contract occupies a retained baseline structural ID (from warmB's shifted toggleA),
+        //    Rebuild.rebuildSelective (with relation transport) succeeds, whereas physical-only reconciliation (without transport) refuses with collision.
+        let retainedBaseNodeId, retainedCandNodeId =
+            scheduleC.Receipt.Alignment
+            |> Map.toSeq
+            |> Seq.find (fun (oldId, candId) ->
+                oldId <> candId
+                && preparedWarmB.Nodes.ContainsKey oldId
+                && not (coldC.Nodes.ContainsKey oldId)
+                && not (coldC.Codata.Value.CallableContracts.ContainsKey oldId)
+                && not (coldC.Codata.Value.CallableAggregateSlots.ContainsKey oldId)
+                && planC.NodeRemap.TryFind candId = Some oldId)
+        let firstContractIdC, firstContractC = contractByBindingName coldC "first"
+        let remapContractId id = if id = firstContractIdC then retainedBaseNodeId else id
+        let overlappedColdC =
+            let cod = coldC.Codata.Value
+            let movedContract =
+                { firstContractC with
+                    Identity = retainedBaseNodeId
+                    Participants =
+                        firstContractC.Participants |> List.map (fun p ->
+                            { p with Node = remapContractId p.Node; Group = remapContractId p.Group }) }
+            let movedContracts = cod.CallableContracts.Remove(firstContractIdC).Add(retainedBaseNodeId, movedContract)
+            let movedCarriers =
+                cod.CallableCarriers |> Map.map (fun _ c ->
+                    { c with Contract = c.Contract |> Result.map remapContractId })
+            let movedSlots =
+                cod.CallableAggregateSlots |> Map.map (fun _ s ->
+                    { s with
+                        Contract = s.Contract |> Result.map remapContractId
+                        Participants = s.Participants |> List.map (fun p -> { p with Node = remapContractId p.Node }) })
+            let movedValues =
+                cod.CallableAggregateValues |> Map.map (fun _ rows ->
+                    rows |> List.map (fun r ->
+                        { r with Alternatives = r.Alternatives |> List.map (fun a -> { a with Contract = remapContractId a.Contract }) }))
+            let movedDeps =
+                cod.CallableAggregateDependencies |> Map.map (fun _ dep ->
+                    { dep with
+                        Contracts = dep.Contracts |> List.map (fun c -> if c.Identity = firstContractIdC then movedContract else c)
+                        Participants = dep.Participants |> List.map (fun p -> { p with Node = remapContractId p.Node; Group = remapContractId p.Group }) })
+            { coldC with
+                Codata = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.materializedCodata { cod with CallableContracts = movedContracts; CallableCarriers = movedCarriers; CallableAggregateSlots = movedSlots; CallableAggregateValues = movedValues; CallableAggregateDependencies = movedDeps } }
+        // With callable-relation transport (production Rebuild.rebuildSelective): transports cleanly with zero collision.
+        let transportedWarmC, _ = advance preparedWarmB overlappedColdC
+        validateAndPublish transportedWarmC |> ignore
+        // Without callable-relation transport (physical-only): reproduces exact callable-relation collision refusal.
+        match DimensionalCases.reconcileCheckedPhysical
+                  preparedWarmB (Map.ofList [ retainedBaseNodeId, retainedCandNodeId ]) (Set.singleton retainedCandNodeId) overlappedColdC with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities failures)) ->
+            Assert.Contains((retainedBaseNodeId, "A callable relation identity is misfiled or collides with another source identity."), failures)
+        | other -> failwithf "Expected physical-only reconciliation without relation transport to fail with collision, got %A" other
+
+        // 5. Reusing a changed support endpoint fails the existing current-account check (CCS8414) and WitnessEmission.prepare.
+        let aggSite, aggAccount = warmC.Codata.Value.CallableAggregateDependencies |> Map.toSeq |> Seq.head
+        let supportId =
+            aggAccount.Contracts
+            |> List.collect (fun c -> c.SourcePremises |> Map.keys |> Seq.toList)
+            |> List.find warmC.Nodes.ContainsKey
+        let origSupportNode = warmC.Nodes[supportId]
+        let mutatedSupportNode =
+            { origSupportNode with Metadata = origSupportNode.Metadata.Add("Clef175.SupportProbe", MetadataValue.String "changed") }
+        let changedSupportC = { warmC with Nodes = warmC.Nodes.Add(supportId, mutatedSupportNode) }
+        Assert.True(Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current warmC aggSite |> Result.isOk)
+        match Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changedSupportC aggSite with
+        | Result.Error reason ->
+            Assert.Equal("Callable aggregate contract source premises changed before commitment.", reason)
+        | Result.Ok _ -> failwith "Reusing a changed support endpoint was admitted by CallableAggregateAccounts.current."
+        let _, renewFailures = Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts changedSupportC
+        Assert.Contains(renewFailures, fun f ->
+            f.Occurrence = aggSite
+            && f.Code = "CCS8414"
+            && f.Reason = "Callable aggregate contract source premises changed before commitment.")
+        match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare changedSupportC with
+        | Result.Error failures ->
+            Assert.Contains(failures, fun f ->
+                f.Reason.Contains("Callable aggregate", StringComparison.Ordinal)
+                || f.Reason.Contains("CCS8414", StringComparison.Ordinal)
+                || f.Reason.Contains("source premises changed", StringComparison.Ordinal))
+        | Result.Ok _ -> failwith "WitnessEmission.prepare admitted changed callable aggregate support."

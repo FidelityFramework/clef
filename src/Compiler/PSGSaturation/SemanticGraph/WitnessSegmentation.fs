@@ -246,7 +246,12 @@ let internal canonicalRelationIdentities
                     |> List.choose (fun p -> Map.tryFind p.Node nodeAddresses)
                     |> List.sort
                     |> String.concat "|")
-            let participantAddresses = row.Participants |> List.choose (fun p -> nodeAddresses.TryFind p.Node |> Option.map (fun addr -> addr, p.Role, p.Ordinal)) |> List.sort
+            let participantAddresses =
+                row.Participants
+                |> List.choose (fun p ->
+                    let ordinal = if p.Role = ParticipantRole.Source then 0 else p.Ordinal
+                    nodeAddresses.TryFind p.Node |> Option.map (fun addr -> addr, p.Role, ordinal))
+                |> List.sort
             let keyShape = encoder nodeAddresses (box (implName, row.Kind, row.Convention, row.ParameterTypes, row.ResultType, participantAddresses))
             key, "callable-contract:" + implName + ":" + string row.Kind + ":" + string row.Convention, keyShape)
         |> List.groupBy (fun (_, label, _) -> label)
@@ -410,7 +415,9 @@ let internal canonicalAddresses (graph: SemanticGraph) (platformRead: PlatformRe
                     |> List.sort |> String.concat "|"
                 contract.Participants
                 |> Seq.filter (fun p -> p.Node = id)
-                |> Seq.map (fun p -> sprintf "%s:%A:%A:%A:%d" owner contract.Kind contract.Convention p.Role p.Ordinal))
+                |> Seq.map (fun p ->
+                    let ordinal = if p.Role = ParticipantRole.Source then 0 else p.Ordinal
+                    sprintf "%s:%A:%A:%A:%d" owner contract.Kind contract.Convention p.Role ordinal))
             |> Seq.sort |> String.concat "|"
         let settledNonObligations =
             nonObligations

@@ -490,9 +490,9 @@ type SelectiveRebuildCases() =
         | result -> failwithf "Expected refusal of a missing retained assignment: %A" result
 
         let retainedWithoutAlignment =
-            Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign baselineWithAssignment Map.empty (Set.singleton retained) baselineWithAssignment
+            DimensionalCases.reconcileCheckedPhysical baselineWithAssignment Map.empty (Set.singleton retained) baselineWithAssignment
         match retainedWithoutAlignment with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingRetainedCorrespondence occurrence) ->
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Correspondence (Segments.PhysicalCorrespondenceFailure.MissingRetainedCorrespondence occurrence)) ->
             Assert.Equal(retained, occurrence)
         | result -> failwithf "Expected refusal of missing retained correspondence: %A" result
 
@@ -511,13 +511,13 @@ type SelectiveRebuildCases() =
         Assert.NotEmpty(family[competing])
         let scope = Set.singleton current
         let alignment = Map.ofList [retained, current]
-        let _, exact = Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign baseline alignment scope candidate |> SelectiveRebuildFixture.admitted
+        let _, exact = DimensionalCases.reconcileCheckedPhysical baseline alignment scope candidate |> SelectiveRebuildFixture.admitted
         Assert.Equal(retained, exact.NodeRemap[current])
         Assert.True(exact.Assignments[retained] = family[retained])
 
         let ambiguous = alignment.Add(competing, current)
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign baseline ambiguous scope candidate with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.AmbiguousRetainedCorrespondence diagnostic) ->
+        match DimensionalCases.reconcileCheckedPhysical baseline ambiguous scope candidate with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Correspondence (Segments.PhysicalCorrespondenceFailure.AmbiguousRetainedCorrespondence diagnostic)) ->
             Assert.Equal("CCS8407", diagnostic.Code)
             Assert.Equal(Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error,
                          Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.Diagnostic.effectiveSeverity diagnostic)
@@ -581,8 +581,8 @@ type SelectiveRebuildCases() =
         Segments.segment assignedBaseline |> SelectiveRebuildFixture.admitted |> ignore
         let alignment = Map.ofList [identity, site]
         let retained = Set.singleton site
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign assignedBaseline alignment retained candidate with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities failures) ->
+        match DimensionalCases.reconcileCheckedPhysical assignedBaseline alignment retained candidate with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities failures)) ->
             Assert.Contains((identity, "A callable relation identity is misfiled or collides with another source identity."), failures)
         | result -> failwithf "Expected SSA to refuse overlapping retained and callable identities: %A" result
 
@@ -935,7 +935,7 @@ let main _ = if toggle true then 0 else 1
         let sampleIds = preparedBaseline.Nodes.Keys |> Seq.sort |> Seq.take 3 |> Seq.toList
 
         let cleanReconciled, cleanPlan =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline Map.empty Set.empty preparedBaseline with
+            match DimensionalCases.reconcileCheckedPhysical preparedBaseline Map.empty Set.empty preparedBaseline with
             | Result.Ok pair -> pair
             | Result.Error failure -> failwithf "Clean full typed SSA remap refused: %A" failure
         Assert.True cleanReconciled.WitnessProvenance.IsNone
@@ -974,7 +974,7 @@ let main _ = if toggle true then 0 else 1
                 RangeContextFacts = None
                 Edges = edgesWithoutRangeReceipt }
         let reconciled, plan =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline Map.empty Set.empty annotated with
+            match DimensionalCases.reconcileCheckedPhysical preparedBaseline Map.empty Set.empty annotated with
             | Result.Ok pair -> pair
             | Result.Error failure -> failwithf "Annotated typed SSA remap refused: %A" failure
         let newTarget = plan.NodeRemap[targetId]
@@ -1024,12 +1024,12 @@ let main _ = if toggle true then 0 else 1
         let tailMinId = reversedTailMin |> Option.defaultWith (fun () -> failwith "Missing reversed tail min node.")
         // Non-monotone remap reassigns the smaller tail node above high-water while retaining its peer:
         // without pre-remap validation, the reversed tail would look canonically ascending after renumbering.
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline idAlign (Set.remove tailMinId allIds) preFaulted with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical preparedBaseline idAlign (Set.remove tailMinId allIds) preFaulted with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Equal("SSAAssignment: Invocation-context range premises are not current before SSA remapping.", reason)
         | other -> failwithf "Expected direct SSA refusal on non-monotone pre-faulted RangeContextFacts, got %A" other
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline idAlign allIds preFaulted with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical preparedBaseline idAlign allIds preFaulted with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Equal("SSAAssignment: Invocation-context range premises are not current before SSA remapping.", reason)
         | other -> failwithf "Expected direct SSA refusal on identity pre-faulted RangeContextFacts, got %A" other
 
@@ -1052,7 +1052,7 @@ let main _ = if toggle true then 0 else 1
         let fcAlign = fcAllIds |> Seq.map (fun id -> id, id) |> Map.ofSeq
         let fcMinId = fcAllIds |> Set.minElement
         let fcClean, _ =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign finiteCompiled fcAlign (Set.remove fcMinId fcAllIds) finiteCompiled with
+            match DimensionalCases.reconcileCheckedPhysical finiteCompiled fcAlign (Set.remove fcMinId fcAllIds) finiteCompiled with
             | Result.Ok pair -> pair
             | Result.Error failure -> failwithf "Clean finite-cell non-monotone SSA remap refused: %A" failure
         let fcPrepared =
@@ -1074,8 +1074,8 @@ let main _ = if toggle true then 0 else 1
                         match e.Role with
                         | EdgeRole.NumericDomain d -> { e with Role = EdgeRole.NumericDomain { d with FiniteCellRelations = Some corruptedFcRows } }
                         | _ -> e) }
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign finiteCompiled fcAlign (Set.remove fcMinId fcAllIds) preFaultedFinite with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical finiteCompiled fcAlign (Set.remove fcMinId fcAllIds) preFaultedFinite with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Equal("SSAAssignment: Finite-cell relation premises are not current before SSA remapping.", reason)
         | other -> failwithf "Expected direct SSA refusal on pre-faulted FiniteCellRelations, got %A" other
 
@@ -1098,7 +1098,7 @@ let main _ = if toggle true then 0 else 1
         let soAlign = soAllIds |> Seq.map (fun id -> id, id) |> Map.ofSeq
         let soMinId = soAllIds |> Set.minElement
         let soClean, _ =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign originCompiled soAlign (Set.remove soMinId soAllIds) originCompiled with
+            match DimensionalCases.reconcileCheckedPhysical originCompiled soAlign (Set.remove soMinId soAllIds) originCompiled with
             | Result.Ok pair -> pair
             | Result.Error failure -> failwithf "Clean string-origin non-monotone SSA remap refused: %A" failure
         let soPrepared =
@@ -1120,8 +1120,8 @@ let main _ = if toggle true then 0 else 1
                         match e.Role with
                         | EdgeRole.BoundaryDomain d -> { e with Role = EdgeRole.BoundaryDomain { d with StringOriginRelations = Some corruptedSoRows } }
                         | _ -> e) }
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign originCompiled soAlign (Set.remove soMinId soAllIds) preFaultedOrigin with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical originCompiled soAlign (Set.remove soMinId soAllIds) preFaultedOrigin with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Equal("SSAAssignment: String-origin relation premises are not current before SSA remapping.", reason)
         | other -> failwithf "Expected direct SSA refusal on pre-faulted StringOriginRelations, got %A" other
 
@@ -1162,8 +1162,8 @@ let main _ = if toggle true then 0 else 1
         | Result.Ok _ -> ()
         | Result.Error err -> failwithf "Monotone identical companion order should not trigger ambiguity, got %A" err
         // Exact-reason negative control: non-monotone remap causes sorted domainRewrite and positional foreignProofRows to conflict.
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline idAlign (Set.remove minPremise allIds) ambiguousGraph with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical preparedBaseline idAlign (Set.remove minPremise allIds) ambiguousGraph with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Equal("SSAAssignment: Ambiguous companion hyperedge correspondence during SSA remapping.", reason)
         | other -> failwithf "Expected exact ambiguous companion correspondence refusal, got %A" other
 
@@ -1178,3 +1178,125 @@ let main _ = if toggle true then 0 else 1
             Assert.Equal(collideA, site)
             Assert.Equal("SSAAssignment: NodeId remapping collided distinct graph nodes.", reason)
         | Result.Ok _ -> failwith "Colliding NodeId remap was admitted."
+
+    [<Fact>]
+    member _.``clef #175: selective SSA requires Segmentation checked pairs and enforces correspondence and cutoff controls``() =
+        // 1. Live assembly + source ownership guard:
+        //    - No public reconcile* entry point exists on SSAAssignment.
+        //    - ScopedRebuildPair and CheckedPhysicalPair expose no public constructors.
+        //    - Both internal SSA reconciliation entry points accept ONLY a single checked pair
+        //      (no raw retainedCandidateNodes or alignment parameter).
+        //    - Rebuild.fs is the sole src/ caller of reconcileAndAssignWithCallableRelations;
+        //      zero src/ callers invoke reconcileAndAssign or reconcileCheckedPhysical.
+        //    - Segmentation.fs is the sole src/ author of CCS8407.
+        let ssaModule =
+            match typeof<Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure>.DeclaringType with
+            | null -> failwith "Expected SSAAssignment module declaring type."
+            | t -> t
+        let publicReconcileMethods =
+            ssaModule.GetMethods(System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Static)
+            |> Array.filter (fun m -> m.Name.StartsWith("reconcile", StringComparison.Ordinal))
+        Assert.Empty publicReconcileMethods
+        let internalStatic = System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Static
+        let callableMethod =
+            match ssaModule.GetMethod("reconcileAndAssignWithCallableRelations", internalStatic) with
+            | null -> failwith "Expected internal reconcileAndAssignWithCallableRelations method."
+            | m -> m
+        let callableParams = callableMethod.GetParameters()
+        Assert.Equal(1, callableParams.Length)
+        Assert.Equal(typeof<Segments.ScopedRebuildPair>, callableParams[0].ParameterType)
+        let physicalMethod =
+            match ssaModule.GetMethod("reconcileCheckedPhysical", internalStatic) with
+            | null -> failwith "Expected internal reconcileCheckedPhysical method."
+            | m -> m
+        let physicalParams = physicalMethod.GetParameters()
+        Assert.Equal(1, physicalParams.Length)
+        Assert.Equal(typeof<Segments.CheckedPhysicalPair>, physicalParams[0].ParameterType)
+        Assert.Empty(typeof<Segments.ScopedRebuildPair>.GetConstructors(System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Instance))
+        Assert.Empty(typeof<Segments.CheckedPhysicalPair>.GetConstructors(System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Instance))
+        let repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../.."))
+        let srcFiles = System.IO.Directory.GetFiles(System.IO.Path.Combine(repoRoot, "src/Compiler"), "*.fs", System.IO.SearchOption.AllDirectories)
+        let relPath (p: string) = System.IO.Path.GetRelativePath(repoRoot, p).Replace('\\', '/')
+        let callableCallers =
+            srcFiles
+            |> Array.filter (fun p ->
+                let rel = relPath p
+                rel <> "src/Compiler/Nanopass/SSAAssignment.fs"
+                && (System.IO.File.ReadAllText p).Contains("reconcileAndAssignWithCallableRelations", StringComparison.Ordinal))
+            |> Array.map relPath
+        Assert.Equal<string array>([| "src/Compiler/PSGSaturation/SemanticGraph/Rebuild.fs" |], callableCallers)
+        let rawOrPhysicalCallers =
+            srcFiles
+            |> Array.filter (fun p ->
+                let rel = relPath p
+                let text = System.IO.File.ReadAllText p
+                rel <> "src/Compiler/Nanopass/SSAAssignment.fs"
+                && (text.Contains("reconcileAndAssign ", StringComparison.Ordinal)
+                    || text.Contains("reconcileCheckedPhysical", StringComparison.Ordinal)))
+            |> Array.map relPath
+        Assert.Empty rawOrPhysicalCallers
+        let ccs8407Authors =
+            srcFiles
+            |> Array.filter (fun p -> (System.IO.File.ReadAllText p).Contains("\"CCS8407\"", StringComparison.Ordinal))
+            |> Array.map relPath
+        Assert.Equal<string array>([| "src/Compiler/PSGSaturation/SemanticGraph/Segmentation.fs" |], ccs8407Authors)
+
+        // 2. Checked-pair positive control: Segmentation.checkPhysicalCorrespondence admits exact physical alignment.
+        let baseline = SelectiveRebuildFixture.graph 0 |> Clef.Compiler.Nanopass.SSAAssignment.normalize
+        let candidate = SelectiveRebuildFixture.graph 1000
+        let retainedBase = NodeId 21
+        let retainedCand = NodeId 1021
+        let validAlign = Map.ofList [ retainedBase, retainedCand ]
+        let scope = Set.singleton retainedCand
+        let checkedPair =
+            match Segments.checkPhysicalCorrespondence baseline validAlign scope candidate with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Valid checked physical correspondence was refused: %A" failure
+        let _, plan =
+            Clef.Compiler.Nanopass.SSAAssignment.reconcileCheckedPhysical checkedPair
+            |> SelectiveRebuildFixture.admitted
+        Assert.Equal(retainedBase, plan.NodeRemap[retainedCand])
+
+        // 3. Exact-reason negative controls at the single Segmentation correspondence boundary:
+        //    (a) MissingRetainedCorrespondence
+        match Segments.checkPhysicalCorrespondence baseline Map.empty scope candidate with
+        | Result.Error (Segments.PhysicalCorrespondenceFailure.MissingRetainedCorrespondence id) ->
+            Assert.Equal(retainedCand, id)
+        | other -> failwithf "Expected MissingRetainedCorrespondence, got %A" other
+        //    (b) CCS8407 AmbiguousRetainedCorrespondence
+        let ambiguousAlign = validAlign.Add(NodeId 13, retainedCand)
+        match Segments.checkPhysicalCorrespondence baseline ambiguousAlign scope candidate with
+        | Result.Error (Segments.PhysicalCorrespondenceFailure.AmbiguousRetainedCorrespondence diagnostic) ->
+            Assert.Equal("CCS8407", diagnostic.Code)
+            Assert.Equal("The retained occurrence has more than one admissible baseline identity.", diagnostic.Message)
+            Assert.Equal<NodeId list>([ retainedCand ], diagnostic.RelatedNodes)
+        | other -> failwithf "Expected CCS8407 AmbiguousRetainedCorrespondence, got %A" other
+        //    (c) InvalidBaseline & InvalidCandidate on malformed graphs (including empty retained set!)
+        let brokenBaseline =
+            let n = baseline.Nodes[retainedBase]
+            { baseline with Nodes = baseline.Nodes.Add(retainedBase, { n with Children = NodeId -99 :: n.Children }) }
+        let expectedMissingTarget =
+            Segments.SegmentationFailure.InvalidGraph(Some retainedBase, "A structural or reference target is absent from the graph.")
+        match Segments.checkPhysicalCorrespondence brokenBaseline validAlign scope candidate with
+        | Result.Error (Segments.PhysicalCorrespondenceFailure.InvalidBaseline failures) ->
+            Assert.Contains(expectedMissingTarget, failures)
+        | other -> failwithf "Expected InvalidBaseline on broken baseline, got %A" other
+        match Segments.checkPhysicalCorrespondence brokenBaseline Map.empty Set.empty candidate with
+        | Result.Error (Segments.PhysicalCorrespondenceFailure.InvalidBaseline failures) ->
+            Assert.Contains(expectedMissingTarget, failures)
+        | other -> failwithf "Expected InvalidBaseline even when retained set is empty, got %A" other
+        let brokenCandidate =
+            let n = candidate.Nodes[retainedCand]
+            { candidate with Nodes = candidate.Nodes.Add(retainedCand, { n with Children = NodeId -99 :: n.Children }) }
+        let expectedCandMissingTarget =
+            Segments.SegmentationFailure.InvalidGraph(Some retainedCand, "A structural or reference target is absent from the graph.")
+        match Segments.checkPhysicalCorrespondence baseline validAlign scope brokenCandidate with
+        | Result.Error (Segments.PhysicalCorrespondenceFailure.InvalidCandidate failures) ->
+            Assert.Contains(expectedCandMissingTarget, failures)
+        | other -> failwithf "Expected InvalidCandidate on broken candidate, got %A" other
+        //    (d) Exact-reason negative: wrong predecessor from another source occurrence refused before SSA runs.
+        let wrongPredecessor = Map.ofList [ NodeId 13, retainedCand ]
+        match Segments.checkPhysicalCorrespondence baseline wrongPredecessor scope candidate with
+        | Result.Error (Segments.PhysicalCorrespondenceFailure.MissingRetainedCorrespondence id) ->
+            Assert.Equal(retainedCand, id)
+        | other -> failwithf "Expected wrong predecessor alignment to refuse at checked-pair boundary, got %A" other

@@ -183,53 +183,6 @@ let private scheduleCheckedRebuild (baseline: SemanticGraph) (candidate: Semanti
 let scheduleRebuild baseline candidate =
     scheduleCheckedRebuild baseline candidate |> Result.map fst
 
-let private retainedCandidateNodes (alignment: Map<NodeId, NodeId>) (schedule: RebuildSchedule) (graph: SemanticGraph) : Set<NodeId> =
-    let affected = schedule.Receipt.Cone.AffectedCone
-    let codata = graph.Codata.Value
-    let obligationIncidentOwners =
-        graph.Edges
-        |> List.groupBy _.Target
-        |> List.map (fun (target, edges) ->
-            let owners =
-                edges
-                |> List.collect _.Sources
-                |> List.choose schedule.Candidate.NodeOwners.TryFind
-                |> Set.ofList
-            target, owners)
-        |> Map.ofList
-    alignment
-    |> Map.fold (fun acc _ candId ->
-        if Set.contains candId schedule.Scopes || Set.contains candId affected then
-            acc
-        else
-            match schedule.Candidate.NodeOwners.TryFind candId with
-            | Some owner when schedule.Regions.TryFind owner = Some RegionDisposition.Retained ->
-                Set.add candId acc
-            | None ->
-                match graph.Nodes.TryFind candId with
-                | Some { Kind = SemanticKind.ModuleDef _ } -> Set.add candId acc
-                | Some { Kind = SemanticKind.Obligation _ } ->
-                    let incident = obligationIncidentOwners |> Map.tryFind candId |> Option.defaultValue Set.empty
-                    if incident |> Set.forall (fun owner -> schedule.Regions.TryFind owner = Some RegionDisposition.Retained) then
-                        Set.add candId acc
-                    else
-                        acc
-                | _ ->
-                    match codata.CallableContracts.TryFind candId with
-                    | Some contract ->
-                        let retainedContract =
-                            contract.Participants
-                            |> List.tryFind (fun p -> p.Role = ParticipantRole.CallableImplementation)
-                            |> Option.bind (fun p -> schedule.Candidate.NodeOwners.TryFind p.Node)
-                            |> Option.exists (fun owner -> schedule.Regions.TryFind owner = Some RegionDisposition.Retained)
-                        if retainedContract then Set.add candId acc else acc
-                    | None ->
-                        if codata.CallableAggregateSlots.ContainsKey candId then
-                            Set.add candId acc
-                        else
-                            acc
-            | _ -> acc) Set.empty
-
 /// Program Hypergraph §5.1 defines scoped evaluation and witness authorization.
 /// https://clef-lang.com/spec/draft/program-hypergraph/#51-scoped-re-evaluation-and-witness-authorization
 /// The shadow pass selects the reachable causal cone before Baker runs pure
@@ -241,9 +194,13 @@ let private retainedCandidateNodes (alignment: Map<NodeId, NodeId>) (schedule: R
 let rebuildSelective baseline candidate =
     scheduleCheckedRebuild baseline candidate
     |> Result.bind (fun (schedule, pair) ->
+        let retainedRegions =
+            schedule.Regions
+            |> Map.fold (fun acc identity disposition ->
+                if disposition = RegionDisposition.Retained then Set.add identity acc else acc) Set.empty
         Core.SemanticGraph.withSettledEnrichment baseline (fun () ->
             Core.SemanticGraph.withSettledEnrichment candidate (fun () ->
-                match settleRebuildScopes pair schedule.Scopes with
+                match settleRebuildScopes pair schedule.Scopes schedule.Receipt.Cone.AffectedCone retainedRegions with
                 | Result.Error (ScopedSettlementFailure.RecipeRefused(id, reason)) ->
                     Result.Error(RebuildFailure.RecipeRefused(id, reason))
                 | Result.Error ScopedSettlementFailure.MissingCallableSettlement ->
@@ -251,25 +208,24 @@ let rebuildSelective baseline candidate =
                     Result.Error(RebuildFailure.InvalidReturnedGraph [SegmentationFailure.InvalidGraph(None, reason)])
                 | Result.Error (ScopedSettlementFailure.SentinelSettlementRefused(site, reason)) ->
                     Result.Error(RebuildFailure.InvalidReturnedGraph [SegmentationFailure.InvalidGraph(site, reason)])
+                | Result.Error (ScopedSettlementFailure.CorrespondenceRefused (PhysicalCorrespondenceFailure.InvalidBaseline failures)) ->
+                    Result.Error(RebuildFailure.InvalidBaseline failures)
+                | Result.Error (ScopedSettlementFailure.CorrespondenceRefused (PhysicalCorrespondenceFailure.InvalidCandidate failures)) ->
+                    Result.Error(RebuildFailure.InvalidCandidate failures)
+                | Result.Error (ScopedSettlementFailure.CorrespondenceRefused (PhysicalCorrespondenceFailure.MissingRetainedCorrespondence id)) ->
+                    let reason = "The retained occurrence has no admissible identity correspondence."
+                    Result.Error(RebuildFailure.InvalidCandidate [SegmentationFailure.InvalidGraph(Some id, reason)])
+                | Result.Error (ScopedSettlementFailure.CorrespondenceRefused (PhysicalCorrespondenceFailure.AmbiguousRetainedCorrespondence diagnostic)) ->
+                    Result.Error(RebuildFailure.SSAAssignmentRefused diagnostic)
                 | Result.Ok (scoped, recipes) ->
-                    let _, saturated, alignment, relations = scopedRebuildInputs scoped
-                    let retained = retainedCandidateNodes alignment schedule saturated
-                    match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssignWithCallableRelations scoped retained with
+                    let _, _, _, relations = scopedRebuildInputs scoped
+                    match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssignWithCallableRelations scoped with
                     | Result.Error Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingBaselinePlan ->
                         let reason = "The accepted baseline graph has no SSA assignment plan."
                         Result.Error(RebuildFailure.InvalidBaseline [SegmentationFailure.InvalidGraph(None, reason)])
                     | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingRetainedAssignment id) ->
                         let reason = "The accepted baseline lacks the exact SSA assignment for a retained occurrence."
                         Result.Error(RebuildFailure.InvalidBaseline [SegmentationFailure.InvalidGraph(Some id, reason)])
-                    | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.MissingRetainedCorrespondence id) ->
-                        let reason = "The retained occurrence has no admissible identity correspondence."
-                        Result.Error(RebuildFailure.InvalidCandidate [SegmentationFailure.InvalidGraph(Some id, reason)])
-                    | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.AmbiguousRetainedCorrespondence diagnostic) ->
-                        Result.Error(RebuildFailure.SSAAssignmentRefused diagnostic)
-                    | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidCorrespondenceBaseline failures) ->
-                        Result.Error(RebuildFailure.InvalidBaseline failures)
-                    | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidCorrespondenceCandidate failures) ->
-                        Result.Error(RebuildFailure.InvalidCandidate failures)
                     | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities failures) ->
                         let invalid =
                             failures

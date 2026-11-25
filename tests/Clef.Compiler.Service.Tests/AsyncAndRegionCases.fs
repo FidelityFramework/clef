@@ -567,7 +567,7 @@ module private AsyncAndRegionFixture =
         let retained = Set.difference every cone
         let alignment = retained |> Seq.map (fun id -> id, id) |> Map.ofSeq
         let reconciled, plan =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+            match DimensionalCases.reconcileCheckedPhysical graph alignment retained graph with
             | Result.Ok result -> result
             | Result.Error failure -> failwithf "Expected checked SSA reconciliation: %A" failure
         let current (id: NodeId) = plan.NodeRemap[id]
@@ -1952,7 +1952,7 @@ let main _ =
         let alignment = allNodes |> Seq.map (fun id -> id, id) |> Map.ofSeq
 
         let reconciled, plan =
-            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+            match DimensionalCases.reconcileCheckedPhysical graph alignment retained graph with
             | Result.Ok result -> result
             | Result.Error failure -> failwithf "Non-monotone SSA reconciliation refused: %A" failure
 
@@ -2021,8 +2021,8 @@ let main _ =
                   Sources = [ createOp.Site ]
                   Target = createOp.Site }
             { graph with Edges = invalidRecordedEdge :: edgesWithOriginSlot }
-        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph Map.empty Set.empty corruptedGraph with
-        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+        match DimensionalCases.reconcileCheckedPhysical graph Map.empty Set.empty corruptedGraph with
+        | Result.Error (DimensionalCases.CheckedPhysicalReconciliationFailure.Reconciliation (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ])) ->
             Assert.Contains("SSAAssignment:", reason)
             Assert.Contains("unsupported recorded incidence payload", reason)
         | other -> failwithf "Expected SSAAssignment to refuse invalid StringOrigins relation payload, got %A" other

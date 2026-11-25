@@ -27,6 +27,17 @@ module SemanticGraph =
 
     let maxNodeId (graph: SemanticGraph) = maxNodeIdIn graph.Nodes graph.Edges
 
+    /// Wrap an already-computed Codata record as a materialized Lazy without creating a thunk.
+    let internal materializedCodata (codata: Codata) = System.Lazy<Codata>(codata)
+
+    let private maxOccupiedInCodata (codata: Codata) maximum =
+        let includeKey maximum id _ = max maximum (NodeId.value id)
+        let maximum = Map.fold includeKey maximum codata.CallableContracts
+        let maximum = Map.fold includeKey maximum codata.CallableAggregateSlots
+        match codata.SSAAssignment with
+        | Some plan -> max maximum plan.NodeHighWater
+        | None -> maximum
+
     /// Read every currently occupied structural and settled callable-relation identity.
     let internal maxOccupiedNodeId (graph: SemanticGraph) =
         let codata = graph.Codata.Value
@@ -38,19 +49,23 @@ module SemanticGraph =
     /// Read the settled high-water mark: current occupied structural and typed
     /// relation keys plus any already-owned SSA high-water.
     let private maxSettledNodeId (graph: SemanticGraph) =
-        let codata = graph.Codata.Value
-        let occupied = maxOccupiedNodeId graph
-        match codata.SSAAssignment with
-        | Some plan -> max occupied plan.NodeHighWater
-        | None -> occupied
+        maxOccupiedInCodata graph.Codata.Value (maxNodeId graph)
 
     let private withReservation maximum work =
         Clef.Compiler.CheckExecution.enrich (NodeId.withReservation maximum) work
 
     /// Protect the complete allocating operation, including reentrant checks.
-    /// Reserves structural identities. Nested calls retain any wider active reservation.
+    /// Reserves structural identities plus already-materialized callable-relation keys
+    /// and SSA high-water without forcing deferred codata.
+    /// Nested calls retain any wider active reservation.
     let withEnrichment (graph: SemanticGraph) work =
-        withReservation (maxNodeId graph) work
+        let structural = maxNodeId graph
+        let reserved =
+            if graph.Codata.IsValueCreated then
+                maxOccupiedInCodata graph.Codata.Value structural
+            else
+                structural
+        withReservation reserved work
 
     /// Protect the complete allocating operation on a settled graph, reserving above
     /// current structural and typed relation keys plus any already-owned SSA high-water.
@@ -246,8 +261,18 @@ module SemanticGraph =
     /// old snapshot. Re-publication belongs to source settlement.
     let invalidateWitness (graph: SemanticGraph) : SemanticGraph =
         let previous = graph.Codata
-        { graph with Codata = lazy { previous.Value with WitnessEmission = None; WitnessSegmentation = None; WitnessLiveScope = None; ProofDispatch = None; WitnessPreparedRows = None; WitnessLiveRows = None; WitnessPublishedRows = None }
-                     WitnessProvenance = None }
+        let nextCodata =
+            if previous.IsValueCreated then
+                materializedCodata
+                    { previous.Value with
+                        WitnessEmission = None; WitnessSegmentation = None; WitnessLiveScope = None
+                        ProofDispatch = None; WitnessPreparedRows = None; WitnessLiveRows = None; WitnessPublishedRows = None }
+            else
+                lazy
+                    { previous.Value with
+                        WitnessEmission = None; WitnessSegmentation = None; WitnessLiveScope = None
+                        ProofDispatch = None; WitnessPreparedRows = None; WitnessLiveRows = None; WitnessPublishedRows = None }
+        { graph with Codata = nextCodata; WitnessProvenance = None }
 
     /// Set the platform context on a graph
     let withPlatform (platform: PlatformContext) (graph: SemanticGraph) : SemanticGraph =

@@ -419,7 +419,7 @@ let renewUnionTagReads (context: PlatformContext option) (graph: SemanticGraph) 
                     | values -> Map.add id values current
                 | _ -> current) facts.Meets
         if meets = facts.Meets then graph
-        else { graph with Codata = lazy { facts with Meets = meets } } |> SemanticGraph.invalidateWitness
+        else { graph with Codata = SemanticGraph.materializedCodata { facts with Meets = meets } } |> SemanticGraph.invalidateWitness
 
 let private environmentSlotWidths (graph: SemanticGraph) (slot: ContinuationSlot) =
     match slot.Holds with

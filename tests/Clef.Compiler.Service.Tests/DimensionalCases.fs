@@ -23,6 +23,20 @@ let noErrors result =
     let errors = result.Diagnostics |> List.filter (fun d -> d.Severity = NativeDiagnosticSeverity.Error)
     if not errors.IsEmpty then failwithf "Unexpected errors: %A" errors
 
+[<RequireQualifiedAccess>]
+type internal CheckedPhysicalReconciliationFailure =
+    | Correspondence of Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.PhysicalCorrespondenceFailure
+    | Reconciliation of Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure
+
+/// Test-only helper that always validates physical correspondence through
+/// Segmentation.checkPhysicalCorrespondence before calling SSAAssignment.
+let internal reconcileCheckedPhysical baseline alignment retained candidate =
+    match Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation.checkPhysicalCorrespondence baseline alignment retained candidate with
+    | Result.Error failure -> Result.Error (CheckedPhysicalReconciliationFailure.Correspondence failure)
+    | Result.Ok checkedPair ->
+        Clef.Compiler.Nanopass.SSAAssignment.reconcileCheckedPhysical checkedPair
+        |> Result.mapError CheckedPhysicalReconciliationFailure.Reconciliation
+
 let bindingType name result =
     let ty = result.Graph.Nodes |> Map.values |> Seq.pick (fun node ->
         match node.Kind with

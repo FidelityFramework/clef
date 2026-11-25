@@ -8,6 +8,7 @@ open System.Reflection
 open Microsoft.FSharp.Reflection
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 [<RequireQualifiedAccess>]
 type DependencyKind = Call | Storage | CapturedEnvironment | ProofSupport
@@ -365,11 +366,18 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                 |> List.filter (fun p -> p.Role <> ParticipantRole.Source)
                 |> List.choose (fun p -> owners.TryFind p.Node)
                 |> Set.ofList
+            let normalizedContract =
+                let nonSource, sources = contract.Participants |> List.partition (fun p -> p.Role <> ParticipantRole.Source)
+                let canonicalSources =
+                    sources
+                    |> List.sortBy (fun p -> names.TryFind p.Node |> Option.defaultValue "")
+                    |> List.map (fun p -> { p with Ordinal = 0 })
+                { contract with Participants = nonSource @ canonicalSources }
             addSupportWithProviders
                 "CallableContracts"
                 (names.TryFind id |> Option.defaultValue "CallableContracts")
                 implAnchor
-                (box contract)
+                (box normalizedContract)
                 (Some nonCallerRefs)
         mapRows "MutableCallableStorage" codata.MutableCallableStorage
         mapRows "ClosureDomain.Layouts" codata.EnvironmentLayouts
@@ -422,6 +430,130 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
                             let _ = regionIdentity
                             addSupport domain (domain + "." + field.Name) (Some rootId) row
                 if not isOption || not (isNull row) then route row
+        let setDerivedEdgeTailPrefixes =
+            let addPrefix (acc: Map<NodeId * EdgeRole * NodeId list, int>) target role sources prefixLen =
+                Map.add (target, role, sources) prefixLen acc
+            graph.Edges
+            |> List.fold (fun acc edge ->
+                match edge.Role with
+                | EdgeRole.NumericDomain d ->
+                    let acc = addPrefix acc edge.Target EdgeRole.EnrichedWith (Map.keys d.Premises |> Seq.toList) 0
+                    let acc =
+                        d.Values
+                        |> List.fold (fun state carrier ->
+                            let sources = Set.toList carrier.Participants
+                            carrier.Obligations
+                            |> List.fold (fun s ob ->
+                                let s = addPrefix s ob EdgeRole.Constrains sources 0
+                                addPrefix s ob EdgeRole.EnrichedWith sources 0) state) acc
+                    let acc =
+                        d.IndexTransports
+                        |> List.fold (fun state transport ->
+                            let sources = Set.toList transport.Participants
+                            let state = addPrefix state transport.Obligation EdgeRole.Constrains sources 0
+                            addPrefix state transport.Obligation EdgeRole.EnrichedWith sources 0) acc
+                    d.OperationProofs
+                    |> List.fold (fun state proof ->
+                        let sources = proof.Site :: Set.toList proof.Participants
+                        let state = addPrefix state proof.Obligation EdgeRole.Constrains sources 1
+                        addPrefix state proof.Obligation EdgeRole.EnrichedWith sources 1) acc
+                | EdgeRole.SpatialModuleDomain d ->
+                    let acc = addPrefix acc edge.Target EdgeRole.EnrichedWith (Map.keys d.Premises |> Seq.toList) 0
+                    d.Proofs
+                    |> List.fold (fun state proof ->
+                        let sources = proof.Site :: Set.toList proof.Participants
+                        let state = addPrefix state proof.Obligation EdgeRole.Constrains sources 1
+                        addPrefix state proof.Obligation EdgeRole.EnrichedWith sources 1) acc
+                | EdgeRole.MemoryDomain d ->
+                    let acc = addPrefix acc edge.Target EdgeRole.EnrichedWith (Map.keys d.Premises |> Seq.toList) 0
+                    d.Proofs
+                    |> List.fold (fun state proof ->
+                        let sources = proof.Site :: Set.toList proof.Participants
+                        let state = addPrefix state proof.Obligation EdgeRole.Constrains sources 1
+                        addPrefix state proof.Obligation EdgeRole.EnrichedWith sources 1) acc
+                | EdgeRole.BoundaryDomain d ->
+                    let acc = addPrefix acc edge.Target EdgeRole.EnrichedWith (Map.keys d.Premises |> Seq.toList) 0
+                    d.IntrinsicProofs
+                    |> List.fold (fun state proof ->
+                        let sources = proof.Site :: Set.toList proof.Participants
+                        let state = addPrefix state proof.Obligation EdgeRole.Constrains sources 1
+                        addPrefix state proof.Obligation EdgeRole.EnrichedWith sources 1) acc
+                | _ -> acc) Map.empty
+        let finiteCellTargets =
+            graph.Edges
+            |> List.collect (fun edge ->
+                match edge.Role with
+                | EdgeRole.NumericDomain d -> d.FiniteCellObligations |> List.map fst
+                | _ -> [])
+            |> Set.ofList
+        let optionalClaimCallSites =
+            graph.Edges
+            |> List.collect (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryCall call ->
+                    call.Arguments
+                    |> List.collect (fun operand ->
+                        operand.OptionalEntry
+                        |> Option.toList
+                        |> List.collect BoundaryOptionalEntryChoice.leaves
+                        |> List.map (fun leaf -> leaf.Obligation, call.Site))
+                | _ -> [])
+            |> Map.ofList
+        let sortCanonicalTail (prefixLen: int) (sources: NodeId list) =
+            if sources.Length <= prefixLen then sources
+            else
+                let prefix, tail = List.splitAt prefixLen sources
+                let sortedTail =
+                    tail |> List.sortBy (fun s -> names.TryFind s |> Option.defaultValue "")
+                prefix @ sortedTail
+        let canonicalSetTailPrefix (edge: Hyperedge) : int option =
+            match edge.Role with
+            // Pure set-derived Sources (Set.toList / Map.keys)
+            | EdgeRole.NumericCarrier _
+            | EdgeRole.NumericIndexTransport _
+            | EdgeRole.KernelIngress _
+            | EdgeRole.BoundaryResourceDeclaration _
+            | EdgeRole.BoundaryResourceAccess _
+            | EdgeRole.BoundaryWritableBufferDeclaration _
+            | EdgeRole.BoundaryWritableBufferUse _
+            | EdgeRole.BoundaryBufferAbsence _
+            | EdgeRole.BoundaryEntry _
+            | EdgeRole.BoundaryCallbackInvocation _
+            | EdgeRole.BoundaryCallbackAbsence _
+            | EdgeRole.BoundaryClosedEntry _ -> Some 0
+            // Positional prefix followed by Set.toList participants tail (preserving exact head/operand order)
+            | EdgeRole.NumericOperation op -> Some (1 + op.Operands.Length)
+            | EdgeRole.NumericOperationProof _
+            | EdgeRole.NumericProof _
+            | EdgeRole.SpatialProof _
+            | EdgeRole.MemoryProof _
+            | EdgeRole.IntrinsicWriteProof _
+            | EdgeRole.IntrinsicWriteImport _ -> Some 1
+            | EdgeRole.IntrinsicWriteAbi _ -> Some 2
+            | EdgeRole.IntrinsicWriteCall _
+            | EdgeRole.IntrinsicWriteOperand _ -> Some 5
+            | EdgeRole.HardwareModule plan -> Some (4 + plan.Parameters.Length)
+            | EdgeRole.KernelModule plan -> Some (4 + plan.Parameters.Length)
+            | EdgeRole.BoundaryImport import -> Some (2 + import.DeclarationPath.Length + import.Parameters.Length)
+            | EdgeRole.BoundaryCall call -> Some (2 + call.Arguments.Length + call.ErasedUnitArguments.Length)
+            | EdgeRole.ArrayAllocationConstruction _ -> Some 4
+            | EdgeRole.ArrayCopyConstruction _
+            | EdgeRole.MemoryArrayCopy _ -> Some 5
+            | EdgeRole.OrdinaryUnusedFormal -> Some 1
+            | EdgeRole.OrdinaryUnusedBindingInitializer -> Some 2
+            | EdgeRole.OrdinaryUnusedActual -> Some 4
+            | EdgeRole.SequenceProgramBorrow -> Some 6
+            // Constrains / EnrichedWith: sort only tails explicitly attested by a set-tail producer row;
+            // every positional Constrains/EnrichedWith edge (and any edge whose leading Site changed) keeps exact source order.
+            | EdgeRole.Constrains | EdgeRole.EnrichedWith ->
+                match setDerivedEdgeTailPrefixes.TryFind (edge.Target, edge.Role, edge.Sources) with
+                | Some prefixLen -> Some prefixLen
+                | None ->
+                    match optionalClaimCallSites.TryFind edge.Target, edge.Sources with
+                    | Some callSite, head :: _ when head = callSite -> Some 1
+                    | _ when edge.Role = EdgeRole.Constrains && finiteCellTargets.Contains edge.Target -> Some 0
+                    | _ -> None
+            | _ -> None
         for edge in graph.Edges do
             match edge.Role with
             | EdgeRole.NumericDomain domain -> domainRows "NumericDomain" (box domain)
@@ -431,19 +563,23 @@ let segment (graph: SemanticGraph) : Result<SegmentationPlan, SegmentationFailur
             | role when isCrossCallableProvenanceRole role ->
                 ()
             | _ ->
+                let canonicalEdge =
+                    match canonicalSetTailPrefix edge with
+                    | Some prefixLen -> { edge with Sources = sortCanonicalTail prefixLen edge.Sources }
+                    | None -> edge
                 let anchor =
-                    if owners.ContainsKey edge.Target then Some edge.Target
-                    else edge.Sources |> List.tryFind owners.ContainsKey
+                    if owners.ContainsKey canonicalEdge.Target then Some canonicalEdge.Target
+                    else canonicalEdge.Sources |> List.tryFind owners.ContainsKey
                 for source in edge.Sources do
                     match owners.TryFind edge.Target, owners.TryFind source with
                     | Some targetOwner, Some sourceOwner when targetOwner <> sourceOwner ->
                         addRegionDependency (classifyProviderDependency sourceOwner) targetOwner sourceOwner (Set.ofList (edge.Target :: edge.Sources))
                     | _ -> ()
-                let encodedKey = encode (box (edge.Class, edge.Ordinal, edge.Target, edge.Sources))
+                let encodedKey = encode (box (canonicalEdge.Class, canonicalEdge.Ordinal, canonicalEdge.Target, canonicalEdge.Sources))
                 let payload =
-                    match graph.Nodes.TryFind edge.Target with
-                    | Some { Kind = SemanticKind.Obligation info } -> box (edge, info)
-                    | _ -> box edge
+                    match graph.Nodes.TryFind canonicalEdge.Target with
+                    | Some { Kind = SemanticKind.Obligation info } -> box (canonicalEdge, info)
+                    | _ -> box canonicalEdge
                 addSupport "Relation" encodedKey anchor payload
         let settledDependencies = deps |> Seq.distinct |> Seq.sort |> Seq.toList
         let settledSupports = supports |> Seq.distinct |> Seq.sort |> Seq.toList
@@ -696,21 +832,134 @@ let internal rebuildPairPlans (pair: CheckedRebuildPair) =
     pair.BaselinePlan, pair.CandidatePlan, pair.Alignment, pair.RelationAlignment
 
 [<RequireQualifiedAccess>]
+type internal PhysicalCorrespondenceFailure =
+    | InvalidBaseline of SegmentationFailure list
+    | InvalidCandidate of SegmentationFailure list
+    | MissingRetainedCorrespondence of NodeId
+    | AmbiguousRetainedCorrespondence of Diagnostic
+
+/// Single compiler owner for retained-occurrence identity correspondence and CCS8407.
+let private resolveRetainedCorrespondence
+    (transportCallableRelations: bool)
+    (baseline: SemanticGraph)
+    (candidate: SemanticGraph)
+    (alignment: Map<NodeId, NodeId>)
+    (retainedCandidateNodes: Set<NodeId>)
+    : Result<Map<NodeId, NodeId>, PhysicalCorrespondenceFailure> =
+    let baselineFacts = baseline.Codata.Value
+    let candidateFacts = candidate.Codata.Value
+    let sameIdentityClass baseId candId =
+        (baseline.Nodes.ContainsKey baseId && candidate.Nodes.ContainsKey candId)
+        || (transportCallableRelations &&
+            ((baselineFacts.CallableContracts.ContainsKey baseId && candidateFacts.CallableContracts.ContainsKey candId)
+             || (baselineFacts.CallableAggregateSlots.ContainsKey baseId && candidateFacts.CallableAggregateSlots.ContainsKey candId)))
+    let candToBase =
+        alignment
+        |> Map.fold (fun acc baseId candId ->
+            if Set.contains candId retainedCandidateNodes && sameIdentityClass baseId candId then
+                let correspondence = if Map.containsKey candId acc then None else Some baseId
+                Map.add candId correspondence acc
+            else
+                acc) Map.empty
+    let refusal =
+        retainedCandidateNodes
+        |> Seq.tryPick (fun source ->
+            match candToBase.TryFind source with
+            | None -> Some(PhysicalCorrespondenceFailure.MissingRetainedCorrespondence source)
+            | Some None ->
+                let range = candidate.Nodes.TryFind source |> Option.map _.Range |> Option.defaultValue dummyRange
+                Some(PhysicalCorrespondenceFailure.AmbiguousRetainedCorrespondence
+                    { Severity = NativeDiagnosticSeverity.Error
+                      Code = "CCS8407"
+                      Message = "The retained occurrence has more than one admissible baseline identity."
+                      Range = range
+                      RelatedNodes = [source]
+                      Reachability = ReachabilityContext.Unknown })
+            | Some (Some _) -> None)
+    match refusal with
+    | Some failure -> Result.Error failure
+    | None ->
+        candToBase
+        |> Map.fold (fun acc candId baseOpt ->
+            match baseOpt with
+            | Some baseId -> Map.add candId baseId acc
+            | None -> acc) Map.empty
+        |> Result.Ok
+
+let private computeRetainedCandidateNodes
+    (alignment: Map<NodeId, NodeId>)
+    (nodeOwners: Map<NodeId, string>)
+    (scopes: Set<NodeId>)
+    (affectedCone: Set<NodeId>)
+    (retainedRegions: Set<string>)
+    (graph: SemanticGraph)
+    : Set<NodeId> =
+    let codata = graph.Codata.Value
+    let obligationIncidentOwners =
+        graph.Edges
+        |> List.groupBy _.Target
+        |> List.map (fun (target, edges) ->
+            let owners =
+                edges
+                |> List.collect _.Sources
+                |> List.choose nodeOwners.TryFind
+                |> Set.ofList
+            target, owners)
+        |> Map.ofList
+    alignment
+    |> Map.fold (fun acc _ candId ->
+        if Set.contains candId scopes || Set.contains candId affectedCone then
+            acc
+        else
+            match nodeOwners.TryFind candId with
+            | Some owner when retainedRegions.Contains owner ->
+                Set.add candId acc
+            | None ->
+                match graph.Nodes.TryFind candId with
+                | Some { Kind = SemanticKind.ModuleDef _ } -> Set.add candId acc
+                | Some { Kind = SemanticKind.Obligation _ } ->
+                    let incident = obligationIncidentOwners |> Map.tryFind candId |> Option.defaultValue Set.empty
+                    if incident |> Set.forall retainedRegions.Contains then
+                        Set.add candId acc
+                    else
+                        acc
+                | _ ->
+                    match codata.CallableContracts.TryFind candId with
+                    | Some contract ->
+                        let retainedContract =
+                            contract.Participants
+                            |> List.tryFind (fun p -> p.Role = ParticipantRole.CallableImplementation)
+                            |> Option.bind (fun p -> nodeOwners.TryFind p.Node)
+                            |> Option.exists retainedRegions.Contains
+                        if retainedContract then Set.add candId acc else acc
+                    | None ->
+                        if codata.CallableAggregateSlots.ContainsKey candId then
+                            Set.add candId acc
+                        else
+                            acc
+            | _ -> acc) Set.empty
+
+[<RequireQualifiedAccess>]
 type internal ScopedSettlementFailure =
     | RecipeRefused of NodeId * string
     | MissingCallableSettlement
     | SentinelSettlementRefused of NodeId option * string
+    | CorrespondenceRefused of PhysicalCorrespondenceFailure
 
 type internal ScopedRebuildPair =
     private
         { Baseline: SemanticGraph
           Receiving: SemanticGraph
-          Alignment: Map<NodeId, NodeId>
+          CheckedCandToBase: Map<NodeId, NodeId>
           RelationAlignment: Map<NodeId, NodeId> }
 
-/// Bind the receiving graph by running the existing scoped Baker operation on
-/// the checked candidate and the scopes selected by Rebuild.
-let internal settleRebuildScopes (pair: CheckedRebuildPair) scopes =
+/// Bind the receiving graph and its checked retained correspondence by running
+/// the existing scoped Baker operation on the checked candidate and Rebuild scopes.
+let internal settleRebuildScopes
+    (pair: CheckedRebuildPair)
+    (scopes: Set<NodeId>)
+    (affectedCone: Set<NodeId>)
+    (retainedRegions: Set<string>) =
     let recipes = Clef.Compiler.Nanopass.BakerSaturation.fanOutScopes scopes pair.Candidate
     let refusal =
         recipes.Diagnostics |> List.tryPick (fun diagnostic ->
@@ -748,14 +997,22 @@ let internal settleRebuildScopes (pair: CheckedRebuildPair) scopes =
                     if not refolded then pair.RelationAlignment
                     else alignRelations pair.Baseline settled pair.BaselinePlan pair.CandidatePlan pair.Alignment
                 let alignment = relations |> Map.fold (fun acc old current -> Map.add old current acc) pair.Alignment
-                Result.Ok ({ Baseline = pair.Baseline; Receiving = settled
-                             Alignment = alignment; RelationAlignment = relations }, recipes))
+                let retained =
+                    computeRetainedCandidateNodes alignment pair.CandidatePlan.NodeOwners scopes affectedCone retainedRegions settled
+                match resolveRetainedCorrespondence true pair.Baseline settled alignment retained with
+                | Result.Error failure -> Result.Error (ScopedSettlementFailure.CorrespondenceRefused failure)
+                | Result.Ok checkedCandToBase ->
+                    Result.Ok
+                        ({ Baseline = pair.Baseline
+                           Receiving = settled
+                           CheckedCandToBase = checkedCandToBase
+                           RelationAlignment = relations }, recipes))
 
 let internal scopedRebuildInputs (pair: ScopedRebuildPair) =
-    pair.Baseline, pair.Receiving, pair.Alignment, pair.RelationAlignment
+    pair.Baseline, pair.Receiving, pair.CheckedCandToBase, pair.RelationAlignment
 
 /// Physical-only reconciliation uses the same source address author as segment.
-let internal physicalOccurrenceAddresses graph =
+let private physicalOccurrenceAddresses graph =
     match structuralFailures graph with
     | [] ->
         readLegacyProjection (fun () ->
@@ -765,3 +1022,43 @@ let internal physicalOccurrenceAddresses graph =
                 let ambiguous = ambiguousAddresses addresses |> Set.ofList
                 addresses |> Map.filter (fun id address -> graph.Nodes.ContainsKey id && not (ambiguous.Contains address))))
     | failures -> Result.Error failures
+
+/// Checked physical-only selective SSA input constructed exclusively after
+/// validating structural soundness, unique baseline correspondence, and exact
+/// canonical occurrence address equality for every retained candidate node.
+type internal CheckedPhysicalPair =
+    private
+        { Baseline: SemanticGraph
+          Candidate: SemanticGraph
+          CheckedCandToBase: Map<NodeId, NodeId> }
+
+let internal checkPhysicalCorrespondence
+    (baseline: SemanticGraph)
+    (alignment: Map<NodeId, NodeId>)
+    (retainedCandidateNodes: Set<NodeId>)
+    (candidate: SemanticGraph)
+    : Result<CheckedPhysicalPair, PhysicalCorrespondenceFailure> =
+    match physicalOccurrenceAddresses baseline, physicalOccurrenceAddresses candidate with
+    | Result.Error failures, _ -> Result.Error (PhysicalCorrespondenceFailure.InvalidBaseline failures)
+    | _, Result.Error failures -> Result.Error (PhysicalCorrespondenceFailure.InvalidCandidate failures)
+    | Result.Ok prior, Result.Ok current ->
+        match resolveRetainedCorrespondence false baseline candidate alignment retainedCandidateNodes with
+        | Result.Error failure -> Result.Error failure
+        | Result.Ok checkedCandToBase ->
+            let addressRefusal =
+                checkedCandToBase
+                |> Map.toSeq
+                |> Seq.tryPick (fun (receiving, predecessor) ->
+                    let address = prior.TryFind predecessor
+                    if address.IsSome && address = current.TryFind receiving then None
+                    else Some(PhysicalCorrespondenceFailure.MissingRetainedCorrespondence receiving))
+            match addressRefusal with
+            | Some failure -> Result.Error failure
+            | None ->
+                Result.Ok
+                    { Baseline = baseline
+                      Candidate = candidate
+                      CheckedCandToBase = checkedCandToBase }
+
+let internal checkedPhysicalInputs (pair: CheckedPhysicalPair) =
+    pair.Baseline, pair.Candidate, pair.CheckedCandToBase

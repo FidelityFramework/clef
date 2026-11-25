@@ -39,9 +39,9 @@ let private normalizeCore (graph: SemanticGraph) =
             // Contract settlement changes no storage protocol. Preserve every
             // write/read/frontier and update only the referenced carrier rows.
             MutableCallableStorage = mutableStorage }
-    let graph = { graph with Codata = lazy codata }
+    let graph = { graph with Codata = Graph.materializedCodata codata }
     let authority = Recipe.settle graph
-    { graph with Codata = lazy { codata with CallableBranches = authority } }, carrierResiduals, flowResiduals
+    { graph with Codata = Graph.materializedCodata { codata with CallableBranches = authority } }, carrierResiduals, flowResiduals
 
 let normalize graph =
   Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

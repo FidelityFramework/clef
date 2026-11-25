@@ -34,7 +34,7 @@ let private install (rows: Recipe.Settlement) (graph: SemanticGraph) =
     let codata =
         { facts with CallableAggregateSlots = rows.Slots; CallableAggregateValues = rows.Values
                      CallableAggregateDependencies = rows.Dependencies }
-    { graph with Codata = lazy codata } |> Graph.invalidateWitness
+    { graph with Codata = Graph.materializedCodata codata } |> Graph.invalidateWitness
 
 let private overlay previous replacements =
     replacements |> Map.fold (fun table key value ->
@@ -131,7 +131,7 @@ let private normalizeCore (graph: SemanticGraph) =
                     if contracts = facts.CallableContracts && carriers = facts.CallableCarriers && storage = facts.MutableCallableStorage then placed
                     else
                         let codata = { facts with CallableContracts = contracts; CallableCarriers = carriers; MutableCallableStorage = storage }
-                        { placed with Codata = lazy codata } |> Graph.invalidateWitness
+                        { placed with Codata = Graph.materializedCodata codata } |> Graph.invalidateWitness
             remaining <- Set.difference remaining ready
     // No intermediate queued account can escape the owner. Check complete
     // final merged tables after every receiving convention has advanced.
@@ -171,7 +171,7 @@ let private renewAccountsCore (graph: SemanticGraph) =
         graph, expected.Residuals
     else
         let refreshed =
-            { graph with Codata = lazy { facts with CallableAggregateDependencies = expected.Dependencies } }
+            { graph with Codata = Graph.materializedCodata { facts with CallableAggregateDependencies = expected.Dependencies } }
             |> Graph.invalidateWitness
         refreshed, expected.Residuals
 
