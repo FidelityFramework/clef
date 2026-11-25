@@ -2777,3 +2777,168 @@ let main _ = if read 10 = 0 then 0 else 1
             + premiseQuery
             + "\nSOURCE_VACUITY_PREMISES_END"
         )
+
+    [<Fact>]
+    member _.``clef #197: non-monotone SSA remap preserves sorted ResourceDeclarations, ResourceAccesses, and boundary companion rows``() =
+        let firstMarker = "[<FidelityExtern(\"c\", \"malloc\")>]"
+        let firstIdx = ForeignCases.resourceSource.IndexOf(firstMarker, System.StringComparison.Ordinal)
+        let secondIdx = ForeignCases.resourceSource.IndexOf(firstMarker, firstIdx + firstMarker.Length, System.StringComparison.Ordinal)
+        Assert.True(secondIdx > firstIdx && firstIdx >= 0)
+        let distinctSource =
+            ForeignCases.resourceSource.Substring(0, secondIdx)
+            + ForeignCases.resourceSource.Substring(secondIdx).Replace("\"malloc\"", "\"malloc_second\"").Replace("\"free\"", "\"free_second\"")
+            + """
+let useFirst () =
+    match mallocFirst 8 with
+    | Some h1 -> freeFirst h1; 1
+    | None -> 0
+let useSecond () =
+    match mallocSecond 8 with
+    | Some h2 -> freeSecond h2; 2
+    | None -> 0
+"""
+        let result =
+            ForeignCases.applicationFor distinctSource "ResourceRemapMain"
+                "    Foreign.useFirst () + Foreign.useSecond ()\n"
+        Assert.False(Clef.Compiler.Project.ProjectChecker.hasErrors result, String.concat "\n" (Clef.Compiler.Project.ProjectChecker.getErrorMessages result))
+        let graph = result.CheckResult.Graph
+        let baselinePlan =
+            graph.Codata.Value.SSAAssignment
+            |> Option.defaultWith (fun () -> failwith "Expected baseline SSAAssignment plan.")
+        let domain =
+            graph.Edges
+            |> List.pick (fun edge -> match edge.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+        let resourceDecls =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceDeclaration row -> Some row | _ -> None)
+        let resourceAccesses =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryResourceAccess row -> Some row | _ -> None)
+        let imports =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryImport row -> Some row | _ -> None)
+        let calls =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall row -> Some row | _ -> None)
+        Assert.True(domain.ResourceDeclarations.Length >= 2)
+        Assert.True(domain.ResourceAccesses.Length >= 2)
+        Assert.True(domain.Imports.Length >= 2)
+        Assert.True(domain.Calls.Length >= 2)
+        Assert.True(resourceDecls.Length >= 2)
+        Assert.True(resourceAccesses.Length >= 2)
+
+        // Invert order across ResourceDeclarations, ResourceAccesses, Imports, Calls, and their Participants.
+        let minResDecl = List.min domain.ResourceDeclarations
+        let minResAcc = List.min domain.ResourceAccesses
+        let minImp = List.min domain.Imports
+        let minCall = List.min domain.Calls
+        let minResDeclPart = Set.minElement resourceDecls.Head.Participants
+        let minResAccPart = Set.minElement resourceAccesses.Head.Participants
+        let minImpPart = Set.minElement imports.Head.Participants
+        let minCallPart = Set.minElement calls.Head.Participants
+        let reassigned =
+            [ minResDecl; minResAcc; minImp; minCall; minResDeclPart; minResAccPart; minImpPart; minCallPart ]
+            |> List.filter graph.Nodes.ContainsKey
+            |> Set.ofList
+        let allNodes = graph.Nodes.Keys |> Set.ofSeq
+        let retained = Set.difference allNodes reassigned
+        let alignment = allNodes |> Seq.map (fun id -> id, id) |> Map.ofSeq
+
+        let reconciled, plan =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Non-monotone resource SSA remap refused: %A" failure
+
+        // Unconditional non-monotone order inversion verification on every domain list and companion role.
+        let assertInverted name (origList: NodeId list) =
+            let minId = List.min origList
+            Assert.True(reassigned.Contains minId, sprintf "Expected min %A of %s to be reassigned." minId name)
+            let remappedMin = plan.NodeRemap[minId]
+            let peer = origList |> List.find (fun id -> not (reassigned.Contains id) && graph.Nodes.ContainsKey id)
+            Assert.True(NodeId.value remappedMin > baselinePlan.NodeHighWater, sprintf "%s min did not advance past high-water." name)
+            Assert.Equal(peer, plan.NodeRemap[peer])
+            Assert.True(remappedMin > plan.NodeRemap[peer], sprintf "%s did not invert order." name)
+            let unsortedMapped = origList |> List.map (fun id -> plan.NodeRemap[id])
+            let sortedMapped = List.sort unsortedMapped
+            Assert.NotEqual<NodeId list>(unsortedMapped, sortedMapped)
+            unsortedMapped, sortedMapped
+
+        let _, _ = assertInverted "ResourceDeclarations" domain.ResourceDeclarations
+        let unsortedAccesses, _ = assertInverted "ResourceAccesses" domain.ResourceAccesses
+        let unsortedImports, _ = assertInverted "Imports" domain.Imports
+        let unsortedCalls, _ = assertInverted "Calls" domain.Calls
+        let _, _ = assertInverted "ResourceDecl.Participants" (Set.toList resourceDecls.Head.Participants)
+        let _, _ = assertInverted "ResourceAccess.Participants" (Set.toList resourceAccesses.Head.Participants)
+        let _, _ = assertInverted "Import.Participants" (Set.toList imports.Head.Participants)
+        let _, _ = assertInverted "Call.Participants" (Set.toList calls.Head.Participants)
+
+        let remappedDomain =
+            reconciled.Edges
+            |> List.pick (fun edge -> match edge.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.ResourceDeclarations, remappedDomain.ResourceDeclarations)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.ResourceAccesses, remappedDomain.ResourceAccesses)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.Imports, remappedDomain.Imports)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.Calls, remappedDomain.Calls)
+        Assert.True remappedDomain.ResourceEvidence.IsSome
+        Assert.Equal<NodeId list>(remappedDomain.ResourceAccesses, remappedDomain.ResourceEvidence.Value.Accesses)
+
+        // Positive control: full WitnessEmission.prepare + RevisionPublication + Fidelity.PSG.Integrity.check = 0 defects.
+        let prepared =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare reconciled
+            |> Result.defaultWith (fun failures -> failwithf "WitnessEmission.prepare refused: %A" failures)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish prepared
+            |> Result.defaultWith (fun failures -> failwithf "RevisionPublication.publish refused: %A" failures)
+        let defects = Fidelity.PSG.Integrity.check revision
+        Assert.True(defects.IsEmpty, Fidelity.PSG.Integrity.describe defects)
+
+        // Exact-reason negative controls: reversing Sources on EVERY companion role in this graph is refused.
+        let expectedRowReason =
+            "BoundaryEmission: The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent."
+        let flipRole name predicate =
+            let mutable flipped = false
+            let edges =
+                reconciled.Edges |> List.map (fun edge ->
+                    if not flipped && predicate edge.Role && edge.Sources.Length >= 2 && edge.Sources <> List.rev edge.Sources then
+                        flipped <- true
+                        { edge with Sources = List.rev edge.Sources }
+                    else edge)
+            Assert.True(flipped, sprintf "Expected to flip companion edge %s" name)
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare { reconciled with Edges = edges } with
+            | Ok _ -> failwithf "Unsorted %s companion edge was admitted." name
+            | Error failures -> Assert.Contains(failures, fun f -> f.Reason = expectedRowReason)
+        flipRole "BoundaryResourceDeclaration" (function EdgeRole.BoundaryResourceDeclaration _ -> true | _ -> false)
+        flipRole "BoundaryResourceAccess" (function EdgeRole.BoundaryResourceAccess _ -> true | _ -> false)
+        flipRole "BoundaryImport" (function EdgeRole.BoundaryImport _ -> true | _ -> false)
+        flipRole "BoundaryCall" (function EdgeRole.BoundaryCall _ -> true | _ -> false)
+        flipRole "BoundaryCoverage" (function EdgeRole.BoundaryCoverage _ -> true | _ -> false)
+
+        // Fault-injection negative controls: simulating disabled List.sort (unsorted remapped lists) and withdrawals are refused with exact reasons.
+        let faultWithDomain mutate expectedReason =
+            let faulted =
+                { reconciled with
+                    Edges =
+                        reconciled.Edges |> List.map (fun edge ->
+                            match edge.Role with
+                            | EdgeRole.BoundaryDomain d ->
+                                let updated = mutate d
+                                { edge with Role = EdgeRole.BoundaryDomain updated }
+                            | _ -> edge) }
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare faulted with
+            | Ok _ -> failwithf "Boundary domain fault was admitted (expected: %s)" expectedReason
+            | Error failures -> Assert.Contains(failures, fun f -> f.Reason = expectedReason)
+        faultWithDomain (fun d -> { d with Imports = unsortedImports })
+            "BoundaryEmission: The boundary domain lost or duplicated an import, call or ordered coverage occurrence."
+        faultWithDomain (fun d -> { d with Calls = unsortedCalls })
+            "BoundaryEmission: The boundary domain lost or duplicated an import, call or ordered coverage occurrence."
+        faultWithDomain (fun d -> { d with ResourceDeclarations = List.tail d.ResourceDeclarations })
+            "BoundaryEmission: The source resource declaration account was withdrawn or duplicated."
+        faultWithDomain (fun d -> { d with ResourceEvidence = d.ResourceEvidence |> Option.map (fun ev -> { ev with Accesses = unsortedAccesses }) })
+            "BoundaryEmission: The complete current resource evaluation relation, original root or scoped source premise incidence changed."
+        faultWithDomain
+            (fun d ->
+                let tail = List.tail d.ResourceAccesses
+                { d with
+                    ResourceAccesses = tail
+                    ResourceEvidence = d.ResourceEvidence |> Option.map (fun ev -> { ev with Accesses = tail }) })
+            "BoundaryEmission: The resource read or immutable alias account was withdrawn or duplicated."

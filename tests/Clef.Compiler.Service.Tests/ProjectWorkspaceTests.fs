@@ -1205,3 +1205,292 @@ let kernel: ElementKernel = { Compute=calculate; Shape={Elements=64;Grain=16} }
             roots, nodes, incidence
         Assert.False(Map.isEmpty quiet.CheckResult.Graph.Nodes)
         Assert.True(graphFacts quiet = graphFacts checkedProject)
+
+    [<Fact>]
+    member _.``clef #197: production reconcileAndAssignWithCallableRelations matches cold compile and preserves NumericDomain and SpatialModuleDomain companions under non-monotone remap``() =
+        // 1. Production entry point (Rebuild.rebuildSelective -> SSAAssignment.reconcileAndAssignWithCallableRelations)
+        //    vs fresh cold compile of the exact edited source.
+        let previous, coldEdited, warmReconciled, _ = LibraryClaimCases.receivingEdit ()
+        let warmPlan =
+            warmReconciled.Codata.Value.SSAAssignment
+            |> Option.defaultWith (fun () -> failwith "Expected SSAAssignment plan on warm reconciled graph.")
+        Assert.NotEmpty warmPlan.ReassignedNodes
+        let prevHighWater = previous.Codata.Value.SSAAssignment.Value.NodeHighWater
+        Assert.True(warmPlan.NodeHighWater > prevHighWater)
+        Assert.True(warmPlan.NodeRemap |> Map.exists (fun _ mapped -> NodeId.value mapped <= prevHighWater && previous.Nodes.ContainsKey mapped),
+                    "Expected production reconciliation to retain unchanged baseline NodeIds.")
+        Assert.True(warmPlan.NodeRemap |> Map.exists (fun _ mapped -> NodeId.value mapped > prevHighWater),
+                    "Expected production reconciliation to advance reassigned NodeIds above baseline high-water.")
+        // Assert actual non-monotone order inversion on the production reconcileAndAssignWithCallableRelations path
+        // across all 4 domain edges (BoundaryDomain, MemoryDomain, NumericDomain, SpatialModuleDomain).
+        let prodRemap id = warmPlan.NodeRemap[id]
+        let domainPremiseKeys (edge: Hyperedge) =
+            match edge.Role with
+            | EdgeRole.BoundaryDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | EdgeRole.MemoryDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | EdgeRole.NumericDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | EdgeRole.SpatialModuleDomain d -> Some (Map.keys d.Premises |> Seq.toList)
+            | _ -> None
+        let coldDomains = coldEdited.Edges |> List.filter (domainPremiseKeys >> Option.isSome)
+        Assert.Equal(4, coldDomains.Length)
+        for original in coldDomains do
+            let target = prodRemap original.Target
+            let warmDomain = warmReconciled.Edges |> List.filter (fun e -> e.Target = target && (domainPremiseKeys e).IsSome) |> Assert.Single
+            let expected = (domainPremiseKeys warmDomain).Value
+            Assert.False(List.map prodRemap original.Sources = expected, "Production selective rebuild must exercise actual non-monotone inversion.")
+            Assert.Equal<NodeId list>(expected, warmDomain.Sources)
+
+        let warmPrepared = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare warmReconciled |> WorkspaceCases.need
+        let warmRev = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish warmPrepared |> WorkspaceCases.need
+        let warmDefects = Fidelity.PSG.Integrity.check warmRev
+        Assert.True(warmDefects.IsEmpty, Fidelity.PSG.Integrity.describe warmDefects)
+
+        let coldPrepared = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare coldEdited |> WorkspaceCases.need
+        let coldRev = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish coldPrepared |> WorkspaceCases.need
+        let coldDefects = Fidelity.PSG.Integrity.check coldRev
+        Assert.True(coldDefects.IsEmpty, Fidelity.PSG.Integrity.describe coldDefects)
+
+        // Structural cold-vs-warm published revision & boundary/premise parity (identity-independent, not counts only).
+        let graphPremiseSummary (g: SemanticGraph) =
+            let rangeOf id = g.Nodes.TryFind id |> Option.map _.Range
+            let boundaryDomain = g.Edges |> List.pick (fun e -> match e.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+            let boundaryLists =
+                [ boundaryDomain.WritableBufferDeclarations |> List.map rangeOf |> List.sort
+                  boundaryDomain.WritableBufferUses |> List.map (fst >> rangeOf) |> List.sort
+                  boundaryDomain.ReadOnlyBufferDeclarations |> List.map rangeOf |> List.sort
+                  boundaryDomain.ReadOnlyBufferUses |> List.map (fst >> rangeOf) |> List.sort
+                  boundaryDomain.BorrowedResultViewDeclarations |> List.map rangeOf |> List.sort
+                  boundaryDomain.BorrowedResultViewUses |> List.map rangeOf |> List.sort
+                  boundaryDomain.BufferAbsences |> List.map rangeOf |> List.sort
+                  boundaryDomain.CountedEntryArrays |> List.map rangeOf |> List.sort
+                  boundaryDomain.ResourceDeclarations |> List.map rangeOf |> List.sort
+                  boundaryDomain.ResourceAccesses |> List.map rangeOf |> List.sort
+                  boundaryDomain.Imports |> List.map rangeOf |> List.sort
+                  boundaryDomain.Calls |> List.map rangeOf |> List.sort
+                  boundaryDomain.Entries |> List.map rangeOf |> List.sort
+                  boundaryDomain.CallbackInvocations |> List.map rangeOf |> List.sort
+                  boundaryDomain.CallbackAbsences |> List.map rangeOf |> List.sort
+                  boundaryDomain.ClosedEntries |> List.map rangeOf |> List.sort ]
+            let obligationPremises =
+                g.Nodes.Values
+                |> Seq.choose (fun n ->
+                    match n.Kind with
+                    | SemanticKind.Obligation ob -> Some (n.Range, ob.Kind, ob.Logic, ob.Statement, ob.Body)
+                    | _ -> None)
+                |> Seq.sort
+                |> Seq.toList
+            let contractSummaries =
+                g.Codata.Value.CallableContracts.Values
+                |> Seq.map (fun c ->
+                    let sourceRanges =
+                        c.Participants
+                        |> List.filter (fun p -> p.Role = ParticipantRole.Source)
+                        |> List.map (fun p -> rangeOf p.Node)
+                        |> List.sort
+                    c.Kind, c.Convention, sourceRanges)
+                |> Seq.sort
+                |> Seq.toList
+            boundaryLists, obligationPremises, contractSummaries
+        let revisionSummary (rev: Fidelity.PSG.Revision) =
+            let claims =
+                rev.CurrentClaims.Values
+                |> Seq.map (fun c -> c.Kind, c.Logic, c.Statement)
+                |> Seq.sort
+                |> Seq.toList
+            let carriers =
+                rev.Emission.Numeric.Values.Values
+                |> Seq.map (fun v -> v.Slot, v.Range)
+                |> Seq.sort
+                |> Seq.toList
+            let operations =
+                rev.Emission.Numeric.Operations.Values
+                |> Seq.map (fun o -> o.Kind, o.Form, o.OperationCarrier, o.Result.Slot)
+                |> Seq.sort
+                |> Seq.toList
+            let imports = rev.Emission.Boundary.Imports.Values |> Seq.map (fun (i: Fidelity.PSG.BoundaryImport) -> i.Symbol, i.Library) |> Seq.sort |> Seq.toList
+            let calls = rev.Emission.Boundary.Calls.Values |> Seq.map (fun (c: Fidelity.PSG.BoundaryCall) -> c.Arguments.Length, c.Participants.Count) |> Seq.sort |> Seq.toList
+            let kernels = rev.Emission.Spatial.Kernels.Values |> Seq.map (fun (k: Fidelity.PSG.KernelModuleWitness) -> k.Name) |> Seq.sort |> Seq.toList
+            claims, carriers, operations, imports, calls, kernels
+        Assert.Equal(revisionSummary coldRev, revisionSummary warmRev)
+        Assert.Equal(graphPremiseSummary coldPrepared, graphPremiseSummary warmPrepared)
+
+        // Exact-reason fault-injection on production warmReconciled: reversing BoundaryDomain EnrichedWith Sources is refused.
+        let prodBoundaryTarget =
+            warmReconciled.Edges |> List.pick (fun e -> match e.Role with EdgeRole.BoundaryDomain _ -> Some e.Target | _ -> None)
+        let mutable flippedProdBoundary = false
+        let faultedProdEdges =
+            warmReconciled.Edges |> List.map (fun e ->
+                if not flippedProdBoundary && e.Target = prodBoundaryTarget && e.Role = EdgeRole.EnrichedWith && e.Sources.Length >= 2 then
+                    flippedProdBoundary <- true
+                    { e with Sources = List.rev e.Sources }
+                else e)
+        Assert.True(flippedProdBoundary, "Expected to flip production BoundaryDomain EnrichedWith edge.")
+        match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare { warmReconciled with Edges = faultedProdEdges } with
+        | Result.Ok _ -> failwith "Reversed production BoundaryDomain EnrichedWith edge was admitted."
+        | Result.Error failures ->
+            Assert.Contains(failures, fun f ->
+                f.Reason = "BoundaryEmission: The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent.")
+
+        // 2. Non-monotone SSA remap on live NumericDomain + SpatialModuleDomain (2 KernelModule roots)
+        //    with unconditional inversion, clean prepare/publish/Integrity.check, and companion Sources-reversal negatives.
+        let authority = """namespace Fidelity.Platform.Contracts
+type KernelTarget = { Device: string; Columns: int; ShimRow: int; ComputeRow: int; FifoDepth: int; Iterations: int; Inputs: string array; Result: string }
+type WidthDeclaration = { Name: string; Bits: int }
+type Representation = { Name: string; Capability: string; Family: string; Bits: int; MinMagnitude: string; MaxMagnitude: string; Boundary: string }
+type TargetCore = { Arch: string; Runtime: string; Widths: WidthDeclaration array; Representations: Representation array }
+type PlatformDescription = { Id: string; Core: TargetCore option }
+module KernelAuthority =
+    let target: KernelTarget = { Device="npu2"; Columns=8; ShimRow=0; ComputeRow=2; FifoDepth=2; Iterations=1; Inputs=[|"int16";"int16"|]; Result="int32" }
+    let description: PlatformDescription = {
+        Id="kernel-witness-clef197"
+        Core=Some {
+            Arch="xdna2"; Runtime="xdna"
+            Widths=[| {Name="Pointer";Bits=32}; {Name="Register";Bits=16} |]
+            Representations=[|
+                {Name="int16";Capability="native";Family="int";Bits=16;MinMagnitude="-32768";MaxMagnitude="32767";Boundary="wrap"}
+                {Name="uint16";Capability="native";Family="uint";Bits=16;MinMagnitude="0";MaxMagnitude="65535";Boundary="wrap"}
+                {Name="int32";Capability="native";Family="int";Bits=32;MinMagnitude="-2147483648";MaxMagnitude="2147483647";Boundary="wrap"}
+                {Name="uint32";Capability="native";Family="uint";Bits=32;MinMagnitude="0";MaxMagnitude="4294967295";Boundary="wrap"} |] } }
+"""
+        let kernel = """module KernelComputation197
+type Shape = { Elements: int; Grain: int }
+type ElementKernelA = { Compute: int -> int -> int; Shape: Shape }
+type ElementKernelB = { Compute: int -> int -> int; Shape: Shape }
+let addCalc (left: int) (right: int) = left + right
+let mulCalc (left: int) (right: int) = left * right
+[<KernelModule>]
+let kernelA: ElementKernelA = { Compute = addCalc; Shape = { Elements = 64; Grain = 16 } }
+[<KernelModule>]
+let kernelB: ElementKernelB = { Compute = mulCalc; Shape = { Elements = 64; Grain = 16 } }
+"""
+        let representation name family bits minimum maximum : NumericRepresentation =
+            { Name = name; Family = family; Bits = bits; Capability = "native"
+              MinMagnitude = minimum; MaxMagnitude = maximum; Boundary = "wrap" }
+        let representations =
+            [ representation "int16" "int" 16 "-32768" "32767"
+              representation "uint16" "uint" 16 "0" "65535"
+              representation "int32" "int" 32 "-2147483648" "2147483647"
+              representation "uint32" "uint" 32 "0" "4294967295" ]
+        let context =
+            { SourcePlatformFixture.platform with
+                PlatformId = "kernel-witness-clef197"; Dimensions = Map.ofList [ "Pointer", 32; "Register", 16 ]
+                Representations = representations |> List.map (fun v -> v.Name, v) |> Map.ofList
+                PlatformDescription = Some "Fidelity.Platform.Contracts.KernelAuthority.description"
+                PlatformArchitecture = Some "xdna2"; SubstrateKind = Some SubstrateKind.NPU
+                RuntimeModel = Some RuntimeModel.XDNA
+                PlatformSourcePaths = Set.singleton (Path.GetFullPath "clef197-kernel-authority.clef") }
+        let parse path source =
+            match NativeService.parseStringWithDefaults source path with
+            | NativeService.ParseSuccess input -> input
+            | NativeService.ParseError errors -> failwithf "Kernel source failed to parse: %A" errors
+        let kernelRes =
+            NativeService.checkParsedInputsWithDeclarations
+                [ parse "clef197-kernel-authority.clef" authority; parse "clef197-kernel.clef" kernel ]
+                (Some context) Set.empty None None
+        DimensionalCases.noErrors kernelRes
+        let kg = kernelRes.Graph
+        let kBasePlan = kg.Codata.Value.SSAAssignment |> Option.defaultWith (fun () -> failwith "Expected kernel SSA plan.")
+        let numDomain = kg.Edges |> List.pick (fun e -> match e.Role with EdgeRole.NumericDomain d -> Some d | _ -> None)
+        let spaDomain = kg.Edges |> List.pick (fun e -> match e.Role with EdgeRole.SpatialModuleDomain d -> Some d | _ -> None)
+        Assert.True(spaDomain.Kernels.Length = 2, sprintf "Expected 2 spatial kernels, got %d" spaDomain.Kernels.Length)
+        Assert.True(numDomain.Values.Length >= 2)
+        Assert.True(numDomain.Operations.Length >= 2)
+        let numCarrierEdge = kg.Edges |> List.find (fun e -> match e.Role with EdgeRole.NumericCarrier _ when e.Sources.Length >= 2 -> true | _ -> false)
+        let numOpEdge = kg.Edges |> List.find (fun e -> match e.Role with EdgeRole.NumericOperation _ when e.Sources.Length >= 2 -> true | _ -> false)
+        let spaKernelEdge = kg.Edges |> List.find (fun e -> match e.Role with EdgeRole.KernelModule _ when e.Sources.Length >= 2 -> true | _ -> false)
+        let toReassign =
+            [ numCarrierEdge.Sources |> List.filter kg.Nodes.ContainsKey |> List.min
+              numOpEdge.Sources |> List.filter kg.Nodes.ContainsKey |> List.min
+              spaKernelEdge.Sources |> List.filter kg.Nodes.ContainsKey |> List.min
+              numDomain.Premises |> Map.keys |> Seq.min
+              spaDomain.Premises |> Map.keys |> Seq.min ]
+            |> Set.ofList
+        let allIds = kg.Nodes.Keys |> Set.ofSeq
+        let retained = Set.difference allIds toReassign
+        let alignment = allIds |> Seq.map (fun id -> id, id) |> Map.ofSeq
+        let reconciledKg, kPlan =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign kg alignment retained kg with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Non-monotone kernel SSA remap refused: %A" failure
+        for name, sources in
+            [ "NumericCarrier", numCarrierEdge.Sources
+              "NumericOperation", numOpEdge.Sources
+              "SpatialKernel", spaKernelEdge.Sources ] do
+            let present = sources |> List.filter kg.Nodes.ContainsKey
+            let minId = List.min present
+            Assert.True(toReassign.Contains minId, sprintf "%s min was not reassigned." name)
+            let peer = present |> List.find (fun id -> not (toReassign.Contains id))
+            Assert.True(NodeId.value kPlan.NodeRemap[minId] > kBasePlan.NodeHighWater)
+            Assert.Equal(peer, kPlan.NodeRemap[peer])
+            Assert.True(kPlan.NodeRemap[minId] > kPlan.NodeRemap[peer])
+        let kPrepared = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare reconciledKg |> WorkspaceCases.need
+        let kRev = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish kPrepared |> WorkspaceCases.need
+        let kDefects = Fidelity.PSG.Integrity.check kRev
+        Assert.True(kDefects.IsEmpty, Fidelity.PSG.Integrity.describe kDefects)
+        // Exact-reason Sources-reversal negatives on NumericCarrier, NumericOperation, and SpatialKernel companion edges.
+        let flipAndExpect name pred expectedReason =
+            let mutable flipped = false
+            let edges =
+                reconciledKg.Edges |> List.map (fun e ->
+                    if not flipped && pred e.Role && e.Sources.Length >= 2 && e.Sources <> List.rev e.Sources then
+                        flipped <- true
+                        { e with Sources = List.rev e.Sources }
+                    else e)
+            Assert.True(flipped, sprintf "Expected to flip %s companion edge." name)
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare { reconciledKg with Edges = edges } with
+            | Result.Ok _ -> failwithf "Reversed %s companion edge was admitted." name
+            | Result.Error failures -> Assert.Contains(failures, fun f -> f.Reason = expectedReason)
+        flipAndExpect "NumericCarrier" (function EdgeRole.NumericCarrier _ -> true | _ -> false)
+            "NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent."
+        flipAndExpect "NumericOperation" (function EdgeRole.NumericOperation _ -> true | _ -> false)
+            "NumericPublication: The numeric carrier, joint premises, rewrite record or checked coverage obligation is inconsistent."
+        flipAndExpect "KernelModule" (function EdgeRole.KernelModule _ -> true | _ -> false)
+            "SpatialPublication: The complete spatial plan, participants, proof census or source rewrite record is inconsistent."
+
+        // Hardened CallableContracts controls:
+        // (a) Positive: at least one CallableContract with >= 2 Source participants had its source order inverted and re-synced cleanly.
+        let origContracts = kg.Codata.Value.CallableContracts
+        let newContracts = reconciledKg.Codata.Value.CallableContracts
+        let contractWithInvertedSources =
+            origContracts
+            |> Map.toList
+            |> List.tryPick (fun (cid, origContract) ->
+                let origSources = origContract.Participants |> List.filter (fun p -> p.Role = ParticipantRole.Source) |> List.map _.Node
+                if origSources.Length >= 2 then
+                    let mappedCid = kPlan.NodeRemap.TryFind cid |> Option.defaultValue cid
+                    let mappedOrigOrder = origSources |> List.map (fun n -> kPlan.NodeRemap.TryFind n |> Option.defaultValue n)
+                    match newContracts.TryFind mappedCid with
+                    | Some newContract ->
+                        let newSources = newContract.Participants |> List.filter (fun p -> p.Role = ParticipantRole.Source) |> List.map _.Node
+                        if newSources <> mappedOrigOrder && List.sort newSources = List.sort mappedOrigOrder then Some (cid, origContract) else None
+                    | None -> None
+                else None)
+        Assert.True(contractWithInvertedSources.IsSome, "Expected at least one CallableContract with >= 2 inverted Source participants.")
+        let targetContractId, targetContract = contractWithInvertedSources.Value
+        // (b) Exact-reason negative: pre-faulted non-canonical CallableContract.Participants is refused directly by SSA.
+        let sourceParts = targetContract.Participants |> List.filter (fun p -> p.Role = ParticipantRole.Source)
+        let nonSourceParts = targetContract.Participants |> List.filter (fun p -> p.Role <> ParticipantRole.Source)
+        let reversedSources = List.rev sourceParts |> List.mapi (fun i p -> { p with Ordinal = i })
+        Assert.NotEqual<Participant list>(sourceParts, reversedSources)
+        let preFaultedContractGraph =
+            let cod = kg.Codata.Value
+            let badContract = { targetContract with Participants = nonSourceParts @ reversedSources }
+            { kg with Codata = lazy { cod with CallableContracts = cod.CallableContracts.Add(targetContractId, badContract) } }
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign kg Map.empty Set.empty preFaultedContractGraph with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Equal("SSAAssignment: Callable contract participants are not canonical before SSA remapping.", reason)
+        | other -> failwithf "Expected direct SSA refusal on non-canonical CallableContract participants, got %A" other
+        // (c) Exact-reason negative: ambiguous duplicate CallableCarrier with conflicting signature for one contract is refused directly by SSA.
+        let sampleCarrierKey, sampleCarrier =
+            kg.Codata.Value.CallableCarriers |> Map.toList |> List.find (fun (_, c) -> match c.Contract with Result.Ok _ -> true | Result.Error _ -> false)
+        let syntheticCarrierKey = NodeId (kBasePlan.NodeHighWater + 999)
+        let conflictingCarrier = { sampleCarrier with Occurrence = syntheticCarrierKey; Result = syntheticCarrierKey }
+        Assert.NotEqual(sampleCarrier.Result, conflictingCarrier.Result)
+        let ambiguousCarrierGraph =
+            let cod = kg.Codata.Value
+            { kg with Codata = lazy { cod with CallableCarriers = cod.CallableCarriers.Add(syntheticCarrierKey, conflictingCarrier) } }
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign kg Map.empty Set.empty ambiguousCarrierGraph with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Equal("SSAAssignment: Ambiguous callable carrier for implementation during SSA remapping.", reason)
+        | other -> failwithf "Expected direct SSA refusal on ambiguous CallableCarrier, got %A" other
+        ignore sampleCarrierKey

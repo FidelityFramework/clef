@@ -5,10 +5,6 @@ Nanopass/ClosureEnvironmentSettlement.fs	ConditionalWeakTable	1
 Nanopass/FoldIn.fs	ConditionalWeakTable	1
 Nanopass/LazyRuntime.fs	ConditionalWeakTable	1
 Nanopass/ObligationDischarge.fs	ProcessStartInfo	1
-Nanopass/SSAAssignment.fs	FSharpType	7
-Nanopass/SSAAssignment.fs	FSharpValue	11
-Nanopass/SSAAssignment.fs	Microsoft.FSharp.Reflection	1
-Nanopass/SSAAssignment.fs	System.Reflection	1
 Nanopass/SequenceProgramInstances.fs	ConditionalWeakTable	2
 PSGSaturation/SemanticGraph/BorrowedViews.fs	ConditionalWeakTable	1
 PSGSaturation/SemanticGraph/CallableCarriers.fs	ConditionalWeakTable	2

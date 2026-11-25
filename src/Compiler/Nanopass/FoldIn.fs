@@ -34,10 +34,9 @@ let private remapSchemeReferences replacements metadata =
         | _ -> value)
 
 /// Redirect semantic references by identity, including resolved definitions and
-/// capture sources. Recipes may use the same operation with a scope-local map;
-/// it does not change types, capture modes, provenance ranges or graph topology.
-let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKind) : SemanticKind =
-    let update = updateRef replacementMap
+/// capture sources. Shared single closed algebraic owner for both FoldIn
+/// (`remapObligation = id`) and SSA remapping (`remapObligation = remapObligationInfo`).
+let remapKind (update: NodeId -> NodeId) (remapObligation: ObligationInfo -> ObligationInfo) (kind: SemanticKind) : SemanticKind =
     let updateCaptures captures =
         captures |> List.map (fun capture ->
             { capture with SourceNodeId = Option.map update capture.SourceNodeId })
@@ -170,7 +169,7 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
     | SemanticKind.InterpolatedString parts ->
         let updatedParts = parts |> List.map (function
             | InterpolatedPart.ExprPart nodeId -> InterpolatedPart.ExprPart (update nodeId)
-            | other -> other)
+            | InterpolatedPart.StringPart _ as other -> other)
         SemanticKind.InterpolatedString updatedParts
     | SemanticKind.Yield value ->
         SemanticKind.Yield (update value)
@@ -180,14 +179,19 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
         SemanticKind.TupleGet (update tuple, index)
     | SemanticKind.TraitCall (memberName, types, arg) ->
         SemanticKind.TraitCall (memberName, types, update arg)
+    | SemanticKind.Obligation info ->
+        SemanticKind.Obligation (remapObligation info)
     // Leaf nodes - no references to update
-    | SemanticKind.Binding _ 
+    | SemanticKind.Binding _
     | SemanticKind.Literal _
     | SemanticKind.PlatformBinding _
     | SemanticKind.Intrinsic _
     | SemanticKind.PatternBinding _
-    | SemanticKind.Obligation _
     | SemanticKind.Error _ -> kind
+
+/// Redirect semantic references by identity using a scope-local replacement map.
+let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKind) : SemanticKind =
+    remapKind (updateRef replacementMap) id kind
 
 /// Update all NodeId references in a node's Children list
 let private updateChildRefs (replacementMap: Map<NodeId, NodeId>) (children: NodeId list) : NodeId list =

@@ -4285,3 +4285,510 @@ let main _ =
                 s.Replace("LibraryMutatesBuffer = false", "LibraryMutatesBuffer = true"))
         Assert.Contains(BoundaryEmissionFixture.rejected fs9223ExclusiveLibraryMutatesRes.Graph, fun f -> f.Reason.Contains "FS9223:")
         Assert.Contains(fs9223ExclusiveLibraryMutatesRes.Diagnostics, fun d -> d.Code = "FS9223")
+
+    [<Fact>]
+    member _.``clef #197: non-monotone SSA remap preserves all remaining boundary buffer, absence, counted-entry, and native-entry lists and companion roles``() =
+        let rowRefusal =
+            "BoundaryEmission: The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent."
+        let verifyNonMonotone
+            (label: string)
+            (graph: SemanticGraph)
+            (listSpecs: (string * (BoundaryDomain -> NodeId list) * (BoundaryDomain -> NodeId list -> BoundaryDomain) * string * bool) list)
+            (pairListSpecs: (string * (BoundaryDomain -> (NodeId * int) list) * (BoundaryDomain -> (NodeId * int) list -> BoundaryDomain) * string) list)
+            (rolePredicates: (string * (EdgeRole -> bool) * (Hyperedge -> NodeId list)) list) =
+            let baselinePlan =
+                graph.Codata.Value.SSAAssignment
+                |> Option.defaultWith (fun () -> failwithf "%s: expected baseline SSAAssignment plan." label)
+            let origDomain =
+                graph.Edges |> List.pick (fun e -> match e.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+            let toReassign =
+                [ for name, getter, _, _, _ in listSpecs do
+                      let items = getter origDomain
+                      Assert.True(items.Length >= 2, sprintf "%s/%s: expected >=2 entries, got %d" label name items.Length)
+                      yield List.min items
+                  for name, getter, _, _ in pairListSpecs do
+                      let items = getter origDomain
+                      Assert.True(items.Length >= 2, sprintf "%s/%s: expected >=2 entries, got %d" label name items.Length)
+                      yield items |> List.map fst |> List.min
+                  for name, pred, getNodes in rolePredicates do
+                      let matching = graph.Edges |> List.filter (fun e -> pred e.Role)
+                      Assert.True(not matching.IsEmpty, sprintf "%s/%s: expected matching companion edge" label name)
+                      let nodes = getNodes matching.Head |> List.filter graph.Nodes.ContainsKey
+                      Assert.True(nodes.Length >= 2, sprintf "%s/%s: expected >=2 source nodes" label name)
+                      yield List.min nodes ]
+                |> Set.ofList
+            Assert.True(not toReassign.IsEmpty, sprintf "%s: expected non-empty reassigned set" label)
+            for id in toReassign do
+                Assert.True(graph.Nodes.ContainsKey id, sprintf "%s: reassigned %A must be a graph node" label id)
+            let allNodes = graph.Nodes.Keys |> Set.ofSeq
+            let retained = Set.difference allNodes toReassign
+            let alignment = allNodes |> Seq.map (fun id -> id, id) |> Map.ofSeq
+            let reconciled, plan =
+                match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+                | Result.Ok pair -> pair
+                | Result.Error failure -> failwithf "%s: non-monotone SSA remap refused: %A" label failure
+            let remappedDomain =
+                reconciled.Edges |> List.pick (fun e -> match e.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+            for name, getter, _, _, _ in listSpecs do
+                let origItems = getter origDomain
+                let minId = List.min origItems
+                Assert.True(toReassign.Contains minId, sprintf "%s/%s: min was not reassigned" label name)
+                let remappedMin = plan.NodeRemap[minId]
+                let peer = origItems |> List.find (fun id -> not (toReassign.Contains id))
+                Assert.True(NodeId.value remappedMin > baselinePlan.NodeHighWater, sprintf "%s/%s: min did not advance" label name)
+                Assert.Equal(peer, plan.NodeRemap[peer])
+                Assert.True(remappedMin > plan.NodeRemap[peer], sprintf "%s/%s: order not inverted" label name)
+                let unsorted = origItems |> List.map (fun id -> plan.NodeRemap[id])
+                let sorted = List.sort unsorted
+                Assert.NotEqual<NodeId list>(unsorted, sorted)
+                Assert.Equal<NodeId list>(sorted, getter remappedDomain)
+            for name, getter, _, _ in pairListSpecs do
+                let origItems = getter origDomain
+                let minId = origItems |> List.map fst |> List.min
+                Assert.True(toReassign.Contains minId, sprintf "%s/%s: min was not reassigned" label name)
+                let remappedMin = plan.NodeRemap[minId]
+                let peer = origItems |> List.map fst |> List.find (fun id -> not (toReassign.Contains id))
+                Assert.True(NodeId.value remappedMin > baselinePlan.NodeHighWater, sprintf "%s/%s: min did not advance" label name)
+                Assert.Equal(peer, plan.NodeRemap[peer])
+                Assert.True(remappedMin > plan.NodeRemap[peer], sprintf "%s/%s: order not inverted" label name)
+                let unsorted = origItems |> List.map (fun (id, ord) -> plan.NodeRemap[id], ord)
+                let sorted = List.sort unsorted
+                Assert.NotEqual<(NodeId * int) list>(unsorted, sorted)
+                Assert.Equal<(NodeId * int) list>(sorted, getter remappedDomain)
+            // Positive control: prepare + publish + Integrity.check = 0 defects.
+            let prepared =
+                Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare reconciled
+                |> Result.defaultWith (fun f -> failwithf "%s: WitnessEmission.prepare refused: %A" label f)
+            let revision =
+                Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish prepared
+                |> Result.defaultWith (fun f -> failwithf "%s: RevisionPublication.publish refused: %A" label f)
+            let defects = Fidelity.PSG.Integrity.check revision
+            Assert.True(defects.IsEmpty, sprintf "%s: %s" label (Fidelity.PSG.Integrity.describe defects))
+            // Exact-reason companion-role Sources-reversal negatives.
+            for name, pred, _ in rolePredicates do
+                let mutable flipped = false
+                let edges =
+                    reconciled.Edges |> List.map (fun e ->
+                        if not flipped && pred e.Role && e.Sources.Length >= 2 && e.Sources <> List.rev e.Sources then
+                            flipped <- true
+                            { e with Sources = List.rev e.Sources }
+                        else e)
+                Assert.True(flipped, sprintf "%s/%s: expected to flip companion edge Sources" label name)
+                match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare { reconciled with Edges = edges } with
+                | Result.Ok _ -> failwithf "%s/%s: reversed companion Sources was admitted" label name
+                | Result.Error failures -> Assert.Contains(failures, fun f -> f.Reason = rowRefusal)
+            // Fault-injection negative controls (unsorted where order-checked + withdrawal on every list).
+            let assertDomainFault desc mutate expectedReason =
+                let faulted =
+                    { reconciled with
+                        Edges =
+                            reconciled.Edges |> List.map (fun e ->
+                                match e.Role with
+                                | EdgeRole.BoundaryDomain d -> { e with Role = EdgeRole.BoundaryDomain (mutate d) }
+                                | _ -> e) }
+                match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare faulted with
+                | Result.Ok _ -> failwithf "%s/%s: fault was admitted (expected %s)" label desc expectedReason
+                | Result.Error failures -> Assert.Contains(failures, fun f -> f.Reason = expectedReason)
+            for name, getter, setter, reason, strictOrder in listSpecs do
+                if strictOrder then
+                    let unsorted = getter origDomain |> List.map (fun id -> plan.NodeRemap[id])
+                    assertDomainFault (name + ".unsorted") (fun d -> setter d unsorted) reason
+                assertDomainFault (name + ".withdrawn") (fun d -> setter d (List.tail (getter d))) reason
+            for name, getter, setter, reason in pairListSpecs do
+                assertDomainFault (name + ".withdrawn") (fun d -> setter d (List.tail (getter d))) reason
+
+        // 1. WritableBufferDeclarations + WritableBufferUses + BoundaryWritableBufferDeclaration + BoundaryWritableBufferUse.
+        let writableSrc = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type WritableBufferDescriptor = { Binding: string; Parameter: int; CountParameter: int; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "wbuf_a")>]
+let writeA (buffer: int array) (count: int) : unit = NativeDefault.zeroed ()
+let writeADescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "wbuf_a"
+    Parameters = [| { Name = "buffer"; Type = Integer (Unsigned, 8); PassBy = Reference }; { Name = "count"; Type = Integer (Unsigned, 64); PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let writeAWritableBufferDescriptor: Expr<WritableBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.writeA"; Parameter = 0; CountParameter = 1
+    Hypothesis = { Identity = "test.wb.a"; Version = "1"; Source = "clef197-wb" } } @>
+
+[<FidelityExtern("c", "wbuf_b")>]
+let writeB (buffer: int array) (count: int) : unit = NativeDefault.zeroed ()
+let writeBDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "wbuf_b"
+    Parameters = [| { Name = "buffer"; Type = Integer (Unsigned, 8); PassBy = Reference }; { Name = "count"; Type = Integer (Unsigned, 64); PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let writeBWritableBufferDescriptor: Expr<WritableBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.writeB"; Parameter = 0; CountParameter = 1
+    Hypothesis = { Identity = "test.wb.b"; Version = "1"; Source = "clef197-wb" } } @>
+
+[<EntryPoint>]
+let main _ =
+    let a = Array.zeroCreate 4
+    let b = Array.zeroCreate 4
+    writeA a 3
+    writeB b 3
+    if a[0] = b[0] then 0 else 1
+"""
+        let writableRes = BoundaryEmissionCases.B1bCheck("clef197-wb.clef", writableSrc)
+        DimensionalCases.noErrors writableRes
+        verifyNonMonotone
+            "WritableBuffers"
+            writableRes.Graph
+            [ "WritableBufferDeclarations", (fun d -> d.WritableBufferDeclarations), (fun d v -> { d with WritableBufferDeclarations = v }),
+              "BoundaryEmission: The source writable buffer declaration account was withdrawn or duplicated.", false ]
+            [ "WritableBufferUses", (fun d -> d.WritableBufferUses), (fun d v -> { d with WritableBufferUses = v }),
+              "BoundaryEmission: The exact writable application or native buffer ordinal was withdrawn or duplicated." ]
+            [ "BoundaryWritableBufferDeclaration", (function EdgeRole.BoundaryWritableBufferDeclaration _ -> true | _ -> false), (fun e -> e.Sources)
+              "BoundaryWritableBufferUse", (function EdgeRole.BoundaryWritableBufferUse _ -> true | _ -> false), (fun e -> e.Sources) ]
+
+        // 2. ReadOnlyBufferDeclarations + ReadOnlyBufferUses + BufferAbsences + BoundaryBufferAbsence.
+        let barePrelude =
+            [ "BAREWireDescriptors.clef",
+              "namespace BAREWire.Descriptors\n"
+              + "type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }\n"
+              + "type BufferAbsenceContract = { Binding: string; Parameter: int; Hypothesis: ExternalExecutionHypothesis }\n" ]
+        let roAndAbsSrc = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ReadOnlyBufferExtent = ExplicitCount of int | UncountedNulTerminated
+type BorrowedContent = | Utf8Text | RawBytes
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type BufferRetention = DuringCall | RetainedUntil of int * RetentionRelease array
+type ReadOnlyBufferDescriptor = { Binding: string; Parameter: int; Extent: ReadOnlyBufferExtent; Content: BorrowedContent; Retention: BufferRetention; Hypothesis: ExternalExecutionHypothesis }
+
+[<FidelityExtern("c", "send_opt_a")>]
+let sendOptA (buf: option<string>) (len: int) : int = NativeDefault.zeroed ()
+let sendOptADescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "send_opt_a"
+    Parameters = [| { Name = "buf"; Type = Pointer 64; PassBy = Value }; { Name = "len"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let sendOptAReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.sendOptA"; Parameter = 0
+    Extent = ExplicitCount 1; Content = RawBytes; Retention = DuringCall
+    Hypothesis = { Identity = "test.send.ro.a"; Version = "1"; Source = "clef197-ro" } } @>
+let sendOptABufferAbsenceDescriptor: Expr<BAREWire.Descriptors.BufferAbsenceContract> = <@ {
+    BAREWire.Descriptors.BufferAbsenceContract.Binding = "BoundaryFixture.sendOptA"; Parameter = 0
+    Hypothesis = { BAREWire.Descriptors.ExternalExecutionHypothesis.Identity = "test.abs.a"; Version = "1"; Source = "clef197-abs" } } @>
+
+[<FidelityExtern("c", "send_opt_b")>]
+let sendOptB (buf: option<string>) (len: int) : int = NativeDefault.zeroed ()
+let sendOptBDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "send_opt_b"
+    Parameters = [| { Name = "buf"; Type = Pointer 64; PassBy = Value }; { Name = "len"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let sendOptBReadOnlyBufferDescriptor: Expr<ReadOnlyBufferDescriptor> = <@ {
+    Binding = "BoundaryFixture.sendOptB"; Parameter = 0
+    Extent = ExplicitCount 1; Content = RawBytes; Retention = DuringCall
+    Hypothesis = { Identity = "test.send.ro.b"; Version = "1"; Source = "clef197-ro" } } @>
+let sendOptBBufferAbsenceDescriptor: Expr<BAREWire.Descriptors.BufferAbsenceContract> = <@ {
+    BAREWire.Descriptors.BufferAbsenceContract.Binding = "BoundaryFixture.sendOptB"; Parameter = 0
+    Hypothesis = { BAREWire.Descriptors.ExternalExecutionHypothesis.Identity = "test.abs.b"; Version = "1"; Source = "clef197-abs" } } @>
+
+[<EntryPoint>]
+let main _ =
+    let r1 = sendOptA None 0
+    let r2 = sendOptA (Some "ab") 2
+    let r3 = sendOptB None 0
+    let r4 = sendOptB (Some "cd") 2
+    if r1 + r2 + r3 + r4 = 0 then 0 else 1
+"""
+        let roAndAbsRes = BoundaryEmissionCases.B1bCheck("clef197-ro-abs.clef", roAndAbsSrc, barePrelude)
+        DimensionalCases.noErrors roAndAbsRes
+        verifyNonMonotone
+            "ReadOnlyBuffersAndAbsences"
+            roAndAbsRes.Graph
+            [ "ReadOnlyBufferDeclarations", (fun d -> d.ReadOnlyBufferDeclarations), (fun d v -> { d with ReadOnlyBufferDeclarations = v }),
+              "BoundaryEmission: The source read-only buffer declaration account was withdrawn or duplicated.", false
+              "BufferAbsences", (fun d -> d.BufferAbsences), (fun d v -> { d with BufferAbsences = v }),
+              "BoundaryEmission: The source buffer absence account was withdrawn or duplicated.", false ]
+            [ "ReadOnlyBufferUses", (fun d -> d.ReadOnlyBufferUses), (fun d v -> { d with ReadOnlyBufferUses = v }),
+              "BoundaryEmission: The exact read-only buffer application or native ordinal was withdrawn or duplicated." ]
+            [ "BoundaryBufferAbsence", (function EdgeRole.BoundaryBufferAbsence _ -> true | _ -> false), (fun e -> e.Sources) ]
+
+        // 3. BorrowedResultViewDeclarations + BorrowedResultViewUses.
+        let bvSrc = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ResourceRelease = { Binding: string; Parameter: int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }
+type BorrowedContent = | Utf8Text | RawBytes
+type BorrowedExtent = NulTerminated | CompanionCall of string * int array
+type OwnerInvalidationCall = { Binding: string; Parameter: int }
+type BorrowInvalidation = AnyOwnerCall | OwnerCall of OwnerInvalidationCall
+type BorrowedResultViewDescriptor = { Binding: string; Content: BorrowedContent; Extent: BorrowedExtent; Owner: int; InvalidatedBy: BorrowInvalidation array; Hypothesis: ExternalExecutionHypothesis }
+type StmtHandle = | StmtHandle
+
+[<FidelityExtern("c", "bv_create")>]
+let createStmt (k: int) : option<CHandle<StmtHandle>> = NativeDefault.zeroed ()
+let createStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "bv_create"; Parameters = [| { Name = "k"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let createStmtResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 })
+    Hypothesis = { Identity = "test.bv.stmt"; Version = "1"; Source = "clef197-bv" } } @>
+
+[<FidelityExtern("c", "bv_finalize")>]
+let finalizeStmt (stmt: CHandle<StmtHandle>) : unit = NativeDefault.zeroed ()
+let finalizeStmtDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "bv_finalize"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "bv_col_bytes")>]
+let colBytes (stmt: CHandle<StmtHandle>) (col: int) : int = NativeDefault.zeroed ()
+let colBytesDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "bv_col_bytes"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value }; { Name = "col"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+
+[<FidelityExtern("c", "bv_col_text_a")>]
+let colTextA (stmt: CHandle<StmtHandle>) (col: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let colTextADescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "bv_col_text_a"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value }; { Name = "col"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let colTextABorrowedResultViewDescriptor: Expr<BorrowedResultViewDescriptor> = <@ {
+    Binding = "BoundaryFixture.colTextA"; Content = RawBytes
+    Extent = CompanionCall ("BoundaryFixture.colBytes", [| 0; 1 |]); Owner = 0
+    InvalidatedBy = [| OwnerCall { Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 } |]
+    Hypothesis = { Identity = "test.bv.a"; Version = "1"; Source = "clef197-bv" } } @>
+
+[<FidelityExtern("c", "bv_col_text_b")>]
+let colTextB (stmt: CHandle<StmtHandle>) (col: int) : option<CHandle<unit>> = NativeDefault.zeroed ()
+let colTextBDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "bv_col_text_b"; Parameters = [| { Name = "stmt"; Type = Pointer 64; PassBy = Value }; { Name = "col"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let colTextBBorrowedResultViewDescriptor: Expr<BorrowedResultViewDescriptor> = <@ {
+    Binding = "BoundaryFixture.colTextB"; Content = RawBytes
+    Extent = CompanionCall ("BoundaryFixture.colBytes", [| 0; 1 |]); Owner = 0
+    InvalidatedBy = [| OwnerCall { Binding = "BoundaryFixture.finalizeStmt"; Parameter = 0 } |]
+    Hypothesis = { Identity = "test.bv.b"; Version = "1"; Source = "clef197-bv" } } @>
+
+let readView (v: option<CHandle<unit>>) (n: int) : int =
+    match v with
+    | Some _ -> if n >= 0 then 0 else 1
+    | None -> 0
+
+[<EntryPoint>]
+let main _ =
+    match createStmt 1 with
+    | None -> 1
+    | Some s ->
+        let col = 0
+        let v1 = colTextA s col
+        let n1 = colBytes s col
+        let r1 = readView v1 n1
+        let v2 = colTextB s col
+        let n2 = colBytes s col
+        let r2 = readView v2 n2
+        finalizeStmt s
+        r1 + r2
+"""
+        let bvRes = BoundaryEmissionCases.B1bCheck("clef197-bv.clef", bvSrc)
+        DimensionalCases.noErrors bvRes
+        verifyNonMonotone
+            "BorrowedResultViews"
+            bvRes.Graph
+            [ "BorrowedResultViewDeclarations", (fun d -> d.BorrowedResultViewDeclarations), (fun d v -> { d with BorrowedResultViewDeclarations = v }),
+              "BoundaryEmission: The source borrowed result view declaration account was withdrawn or duplicated.", false
+              "BorrowedResultViewUses", (fun d -> d.BorrowedResultViewUses), (fun d v -> { d with BorrowedResultViewUses = v }),
+              "BoundaryEmission: The exact borrowed result view application was withdrawn or duplicated.", false ]
+            []
+            []
+
+        // 4. CountedEntryArrays (>= 2).
+        let ceaSrc = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void | Entry of string
+type EntrySentinel = EntrySentinel of string * int
+type PassBy = Value | Reference | ReadOnlyReference | Fixed of EntrySentinel
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type EntrySignature = { Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv }
+type ExternalExecutionHypothesis = { Identity: string; Version: string; Source: string }
+type ResourceRelease = { Binding: string; Parameter: int }
+type ResourceProtocol = OwnedNullableReturn of ResourceRelease
+type ResourceDescriptor = { Resource: ResourceProtocol; Hypothesis: ExternalExecutionHypothesis }
+type OwnerReleaseTarget = { Binding: string; Parameter: int }
+type RetentionRelease = Redefinition of int array | OwnerRelease of OwnerReleaseTarget
+type RetainedCallbackDescriptor = { Binding: string; Parameter: string; Owner: int; Releases: RetentionRelease array }
+type CountedElement = Text | NullableText | Handle of string | NullableHandle of string
+type CountedEntryArrayDescriptor = { Binding: string; Parameter: int; Argument: int; CountArgument: int; Element: CountedElement }
+type CallbackInvocationContract = { Binding: string; Parameter: int; Signature: EntrySignature; Hypothesis: ExternalExecutionHypothesis; Scope: string }
+type DbMarker = | DbMarker
+type CtxMarker = | CtxMarker
+
+[<FidelityExtern("c", "cea_open")>]
+let dbOpen (k: int) : option<CHandle<DbMarker>> = NativeDefault.zeroed ()
+let dbOpenDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "cea_open"; Parameters = [| { Name = "k"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Pointer 64; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+let dbOpenResourceDescriptor: Expr<ResourceDescriptor> = <@ {
+    Resource = OwnedNullableReturn ({ Binding = "BoundaryFixture.dbClose"; Parameter = 0 })
+    Hypothesis = { Identity = "test.cea.db"; Version = "1"; Source = "clef197-cea" } } @>
+
+[<FidelityExtern("c", "cea_close")>]
+let dbClose (db: CHandle<DbMarker>) : unit = NativeDefault.zeroed ()
+let dbCloseDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "cea_close"; Parameters = [| { Name = "db"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Undeclared } @>
+
+[<FidelityExtern("c", "cea_create_a")>]
+let createFnA (db: CHandle<DbMarker>) (xFunc: FnPtr<CHandle<CtxMarker> -> int -> CHandle<unit> -> unit>) : int = NativeDefault.zeroed ()
+let createFnADescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "cea_create_a"
+    Parameters = [|
+        { Name = "db"; Type = Pointer 64; PassBy = Value }
+        { Name = "eTextRep"; Type = Integer (Signed, 32); PassBy = Fixed (EntrySentinel ("SQLITE_UTF8", 1)) }
+        { Name = "xFunc"; Type = Entry "BoundaryFixture.xFuncACallbackInvocationContract"; PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let xFuncAScope: Expr<RetainedCallbackDescriptor> = <@ {
+    Binding = "BoundaryFixture.createFnA"; Parameter = "xFunc"; Owner = 0
+    Releases = [| OwnerRelease { Binding = "BoundaryFixture.dbClose"; Parameter = 0 } |] } @>
+let xFuncACallbackInvocationContract: Expr<CallbackInvocationContract> = <@ {
+    Binding = "BoundaryFixture.createFnA"; Parameter = 2
+    Signature = {
+        Parameters = [|
+            { Name = "ctx"; Type = Pointer 64; PassBy = Value }
+            { Name = "argc"; Type = Integer (Signed, 32); PassBy = Value }
+            { Name = "argv"; Type = Pointer 64; PassBy = Value } |]
+        ReturnType = Void; CallingConvention = CDecl }
+    Hypothesis = { Identity = "test.cea.a"; Version = "1"; Source = "clef197-cea" }
+    Scope = "BoundaryFixture.xFuncAScope" } @>
+let xFuncACountedEntryArrayDescriptor: Expr<CountedEntryArrayDescriptor> = <@ {
+    Binding = "BoundaryFixture.createFnA"; Parameter = 2; Argument = 2; CountArgument = 1; Element = Text } @>
+
+[<FidelityExtern("c", "cea_create_b")>]
+let createFnB (db: CHandle<DbMarker>) (xFunc: FnPtr<CHandle<CtxMarker> -> int -> CHandle<unit> -> unit>) : int = NativeDefault.zeroed ()
+let createFnBDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "cea_create_b"
+    Parameters = [|
+        { Name = "db"; Type = Pointer 64; PassBy = Value }
+        { Name = "eTextRep"; Type = Integer (Signed, 32); PassBy = Fixed (EntrySentinel ("SQLITE_UTF8", 1)) }
+        { Name = "xFunc"; Type = Entry "BoundaryFixture.xFuncBCallbackInvocationContract"; PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let xFuncBScope: Expr<RetainedCallbackDescriptor> = <@ {
+    Binding = "BoundaryFixture.createFnB"; Parameter = "xFunc"; Owner = 0
+    Releases = [| OwnerRelease { Binding = "BoundaryFixture.dbClose"; Parameter = 0 } |] } @>
+let xFuncBCallbackInvocationContract: Expr<CallbackInvocationContract> = <@ {
+    Binding = "BoundaryFixture.createFnB"; Parameter = 2
+    Signature = {
+        Parameters = [|
+            { Name = "ctx"; Type = Pointer 64; PassBy = Value }
+            { Name = "argc"; Type = Integer (Signed, 32); PassBy = Value }
+            { Name = "argv"; Type = Pointer 64; PassBy = Value } |]
+        ReturnType = Void; CallingConvention = CDecl }
+    Hypothesis = { Identity = "test.cea.b"; Version = "1"; Source = "clef197-cea" }
+    Scope = "BoundaryFixture.xFuncBScope" } @>
+let xFuncBCountedEntryArrayDescriptor: Expr<CountedEntryArrayDescriptor> = <@ {
+    Binding = "BoundaryFixture.createFnB"; Parameter = 2; Argument = 2; CountArgument = 1; Element = Text } @>
+
+let handler (_ctx: CHandle<CtxMarker>) (argc: int) (_argv: CHandle<unit>) : unit =
+    let a = if argc < 0 then 0 elif argc > 15 then 15 else argc
+    if a >= 0 then () else ()
+
+let runTest () : int =
+    match dbOpen 1 with
+    | None -> 1
+    | Some db ->
+        let r1 = createFnA db (FnPtr.ofFunction handler)
+        let r2 = createFnB db (FnPtr.ofFunction handler)
+        dbClose db
+        r1 + r2
+
+[<EntryPoint>]
+let main _ =
+    if runTest () = 0 then 0 else 1
+"""
+        let ceaRes = BoundaryEmissionCases.B1bCheck("clef197-cea.clef", ceaSrc)
+        DimensionalCases.noErrors ceaRes
+        verifyNonMonotone
+            "CountedEntryArrays"
+            ceaRes.Graph
+            [ "CountedEntryArrays", (fun d -> d.CountedEntryArrays), (fun d v -> { d with CountedEntryArrays = v }),
+              "BoundaryEmission: The source counted entry array account was withdrawn or duplicated.", false ]
+            []
+            []
+
+        // 5. Entries (>= 2 via FnPtr.ofExtern + ProcessLinkContract) + BoundaryEntry + strict-order fault injection.
+        let entryAuthority =
+            SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+            + """
+type ProcessLinkContract = { Identity: string; Version: string; Source: string; Library: string; Runtime: string; Os: string; Arch: string; LoadAt: string; LiveUntil: string; Unloading: string; ExportedLibrary: string }
+let loading: ProcessLinkContract = {
+    Identity = "linux-libc-loading-clef197"; Version = "1"; Source = "WriteAuthority.loading"
+    Library = "c"; Runtime = "libc"; Os = "linux"; Arch = "x86_64"
+    LoadAt = "ProcessStartup"; LiveUntil = "ProcessTermination"
+    Unloading = "Forbidden"; ExportedLibrary = "Forbidden"
+}
+"""
+        let entryBody = """module EntryFixture
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference
+type CallConv = | CDecl
+type Transfer = | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+
+[<FidelityExtern("c", "ext_entry_a")>]
+let extA (x: int) : int = NativeDefault.zeroed ()
+let extADescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "ext_entry_a"; Parameters = [| { Name = "x"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+
+[<FidelityExtern("c", "ext_entry_b")>]
+let extB (x: int) : int = NativeDefault.zeroed ()
+let extBDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "ext_entry_b"; Parameters = [| { Name = "x"; Type = Integer (Signed, 32); PassBy = Value } |]
+    ReturnType = Integer (Signed, 32); CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+
+[<EntryPoint>]
+let main _ =
+    let f1 = FnPtr.ofExtern extA
+    let f2 = FnPtr.ofExtern extB
+    let a = FnPtr.invoke f1 1
+    let b = FnPtr.invoke f2 2
+    if a + b = 0 then 0 else 1
+"""
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "Parse failed: %A" errors
+        let entryCtx =
+            { SourcePlatformFixture.platform with
+                RuntimeModel = Some RuntimeModel.Libc
+                PlatformLoading = Some "WriteAuthority.loading" }
+        let entryRes =
+            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                [ parse entryAuthority "write-authority.clef"; parse entryBody "clef197-entries.clef" ]
+                (Some entryCtx)
+        DimensionalCases.noErrors entryRes
+        verifyNonMonotone
+            "Entries"
+            entryRes.Graph
+            [ "Entries", (fun d -> d.Entries), (fun d v -> { d with Entries = v }),
+              "BoundaryEmission: The boundary domain lost or duplicated an import, call or ordered coverage occurrence.", true ]
+            []
+            [ "BoundaryEntry", (function EdgeRole.BoundaryEntry _ -> true | _ -> false), (fun e -> e.Sources) ]

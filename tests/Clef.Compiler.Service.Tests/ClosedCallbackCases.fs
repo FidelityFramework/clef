@@ -3296,3 +3296,145 @@ let main _ =
         Assert.Empty(Fidelity.PSG.Integrity.check revision)
         let native = revision.Emission.Boundary.ClosedEntries.Values |> Assert.Single
         Assert.True(native.ResultAdaptation.IsNone)
+
+    [<Fact>]
+    member _.``clef #197: non-monotone SSA remap preserves sorted CallbackInvocations, CallbackAbsences, ClosedEntries, and companion rows``() =
+        let result =
+            ClosedCallbackCases.mixedAbsenceCheck false false (fun source ->
+                let invocation = source.Split('\n') |> Array.find (fun line -> line.StartsWith("let invocation2:"))
+                let absenceLine = source.Split('\n') |> Array.find (fun line -> line.Contains("CallbackAbsenceContract") && line.Contains("let "))
+                let absence0 =
+                    absenceLine
+                        .Replace("let absence:", "let absence0:")
+                        .Replace("Parameter = 1", "Parameter = 0")
+                        .Replace("Identity = \"", "Identity = \"first-")
+                source
+                    .Replace(invocation, invocation.Replace("Identity = \"receiving-test\"", "Identity = \"receiving-second-test\""))
+                    .Replace(absenceLine, absence0 + "\n" + absenceLine)
+                    .Replace("let callback (_unused: int) = 7", "let callback (_unused: int) = 7\nlet callback2 (_unused: int) : unit = ()")
+                    .Replace("    receive (Some (FnPtr.ofFunction callback)) None",
+                             "    receive (Some (FnPtr.ofFunction callback)) None\n    receive None (Some (FnPtr.ofFunction callback2))"))
+        ClosedCallbackCases.absenceNoErrors result
+        let graph = result.Graph
+        let baselinePlan =
+            graph.Codata.Value.SSAAssignment
+            |> Option.defaultWith (fun () -> failwith "Expected baseline SSAAssignment plan.")
+        let domain =
+            graph.Edges
+            |> List.pick (fun edge -> match edge.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+        let invocations =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCallbackInvocation row -> Some row | _ -> None)
+        let absences =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCallbackAbsence row -> Some row | _ -> None)
+        let closedEntries =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryClosedEntry row -> Some row | _ -> None)
+        Assert.True(domain.CallbackInvocations.Length >= 2, sprintf "Expected >=2 CallbackInvocations, got %d" domain.CallbackInvocations.Length)
+        Assert.True(domain.CallbackAbsences.Length >= 2, sprintf "Expected >=2 CallbackAbsences, got %d" domain.CallbackAbsences.Length)
+        Assert.True(domain.ClosedEntries.Length >= 2, sprintf "Expected >=2 ClosedEntries, got %d" domain.ClosedEntries.Length)
+        Assert.True(domain.Calls.Length >= 2)
+
+        let minGraphOf (xs: NodeId seq) = xs |> Seq.filter graph.Nodes.ContainsKey |> Seq.min
+        let minInv = minGraphOf domain.CallbackInvocations
+        let minAbs = minGraphOf domain.CallbackAbsences
+        let minClosed = minGraphOf domain.ClosedEntries
+        let minCall = minGraphOf domain.Calls
+        let minInvPart = minGraphOf invocations.Head.Participants
+        let minAbsFact = minGraphOf (absences.Head.DeclarationFacts |> Map.keys)
+        let minClosedPart = minGraphOf closedEntries.Head.Participants
+        let reassigned =
+            [ minInv; minAbs; minClosed; minCall; minInvPart; minAbsFact; minClosedPart ]
+            |> List.filter graph.Nodes.ContainsKey
+            |> Set.ofList
+        let allNodes = graph.Nodes.Keys |> Set.ofSeq
+        let retained = Set.difference allNodes reassigned
+        let alignment = allNodes |> Seq.map (fun id -> id, id) |> Map.ofSeq
+
+        let reconciled, plan =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Non-monotone callback SSA remap refused: %A" failure
+
+        // Unconditional non-monotone order inversion check across ALL 4 multi-entry lists and 3 companion participant sets.
+        let remapOf id = plan.NodeRemap.TryFind id |> Option.defaultValue id
+        let assertInverted name (origList: NodeId list) =
+            let graphMembers = origList |> List.filter graph.Nodes.ContainsKey
+            Assert.True(graphMembers.Length >= 2, sprintf "Expected >=2 graph members in %s, got %d" name graphMembers.Length)
+            let minId = List.min graphMembers
+            Assert.True(reassigned.Contains minId, sprintf "Expected min %A of %s to be reassigned." minId name)
+            let remappedMin = plan.NodeRemap[minId]
+            let peer = graphMembers |> List.find (fun id -> not (reassigned.Contains id))
+            Assert.True(NodeId.value remappedMin > baselinePlan.NodeHighWater, sprintf "%s min did not advance past high-water." name)
+            Assert.Equal(peer, plan.NodeRemap[peer])
+            Assert.True(remappedMin > plan.NodeRemap[peer], sprintf "%s did not invert order." name)
+            let unsortedMapped = origList |> List.map remapOf
+            let sortedMapped = List.sort unsortedMapped
+            Assert.NotEqual<NodeId list>(unsortedMapped, sortedMapped)
+            unsortedMapped, sortedMapped
+
+        let _, _ = assertInverted "CallbackInvocations" domain.CallbackInvocations
+        let _, _ = assertInverted "CallbackAbsences" domain.CallbackAbsences
+        let _, _ = assertInverted "ClosedEntries" domain.ClosedEntries
+        let unsortedCalls, _ = assertInverted "Calls" domain.Calls
+        let _, _ = assertInverted "CallbackInvocation.Participants" (Set.toList invocations.Head.Participants)
+        let _, _ = assertInverted "CallbackAbsence.DeclarationFacts" (absences.Head.DeclarationFacts |> Map.keys |> Seq.toList)
+        let _, _ = assertInverted "ClosedEntry.Participants" (Set.toList closedEntries.Head.Participants)
+
+        let remappedDomain =
+            reconciled.Edges
+            |> List.pick (fun edge -> match edge.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.CallbackInvocations, remappedDomain.CallbackInvocations)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.CallbackAbsences, remappedDomain.CallbackAbsences)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.ClosedEntries, remappedDomain.ClosedEntries)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.Imports, remappedDomain.Imports)
+        Assert.Equal<NodeId list>(List.sort remappedDomain.Calls, remappedDomain.Calls)
+
+        // Positive control: full WitnessEmission.prepare + RevisionPublication + Fidelity.PSG.Integrity.check = 0 defects.
+        let prepared =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare reconciled
+            |> Result.defaultWith (fun failures -> failwithf "WitnessEmission.prepare refused: %A" failures)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish prepared
+            |> Result.defaultWith (fun failures -> failwithf "RevisionPublication.publish refused: %A" failures)
+        let defects = Fidelity.PSG.Integrity.check revision
+        Assert.True(defects.IsEmpty, Fidelity.PSG.Integrity.describe defects)
+
+        // Exact-reason negative controls: reversing Sources of each callback companion row fails WitnessEmission.prepare.
+        let expectedRowReason =
+            "BoundaryEmission: The ordered boundary relation, adaptation, rewrite record or proof outcome is missing, duplicated or inconsistent."
+        let flipRole name predicate =
+            let mutable flipped = false
+            let edges =
+                reconciled.Edges |> List.map (fun edge ->
+                    if not flipped && predicate edge.Role && edge.Sources.Length >= 2 && edge.Sources <> List.rev edge.Sources then
+                        flipped <- true
+                        { edge with Sources = List.rev edge.Sources }
+                    else edge)
+            Assert.True(flipped, sprintf "Expected to flip companion edge %s" name)
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare { reconciled with Edges = edges } with
+            | Result.Ok _ -> failwithf "Unsorted %s companion edge was admitted." name
+            | Result.Error failures -> Assert.Contains(failures, fun f -> f.Reason = expectedRowReason)
+        flipRole "BoundaryCallbackInvocation" (function EdgeRole.BoundaryCallbackInvocation _ -> true | _ -> false)
+        flipRole "BoundaryCallbackAbsence" (function EdgeRole.BoundaryCallbackAbsence _ -> true | _ -> false)
+        flipRole "BoundaryClosedEntry" (function EdgeRole.BoundaryClosedEntry _ -> true | _ -> false)
+
+        // Fault-injection negative controls: unsorting Calls and withdrawing CallbackInvocations / CallbackAbsences / ClosedEntries are refused.
+        let faultDomain mutate expectedReason =
+            let faulted =
+                { reconciled with
+                    Edges =
+                        reconciled.Edges |> List.map (fun edge ->
+                            match edge.Role with
+                            | EdgeRole.BoundaryDomain d -> { edge with Role = EdgeRole.BoundaryDomain (mutate d) }
+                            | _ -> edge) }
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare faulted with
+            | Result.Ok _ -> failwithf "Callback domain fault was admitted (expected: %s)" expectedReason
+            | Result.Error failures -> Assert.Contains(failures, fun f -> f.Reason = expectedReason)
+        faultDomain (fun d -> { d with Calls = unsortedCalls })
+            "BoundaryEmission: The boundary domain lost or duplicated an import, call or ordered coverage occurrence."
+        let callbackReason = "BoundaryEmission: The closed native callback or receiving invocation account was withdrawn or duplicated."
+        faultDomain (fun d -> { d with CallbackInvocations = List.tail d.CallbackInvocations }) callbackReason
+        faultDomain (fun d -> { d with CallbackAbsences = List.tail d.CallbackAbsences }) callbackReason
+        faultDomain (fun d -> { d with ClosedEntries = List.tail d.ClosedEntries }) callbackReason

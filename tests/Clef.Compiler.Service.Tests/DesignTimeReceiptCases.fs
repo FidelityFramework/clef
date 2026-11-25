@@ -873,3 +873,308 @@ let main _ = if toggle true then 0 else 1
         finally
             Environment.SetEnvironmentVariable("CLEF_PHASE_TIMING", previousTiming)
             Console.SetError previousErr
+
+    [<Fact>]
+    member _.``clef #197: typed NodeIdRemap eliminates SSAAssignment reflection, enforces generator drift check, invalidates stale witness caches, and refuses pre-faulted numeric facts``() =
+        // 1. Source hygiene & allowance-elimination controls (zero reflection/box/:? in SSAAssignment.fs / NodeIdRemap.fs).
+        let repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, "../.."))
+        let ssaPath = System.IO.Path.Combine(repoRoot, "src/Compiler/Nanopass/SSAAssignment.fs")
+        let remapPath = System.IO.Path.Combine(repoRoot, "src/Compiler/Nanopass/NodeIdRemap.fs")
+        let ssaSource = System.IO.File.ReadAllText ssaPath
+        let remapSource = System.IO.File.ReadAllText remapPath
+        let allowances = System.IO.File.ReadAllText(System.IO.Path.Combine(repoRoot, "build/ClefCore.allowances.tsv"))
+        for forbidden in [ "System.Reflection"; "Microsoft.FSharp.Reflection"; "FSharpValue"; "FSharpType"; "ConditionalWeakTable"; ":?" ] do
+            Assert.DoesNotContain(forbidden, ssaSource, StringComparison.Ordinal)
+            Assert.DoesNotContain(forbidden, remapSource, StringComparison.Ordinal)
+        Assert.False(System.Text.RegularExpressions.Regex.IsMatch(ssaSource, @"\b(box|unbox)\b"), "SSAAssignment.fs must not contain box/unbox.")
+        Assert.False(System.Text.RegularExpressions.Regex.IsMatch(remapSource, @"\b(box|unbox)\b"), "NodeIdRemap.fs must not contain box/unbox.")
+        Assert.Contains("Clef.Compiler.Nanopass.FoldIn.remapKind", remapSource, StringComparison.Ordinal)
+        Assert.DoesNotContain("SSAAssignment.fs", allowances, StringComparison.Ordinal)
+        Assert.DoesNotContain("NodeIdRemap.fs", allowances, StringComparison.Ordinal)
+
+        // 2. Enforce GenerateNodeIdRemapper.fsx --check drift gate against the live compiled Clef.Compiler.Service.dll.
+        let generatorScript = System.IO.Path.Combine(repoRoot, "tools/PSGContract/GenerateNodeIdRemapper.fsx")
+        let ccsDll = typeof<Clef.Compiler.PSGSaturation.SemanticGraph.Types.SemanticGraph>.Assembly.Location
+        Assert.True(System.IO.File.Exists generatorScript, sprintf "Missing generator script at %s" generatorScript)
+        Assert.True(System.IO.File.Exists ccsDll, sprintf "Missing Clef.Compiler.Service.dll at %s" ccsDll)
+        let psi = System.Diagnostics.ProcessStartInfo("dotnet", sprintf "fsi \"%s\" --check \"%s\" \"%s\"" generatorScript ccsDll remapPath)
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.UseShellExecute <- false
+        use proc =
+            match System.Diagnostics.Process.Start psi with
+            | null -> failwith "Failed to start dotnet fsi for GenerateNodeIdRemapper.fsx --check."
+            | started -> started
+        let checkStdout = proc.StandardOutput.ReadToEnd()
+        let checkStderr = proc.StandardError.ReadToEnd()
+        proc.WaitForExit()
+        Assert.True(proc.ExitCode = 0, sprintf "GenerateNodeIdRemapper.fsx --check failed (exit %d):\nstdout: %s\nstderr: %s" proc.ExitCode checkStdout checkStderr)
+        Assert.Contains("matches exact closed SemanticGraph NodeId closure", checkStdout, StringComparison.Ordinal)
+        Assert.Contains("FoldIn.remapKind leaf cases", checkStdout, StringComparison.Ordinal)
+
+        // 3. Full typed SSA remap clears stale witness caches (refused by WitnessEmission.tryRead) and republishes cleanly.
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "Parse failed: %A" errors
+        let authority = SourcePlatformFixture.authority.Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+        let compiled =
+            let r =
+                Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                    [ parse authority "write-authority.clef"
+                      parse "module Clef197TypedRemap\nlet ignoreArg (_unused: int) = 7\nlet identity (value: int) = value\n[<EntryPoint>]\nlet main _ = identity (ignoreArg 1 - 7)\n" "clef197-remap.clef" ]
+                    (Some { SourcePlatformFixture.platform with RuntimeModel = Some RuntimeModel.Libc })
+            DimensionalCases.noErrors r
+            r.Graph
+        let preparedBaseline =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare compiled
+            |> Result.defaultWith (fun f -> failwithf "Baseline prepare failed: %A" f)
+        Assert.True preparedBaseline.WitnessProvenance.IsSome
+        Assert.True preparedBaseline.Codata.Value.WitnessEmission.IsSome
+        Assert.True preparedBaseline.Codata.Value.WitnessPublishedRows.IsSome
+        let sampleIds = preparedBaseline.Nodes.Keys |> Seq.sort |> Seq.take 3 |> Seq.toList
+
+        let cleanReconciled, cleanPlan =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline Map.empty Set.empty preparedBaseline with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Clean full typed SSA remap refused: %A" failure
+        Assert.True cleanReconciled.WitnessProvenance.IsNone
+        Assert.True cleanReconciled.Codata.Value.WitnessEmission.IsNone
+        Assert.True cleanReconciled.Codata.Value.WitnessPublishedRows.IsNone
+        Assert.NotEqual(sampleIds[0], cleanPlan.NodeRemap[sampleIds[0]])
+        // Exact-reason negative control: cleared stale witness cache is refused by WitnessEmission.tryRead.
+        match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.tryRead cleanReconciled with
+        | Result.Ok _ -> failwith "Cleared witness cache was admitted by WitnessEmission.tryRead."
+        | Result.Error reason ->
+            Assert.Equal("The current graph has no complete source witness projection.", reason)
+        let freshPrepared =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare cleanReconciled
+            |> Result.defaultWith (fun f -> failwithf "Post-remap prepare refused: %A" f)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish freshPrepared
+            |> Result.defaultWith (fun f -> failwithf "Post-remap publish refused: %A" f)
+        let defects = Fidelity.PSG.Integrity.check revision
+        Assert.True(defects.IsEmpty, Fidelity.PSG.Integrity.describe defects)
+
+        // 4. MetadataValue.NodeId and NodeIdList are remapped accurately.
+        let targetId, refA, refB = sampleIds[0], sampleIds[1], sampleIds[2]
+        let annotated =
+            let node = preparedBaseline.Nodes[targetId]
+            let meta =
+                node.Metadata
+                    .Add("Test.NodeIdRef", MetadataValue.NodeId refA)
+                    .Add("Test.NodeIdListRef", MetadataValue.NodeIdList [ refA; refB ])
+            let edgesWithoutRangeReceipt =
+                preparedBaseline.Edges |> List.map (fun e ->
+                    match e.Role with
+                    | EdgeRole.NumericDomain d -> { e with Role = EdgeRole.NumericDomain { d with RangeContextFacts = None } }
+                    | _ -> e)
+            { preparedBaseline with
+                Nodes = preparedBaseline.Nodes.Add(targetId, { node with Metadata = meta })
+                RangeContextFacts = None
+                Edges = edgesWithoutRangeReceipt }
+        let reconciled, plan =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline Map.empty Set.empty annotated with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Annotated typed SSA remap refused: %A" failure
+        let newTarget = plan.NodeRemap[targetId]
+        let newRefA = plan.NodeRemap[refA]
+        let newRefB = plan.NodeRemap[refB]
+        Assert.NotEqual(targetId, newTarget)
+        Assert.NotEqual(refA, newRefA)
+        Assert.NotEqual(refB, newRefB)
+        let remappedNode = reconciled.Nodes[newTarget]
+        Assert.Equal(Some (MetadataValue.NodeId newRefA), remappedNode.Metadata.TryFind "Test.NodeIdRef")
+        Assert.Equal(Some (MetadataValue.NodeIdList [ newRefA; newRefB ]), remappedNode.Metadata.TryFind "Test.NodeIdListRef")
+
+        // 5. Pre-faulted RangeContextFacts.SourceRelations under both identity AND non-monotone remap
+        //    must be refused directly by SSAAssignment before remapping (so non-monotone renumbering
+        //    cannot hide a pre-remap ordering fault).
+        let mutable reversedTailMin: NodeId option = None
+        let corruptTail (rows: SourceRangeRelation list) =
+            let mutable mutated = false
+            let updated =
+                rows |> List.map (fun row ->
+                    if not mutated && row.Kind = SourceRangeRelationKind.Named "OrdinaryUnusedActual" && row.Sources.Length >= 6 then
+                        let prefix, tail = List.splitAt 4 row.Sources
+                        let reversed = List.rev tail
+                        if reversed <> tail then
+                            mutated <- true
+                            reversedTailMin <- Some (List.min tail)
+                            { row with Sources = prefix @ reversed }
+                        else row
+                    else row)
+            Assert.True(mutated, "Expected an OrdinaryUnusedActual SourceRangeRelation row with >= 2 distinct tail nodes.")
+            updated
+        let corruptFacts (facts: RangeContextFacts) =
+            match facts.SourceRelations with
+            | Result.Ok rows -> { facts with SourceRelations = Result.Ok (corruptTail rows) }
+            | Result.Error err -> failwithf "Expected Ok SourceRelations, got %s" err
+        let preFaulted =
+            { preparedBaseline with
+                RangeContextFacts = preparedBaseline.RangeContextFacts |> Option.map corruptFacts
+                Edges =
+                    preparedBaseline.Edges |> List.map (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.NumericDomain ({ RangeContextFacts = Some facts } as d) ->
+                            { edge with Role = EdgeRole.NumericDomain { d with RangeContextFacts = Some (corruptFacts facts) } }
+                        | _ -> edge) }
+        let allIds = preFaulted.Nodes.Keys |> Set.ofSeq
+        let idAlign = allIds |> Seq.map (fun id -> id, id) |> Map.ofSeq
+        let tailMinId = reversedTailMin |> Option.defaultWith (fun () -> failwith "Missing reversed tail min node.")
+        // Non-monotone remap reassigns the smaller tail node above high-water while retaining its peer:
+        // without pre-remap validation, the reversed tail would look canonically ascending after renumbering.
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline idAlign (Set.remove tailMinId allIds) preFaulted with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Equal("SSAAssignment: Invocation-context range premises are not current before SSA remapping.", reason)
+        | other -> failwithf "Expected direct SSA refusal on non-monotone pre-faulted RangeContextFacts, got %A" other
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline idAlign allIds preFaulted with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Equal("SSAAssignment: Invocation-context range premises are not current before SSA remapping.", reason)
+        | other -> failwithf "Expected direct SSA refusal on identity pre-faulted RangeContextFacts, got %A" other
+
+        // 6. Pre-faulted FiniteCellRelations positive and direct SSA refusal controls.
+        let finiteCompiled =
+            let r =
+                Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                    [ parse authority "write-authority.clef"
+                      parse "module Clef197FiniteCell\n[<EntryPoint>]\nlet main _ =\n    let mutable state = 0\n    let record (n: int) = state <- n\n    record 1\n    record 2\n    state\n" "clef197-fc.clef" ]
+                    (Some { SourcePlatformFixture.platform with RuntimeModel = Some RuntimeModel.Libc })
+            DimensionalCases.noErrors r
+            r.Graph
+        let fcDomain =
+            finiteCompiled.Edges |> List.pick (fun e -> match e.Role with EdgeRole.NumericDomain d -> Some d | _ -> None)
+        let fcRows =
+            fcDomain.FiniteCellRelations
+            |> Option.defaultWith (fun () -> failwith "Expected FiniteCellRelations = Some _ on mutable-cell fixture.")
+        Assert.NotEmpty fcRows
+        let fcAllIds = finiteCompiled.Nodes.Keys |> Set.ofSeq
+        let fcAlign = fcAllIds |> Seq.map (fun id -> id, id) |> Map.ofSeq
+        let fcMinId = fcAllIds |> Set.minElement
+        let fcClean, _ =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign finiteCompiled fcAlign (Set.remove fcMinId fcAllIds) finiteCompiled with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Clean finite-cell non-monotone SSA remap refused: %A" failure
+        let fcPrepared =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare fcClean
+            |> Result.defaultWith (fun f -> failwithf "Post-remap finite-cell prepare refused: %A" f)
+        let fcRev =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish fcPrepared
+            |> Result.defaultWith (fun f -> failwithf "Post-remap finite-cell publish refused: %A" f)
+        Assert.Empty(Fidelity.PSG.Integrity.check fcRev)
+        let corruptedFcRows =
+            match fcRows |> List.tryFindIndex (fun row -> row.Sources.Length >= 2 && row.Sources <> List.rev row.Sources) with
+            | Some idx -> fcRows |> List.mapi (fun i row -> if i = idx then { row with Sources = List.rev row.Sources } else row)
+            | None -> List.rev fcRows
+        Assert.NotEqual<FiniteCellSourceRelation list>(fcRows, corruptedFcRows)
+        let preFaultedFinite =
+            { finiteCompiled with
+                Edges =
+                    finiteCompiled.Edges |> List.map (fun e ->
+                        match e.Role with
+                        | EdgeRole.NumericDomain d -> { e with Role = EdgeRole.NumericDomain { d with FiniteCellRelations = Some corruptedFcRows } }
+                        | _ -> e) }
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign finiteCompiled fcAlign (Set.remove fcMinId fcAllIds) preFaultedFinite with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Equal("SSAAssignment: Finite-cell relation premises are not current before SSA remapping.", reason)
+        | other -> failwithf "Expected direct SSA refusal on pre-faulted FiniteCellRelations, got %A" other
+
+        // 7. Pre-faulted StringOriginRelations positive and direct SSA refusal controls.
+        let originCompiled =
+            let r =
+                Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                    [ parse authority "write-authority.clef"
+                      parse "module Clef197StringOrigin\n[<EntryPoint>]\nlet main _ =\n    let delayed = lazy \"\"\n    if Lazy.force delayed = \"\" then 0 else 1\n" "clef197-so.clef" ]
+                    (Some { SourcePlatformFixture.platform with RuntimeModel = Some RuntimeModel.Libc })
+            DimensionalCases.noErrors r
+            r.Graph
+        let soDomain =
+            originCompiled.Edges |> List.pick (fun e -> match e.Role with EdgeRole.BoundaryDomain d -> Some d | _ -> None)
+        let soRows =
+            soDomain.StringOriginRelations
+            |> Option.defaultWith (fun () -> failwith "Expected StringOriginRelations = Some _ on lazy-string fixture.")
+        Assert.NotEmpty soRows
+        let soAllIds = originCompiled.Nodes.Keys |> Set.ofSeq
+        let soAlign = soAllIds |> Seq.map (fun id -> id, id) |> Map.ofSeq
+        let soMinId = soAllIds |> Set.minElement
+        let soClean, _ =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign originCompiled soAlign (Set.remove soMinId soAllIds) originCompiled with
+            | Result.Ok pair -> pair
+            | Result.Error failure -> failwithf "Clean string-origin non-monotone SSA remap refused: %A" failure
+        let soPrepared =
+            Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare soClean
+            |> Result.defaultWith (fun f -> failwithf "Post-remap string-origin prepare refused: %A" f)
+        let soRev =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish soPrepared
+            |> Result.defaultWith (fun f -> failwithf "Post-remap string-origin publish refused: %A" f)
+        Assert.Empty(Fidelity.PSG.Integrity.check soRev)
+        let corruptedSoRows =
+            match soRows |> List.tryFindIndex (fun row -> row.Sources.Length >= 2 && row.Sources <> List.rev row.Sources) with
+            | Some idx -> soRows |> List.mapi (fun i row -> if i = idx then { row with Sources = List.rev row.Sources } else row)
+            | None -> List.rev soRows
+        Assert.NotEqual<StringOriginRelation list>(soRows, corruptedSoRows)
+        let preFaultedOrigin =
+            { originCompiled with
+                Edges =
+                    originCompiled.Edges |> List.map (fun e ->
+                        match e.Role with
+                        | EdgeRole.BoundaryDomain d -> { e with Role = EdgeRole.BoundaryDomain { d with StringOriginRelations = Some corruptedSoRows } }
+                        | _ -> e) }
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign originCompiled soAlign (Set.remove soMinId soAllIds) preFaultedOrigin with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Equal("SSAAssignment: String-origin relation premises are not current before SSA remapping.", reason)
+        | other -> failwithf "Expected direct SSA refusal on pre-faulted StringOriginRelations, got %A" other
+
+        // 8. Ambiguous companion hyperedge correspondence controls (identical duplicate accepted,
+        //    conflicting non-monotone companion correspondence refused with exact reason, monotone control accepted).
+        let carrierEdge =
+            preparedBaseline.Edges |> List.find (fun e -> match e.Role with EdgeRole.NumericCarrier _ -> true | _ -> false)
+        let dupIdenticalGraph = { preparedBaseline with Edges = carrierEdge :: preparedBaseline.Edges }
+        match Clef.Compiler.Nanopass.SSAAssignment.remapGraph id dupIdenticalGraph with
+        | Result.Ok _ -> ()
+        | Result.Error err -> failwithf "Identical duplicate companion row should be accepted, got %A" err
+        let numDomainEdge, numDomainPayload =
+            preparedBaseline.Edges |> List.pick (fun e -> match e.Role with EdgeRole.NumericDomain d -> Some (e, d) | _ -> None)
+        let premiseKeys = numDomainPayload.Premises |> Map.keys |> Seq.toList
+        Assert.True(premiseKeys.Length >= 2, "Expected >= 2 NumericDomain premises for ambiguity control.")
+        let minPremise = List.min premiseKeys
+        let syntheticForeignUse : ForeignResultUse =
+            { Application =
+                { Declaration = numDomainEdge.Target
+                  Call = numDomainEdge.Target
+                  Context = []
+                  Hypothesis = None
+                  Arguments = [] }
+              Participants =
+                ParticipantEvidence.Established
+                    (premiseKeys |> List.mapi (fun i n -> { Node = n; Role = ParticipantRole.Source; Ordinal = i; Group = numDomainEdge.Target }))
+              Claims = [ ForeignResultProofRole.LogicalCoverage, numDomainEdge.Target ] }
+        let ambiguousGraph =
+            { preparedBaseline with
+                Edges =
+                    preparedBaseline.Edges |> List.map (fun e ->
+                        match e.Role with
+                        | EdgeRole.NumericDomain _ when e.Target = numDomainEdge.Target ->
+                            { e with Role = EdgeRole.NumericDomain { numDomainPayload with ForeignResultUses = syntheticForeignUse :: numDomainPayload.ForeignResultUses } }
+                        | _ -> e) }
+        // Fault-injection monotone control: under identity remap, both producers emit identical source order so no ambiguity occurs.
+        match Clef.Compiler.Nanopass.SSAAssignment.remapGraph id ambiguousGraph with
+        | Result.Ok _ -> ()
+        | Result.Error err -> failwithf "Monotone identical companion order should not trigger ambiguity, got %A" err
+        // Exact-reason negative control: non-monotone remap causes sorted domainRewrite and positional foreignProofRows to conflict.
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign preparedBaseline idAlign (Set.remove minPremise allIds) ambiguousGraph with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Equal("SSAAssignment: Ambiguous companion hyperedge correspondence during SSA remapping.", reason)
+        | other -> failwithf "Expected exact ambiguous companion correspondence refusal, got %A" other
+
+        // 9. Node-ID collision refusal controls (injective remap accepted, colliding remap refused with exact reason).
+        let collideA, collideB = sampleIds[0], sampleIds[1]
+        let freshNodeId = NodeId (preparedBaseline.Codata.Value.SSAAssignment.Value.NodeHighWater + 1)
+        match Clef.Compiler.Nanopass.SSAAssignment.remapGraph (fun id -> if id = collideB then freshNodeId else id) preparedBaseline with
+        | Result.Ok g -> Assert.Equal(preparedBaseline.Nodes.Count, g.Nodes.Count)
+        | Result.Error err -> failwithf "Injective remap should be accepted, got %A" err
+        match Clef.Compiler.Nanopass.SSAAssignment.remapGraph (fun id -> if id = collideB then collideA else id) preparedBaseline with
+        | Result.Error (site, reason) ->
+            Assert.Equal(collideA, site)
+            Assert.Equal("SSAAssignment: NodeId remapping collided distinct graph nodes.", reason)
+        | Result.Ok _ -> failwith "Colliding NodeId remap was admitted."

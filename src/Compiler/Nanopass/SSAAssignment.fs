@@ -11,10 +11,6 @@
 /// (`normalize`) starts cold from the freshly reset graph without carrying prior state.
 module Clef.Compiler.Nanopass.SSAAssignment
 
-open System
-open System.Collections
-open System.Reflection
-open Microsoft.FSharp.Reflection
 open Clef.Compiler.Baker.Ingredients
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -23,147 +19,6 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 let nodeOf (SSAId(n, _)) = n
 let ordinalOf (SSAId(_, k)) = k
-
-let private flags = BindingFlags.Public ||| BindingFlags.NonPublic
-
-let private isEmptyEnumerable (value: obj) =
-    let enumerator = (value :?> IEnumerable).GetEnumerator()
-    not (enumerator.MoveNext())
-
-let private isLeafType (ty: Type) =
-    ty.IsPrimitive
-    || ty.IsEnum
-    || ty = typeof<string>
-    || ty = typeof<bigint>
-    || ty = typeof<decimal>
-    || ty = typeof<NativeType>
-    || ty = typeof<TypeIdentity>
-    || ty = typeof<NominalTypeIdentity>
-    || ty = typeof<ConstructorIdentity>
-    || ty = typeof<Fidelity.PSG.TypeIdentity>
-    || ty = typeof<Fidelity.PSG.NominalTypeIdentity>
-    || ty = typeof<Fidelity.PSG.ConstructorIdentity>
-    || ty = typeof<SpecializationTrace>
-    || ty.Name = "SpecializationTrace"
-    || ty = typeof<SourceRange>
-    || ty = typeof<Fidelity.PSG.SourceRange>
-    || ty = typeof<ValueRange>
-    || ty = typeof<Fidelity.PSG.ValueRange>
-    || ty = typeof<PlatformContext>
-    || ty = typeof<Fidelity.PSG.PlatformWidths>
-    || ty = typeof<SSAAssignmentPlan>
-
-// Legacy CLR reflection. The self-hosting core requires typed SSA correspondence.
-// https://forge.spkez.dev/FidelityFramework/clef/issues/175#issuecomment-11812
-let rec private remapValue (remap: NodeId -> NodeId) (ty: Type) (value: objnull) : objnull =
-    match value with
-    | null -> null
-    | _ when ty = typeof<NodeId> ->
-        box (remap (unbox<NodeId> value))
-    | _ when ty = typeof<Fidelity.PSG.NodeId> ->
-        let (Fidelity.PSG.NodeId n) = unbox<Fidelity.PSG.NodeId> value
-        box (Fidelity.PSG.NodeId(NodeId.value (remap (NodeId n))))
-    | _ when isLeafType ty ->
-        value
-    | _ ->
-        let value = Option.ofObj value |> Option.get
-        let actualTy = value.GetType()
-        if isLeafType actualTy then
-            box value
-        elif actualTy.IsArray then
-            let elemTy = actualTy.GetElementType() |> Option.ofObj |> Option.get
-            let src = value :?> Array
-            if src.Length = 0 then
-                box value
-            else
-                let dst = Array.CreateInstance(elemTy, src.Length)
-                for i = 0 to src.Length - 1 do
-                    dst.SetValue(remapValue remap elemTy (src.GetValue i), i)
-                box dst
-        elif ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<option<_>> then
-            let elemTy = ty.GetGenericArguments().[0]
-            let case, fields = FSharpValue.GetUnionFields(value, ty, flags)
-            if fields.Length = 0 then
-                null
-            else
-                let mapped = remapValue remap elemTy fields.[0]
-                FSharpValue.MakeUnion(case, [| mapped |], flags)
-        elif ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<list<_>> then
-            if isEmptyEnumerable value then
-                box value
-            else
-                let elemTy = ty.GetGenericArguments().[0]
-                let items =
-                    (value :?> IEnumerable)
-                    |> Seq.cast<objnull>
-                    |> Seq.map (remapValue remap elemTy)
-                    |> Seq.toArray
-                let cases = FSharpType.GetUnionCases(ty, flags)
-                let nilCase = cases |> Array.find (fun c -> c.GetFields().Length = 0)
-                let consCase = cases |> Array.find (fun c -> c.GetFields().Length = 2)
-                let mutable acc = FSharpValue.MakeUnion(nilCase, [||], flags)
-                for i = items.Length - 1 downto 0 do
-                    acc <- FSharpValue.MakeUnion(consCase, [| items.[i]; acc |], flags)
-                acc
-        elif ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<Set<_>> then
-            if isEmptyEnumerable value then
-                box value
-            else
-                let elemTy = ty.GetGenericArguments().[0]
-                let items =
-                    (value :?> IEnumerable)
-                    |> Seq.cast<objnull>
-                    |> Seq.map (remapValue remap elemTy)
-                    |> Seq.toArray
-                let arr = Array.CreateInstance(elemTy, items.Length)
-                for i = 0 to items.Length - 1 do
-                    arr.SetValue(items.[i], i)
-                Activator.CreateInstance(ty, [| box arr |])
-        elif ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<Map<_, _>> then
-            if isEmptyEnumerable value then
-                box value
-            else
-                let args = ty.GetGenericArguments()
-                let keyTy, valTy = args.[0], args.[1]
-                let tupleTy = FSharpType.MakeTupleType [| keyTy; valTy |]
-                let kvpTy = typedefof<Collections.Generic.KeyValuePair<_, _>>.MakeGenericType(args)
-                let propKey = kvpTy.GetProperty("Key") |> Option.ofObj |> Option.get
-                let propVal = kvpTy.GetProperty("Value") |> Option.ofObj |> Option.get
-                let items =
-                    (value :?> IEnumerable)
-                    |> Seq.cast<obj>
-                    |> Seq.map (fun kvp ->
-                        let k = remapValue remap keyTy (propKey.GetValue kvp)
-                        let v = remapValue remap valTy (propVal.GetValue kvp)
-                        FSharpValue.MakeTuple([| k; v |], tupleTy))
-                    |> Seq.toArray
-                let arr = Array.CreateInstance(tupleTy, items.Length)
-                for i = 0 to items.Length - 1 do
-                    arr.SetValue(items.[i], i)
-                Activator.CreateInstance(ty, [| box arr |])
-        elif FSharpType.IsTuple ty then
-            let elemTys = FSharpType.GetTupleElements ty
-            let fields = FSharpValue.GetTupleFields value
-            let mapped = (elemTys, fields) ||> Array.map2 (remapValue remap)
-            FSharpValue.MakeTuple(mapped, ty)
-        elif FSharpType.IsRecord(ty, flags) then
-            let props = FSharpType.GetRecordFields(ty, flags)
-            let fields = FSharpValue.GetRecordFields(value, flags)
-            let mapped = (props, fields) ||> Array.map2 (fun p v -> remapValue remap p.PropertyType v)
-            FSharpValue.MakeRecord(ty, mapped, flags)
-        elif FSharpType.IsUnion(ty, flags) then
-            let case, fields = FSharpValue.GetUnionFields(value, ty, flags)
-            let props = case.GetFields()
-            if props.Length = 0 then
-                box value
-            else
-                let mapped = (props, fields) ||> Array.map2 (fun p v -> remapValue remap p.PropertyType v)
-                FSharpValue.MakeUnion(case, mapped, flags)
-        else
-            box value
-
-let private remapTyped<'T> (remap: NodeId -> NodeId) (value: 'T) : 'T =
-    remapValue remap typeof<'T> (box value) |> unbox<'T>
 
 let private normalizeContiguousRuns (isMatch: Participant -> bool) (renumber: bool) (participants: Participant list) : Participant list =
     let flushRun (runRev: Participant list) (acc: Participant list) =
@@ -205,16 +60,50 @@ let private normalizeMemoryOperation (operation: MemoryWitnessOperation) : Memor
         MemoryWitnessOperation.Region { witness with Participants = participants; Runtime = runtime }
     | _ -> operation
 
+let private normalizeBoundaryDomain (d: BoundaryDomain) : BoundaryDomain =
+    { d with
+        ResourceEvidence =
+            d.ResourceEvidence
+            |> Option.map (fun ev -> { ev with Accesses = List.sort ev.Accesses })
+        WritableBufferDeclarations = List.sort d.WritableBufferDeclarations
+        WritableBufferUses = List.sort d.WritableBufferUses
+        ReadOnlyBufferDeclarations = List.sort d.ReadOnlyBufferDeclarations
+        ReadOnlyBufferUses = List.sort d.ReadOnlyBufferUses
+        BorrowedResultViewDeclarations = List.sort d.BorrowedResultViewDeclarations
+        BorrowedResultViewUses = List.sort d.BorrowedResultViewUses
+        BufferAbsences = List.sort d.BufferAbsences
+        CountedEntryArrays = List.sort d.CountedEntryArrays
+        ResourceDeclarations = List.sort d.ResourceDeclarations
+        ResourceAccesses = List.sort d.ResourceAccesses
+        Imports = List.sort d.Imports
+        Calls = List.sort d.Calls
+        Entries = List.sort d.Entries
+        CallbackInvocations = List.sort d.CallbackInvocations
+        CallbackAbsences = List.sort d.CallbackAbsences
+        ClosedEntries = List.sort d.ClosedEntries }
+
+let private normalizeSequenceRangeAuthority (authority: SequenceRangeAuthority) : SequenceRangeAuthority =
+    { authority with
+        Relations = List.sort authority.Relations
+        Obligations = List.sortBy fst authority.Obligations }
+
+let private normalizeRangeContextFacts (facts: RangeContextFacts) : RangeContextFacts =
+    { facts with CaptureRelations = List.sort facts.CaptureRelations }
+
+let private normalizeNumericDomain (d: NumericDomain) : NumericDomain =
+    { d with
+        SequenceRangeAuthority = d.SequenceRangeAuthority |> Option.map normalizeSequenceRangeAuthority
+        RangeContextFacts = d.RangeContextFacts |> Option.map normalizeRangeContextFacts
+        ForeignResultUses = List.sortBy (fun (u: ForeignResultUse) -> u.Application.Context, u.Application.Call) d.ForeignResultUses
+        FiniteCellObligations = List.sortBy fst d.FiniteCellObligations
+        CaptureRelations = List.sort d.CaptureRelations }
+
 let private normalizeEdge (edge: Hyperedge) : Hyperedge =
     match edge.Role with
     | EdgeRole.BoundaryDomain d ->
-        { edge with
-            Role =
-                EdgeRole.BoundaryDomain
-                    { d with
-                        Imports = List.sort d.Imports
-                        Entries = List.sort d.Entries
-                        Calls = List.sort d.Calls } }
+        { edge with Role = EdgeRole.BoundaryDomain (normalizeBoundaryDomain d) }
+    | EdgeRole.NumericDomain d ->
+        { edge with Role = EdgeRole.NumericDomain (normalizeNumericDomain d) }
     | EdgeRole.MemoryDomain d ->
         let operations = d.Operations |> List.map (fun (site, op) -> site, normalizeMemoryOperation op)
         { edge with Role = EdgeRole.MemoryDomain { d with Operations = operations } }
@@ -222,7 +111,17 @@ let private normalizeEdge (edge: Hyperedge) : Hyperedge =
         { edge with Role = EdgeRole.MemoryOperation (normalizeMemoryOperation op) }
     | _ -> edge
 
-let private remapEdges remap (edges: Hyperedge list) =
+let private sortSuffix (prefixLen: int) (originalSources: NodeId list) (currentSources: NodeId list) : NodeId list option =
+    if originalSources.Length >= prefixLen && currentSources.Length = originalSources.Length then
+        let _, origTail = List.splitAt prefixLen originalSources
+        if origTail = List.sort origTail then
+            let currPrefix, currTail = List.splitAt prefixLen currentSources
+            let sortedTail = List.sort currTail
+            if sortedTail <> currTail then Some (currPrefix @ sortedTail) else None
+        else None
+    else None
+
+let private remapEdges (remap: NodeId -> NodeId) (edges: Hyperedge list) : Result<Hyperedge list, NodeId * string> =
     let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
     let unorderedKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, List.sort edge.Sources, edge.Target
     let callsBySite (rows: Hyperedge list) =
@@ -253,7 +152,19 @@ let private remapEdges remap (edges: Hyperedge list) =
             match calls.TryFind coverage.Site with
             | Some call -> Boundaries.coverageRows call coverage (Boundaries.coverageOutcome coverage)
             | None -> []
-        | EdgeRole.NumericDomain d -> [ NumericValues.domainRow target d; NumericValues.domainRewrite target d ]
+        | EdgeRole.NumericDomain d ->
+            let valueProofRows =
+                d.Values |> List.collect (fun carrier ->
+                    match NumericValues.coverage carrier with
+                    | Some body -> carrier.Obligations |> List.collect (fun ob -> NumericValues.proofRows carrier ob body)
+                    | None -> [])
+            [ NumericValues.domainRow target d; NumericValues.domainRewrite target d ]
+            @ (d.Values |> List.map NumericValues.carrierRow)
+            @ valueProofRows
+            @ (d.Operations |> List.map NumericOperations.operationRow)
+            @ (d.OperationProofs |> List.collect NumericOperations.proofRows)
+            @ (d.IndexTransports |> List.collect NumericValues.indexRows)
+            @ (d.ForeignResultUses |> List.collect NumericValues.foreignProofRows)
         | EdgeRole.MemoryDomain d ->
             let operations = Map.ofList d.Operations
             [ MemoryValues.domainRow target d; MemoryValues.domainRewrite target d ]
@@ -262,14 +173,41 @@ let private remapEdges remap (edges: Hyperedge list) =
             @ (d.ArrayCopies |> List.map MemoryValues.copyRow)
             @ (d.AllocationConstructions |> List.map MemoryValues.allocationConstructionRow)
             @ (d.CopyConstructions |> List.map MemoryValues.copyConstructionRow)
-        | EdgeRole.SpatialModuleDomain d -> [ SpatialValues.domainRow target d; SpatialValues.domainRewrite target d ]
+        | EdgeRole.SpatialModuleDomain d ->
+            [ SpatialValues.domainRow target d; SpatialValues.domainRewrite target d ]
+            @ (d.Hardware |> List.map SpatialValues.hardwareRow)
+            @ (d.Kernels |> List.map SpatialValues.kernelRow)
+            @ (d.Proofs |> List.collect SpatialValues.proofRows)
+        | EdgeRole.KernelIngress ingress ->
+            [ { Class = EdgeClass.Spatial; Role = EdgeRole.KernelIngress ingress; Ordinal = 0; Sources = Set.toList ingress.Participants; Target = ingress.Site } ]
         | _ -> []
-    let mapped = remapTyped<Hyperedge list> remap edges |> List.map normalizeEdge
+    let paired = edges |> List.map (fun orig -> orig, normalizeEdge (NodeIdRemap.remapHyperedge remap orig))
     let origCalls = callsBySite edges
-    let currCalls = callsBySite mapped
+    let currCalls = callsBySite (paired |> List.map snd)
+    let optionalClaimOwners (rows: Hyperedge list) =
+        rows
+        |> List.collect (fun edge ->
+            match edge.Role with
+            | EdgeRole.BoundaryCall call ->
+                call.Arguments
+                |> List.collect (fun operand ->
+                    operand.OptionalEntry
+                    |> Option.toList
+                    |> List.collect BoundaryOptionalEntryChoice.leaves
+                    |> List.map (fun leaf -> leaf.Obligation, call.Site))
+            | _ -> [])
+        |> Map.ofList
+    let origOptionalClaims = optionalClaimOwners edges
+    let origFiniteCellTargets =
+        edges
+        |> List.collect (fun edge ->
+            match edge.Role with
+            | EdgeRole.NumericDomain d -> d.FiniteCellObligations |> List.map fst
+            | _ -> [])
+        |> Set.ofList
     let expectedByPair =
-        (Map.empty, edges, mapped)
-        |||> List.fold2 (fun acc original current ->
+        paired
+        |> List.fold (fun acc (original, current) ->
             let origRows = companionRows origCalls original
             let currRows = companionRows currCalls current
             if origRows.IsEmpty || origRows.Length <> currRows.Length then acc
@@ -279,83 +217,428 @@ let private remapEdges remap (edges: Hyperedge list) =
                     let pairKey = key origExpected, unorderedKey currExpected
                     Map.change pairKey (function
                         | None -> Some (Some currExpected)
-                        | Some _ -> Some None) state))
-    (edges, mapped)
-    ||> List.map2 (fun original current ->
-        match Map.tryFind (key original, unorderedKey current) expectedByPair with
-        | Some (Some expected) when current.Sources <> expected.Sources ->
-            { current with Sources = expected.Sources }
-        | _ -> current)
+                        | Some (Some prev) when key prev = key currExpected -> Some (Some prev)
+                        | Some _ -> Some None) state)) Map.empty
+    let rec mapAll acc remaining =
+        match remaining with
+        | [] -> Result.Ok (List.rev acc)
+        | (original, current) :: rest ->
+            match Map.tryFind (key original, unorderedKey current) expectedByPair with
+            | Some (Some expected) ->
+                let resolved = if current.Sources <> expected.Sources then { current with Sources = expected.Sources } else current
+                mapAll (resolved :: acc) rest
+            | Some None ->
+                Result.Error (current.Target, "SSAAssignment: Ambiguous companion hyperedge correspondence during SSA remapping.")
+            | None ->
+                let canonicalTail =
+                    match original.Role with
+                    | EdgeRole.OrdinaryUnusedFormal -> sortSuffix 1 original.Sources current.Sources
+                    | EdgeRole.OrdinaryUnusedActual -> sortSuffix 4 original.Sources current.Sources
+                    | EdgeRole.OrdinaryUnusedBindingInitializer -> sortSuffix 2 original.Sources current.Sources
+                    | EdgeRole.SequenceProgramBorrow -> sortSuffix 6 original.Sources current.Sources
+                    | EdgeRole.Constrains | EdgeRole.EnrichedWith ->
+                        match Map.tryFind original.Target origOptionalClaims, original.Sources with
+                        | Some origCallSite, origHead :: _ when origHead = origCallSite ->
+                            sortSuffix 1 original.Sources current.Sources
+                        | _ when original.Role = EdgeRole.Constrains && origFiniteCellTargets.Contains original.Target ->
+                            sortSuffix 0 original.Sources current.Sources
+                        | _ -> None
+                    | _ -> None
+                let resolved =
+                    match canonicalTail with
+                    | Some sources -> { current with Sources = sources }
+                    | None -> current
+                mapAll (resolved :: acc) rest
+    mapAll [] paired
 
-let rec private remapGraph (remap: NodeId -> NodeId) (graph: SemanticGraph) : Result<SemanticGraph, NodeId * string> =
-    let provenanceResult =
-        match graph.WitnessProvenance with
-        | None -> Result.Ok None
-        | Some p ->
-            remapGraph remap p.PreparedRoots
-            |> Result.map (fun roots -> Some { PreparedRoots = roots })
-    provenanceResult
-    |> Result.bind (fun provenance ->
-        let remappedCodata =
-            lazy
-                let codata = remapTyped<Codata> remap graph.Codata.Value
-                match codata.WitnessEmission with
-                | None -> codata
-                | Some emission ->
-                    let operations = emission.Memory.Operations |> Map.map (fun _ -> normalizeMemoryOperation)
-                    { codata with WitnessEmission = Some { emission with Memory = { emission.Memory with Operations = operations } } }
-        let remapped =
-            { graph with
-                Nodes = remapTyped<Map<NodeId, SemanticNode>> remap graph.Nodes
-                DeclarationRoots = remapTyped<(NodeId * DeclRoot) list> remap graph.DeclarationRoots
-                Modules = remapTyped<Map<ModulePath, NodeId list>> remap graph.Modules
-                Types = lazy (remapTyped<Map<string, NodeId>> remap graph.Types.Value)
-                ModuleClassifications = lazy (remapTyped<Map<NodeId, ModuleClassification>> remap graph.ModuleClassifications.Value)
-                StaticStringPool = remapTyped<StaticStringPool option> remap graph.StaticStringPool
-                LiteralStorage = remapTyped<Map<NodeId, LiteralStorage>> remap graph.LiteralStorage
-                Escaping = lazy (remapTyped<Map<NodeId, string>> remap graph.Escaping.Value)
-                Codata = remappedCodata
-                Edges = remapEdges remap graph.Edges
-                WitnessProvenance = provenance
-                SequenceRangeProvenance = remapTyped<SequenceRangeAuthority option> remap graph.SequenceRangeProvenance
-                RangeContextFacts = remapTyped<RangeContextFacts option> remap graph.RangeContextFacts }
-        let boundaryOriginTarget =
-            remapped.Edges |> List.tryPick (fun edge ->
-                match edge.Role with
-                | EdgeRole.BoundaryDomain { StringOriginRelations = Some _ } -> Some edge.Target
-                | _ -> None)
-        match boundaryOriginTarget with
-        | None -> Result.Ok remapped
-        | Some target ->
-            match StringOrigins.relations remapped with
-            | Result.Error reason -> Result.Error (target, "SSAAssignment: " + reason)
-            | Result.Ok fresh ->
-                let reorderedEnrichedTargets =
-                    remapped.Edges
-                    |> List.collect (fun edge ->
+let private remapSourceRangeRelations
+    (remap: NodeId -> NodeId)
+    (origRows: SourceRangeRelation list)
+    : SourceRangeRelation list =
+    origRows
+    |> List.map (fun origRow ->
+        let currRow = NodeIdRemap.remapSourceRangeRelation remap origRow
+        let updated =
+            match origRow.Kind with
+            | SourceRangeRelationKind.Named "OrdinaryUnusedFormal" -> sortSuffix 1 origRow.Sources currRow.Sources
+            | SourceRangeRelationKind.Named "OrdinaryUnusedActual" -> sortSuffix 4 origRow.Sources currRow.Sources
+            | SourceRangeRelationKind.Named "OrdinaryUnusedBindingInitializer" -> sortSuffix 2 origRow.Sources currRow.Sources
+            | SourceRangeRelationKind.KernelIngress _ -> sortSuffix 0 origRow.Sources currRow.Sources
+            | _ -> None
+        match updated with
+        | Some sources -> { currRow with Sources = sources }
+        | None -> currRow)
+
+let private remapRangeContextFactsCanonical
+    (remap: NodeId -> NodeId)
+    (origFacts: RangeContextFacts)
+    (currFacts: RangeContextFacts)
+    : RangeContextFacts =
+    let normalized = normalizeRangeContextFacts currFacts
+    match origFacts.SourceRelations with
+    | Result.Ok origRows ->
+        { normalized with SourceRelations = Result.Ok (remapSourceRangeRelations remap origRows) }
+    | Result.Error _ -> normalized
+
+let private remapFiniteCellRelationsCanonical
+    (remap: NodeId -> NodeId)
+    (origFiniteTargets: Set<NodeId>)
+    (origRows: FiniteCellSourceRelation list)
+    : FiniteCellSourceRelation list =
+    origRows
+    |> List.map (fun origRow ->
+        let currRow = NodeIdRemap.remapFiniteCellSourceRelation remap origRow
+        if origRow.Kind = FiniteCellRelationKind.Named "Constrains" && origFiniteTargets.Contains origRow.Target then
+            match sortSuffix 0 origRow.Sources currRow.Sources with
+            | Some sources -> { currRow with Sources = sources }
+            | None -> currRow
+        else currRow)
+
+let private fallbackSite (g: SemanticGraph) : NodeId =
+    g.DeclarationRoots |> List.tryHead |> Option.map fst
+    |> Option.orElseWith (fun () -> g.Nodes.Keys |> Seq.tryHead)
+    |> Option.defaultValue (NodeId -1)
+
+let private validatePreRemapCurrency (graph: SemanticGraph) : Result<unit, NodeId * string> =
+    let origBoundaryOrigins =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.BoundaryDomain { StringOriginRelations = Some rows } -> Some (edge.Target, rows)
+            | _ -> None)
+    let origNumericDomains =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.NumericDomain d -> Some (edge.Target, d)
+            | _ -> None)
+    let checkReaderErrors () =
+        let originReader =
+            match origBoundaryOrigins with
+            | [] -> Result.Ok None
+            | (target, _) :: _ ->
+                match StringOrigins.relations graph with
+                | Result.Ok rows -> Result.Ok (Some rows)
+                | Result.Error reason -> Result.Error (target, "SSAAssignment: " + reason)
+        originReader |> Result.bind (fun originRows ->
+            let rangeAnchor =
+                origNumericDomains |> List.tryPick (fun (anchor, d) -> if d.RangeContextFacts.IsSome then Some anchor else None)
+                |> Option.orElseWith (fun () -> if graph.RangeContextFacts.IsSome then Some (fallbackSite graph) else None)
+            let rangeReader =
+                match rangeAnchor with
+                | None -> Result.Ok ()
+                | Some anchor ->
+                    match NumericValues.rangeContextRelations graph with
+                    | Result.Ok _ -> Result.Ok ()
+                    | Result.Error reason -> Result.Error (anchor, "SSAAssignment: " + reason)
+            rangeReader |> Result.bind (fun () ->
+                match origNumericDomains with
+                | [] -> Result.Ok (originRows, None)
+                | (anchor, _) :: _ ->
+                    match NumericValues.finiteCellRelations graph with
+                    | Result.Ok rows -> Result.Ok (originRows, Some rows)
+                    | Result.Error reason -> Result.Error (anchor, "SSAAssignment: " + reason)))
+    checkReaderErrors ()
+    |> Result.bind (fun (currentOrigins, currentFinite) ->
+        let originsCheck =
+            match currentOrigins with
+            | None -> Result.Ok ()
+            | Some actualRows ->
+                origBoundaryOrigins
+                |> List.fold (fun acc (target, expectedRows) ->
+                    acc |> Result.bind (fun () ->
+                        if actualRows <> expectedRows then
+                            Result.Error (target, "SSAAssignment: String-origin relation premises are not current before SSA remapping.")
+                        else Result.Ok ())) (Result.Ok ())
+        originsCheck |> Result.bind (fun () ->
+            let rangeCheck =
+                let domainRangeCheck =
+                    origNumericDomains
+                    |> List.fold (fun acc (anchor, domain) ->
+                        acc |> Result.bind (fun () ->
+                            match domain.RangeContextFacts with
+                            | None -> Result.Ok ()
+                            | Some expected ->
+                                if graph.RangeContextFacts <> Some expected then
+                                    Result.Error (anchor, "SSAAssignment: Invocation-context range premises disagree between graph root and NumericDomain before SSA remapping.")
+                                elif not (NumericValues.rangeContextCurrent graph expected) then
+                                    Result.Error (anchor, "SSAAssignment: Invocation-context range premises are not current before SSA remapping.")
+                                else Result.Ok ())) (Result.Ok ())
+                domainRangeCheck |> Result.bind (fun () ->
+                    if origNumericDomains.IsEmpty then
+                        match graph.RangeContextFacts with
+                        | Some expected when not (NumericValues.rangeContextCurrent graph expected) ->
+                            Result.Error (fallbackSite graph, "SSAAssignment: Invocation-context range premises are not current before SSA remapping.")
+                        | _ -> Result.Ok ()
+                    else Result.Ok ())
+            rangeCheck |> Result.bind (fun () ->
+                match currentFinite with
+                | None -> Result.Ok ()
+                | Some actualFinite ->
+                    let actualObligations = NumericValues.finiteCellObligations graph
+                    origNumericDomains
+                    |> List.fold (fun acc (anchor, domain) ->
+                        acc |> Result.bind (fun () ->
+                            if actualFinite <> domain.FiniteCellRelations || actualObligations <> domain.FiniteCellObligations then
+                                Result.Error (anchor, "SSAAssignment: Finite-cell relation premises are not current before SSA remapping.")
+                            else Result.Ok ())) (Result.Ok ()))))
+
+let private syncCallableContracts
+    (graph: SemanticGraph)
+    (remap: NodeId -> NodeId)
+    (remappedPreContracts: SemanticGraph)
+    : Result<SemanticGraph, NodeId * string> =
+    let origCodata = graph.Codata.Value
+    if origCodata.CallableContracts.IsEmpty then Result.Ok remappedPreContracts
+    else
+        let singleNumericOwner (g: SemanticGraph) =
+            let owners =
+                g.Edges |> List.choose (fun edge ->
+                    match edge.Role with
+                    | EdgeRole.NumericDomain d -> Some (edge.Target, d)
+                    | _ -> None)
+            match owners with
+            | [] -> Result.Ok None
+            | [ anchor, d ] ->
+                match g.Nodes.TryFind anchor |> Option.filter NumericValues.owned with
+                | Some n -> Result.Ok (Some (anchor, d, Boundaries.premise n))
+                | None -> Result.Error (anchor, "SSAAssignment: NumericDomain anchor node is missing or unowned during callable contract SSA remapping.")
+            | (anchor, _) :: _ ->
+                Result.Error (anchor, "SSAAssignment: Ambiguous NumericDomain owners during callable contract SSA remapping.")
+        let carrierSignature (c: CallableCarrier) = c.Kind, c.Implementation, c.Result, c.Parameters
+        let buildCarrierMap (carriers: Map<NodeId, CallableCarrier>) =
+            carriers.Values
+            |> Seq.fold (fun state (c: CallableCarrier) ->
+                state |> Result.bind (fun m ->
+                    match c.Contract with
+                    | Result.Error _ -> Result.Ok m
+                    | Result.Ok contractId ->
+                        match Map.tryFind contractId m with
+                        | None -> Result.Ok (Map.add contractId c m)
+                        | Some prev when carrierSignature prev = carrierSignature c -> Result.Ok m
+                        | Some _ -> Result.Error (contractId, "SSAAssignment: Ambiguous callable carrier for implementation during SSA remapping.")))
+                (Result.Ok Map.empty)
+        singleNumericOwner graph
+        |> Result.bind (fun origOwnerOpt ->
+            singleNumericOwner remappedPreContracts
+            |> Result.bind (fun currOwnerOpt ->
+                match origOwnerOpt, currOwnerOpt with
+                | None, None -> Result.Ok remappedPreContracts
+                | Some (anchor, _, _), None ->
+                    Result.Error (remap anchor, "SSAAssignment: NumericDomain owner disappeared during callable contract SSA remapping.")
+                | None, Some (anchor, _, _) ->
+                    Result.Error (anchor, "SSAAssignment: NumericDomain owner appeared unexpectedly during callable contract SSA remapping.")
+                | Some origOwner, Some currOwner ->
+                    let currCodata = remappedPreContracts.Codata.Value
+                    buildCarrierMap origCodata.CallableCarriers
+                    |> Result.bind (fun origCarrierByContract ->
+                        buildCarrierMap currCodata.CallableCarriers
+                        |> Result.bind (fun currCarrierByContract ->
+                            let sourceNodes (ps: Participant list) =
+                                ps |> List.filter (fun p -> p.Role = ParticipantRole.Source) |> List.map _.Node |> List.sort
+                            let syncContracts =
+                                origCodata.CallableContracts
+                                |> Map.fold (fun state origId origContract ->
+                                    state |> Result.bind (fun (contracts: Map<NodeId, CallableContract>) ->
+                                        let currId = remap origId
+                                        match contracts.TryFind currId with
+                                        | None ->
+                                            Result.Error (currId, "SSAAssignment: Callable contract disappeared during SSA remapping.")
+                                        | Some currContract ->
+                                            match origCarrierByContract.TryFind origContract.Identity,
+                                                  currCarrierByContract.TryFind currContract.Identity with
+                                            | None, _ | _, None ->
+                                                Result.Error (currId, "SSAAssignment: Callable contract is missing its callable carrier during SSA remapping.")
+                                            | Some origCarrier, Some currCarrier ->
+                                                let origSources, _ = CallableContracts.conventionEvidence graph origContract.Convention origOwner origCarrier
+                                                let expectedOrigParticipants = CallableContracts.conventionParticipants origContract.Convention origContract.Identity origCarrier origSources
+                                                if origContract.Participants <> expectedOrigParticipants then
+                                                    Result.Error (currId, "SSAAssignment: Callable contract participants are not canonical before SSA remapping.")
+                                                else
+                                                    let currSources, _ = CallableContracts.conventionEvidence remappedPreContracts currContract.Convention currOwner currCarrier
+                                                    let expectedCurrParticipants = CallableContracts.conventionParticipants currContract.Convention currContract.Identity currCarrier currSources
+                                                    if currContract.Participants.Length <> expectedCurrParticipants.Length
+                                                       || sourceNodes currContract.Participants <> sourceNodes expectedCurrParticipants then
+                                                        Result.Error (currId, "SSAAssignment: Callable contract participant set drifted during SSA remapping.")
+                                                    elif currContract.Participants <> expectedCurrParticipants then
+                                                        Result.Ok (contracts.Add(currId, { currContract with Participants = expectedCurrParticipants }))
+                                                    else Result.Ok contracts))
+                                    (Result.Ok currCodata.CallableContracts)
+                            syncContracts |> Result.bind (fun updatedContracts ->
+                                if updatedContracts = currCodata.CallableContracts then Result.Ok remappedPreContracts
+                                else
+                                    currCodata.CallableAggregateDependencies
+                                    |> Map.fold (fun state accountId account ->
+                                        state |> Result.bind (fun (deps: Map<NodeId, CallableAggregateDependencyAccount>) ->
+                                            let synced =
+                                                account.Contracts
+                                                |> List.map (fun c -> updatedContracts.TryFind c.Identity |> Option.defaultValue c)
+                                            if synced = account.Contracts then Result.Ok (deps.Add(accountId, account))
+                                            else
+                                                let participants =
+                                                    (account.Slots |> List.collect _.Participants)
+                                                    @ (account.Values |> List.collect (fun row -> row.Participants @ (row.Tag |> Option.map _.Participants |> Option.defaultValue [])))
+                                                    @ (account.Carriers |> List.collect _.Lifetime)
+                                                    @ (synced |> List.collect _.Participants)
+                                                let participantNodes = participants |> List.map _.Node |> List.distinct
+                                                let sourceByNode = account.Sources |> List.map (fun s -> s.Node, s) |> Map.ofList
+                                                let claimByNode = account.Claims |> Map.ofList
+                                                let sources = participantNodes |> List.choose sourceByNode.TryFind
+                                                let claims = participantNodes |> List.choose (fun id -> claimByNode.TryFind id |> Option.map (fun c -> id, c))
+                                                if participants.Length = account.Participants.Length
+                                                   && sources.Length = account.Sources.Length
+                                                   && claims.Length = account.Claims.Length then
+                                                    Result.Ok (deps.Add(accountId, { account with Contracts = synced; Participants = participants; Sources = sources; Claims = claims }))
+                                                else
+                                                    Result.Error (accountId, "SSAAssignment: Callable aggregate dependency account lost participant coherence during SSA remapping.")))
+                                        (Result.Ok Map.empty)
+                                    |> Result.map (fun updatedDeps ->
+                                        { remappedPreContracts with
+                                            Codata = lazy { currCodata with CallableContracts = updatedContracts; CallableAggregateDependencies = updatedDeps } }))))))
+
+let internal remapGraph (remap: NodeId -> NodeId) (graph: SemanticGraph) : Result<SemanticGraph, NodeId * string> =
+    validatePreRemapCurrency graph
+    |> Result.bind (fun () -> remapEdges remap graph.Edges)
+    |> Result.bind (fun remappedEdges ->
+        let remappedBase = NodeIdRemap.remapGraphRoots remap remappedEdges graph
+        if remappedBase.Nodes.Count <> graph.Nodes.Count then
+            let collidingTarget =
+                graph.Nodes.Keys
+                |> Seq.fold (fun (seen, found) id ->
+                    match found with
+                    | Some _ -> seen, found
+                    | None ->
+                        let target = remap id
+                        if Set.contains target seen then seen, Some target
+                        else Set.add target seen, None) (Set.empty, None)
+                |> snd
+                |> Option.defaultValue (fallbackSite graph)
+            Result.Error (collidingTarget, "SSAAssignment: NodeId remapping collided distinct graph nodes.")
+        else
+            let origFiniteTargets =
+                graph.Edges
+                |> List.collect (fun edge ->
+                    match edge.Role with
+                    | EdgeRole.NumericDomain d -> d.FiniteCellObligations |> List.map fst
+                    | _ -> [])
+                |> Set.ofList
+            let syncedEdges =
+                (graph.Edges, remappedBase.Edges)
+                ||> List.map2 (fun origEdge currEdge ->
+                    match origEdge.Role, currEdge.Role with
+                    | EdgeRole.NumericDomain origDom, EdgeRole.NumericDomain currDom ->
+                        let syncedRangeFacts =
+                            match origDom.RangeContextFacts, currDom.RangeContextFacts with
+                            | Some origFacts, Some currFacts -> Some (remapRangeContextFactsCanonical remap origFacts currFacts)
+                            | _, other -> other
+                        let syncedFiniteCells =
+                            match origDom.FiniteCellRelations with
+                            | Some origRows -> Some (remapFiniteCellRelationsCanonical remap origFiniteTargets origRows)
+                            | None -> currDom.FiniteCellRelations
+                        { currEdge with
+                            Role = EdgeRole.NumericDomain { currDom with RangeContextFacts = syncedRangeFacts; FiniteCellRelations = syncedFiniteCells } }
+                    | _ -> currEdge)
+            let syncedRootRangeFacts =
+                match graph.RangeContextFacts, remappedBase.RangeContextFacts with
+                | Some origFacts, Some currFacts -> Some (remapRangeContextFactsCanonical remap origFacts currFacts)
+                | _, other -> other |> Option.map normalizeRangeContextFacts
+            let remappedPreContracts =
+                { remappedBase with
+                    SequenceRangeProvenance = remappedBase.SequenceRangeProvenance |> Option.map normalizeSequenceRangeAuthority
+                    RangeContextFacts = syncedRootRangeFacts
+                    Edges = syncedEdges }
+            syncCallableContracts graph remap remappedPreContracts
+            |> Result.bind (fun remapped ->
+                let remappedNumericDomains =
+                    remapped.Edges |> List.choose (fun edge ->
                         match edge.Role with
-                        | EdgeRole.BoundaryDomain d -> edge.Target :: (d.IntrinsicProofs |> List.map _.Obligation)
-                        | EdgeRole.BoundaryCoverage c -> [ c.Obligation ]
-                        | EdgeRole.MemoryDomain d -> edge.Target :: (d.Proofs |> List.map _.Obligation)
-                        | EdgeRole.NumericDomain _ | EdgeRole.SpatialModuleDomain _ ->
-                            [ edge.Target ]
-                        | _ -> [])
-                    |> Set.ofList
-                let canonicalRelation (row: StringOriginRelation) =
-                    let sources =
-                        if row.Flavor = StringOriginRelationKind.Named "EnrichedWith" && reorderedEnrichedTargets.Contains row.Target then
-                            List.sort row.Sources
-                        else row.Sources
-                    row.Recorded, row.Class, row.Flavor, row.Ordinal, row.Target, sources
-                let sortedFresh = fresh |> List.map canonicalRelation |> List.sort
-                let edges =
-                    remapped.Edges |> List.map (fun edge ->
-                        match edge.Role with
-                        | EdgeRole.BoundaryDomain ({ StringOriginRelations = Some relations } as domain)
-                            when relations <> fresh && (relations |> List.map canonicalRelation |> List.sort) = sortedFresh ->
-                            { edge with Role = EdgeRole.BoundaryDomain { domain with StringOriginRelations = Some fresh } }
-                        | _ -> edge)
-                Result.Ok { remapped with Edges = edges })
+                        | EdgeRole.NumericDomain d -> Some (edge.Target, d)
+                        | _ -> None)
+                let postRangeCheck =
+                    let domainCheck =
+                        remappedNumericDomains
+                        |> List.fold (fun acc (anchor, domain) ->
+                            acc |> Result.bind (fun () ->
+                                match domain.RangeContextFacts with
+                                | None -> Result.Ok ()
+                                | Some facts ->
+                                    match NumericValues.rangeContextRelations remapped with
+                                    | Result.Error reason -> Result.Error (anchor, "SSAAssignment: " + reason)
+                                    | Result.Ok _ when not (NumericValues.rangeContextCurrent remapped facts) ->
+                                        Result.Error (anchor, "SSAAssignment: Invocation-context range premises drifted after SSA remapping.")
+                                    | Result.Ok _ -> Result.Ok ())) (Result.Ok ())
+                    domainCheck |> Result.bind (fun () ->
+                        if remappedNumericDomains.IsEmpty then
+                            match remapped.RangeContextFacts with
+                            | Some facts ->
+                                match NumericValues.rangeContextRelations remapped with
+                                | Result.Error reason -> Result.Error (fallbackSite remapped, "SSAAssignment: " + reason)
+                                | Result.Ok _ when not (NumericValues.rangeContextCurrent remapped facts) ->
+                                    Result.Error (fallbackSite remapped, "SSAAssignment: Invocation-context range premises drifted after SSA remapping.")
+                                | Result.Ok _ -> Result.Ok ()
+                            | None -> Result.Ok ()
+                        else Result.Ok ())
+                let postFiniteCheck =
+                    postRangeCheck |> Result.bind (fun () ->
+                        match remappedNumericDomains with
+                        | [] -> Result.Ok ()
+                        | (anchor, _) :: _ ->
+                            match NumericValues.finiteCellRelations remapped with
+                            | Result.Error reason -> Result.Error (anchor, "SSAAssignment: " + reason)
+                            | Result.Ok actualFinite ->
+                                let actualObligations = NumericValues.finiteCellObligations remapped
+                                remappedNumericDomains
+                                |> List.fold (fun acc (a, domain) ->
+                                    acc |> Result.bind (fun () ->
+                                        if actualFinite <> domain.FiniteCellRelations || actualObligations <> domain.FiniteCellObligations then
+                                            Result.Error (a, "SSAAssignment: Finite-cell relation premises drifted after SSA remapping.")
+                                        else Result.Ok ())) (Result.Ok ()))
+                postFiniteCheck |> Result.bind (fun () ->
+                    let boundaryOriginTarget =
+                        remapped.Edges |> List.tryPick (fun edge ->
+                            match edge.Role with
+                            | EdgeRole.BoundaryDomain { StringOriginRelations = Some _ } -> Some edge.Target
+                            | _ -> None)
+                    match boundaryOriginTarget with
+                    | None -> Result.Ok remapped
+                    | Some target ->
+                        match StringOrigins.relations remapped with
+                        | Result.Error reason -> Result.Error (target, "SSAAssignment: " + reason)
+                        | Result.Ok fresh ->
+                            let reorderedEnrichedTargets =
+                                remapped.Edges
+                                |> List.collect (fun edge ->
+                                    match edge.Role with
+                                    | EdgeRole.BoundaryDomain d -> edge.Target :: (d.IntrinsicProofs |> List.map _.Obligation)
+                                    | EdgeRole.BoundaryCoverage c -> [ c.Obligation ]
+                                    | EdgeRole.MemoryDomain d -> edge.Target :: (d.Proofs |> List.map _.Obligation)
+                                    | EdgeRole.NumericDomain d ->
+                                        edge.Target
+                                        :: (d.Values |> List.collect _.Obligations)
+                                        @ (d.OperationProofs |> List.map _.Obligation)
+                                        @ (d.IndexTransports |> List.map _.Obligation)
+                                    | EdgeRole.SpatialModuleDomain d -> edge.Target :: (d.Proofs |> List.map _.Obligation)
+                                    | _ -> [])
+                                |> Set.ofList
+                            let canonicalRelation (row: StringOriginRelation) =
+                                let sources =
+                                    if row.Flavor = StringOriginRelationKind.Named "EnrichedWith" && reorderedEnrichedTargets.Contains row.Target then
+                                        List.sort row.Sources
+                                    else row.Sources
+                                row.Recorded, row.Class, row.Flavor, row.Ordinal, row.Target, sources
+                            let sortedFresh = fresh |> List.map canonicalRelation |> List.sort
+                            let syncedOriginEdges =
+                                remapped.Edges
+                                |> List.fold (fun acc edge ->
+                                    acc |> Result.bind (fun revEdges ->
+                                        match edge.Role with
+                                        | EdgeRole.BoundaryDomain ({ StringOriginRelations = Some relations } as domain) ->
+                                            if relations = fresh then Result.Ok (edge :: revEdges)
+                                            elif (relations |> List.map canonicalRelation |> List.sort) = sortedFresh then
+                                                Result.Ok ({ edge with Role = EdgeRole.BoundaryDomain { domain with StringOriginRelations = Some fresh } } :: revEdges)
+                                            else
+                                                Result.Error (edge.Target, "SSAAssignment: String-origin relation premises drifted after SSA remapping.")
+                                        | _ -> Result.Ok (edge :: revEdges))) (Result.Ok [])
+                                |> Result.map List.rev
+                            syncedOriginEdges |> Result.map (fun edges -> { remapped with Edges = edges }))))
 
 let [<Literal>] Family = 512
 
