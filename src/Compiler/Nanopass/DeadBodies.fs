@@ -27,10 +27,16 @@ let normalizeWith emit graph =
     |> Option.map Reachability.markUnreachable
     |> Option.defaultValue graph
 
-let normalizeReachedWith emit (graph, reached) =
+let internal normalizeReachedWithStatus emit (graph, reached) =
     let recipes = fanOutUsing (FanOut.fanOutAt reached) graph
     match foldChanged emit graph recipes with
-    | None -> graph, reached
-    | Some folded -> Reachability.markUnreachableWithScope folded
+    | None -> graph, reached, false
+    | Some folded ->
+        let marked, scope = Reachability.markUnreachableWithScope folded
+        marked, scope, true
+
+let normalizeReachedWith emit (graph, reached) =
+    let marked, scope, _ = normalizeReachedWithStatus emit (graph, reached)
+    marked, scope
 
 let normalize graph = normalizeWith ignore graph

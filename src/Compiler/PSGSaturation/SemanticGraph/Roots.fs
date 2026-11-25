@@ -18,8 +18,11 @@ let declarationRootLambdas (graph: SemanticGraph) : Map<NodeId, DeclRoot> =
     graph.DeclarationRoots
     |> List.collect (fun (rootId, rootKind) ->
         match Map.tryFind rootId graph.Nodes with
+        | Some { Kind = SemanticKind.Binding (_, _, _, Some DeclRoot.HardwareModule) } -> []
         | Some ({ Kind = SemanticKind.Binding (_, _, _, Some dr) } as node) ->
             lambdaChild node |> Option.map (fun l -> (l, dr)) |> Option.toList
+        | Some ({ Kind = SemanticKind.Binding (name, _, _, None) } as node) when rootKind = DeclRoot.EntryPoint && name = "main" ->
+            lambdaChild node |> Option.map (fun l -> (l, DeclRoot.EntryPoint)) |> Option.toList
         | Some { Kind = SemanticKind.Lambda _ } -> [ (rootId, rootKind) ]
         | Some { Kind = SemanticKind.ModuleDef (_, memberIds) } ->
             memberIds |> List.choose (fun memberId ->

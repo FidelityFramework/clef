@@ -8,7 +8,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Segmentation
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 [<RequireQualifiedAccess>]
-type RegionDisposition = Retained | Reelaborate
+type RegionDisposition = Retained | Reelaborate | Retired | Dormant
 [<RequireQualifiedAccess>]
 type RebuildFailure =
     | InvalidBaseline of SegmentationFailure list
@@ -25,7 +25,8 @@ type RebuildFailure =
 type ShadowConeReceipt =
     { Alignment: Map<NodeId, NodeId>
       Cone: Reachability.ReachableDeltaCone
-      InvalidatedRegions: Set<string> }
+      InvalidatedRegions: Set<string>
+      RetiredRegions: Set<string> }
 
 type RebuildSchedule =
     { Baseline: SegmentationPlan
@@ -160,11 +161,41 @@ let private scheduleCheckedRebuild (baseline: SemanticGraph) (candidate: Semanti
                     if shouldPropagate state edge then Set.add edge.Consumer state else state) invalid
             if next = invalid then invalid else close next
         let invalid = close (Set.union changed removed)
-        let dispositions = newPlan.Regions |> Map.map (fun identity _ ->
-            if invalid.Contains identity then RegionDisposition.Reelaborate else RegionDisposition.Retained)
+        let isRegionReachable (graph: SemanticGraph) (region: Region) =
+            region.Members |> Set.exists (fun id -> graph.Nodes.TryFind id |> Option.exists _.IsReachable)
+        // Regions unreachable in the candidate contribute no executable Baker scopes;
+        // off-spine metadata support changes already propagated via `close` above.
+        // Regions reachable in the baseline that are absent or unreachable in the
+        // candidate are Retired; changed or newly introduced unreachable regions
+        // are Dormant and excluded from retainedRegions, while unchanged off-spine
+        // declaration regions remain Retained.
+        let retiredRegions =
+            oldPlan.Regions
+            |> Map.toSeq
+            |> Seq.choose (fun (identity, oldRegion) ->
+                if isRegionReachable baseline oldRegion then
+                    match newPlan.Regions.TryFind identity with
+                    | Some newRegion when isRegionReachable candidate newRegion -> None
+                    | _ -> Some identity
+                else None)
+            |> Set.ofSeq
+        let executableInvalid =
+            invalid
+            |> Set.filter (fun identity ->
+                match newPlan.Regions.TryFind identity with
+                | Some region -> isRegionReachable candidate region
+                | None -> false)
+        let dispositions = newPlan.Regions |> Map.map (fun identity region ->
+            if executableInvalid.Contains identity then RegionDisposition.Reelaborate
+            elif retiredRegions.Contains identity then RegionDisposition.Retired
+            elif invalid.Contains identity && not (isRegionReachable candidate region) then RegionDisposition.Dormant
+            else RegionDisposition.Retained)
         let scopes =
-            newPlan.Regions.Values |> Seq.filter (fun region -> invalid.Contains region.Identity)
-            |> Seq.map _.Members |> Set.unionMany
+            newPlan.Regions.Values
+            |> Seq.filter (fun region -> executableInvalid.Contains region.Identity)
+            |> Seq.collect (fun region ->
+                region.Members |> Seq.filter (fun id -> candidate.Nodes.TryFind id |> Option.exists _.IsReachable))
+            |> Set.ofSeq
         let transport (plan: SegmentationPlan) ids =
             plan.NodeIdentities |> Map.toSeq |> Seq.choose (fun (id, address) ->
                 if Set.contains canonical[address] ids then Some id else None) |> Set.ofSeq
@@ -177,7 +208,7 @@ let private scheduleCheckedRebuild (baseline: SemanticGraph) (candidate: Semanti
         let schedule =
             { Baseline = oldPlan; Candidate = newPlan; Regions = dispositions; Scopes = scopes
               RelationAlignment = relations
-              Receipt = { Alignment = alignment; Cone = receipt; InvalidatedRegions = invalid } }
+              Receipt = { Alignment = alignment; Cone = receipt; InvalidatedRegions = executableInvalid; RetiredRegions = retiredRegions } }
         Result.Ok(schedule, pair)
 
 let scheduleRebuild baseline candidate =
@@ -232,7 +263,7 @@ let rebuildSelective baseline candidate =
                             |> List.map (fun (id, reason) -> SegmentationFailure.InvalidGraph(Some id, reason))
                         Result.Error(RebuildFailure.InvalidReturnedGraph invalid)
                     | Result.Ok (reconciled, _) ->
-                        match Clef.Compiler.Nanopass.PremiseEstablishment.settleRebuildSentinels (not recipes.Recipes.IsEmpty) reconciled with
+                        match Clef.Compiler.Nanopass.PremiseEstablishment.settleRebuildSentinels (scopedRebuildRefolded scoped) reconciled with
                         | Result.Ok settled ->
                             Result.Ok(settled, { schedule with RelationAlignment = relations }, recipes)
                         | Result.Error (site, reason) ->

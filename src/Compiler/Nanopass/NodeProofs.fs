@@ -217,13 +217,15 @@ let private widen readSentinel (graph: SemanticGraph) text (added: SemanticNode 
     | _ -> fail "A literal text must have exactly one storage, view, and sentinel claim."
 
 /// Add newly reachable participants to their existing literal claims; fresh texts retain the birth path.
-let tryExtend (graph: SemanticGraph) (newNodes: NodeId seq) =
+/// When Baker fold-in invalidated `graph.StaticStringPool`/`LiteralStorage`, validate prior settled
+/// sentinels against `priorStorage` before widening and resetting them to Pending for re-settlement.
+let internal tryExtendFrom (priorStorage: SemanticGraph) (graph: SemanticGraph) (newNodes: NodeId seq) =
     let wave = newNodes |> Seq.distinct |> Seq.choose graph.Nodes.TryFind |> Seq.toList |> literalTexts graph
     match wave with
     | [] -> Result.Ok graph
     | (_, first :: _) :: _ ->
         let texts = wave |> List.map fst |> Set.ofList
-        let readSentinel = sentinelDisposition graph
+        let readSentinel = sentinelDisposition priorStorage
         residents graph texts |> Result.bind (fun owners ->
             let plan (edits, fresh) (text, participants: SemanticNode list) =
                 match owners.TryFind text with
@@ -246,9 +248,267 @@ let tryExtend (graph: SemanticGraph) (newNodes: NodeId seq) =
                     else fresh |> List.rev |> List.concat |> List.map _.Id |> create current)))
     | _ -> Result.Ok graph
 
-/// Complete the existing sentinel claims from checked storage. Retain the
-/// anchor, claim identity and ordered literal sources in every disposition,
-/// and never leave a stale materialized or omitted body on an orphaned claim.
+/// Add newly reachable participants to their existing literal claims; fresh texts retain the birth path.
+let tryExtend (graph: SemanticGraph) (newNodes: NodeId seq) =
+    tryExtendFrom graph graph newNodes
+
+/// Reconcile resident literal obligation triples against subject reachability
+/// (never obligationNode.IsReachable, which is off-spine per PHG preamble):
+/// - Full withdrawal: when zero constrained literal subjects remain reachable,
+///   remove the extinguished storage_*/view_*/sentinel_* obligation nodes, their
+///   incoming Constrains edges, and their anchor names from the dead literals.
+/// - Partial withdrawal: when a live sibling still shares the text, narrow each
+///   claim's Constrains sources, Range/Source, and dead-literal anchors cleanly,
+///   and reset sentinel_* to Pending so settlement binds the narrowed pool entry.
+let internal reconcileLiteralClaimsWithStatus (graph: SemanticGraph) : SemanticGraph * bool =
+    let incoming = graph.Edges |> List.groupBy _.Target |> Map.ofList
+    let orderBy = sourceOrder graph
+    let stripAnchors (toRemove: Map<NodeId, Set<string>>) (nodes: Map<NodeId, SemanticNode>) =
+        toRemove
+        |> Map.fold (fun current litId dropNames ->
+            match Map.tryFind litId current with
+            | Some node ->
+                match node.Metadata.TryFind ObligationMetadata.Anchors with
+                | Some (MetadataValue.StringList held) ->
+                    let kept = held |> List.filter (fun name -> not (dropNames.Contains name))
+                    if kept = held then current
+                    else
+                        let metadata =
+                            if kept.IsEmpty then node.Metadata.Remove ObligationMetadata.Anchors
+                            else node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList kept)
+                        Map.add litId { node with Metadata = metadata } current
+                | _ -> current
+            | None -> current) nodes
+    let addDrops (drops: Map<NodeId, Set<string>>) (litIds: NodeId list) (anchorName: string) =
+        litIds
+        |> List.fold (fun (acc: Map<NodeId, Set<string>>) litId ->
+            let prev = acc.TryFind litId |> Option.defaultValue Set.empty
+            Map.add litId (Set.add anchorName prev) acc) drops
+    let retiredIds, updatedClaims, updatedEdges, anchorDrops =
+        SemanticGraph.obligations graph
+        |> List.fold (fun (retiredIds, updatedClaims, updatedEdges, anchorDrops) (node, info) ->
+            if not (roleCandidate info) then retiredIds, updatedClaims, updatedEdges, anchorDrops
+            else
+                match incoming.TryFind node.Id |> Option.defaultValue [] with
+                | [edge] when edge.Class = EdgeClass.Obligation && edge.Role = EdgeRole.Constrains && edge.Ordinal = 0 ->
+                    let resolved = edge.Sources |> List.choose graph.Nodes.TryFind
+                    match resolved with
+                    | head :: _ when resolved.Length = edge.Sources.Length
+                                     && (List.distinct edge.Sources).Length = edge.Sources.Length ->
+                        match literal head with
+                        | Some text when resolved |> List.forall (fun n -> literal n = Some text) ->
+                            let liveNodes, deadNodes = resolved |> List.partition _.IsReachable
+                            if deadNodes.IsEmpty then
+                                retiredIds, updatedClaims, updatedEdges, anchorDrops
+                            elif liveNodes.IsEmpty then
+                                let deadIds = deadNodes |> List.map _.Id
+                                Set.add node.Id retiredIds,
+                                updatedClaims,
+                                updatedEdges,
+                                addDrops anchorDrops deadIds info.Id
+                            else
+                                let orderedLive = liveNodes |> List.sortBy (fun n -> orderBy n, n.Id)
+                                let lead = orderedLive.Head
+                                let narrowedIds = orderedLive |> List.map _.Id
+                                let deadIds = deadNodes |> List.map _.Id
+                                let nextBody =
+                                    if info.Kind = "terminator-sentinel" then
+                                        ObligationBody.Pending ["The current literal storage has not established a terminator byte or an omission."]
+                                    else info.Body
+                                let nextInfo = { info with Source = fmtRange lead.Range; Body = nextBody }
+                                let nextNode = { node with Range = lead.Range; Kind = SemanticKind.Obligation nextInfo }
+                                retiredIds,
+                                Map.add node.Id nextNode updatedClaims,
+                                Map.add node.Id { edge with Sources = narrowedIds } updatedEdges,
+                                addDrops anchorDrops deadIds info.Id
+                        | _ -> retiredIds, updatedClaims, updatedEdges, anchorDrops
+                    | _ -> retiredIds, updatedClaims, updatedEdges, anchorDrops
+                | _ -> retiredIds, updatedClaims, updatedEdges, anchorDrops) (Set.empty, Map.empty, Map.empty, Map.empty)
+    if retiredIds.IsEmpty && updatedClaims.IsEmpty && updatedEdges.IsEmpty && anchorDrops.IsEmpty then
+        graph, false
+    else
+        let nodes =
+            graph.Nodes
+            |> fun m -> retiredIds |> Set.fold (fun acc id -> Map.remove id acc) m
+            |> fun m -> updatedClaims |> Map.fold (fun acc id n -> Map.add id n acc) m
+            |> stripAnchors anchorDrops
+        let edges =
+            graph.Edges
+            |> List.choose (fun edge ->
+                if retiredIds.Contains edge.Target then None
+                else
+                    match updatedEdges.TryFind edge.Target with
+                    | Some replacement when edge.Class = EdgeClass.Obligation && edge.Role = EdgeRole.Constrains && edge.Ordinal = 0 ->
+                        Some replacement
+                    | _ -> Some edge)
+        { graph with Nodes = nodes; Edges = edges } |> SemanticGraph.invalidateWitness, true
+
+let internal reconcileLiteralClaims (graph: SemanticGraph) : SemanticGraph =
+    reconcileLiteralClaimsWithStatus graph |> fst
+
+/// Per-obligation reachability authorization over the graph's own reachability marks
+/// and explicit provenance, residence, spatial, and shared-buffer view-use relations.
+/// Off-spine declaration nodes never authorize an obligation whose own site subject is unreachable.
+let internal obligationReachabilityChecker (graph: SemanticGraph) =
+    let isNodeReachable id =
+        graph.Nodes.TryFind id |> Option.exists _.IsReachable
+    let isReachableNonObligation id =
+        match graph.Nodes.TryFind id with
+        | Some target when target.IsReachable ->
+            match target.Kind with
+            | SemanticKind.Obligation _ -> false
+            | _ -> true
+        | _ -> false
+    // Lowered sequence representation passes may retire an original source occurrence
+    // while preserving Provenance/ContinuationValue to a reachable lowered non-obligation node.
+    let continuationBackedToReachable =
+        graph.Edges
+        |> List.fold (fun acc edge ->
+            if edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.ContinuationValue
+               && isReachableNonObligation edge.Target then
+                edge.Sources |> List.fold (fun s id -> Set.add id s) acc
+            else acc) Set.empty
+    // Reference/Resides links a declared buffer/space source to a specific demanding site target.
+    // Track (source -> target set) and all Resides targets so an obligation naming an unreachable
+    // site target (e.g. input_bound [deadSite; buffer]) cannot borrow reachability from a live site.
+    let residesTargetsBySource, allResidesTargets =
+        graph.Edges
+        |> List.fold (fun (bySource: Map<NodeId, Set<NodeId>>, targets: Set<NodeId>) edge ->
+            if edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Resides then
+                let targets = Set.add edge.Target targets
+                let bySource =
+                    edge.Sources
+                    |> List.fold (fun (m: Map<NodeId, Set<NodeId>>) src ->
+                        let prev = m.TryFind src |> Option.defaultValue Set.empty
+                        Map.add src (Set.add edge.Target prev) m) bySource
+                bySource, targets
+            else bySource, targets) (Map.empty, Set.empty)
+    // Spatial relations (KernelIngress | HardwareModule | KernelModule) link off-spine
+    // declaration participants to their specific spatial root target.
+    let spatialTargetsBySource =
+        graph.Edges
+        |> List.fold (fun (bySource: Map<NodeId, Set<NodeId>>) edge ->
+            let isSpatialOwner =
+                edge.Class = EdgeClass.Spatial &&
+                match edge.Role with
+                | EdgeRole.KernelIngress _ | EdgeRole.HardwareModule _ | EdgeRole.KernelModule _ -> true
+                | _ -> false
+            if isSpatialOwner then
+                edge.Sources
+                |> List.fold (fun (m: Map<NodeId, Set<NodeId>>) src ->
+                    let prev = m.TryFind src |> Option.defaultValue Set.empty
+                    Map.add src (Set.add edge.Target prev) m) bySource
+            else bySource) Map.empty
+    // SharedBufferPlacementObligation claims are authorized only when a BoundarySharedBufferViewUse
+    // in BoundaryDomain has a reachable Site or RegionAcquisitionCall.
+    let activeSharedBufferObligations =
+        graph.Edges
+        |> List.collect (fun edge ->
+            match edge.Role with
+            | EdgeRole.BoundaryDomain domain ->
+                domain.SharedBufferViewUses
+                |> List.collect (fun viewUse ->
+                    if isNodeReachable viewUse.Site || isNodeReachable viewUse.RegionAcquisitionCall then
+                        [ viewUse.ExtentObligation; viewUse.LayoutObligation; viewUse.LifetimeObligation
+                          viewUse.ExclusivityObligation; viewUse.SpaceExtentObligation ]
+                    else [])
+            | _ -> [])
+        |> Set.ofList
+    fun (id: NodeId) (info: ObligationInfo) (subjects: NodeId list) ->
+        if subjects.IsEmpty then
+            true
+        elif (match info.Body with ObligationBody.SharedBufferPlacementObligation _ -> activeSharedBufferObligations.Contains id | _ -> false) then
+            true
+        elif subjects |> List.exists isNodeReachable then
+            true
+        else
+            let subjectSet = Set.ofList subjects
+            let hasContinuationBacking =
+                subjects |> List.exists continuationBackedToReachable.Contains
+            let hasResidesBacking =
+                let namesResidesTarget = subjects |> List.exists allResidesTargets.Contains
+                if namesResidesTarget then
+                    subjects |> List.exists (fun src ->
+                        residesTargetsBySource.TryFind src
+                        |> Option.exists (Set.exists (fun target -> subjectSet.Contains target && isReachableNonObligation target)))
+                else
+                    match info.Body with
+                    | ObligationBody.CapacityPositive _ | ObligationBody.CapacityFits _ ->
+                        subjects |> List.exists (fun src ->
+                            residesTargetsBySource.TryFind src
+                            |> Option.exists (Set.exists isReachableNonObligation))
+                    | _ -> false
+            let hasSpatialBacking =
+                subjects |> List.exists (fun src ->
+                    spatialTargetsBySource.TryFind src
+                    |> Option.exists (Set.exists (fun target -> subjectSet.Contains target && isReachableNonObligation target)))
+            hasContinuationBacking || hasResidesBacking || hasSpatialBacking
+
+/// Selective-rebuild obligation reconciliation:
+/// 1. Full and partial literal claim withdrawal (storage/view/sentinel triples).
+/// 2. Withdrawal of any non-literal obligation whose Constrains subjects are no longer
+///    authorized under the per-obligation reachability contract.
+/// Used strictly on the selective rebuild path; cold builds remain fail-closed at dispatch.
+let internal reconcileSelectiveObligationsWithStatus (graph: SemanticGraph) : SemanticGraph * bool =
+    let afterLiterals, literalsChanged = reconcileLiteralClaimsWithStatus graph
+    let isAuthorized = obligationReachabilityChecker afterLiterals
+    let constrainsByTarget =
+        afterLiterals.Edges
+        |> List.fold (fun (acc: Map<NodeId, NodeId list>) edge ->
+            if edge.Role = EdgeRole.Constrains then
+                let prev = acc.TryFind edge.Target |> Option.defaultValue []
+                Map.add edge.Target (prev @ edge.Sources) acc
+            else acc) Map.empty
+    let retiredIds, anchorDrops =
+        SemanticGraph.obligations afterLiterals
+        |> List.fold (fun (retired: Set<NodeId>, drops: Map<NodeId, Set<string>>) (node, info) ->
+            let subjects = constrainsByTarget.TryFind node.Id |> Option.defaultValue []
+            if isAuthorized node.Id info subjects then retired, drops
+            else
+                let drops =
+                    subjects
+                    |> List.fold (fun (acc: Map<NodeId, Set<string>>) subjId ->
+                        let prev = acc.TryFind subjId |> Option.defaultValue Set.empty
+                        Map.add subjId (Set.add info.Id prev) acc) drops
+                Set.add node.Id retired, drops) (Set.empty, Map.empty)
+    if retiredIds.IsEmpty then
+        afterLiterals, literalsChanged
+    else
+        let stripAnchors (toRemove: Map<NodeId, Set<string>>) (nodes: Map<NodeId, SemanticNode>) =
+            toRemove
+            |> Map.fold (fun current subjId dropNames ->
+                match Map.tryFind subjId current with
+                | Some node ->
+                    match node.Metadata.TryFind ObligationMetadata.Anchors with
+                    | Some (MetadataValue.StringList held) ->
+                        let kept = held |> List.filter (fun name -> not (dropNames.Contains name))
+                        if kept = held then current
+                        else
+                            let metadata =
+                                if kept.IsEmpty then node.Metadata.Remove ObligationMetadata.Anchors
+                                else node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList kept)
+                            Map.add subjId { node with Metadata = metadata } current
+                    | _ -> current
+                | None -> current) nodes
+        let nodes =
+            retiredIds
+            |> Set.fold (fun acc id -> Map.remove id acc) afterLiterals.Nodes
+            |> stripAnchors anchorDrops
+        let edges =
+            afterLiterals.Edges
+            |> List.filter (fun edge -> not (retiredIds.Contains edge.Target))
+        let currentCodata = afterLiterals.Codata.Value
+        let initOrders =
+            currentCodata.ProgramInitializationOrders
+            |> Map.filter (fun _ account -> not (retiredIds.Contains account.Claim))
+        let codata =
+            if initOrders.Count = currentCodata.ProgramInitializationOrders.Count then afterLiterals.Codata
+            else SemanticGraph.materializedCodata { currentCodata with ProgramInitializationOrders = initOrders }
+        { afterLiterals with Nodes = nodes; Edges = edges; Codata = codata } |> SemanticGraph.invalidateWitness, true
+
+/// Complete the existing sentinel claims from checked storage. Retain the anchor,
+/// claim identity and ordered live sources in every disposition, and never leave
+/// a stale materialized or omitted body on an orphaned claim.
 let settleSentinels (graph: SemanticGraph) =
     let groups = literalTexts graph (graph.Nodes.Values |> Seq.toList)
     let texts = groups |> List.map fst |> Set.ofList

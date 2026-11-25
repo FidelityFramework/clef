@@ -724,7 +724,6 @@ let fanOut (graph: SemanticGraph) : RecipeSet =
 
 type private FormatIntegerRefusal =
     | NotFormatCallee
-    | UnreachableFormatCall
     | NoAdmittedRange
 
 /// Collect the receiving graph's integer formatting recipes and their eligibility diagnostics.
@@ -734,21 +733,18 @@ let internal formatIntegerRecipes (graph: SemanticGraph) : RecipeSet =
         | SemanticKind.Application(callee, [argument]) ->
             match graph.Nodes.TryFind callee with
             | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Format; Operation = "int" } } ->
-                if not node.IsReachable then Error UnreachableFormatCall
-                else
-                    let ctx = mkContext node.Range node.Type graph.Platform "Format.int" node.Id
-                    match StringRecipes.tryFormatInteger ctx graph argument with
-                    | Some result -> Ok (toRecipeResult node.Id "Format.int" [] result)
-                    | None -> Error NoAdmittedRange
+                let ctx = mkContext node.Range node.Type graph.Platform "Format.int" node.Id
+                match StringRecipes.tryFormatInteger ctx graph argument with
+                | Some result -> Ok (toRecipeResult node.Id "Format.int" [] result)
+                | None -> Error NoAdmittedRange
             | _ -> Error NotFormatCallee
         | _ -> Error NotFormatCallee
     let create node graph =
         match classify node graph with
         | Ok result -> result
         | Error NotFormatCallee -> NotApplicable "Not an integer formatting application."
-        | Error UnreachableFormatCall -> NotApplicable "Integer formatting application is unreachable."
         | Error NoAdmittedRange -> NotApplicable "Integer formatting has no admitted finite source range."
-    FanOut.fanOut "Format.int" needsSaturationBasic create graph
+    FanOut.fanOut "Format.int" (fun node -> node.IsReachable && needsSaturationBasic node) create graph
 
 /// Range-dependent string construction precedes string storage and borrow settlement.
 let formatIntegers (graph: SemanticGraph) : SemanticGraph =

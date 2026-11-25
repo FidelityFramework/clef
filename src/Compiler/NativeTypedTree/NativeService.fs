@@ -604,16 +604,14 @@ let private findDeclarationRoots (libraryOutput: bool) (libraryExports: Set<Node
     let tryGetNode (nodeId: NodeId) =
         Map.tryFind nodeId allNodes
 
-    // Find declaration roots: modules containing root bindings, or top-level root bindings
+    // Find declaration roots: individual root bindings within modules or at top level
     let selected =
         topLevelNodes
         |> List.map (fun node ->
             match node.Kind with
             | SemanticKind.ModuleDef (_, memberIds) ->
                 let bindings = memberIds |> List.choose (tryGetNode >> getBindingDeclRoot)
-                match bindings with
-                | (_, root) :: _ -> [(node.Id, root)], bindings |> List.map fst
-                | [] -> [], []
+                bindings, bindings |> List.map fst
             | _ ->
                 match getBindingDeclRoot (Some node) with
                 | Some root -> [root], [fst root]
@@ -625,9 +623,9 @@ let private findDeclarationRoots (libraryOutput: bool) (libraryExports: Set<Node
     let roots =
         (selected |> List.collect fst) @ (libraryExports |> Set.toList |> List.map (fun id -> id, DeclRoot.LibraryExport))
         |> List.distinct
-    // A containing-module root also retains the source binding that selected
-    // it. Inferred main can be generic before startup supplies its argument;
-    // specialization cannot delete that entry and leave the whole module live.
+    // Record every selected root binding (including inferred generic main before
+    // startup supplies its argument, and library exports) without widening roots
+    // to their enclosing ModuleDef.
     let declarations = selected |> List.collect snd |> Set.ofList |> Set.union libraryExports
     roots, declarations
 

@@ -95,12 +95,15 @@ let private hasStringLiteralOrSentinel (graph: SemanticGraph) =
     graph.Nodes.Values |> Seq.exists (fun node ->
         match node.Kind with
         | SemanticKind.Literal (NativeLiteral.String _) when node.IsReachable -> true
-        | SemanticKind.Obligation info
-            when info.Kind = "terminator-sentinel"
-                 || (match info.Body with
-                     | ObligationBody.MaterializedNulSentinel _
-                     | ObligationBody.OmittedNulSentinel -> true
-                     | _ -> false) -> true
+        | SemanticKind.Obligation info ->
+            match info.Body with
+            | ObligationBody.StorageReservation _
+            | ObligationBody.ViewContainment _
+            | ObligationBody.NulSentinel _
+            | ObligationBody.MaterializedNulSentinel _
+            | ObligationBody.OmittedNulSentinel -> true
+            | ObligationBody.Pending _ -> info.Kind = "terminator-sentinel"
+            | _ -> false
         | _ -> false)
 
 let private storageMatches (deferrals: Map<NodeId, Set<OrdinaryOmission>>) (expected: SemanticGraph) (actual: SemanticGraph) =
@@ -113,26 +116,27 @@ let private storageMatches (deferrals: Map<NodeId, Set<OrdinaryOmission>>) (expe
             deferrals.TryFind id |> Option.map Set.toList = Some current
         | _ -> false))
 
-/// Re-settle string literal storage premises and sentinel claims after a
-/// selective rebuild step so warm rebuilds match cold settlement bit-for-bit.
+/// Re-settle obligation reachability, string literal storage premises, and sentinel claims
+/// after a selective rebuild step so warm rebuilds match cold settlement bit-for-bit.
 let internal settleRebuildSentinels (refolded: bool) (graph: SemanticGraph) : Result<SemanticGraph, NodeId option * string> =
-    if graph.Platform.IsNone || not (hasStringLiteralOrSentinel graph) then
-        Result.Ok graph
+    let reconciled, claimsChanged = NodeProofs.reconcileSelectiveObligationsWithStatus graph
+    if not (hasStringLiteralOrSentinel reconciled) || reconciled.Platform.IsNone then
+        Result.Ok reconciled
     else
-        match Demand.tryDeferrals graph with
+        match Demand.tryDeferrals reconciled with
         | Result.Error failures ->
-            let diagnostics = Demand.diagnostics graph failures
+            let diagnostics = Demand.diagnostics reconciled failures
             let first = diagnostics |> List.tryHead
             let site = first |> Option.bind (fun d -> d.RelatedNodes |> List.tryHead)
             let message = first |> Option.map _.Message |> Option.defaultValue "Demand reading failed during selective sentinel settlement."
             Result.Error (site, message)
         | Result.Ok deferrals ->
-            let expectedPool, layoutDiagnostics = StaticStrings.settle graph
+            let expectedPool, layoutDiagnostics = StaticStrings.settle reconciled
             match layoutDiagnostics with
             | first :: _ ->
                 Result.Error (first.RelatedNodes |> List.tryHead, first.Message)
-            | [] when not refolded && storageMatches deferrals expectedPool graph ->
-                match NodeProofs.settleSentinels graph with
+            | [] when not refolded && not claimsChanged && storageMatches deferrals expectedPool reconciled ->
+                match NodeProofs.settleSentinels reconciled with
                 | Result.Ok settled -> Result.Ok settled
                 | Result.Error failure -> Result.Error (failure.Occurrence, failure.Reason)
             | [] ->

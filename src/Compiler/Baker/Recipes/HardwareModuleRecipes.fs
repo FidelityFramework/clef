@@ -409,7 +409,7 @@ let private settleOne (graph: SemanticGraph) (numeric: NumericWitnessProjection)
 let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection) =
     graph.Nodes.Values |> Seq.fold (fun (enrichment, plans, failures, required) node ->
         match node.Kind with
-        | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule) ->
+        | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule) when node.IsReachable ->
             let required = Set.add node.Id required
             match settleOne graph numeric node with
             | Ok (added, plan) -> Enrichment.combine enrichment added, plan :: plans, failures, required

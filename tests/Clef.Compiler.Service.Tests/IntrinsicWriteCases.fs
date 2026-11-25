@@ -336,7 +336,7 @@ type IntrinsicWriteCases() =
                 match node.Kind with
                 | SemanticKind.Literal (NativeLiteral.String text) when text = "3" || text = "99" -> Some text
                 | _ -> None) |> Seq.sort |> Seq.toList
-        let refused formatter caller width reachable range reason =
+        let refused formatter caller width reachable range (reason: string option) =
             let graph = check formatter caller width
             Assert.Equal<string list>(["99"], emitted graph)
             let site, actual =
@@ -352,14 +352,19 @@ type IntrinsicWriteCases() =
             Assert.Equal<ValueRange option>(range, graph.Nodes[actual].ValueRange)
             let recipes = Clef.Compiler.Nanopass.BakerSaturation.formatIntegerRecipes graph
             Assert.False(recipes.Recipes.ContainsKey site.Id)
-            match (recipes.Diagnostics |> List.find (fun row -> row.NodeId = site.Id)).Result with
-            | Clef.Compiler.Nanopass.Recipe.NotApplicable actualReason -> Assert.Equal<string>(reason, actualReason)
-            | other -> failwithf "Expected the formatter to decline this occurrence, got %A" other
+            match reason with
+            | None ->
+                Assert.False(reachable)
+                Assert.DoesNotContain(recipes.Diagnostics, fun row -> row.NodeId = site.Id)
+            | Some expectedReason ->
+                match (recipes.Diagnostics |> List.find (fun row -> row.NodeId = site.Id)).Result with
+                | Clef.Compiler.Nanopass.Recipe.NotApplicable actualReason -> Assert.Equal<string>(expectedReason, actualReason)
+                | other -> failwithf "Expected the formatter to decline this occurrence, got %A" other
         let active () = Assert.Equal<string list>(["3"; "99"], check "Format.int" "consumeFirst" "0" |> emitted)
         active ()
-        refused "Format.int" "neutralFirst" "0" false None "Integer formatting application is unreachable."
-        refused "ordinary" "consumeFirst" "0" true (Some (ValueRange.Bounded(3I, 3I))) "Not an integer formatting application."
-        refused "Format.int" "consumeFirst" "400" true (Some (ValueRange.Bounded(3I, 403I))) "Integer formatting has no admitted finite source range."
+        refused "Format.int" "neutralFirst" "0" false None None
+        refused "ordinary" "consumeFirst" "0" true (Some (ValueRange.Bounded(3I, 3I))) (Some "Not an integer formatting application.")
+        refused "Format.int" "consumeFirst" "400" true (Some (ValueRange.Bounded(3I, 403I))) (Some "Integer formatting has no admitted finite source range.")
         active ()
 
     [<Theory>]
@@ -666,7 +671,9 @@ let main _ =
         | Error unavailable -> Assert.Equal<string list>([ legacyReason ], (Assert.Single unavailable).MissingPremises)
         Assert.Equal(Error legacyReason, Clef.Compiler.Baker.Ingredients.PublishedFactRows.tryMapObligationInfo legacy)
 
-        // Withdrawn / orphaned sentinel cleanup: unreachable literal never retains a stale MaterializedNulSentinel.
+        // Withdrawn / orphaned sentinel cleanup: cold settleSentinels resets an unreachable
+        // literal sentinel to Pending (never silently withdrawing on the cold path), while
+        // selective settleRebuildSentinels withdraws the orphaned triple and strips its anchor.
         let orphanedGraph =
             { graph with Nodes = graph.Nodes.Add(occurrence, { graph.Nodes[occurrence] with IsReachable = false }) }
         let cleaned =
@@ -675,6 +682,15 @@ let main _ =
         match cleaned.Nodes[sentinelNode].Kind with
         | SemanticKind.Obligation { Body = ObligationBody.Pending _ } -> ()
         | other -> failwithf "Orphaned sentinel retained a non-Pending body: %A" other
+        let selectiveCleaned =
+            Clef.Compiler.Nanopass.PremiseEstablishment.settleRebuildSentinels true orphanedGraph
+            |> Result.defaultWith (fun f -> failwithf "Selective orphaned sentinel withdrawal failed: %A" f)
+        Assert.False(selectiveCleaned.Nodes.ContainsKey sentinelNode, "Selective withdrawal must remove extinguished literal sentinel.")
+        let remainingAnchors =
+            match selectiveCleaned.Nodes[occurrence].Metadata.TryFind ObligationMetadata.Anchors with
+            | Some (MetadataValue.StringList names) -> names
+            | _ -> []
+        Assert.DoesNotContain(current.Id, remainingAnchors)
 
         // Target-free editor check (Platform = None) succeeds with zero CCS8403 sentinel settlement errors.
         let parse text path =

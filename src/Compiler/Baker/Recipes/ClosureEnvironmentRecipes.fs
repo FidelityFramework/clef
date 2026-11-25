@@ -104,7 +104,11 @@ let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion
           Edges = (graph.Edges |> List.filter (fun edge ->
                       not (replaced.Contains (key edge)) &&
                       not (edge.Role = EdgeRole.CallableReferenceOrigin && references.Contains edge.Target)))
-                  @ (nodes |> List.collect structuralIncidence) @ List.ofSeq referenceOrigins }
+                  |> List.map (fun edge ->
+                      if edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.SchemeSpecialization && edge.Target = source.Id then
+                          { edge with Target = implementation }
+                      else edge)
+                  |> fun kept -> kept @ (nodes |> List.collect structuralIncidence) @ List.ofSeq referenceOrigins }
     | NoMatch reason ->
         { Structure = mkFailedResult source.Id ("Plain callable saturation failed: " + reason); Edges = graph.Edges }
 
@@ -266,8 +270,13 @@ let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) :
           Edges = (graph.Edges |> List.filter (fun edge ->
                     not (replaced.Contains (key edge)) &&
                     not (forwarded.ContainsKey edge.Target && (match edge.Role with EdgeRole.EnvironmentCapture _ -> true | _ -> false))))
-                  @ (nodes |> List.collect structuralIncidence) @ captures @ [signature] @ List.ofSeq formations
-                  @ (forwarded |> Map.toList |> List.collect snd) }
+                  |> List.map (fun edge ->
+                      if edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.SchemeSpecialization && edge.Target = source.Id then
+                          { edge with Target = implementation }
+                      else edge)
+                  |> fun kept ->
+                      kept @ (nodes |> List.collect structuralIncidence) @ captures @ [signature] @ List.ofSeq formations
+                      @ (forwarded |> Map.toList |> List.collect snd) }
     | NoMatch reason ->
         { Structure = mkFailedResult source.Id ("Closure environment saturation failed: " + reason); Edges = graph.Edges }
 

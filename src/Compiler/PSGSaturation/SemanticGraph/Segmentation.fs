@@ -951,16 +951,41 @@ type internal ScopedRebuildPair =
         { Baseline: SemanticGraph
           Receiving: SemanticGraph
           CheckedCandToBase: Map<NodeId, NodeId>
-          RelationAlignment: Map<NodeId, NodeId> }
+          RelationAlignment: Map<NodeId, NodeId>
+          Refolded: bool }
 
 /// Bind the receiving graph and its checked retained correspondence by running
-/// the existing scoped Baker operation on the checked candidate and Rebuild scopes.
+/// scoped reachability-gated DeadBodies, IntrinsicElaboration, and BakerSaturation
+/// on the checked candidate and Rebuild scopes.
 let internal settleRebuildScopes
     (pair: CheckedRebuildPair)
     (scopes: Set<NodeId>)
     (affectedCone: Set<NodeId>)
     (retainedRegions: Set<string>) =
-    let recipes = Clef.Compiler.Nanopass.BakerSaturation.fanOutScopes scopes pair.Candidate
+    let activeScopes =
+        scopes |> Set.filter (fun id -> pair.Candidate.Nodes.TryFind id |> Option.exists _.IsReachable)
+    let afterDead, deadScope, deadChanged =
+        if activeScopes.IsEmpty then pair.Candidate, activeScopes, false
+        else Clef.Compiler.Nanopass.DeadBodies.normalizeReachedWithStatus ignore (pair.Candidate, activeScopes)
+    let intrinsicScopes =
+        if deadChanged then
+            let added = afterDead.Nodes.Keys |> Seq.filter (pair.Candidate.Nodes.ContainsKey >> not) |> Set.ofSeq
+            Set.intersect (Set.union activeScopes added) deadScope
+        else activeScopes
+    let intrinsicRecipes =
+        Clef.Compiler.Nanopass.IntrinsicElaboration.fanOutReached intrinsicScopes afterDead
+    let intrinsicChanged = not intrinsicRecipes.Recipes.IsEmpty
+    let afterIntrinsic, intrinsicScope =
+        if not intrinsicChanged then afterDead, intrinsicScopes
+        else Clef.Compiler.Nanopass.IntrinsicElaboration.foldInReached intrinsicScopes intrinsicRecipes afterDead
+    let bakerScopes =
+        let baseScopes =
+            if intrinsicChanged then
+                let added = afterIntrinsic.Nodes.Keys |> Seq.filter (afterDead.Nodes.ContainsKey >> not) |> Set.ofSeq
+                Set.intersect (Set.union intrinsicScopes added) intrinsicScope
+            else intrinsicScopes
+        baseScopes |> Set.filter (fun id -> afterIntrinsic.Nodes.TryFind id |> Option.exists _.IsReachable)
+    let recipes = Clef.Compiler.Nanopass.BakerSaturation.fanOutScopes bakerScopes afterIntrinsic
     let refusal =
         recipes.Diagnostics |> List.tryPick (fun diagnostic ->
             match diagnostic.Result with
@@ -970,21 +995,36 @@ let internal settleRebuildScopes
     match refusal with
     | Some failure -> Result.Error failure
     | None ->
-        let refolded = not recipes.Recipes.IsEmpty
-        let folded =
-            if not refolded then Result.Ok pair.Candidate
+        let bakerFolded = not recipes.Recipes.IsEmpty
+        let receiving =
+            if not bakerFolded then afterIntrinsic
             else
-                let receiving = Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes pair.Candidate
-                let newNodes =
-                    receiving.Nodes.Keys
-                    |> Seq.filter (pair.Candidate.Nodes.ContainsKey >> not)
-                    |> Seq.toList
-                if newNodes.IsEmpty then Result.Ok receiving
+                Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes afterIntrinsic
+                |> Reachability.markUnreachable
+        let newNodes =
+            receiving.Nodes.Keys
+            |> Seq.filter (pair.Candidate.Nodes.ContainsKey >> not)
+            |> Seq.toList
+        let unanchoredLiterals =
+            bakerScopes
+            |> Seq.choose (fun id ->
+                match receiving.Nodes.TryFind id with
+                | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String _); IsReachable = true } as n)
+                    when not (n.Metadata.ContainsKey ObligationMetadata.Anchors) -> Some id
+                | _ -> None)
+            |> Seq.toList
+        let toExtend = (newNodes @ unanchoredLiterals) |> List.distinct
+        let refolded = deadChanged || intrinsicChanged || bakerFolded || not unanchoredLiterals.IsEmpty
+        let folded =
+            let extended =
+                if toExtend.IsEmpty then Result.Ok receiving
                 else
-                    match Clef.Compiler.Nanopass.NodeProofs.tryExtend receiving newNodes with
-                    | Result.Ok extended -> Result.Ok extended
+                    match Clef.Compiler.Nanopass.NodeProofs.tryExtendFrom pair.Candidate receiving toExtend with
+                    | Result.Ok g -> Result.Ok g
                     | Result.Error failure ->
                         Result.Error (ScopedSettlementFailure.SentinelSettlementRefused(failure.Occurrence, failure.Reason))
+            extended |> Result.map (fun g ->
+                if refolded then Clef.Compiler.Nanopass.ProgramInitializationOrder.birth g else g)
         folded
         |> Result.bind (fun settled ->
             let before = pair.Candidate.Codata.Value
@@ -998,7 +1038,7 @@ let internal settleRebuildScopes
                     else alignRelations pair.Baseline settled pair.BaselinePlan pair.CandidatePlan pair.Alignment
                 let alignment = relations |> Map.fold (fun acc old current -> Map.add old current acc) pair.Alignment
                 let retained =
-                    computeRetainedCandidateNodes alignment pair.CandidatePlan.NodeOwners scopes affectedCone retainedRegions settled
+                    computeRetainedCandidateNodes alignment pair.CandidatePlan.NodeOwners activeScopes affectedCone retainedRegions settled
                 match resolveRetainedCorrespondence true pair.Baseline settled alignment retained with
                 | Result.Error failure -> Result.Error (ScopedSettlementFailure.CorrespondenceRefused failure)
                 | Result.Ok checkedCandToBase ->
@@ -1006,10 +1046,14 @@ let internal settleRebuildScopes
                         ({ Baseline = pair.Baseline
                            Receiving = settled
                            CheckedCandToBase = checkedCandToBase
-                           RelationAlignment = relations }, recipes))
+                           RelationAlignment = relations
+                           Refolded = refolded }, recipes))
 
 let internal scopedRebuildInputs (pair: ScopedRebuildPair) =
     pair.Baseline, pair.Receiving, pair.CheckedCandToBase, pair.RelationAlignment
+
+let internal scopedRebuildRefolded (pair: ScopedRebuildPair) =
+    pair.Refolded
 
 /// Physical-only reconciliation uses the same source address author as segment.
 let private physicalOccurrenceAddresses graph =

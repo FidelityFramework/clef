@@ -46,6 +46,30 @@ let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjec
             constrains |> List.filter (fun edge -> Some edge.Target = occurrence)
             |> List.collect _.Sources |> Set.ofList
           Reason = "Proof dispatch rendering failed: " + reason }
+    // Refuse any obligation whose Constrains subjects are all unreachable.
+    // Obligations with empty Constrains remain handled by stalePlans / Dispatch.matches /
+    // WitnessEmission.admit (preserving Pending unavailability and incidence-diff contracts).
+    // Off-spine declarations and retired source occurrences are authorized strictly per
+    // obligation via NodeProofs.obligationReachabilityChecker:
+    // - Direct reachability of a Constrains subject
+    // - Provenance/ContinuationValue to a reachable lowered non-obligation node
+    // - Reference/Resides (declaration capacity claims only when no Resides target is named;
+    //   site-bound claims require their own site subject to be reachable)
+    // - Spatial (KernelIngress | HardwareModule | KernelModule) targeting a reachable subject of
+    //   that same obligation
+    // - SharedBufferPlacementObligation owned by a BoundarySharedBufferViewUse with a reachable
+    //   Site or RegionAcquisitionCall
+    let isAuthorized = Clef.Compiler.Nanopass.NodeProofs.obligationReachabilityChecker graph
+    let unreachableObligations =
+        required
+        |> List.choose (fun (id, info) ->
+            let subjects = sources.TryFind id |> Option.defaultValue [] |> List.concat
+            if subjects.IsEmpty then None
+            elif isAuthorized id info subjects then None
+            else Some (failure (Some id) (sprintf "obligation '%s' constrains only unreachable occurrences." info.Id)))
+    if not unreachableObligations.IsEmpty then
+        Error unreachableObligations
+    else
     try
         let admitted = admittedPending graph required
         let solverRequired =

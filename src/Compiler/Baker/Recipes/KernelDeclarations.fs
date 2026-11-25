@@ -209,7 +209,7 @@ let private declaration (graph: SemanticGraph) (site: SemanticNode) =
 let elaborate (graph: SemanticGraph) =
     graph.Nodes.Values |> Seq.choose (fun site ->
         match site.Kind with
-        | SemanticKind.Binding(_,false,_,Some DeclRoot.KernelModule) -> Some(site.Id,declaration graph site)
+        | SemanticKind.Binding(_,false,_,Some DeclRoot.KernelModule) when site.IsReachable -> Some(site.Id,declaration graph site)
         | _ -> None) |> Map.ofSeq
 
 // Correspondence of the held transport DTO to captured literal declarations.
