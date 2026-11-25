@@ -2,6 +2,7 @@
 /// Establish source premises once the final demand relation is available.
 module Clef.Compiler.Nanopass.PremiseEstablishment
 
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
@@ -9,10 +10,25 @@ module Borrows = Clef.Compiler.Baker.Recipes.StringBorrowRecipes
 module Access = Clef.Compiler.Baker.Recipes.MemoryAccessRecipes
 module Scalar = Clef.Compiler.Baker.Recipes.StringByteStorageRecipes
 module Demand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
+module StaticStrings = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout
+module NodeProofs = Clef.Compiler.Nanopass.NodeProofs
 
 let private diagnostic (graph: SemanticGraph) (site, participants, message) : Diagnostic =
     { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"; Message = message
       Range = graph.Nodes[site].Range; RelatedNodes = Set.toList participants
+      Reachability = ReachabilityContext.Reachable }
+
+let private failureDiagnostic (graph: SemanticGraph) (failure: WitnessProjectionFailure) : Diagnostic =
+    let range =
+        failure.Occurrence
+        |> Option.bind graph.Nodes.TryFind
+        |> Option.map _.Range
+        |> Option.defaultValue dummyRange
+    let related =
+        (Option.toList failure.Occurrence @ Set.toList failure.Participants)
+        |> List.distinct
+    { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"; Message = failure.Reason
+      Range = range; RelatedNodes = related
       Reachability = ReachabilityContext.Reachable }
 
 let private borrows graph =
@@ -29,15 +45,25 @@ let private borrows graph =
     { graph with Edges = (graph.Edges |> List.filter (replaced >> not)) @ rows }, List.map (diagnostic graph) failures
 
 let private storage (deferrals: Map<_, Set<OrdinaryOmission>>) (graph: SemanticGraph) =
+    let existingHistories =
+        graph.Edges
+        |> List.choose (fun edge ->
+            match edge.Role with
+            | EdgeRole.LiteralStorageHistory history -> Some (edge.Target, history)
+            | _ -> None)
+        |> Set.ofList
     let rows, histories, failures = graph.LiteralStorage |> Map.fold (fun (rows, histories, failures) literal row ->
         let error message = rows, histories, (literal, Set.singleton literal, message) :: failures
         match row, deferrals.TryFind literal with
         | LiteralStorage.NotMaterialized (StoragePremise.Pending early), Some current when not current.IsEmpty ->
-            let history =
-                { Class = EdgeClass.Provenance; Role = EdgeRole.LiteralStorageHistory { Literal = literal; Early = early }
-                  Ordinal = 0; Target = literal
-                  Sources = early |> List.collect (fun omission -> [omission.Site; omission.Actual]) }
-            Map.add literal (LiteralStorage.NotMaterialized (StoragePremise.Established (Set.toList current))) rows, history :: histories, failures
+            let record = { Literal = literal; Early = early }
+            let histories =
+                if existingHistories.Contains (literal, record) then histories
+                else
+                    { Class = EdgeClass.Provenance; Role = EdgeRole.LiteralStorageHistory record
+                      Ordinal = 0; Target = literal
+                      Sources = early |> List.collect (fun omission -> [omission.Site; omission.Actual]) } :: histories
+            Map.add literal (LiteralStorage.NotMaterialized (StoragePremise.Established (Set.toList current))) rows, histories, failures
         | LiteralStorage.NotMaterialized _, None ->
             error "The storage of this string literal was not materialized, and after the final demand rows a demanded position reads it."
         | LiteralStorage.Materialized _, Some _ ->
@@ -45,8 +71,80 @@ let private storage (deferrals: Map<_, Set<OrdinaryOmission>>) (graph: SemanticG
         | LiteralStorage.NotMaterialized (StoragePremise.Pending _), Some _ ->
             error "The omission premise of this string literal remains pending after the final demand rows."
         | _ -> rows, histories, failures) (graph.LiteralStorage, [], [])
-    { graph with LiteralStorage = rows; Edges = graph.Edges @ List.rev histories },
-    failures |> List.rev |> List.map (diagnostic graph)
+    let updated =
+        if List.isEmpty histories then { graph with LiteralStorage = rows }
+        else { graph with LiteralStorage = rows; Edges = graph.Edges @ List.rev histories }
+    let storageDiagnostics = failures |> List.rev |> List.map (diagnostic graph)
+    // Target-free checks settle no image pool, and upstream StaticStringLayout
+    // failures already own the missing-pool CCS8206/declaration diagnostic.
+    let missingUnsettledPool =
+        updated.StaticStringPool.IsNone &&
+        (updated.Nodes.Values |> Seq.exists (fun node ->
+            node.IsReachable &&
+            (match node.Kind with SemanticKind.Literal (NativeLiteral.String _) -> true | _ -> false) &&
+            not (deferrals.ContainsKey node.Id) &&
+            not (updated.LiteralStorage.ContainsKey node.Id)))
+    if updated.Platform.IsNone || not failures.IsEmpty || missingUnsettledPool then
+        updated, storageDiagnostics
+    else
+        match NodeProofs.settleSentinels updated with
+        | Result.Ok settled -> settled, storageDiagnostics
+        | Result.Error failure -> updated, storageDiagnostics @ [failureDiagnostic updated failure]
+
+let private hasStringLiteralOrSentinel (graph: SemanticGraph) =
+    graph.Nodes.Values |> Seq.exists (fun node ->
+        match node.Kind with
+        | SemanticKind.Literal (NativeLiteral.String _) when node.IsReachable -> true
+        | SemanticKind.Obligation info
+            when info.Kind = "terminator-sentinel"
+                 || (match info.Body with
+                     | ObligationBody.MaterializedNulSentinel _
+                     | ObligationBody.OmittedNulSentinel -> true
+                     | _ -> false) -> true
+        | _ -> false)
+
+let private storageMatches (deferrals: Map<NodeId, Set<OrdinaryOmission>>) (expected: SemanticGraph) (actual: SemanticGraph) =
+    expected.StaticStringPool = actual.StaticStringPool
+    && expected.LiteralStorage.Count = actual.LiteralStorage.Count
+    && (expected.LiteralStorage |> Map.forall (fun id expectedRow ->
+        match expectedRow, actual.LiteralStorage.TryFind id with
+        | LiteralStorage.Materialized a, Some (LiteralStorage.Materialized b) -> a = b
+        | LiteralStorage.NotMaterialized (StoragePremise.Pending _), Some (LiteralStorage.NotMaterialized (StoragePremise.Established current)) ->
+            deferrals.TryFind id |> Option.map Set.toList = Some current
+        | _ -> false))
+
+/// Re-settle string literal storage premises and sentinel claims after a
+/// selective rebuild step so warm rebuilds match cold settlement bit-for-bit.
+let internal settleRebuildSentinels (refolded: bool) (graph: SemanticGraph) : Result<SemanticGraph, NodeId option * string> =
+    if graph.Platform.IsNone || not (hasStringLiteralOrSentinel graph) then
+        Result.Ok graph
+    else
+        match Demand.tryDeferrals graph with
+        | Result.Error failures ->
+            let diagnostics = Demand.diagnostics graph failures
+            let first = diagnostics |> List.tryHead
+            let site = first |> Option.bind (fun d -> d.RelatedNodes |> List.tryHead)
+            let message = first |> Option.map _.Message |> Option.defaultValue "Demand reading failed during selective sentinel settlement."
+            Result.Error (site, message)
+        | Result.Ok deferrals ->
+            let expectedPool, layoutDiagnostics = StaticStrings.settle graph
+            match layoutDiagnostics with
+            | first :: _ ->
+                Result.Error (first.RelatedNodes |> List.tryHead, first.Message)
+            | [] when not refolded && storageMatches deferrals expectedPool graph ->
+                match NodeProofs.settleSentinels graph with
+                | Result.Ok settled -> Result.Ok settled
+                | Result.Error failure -> Result.Error (failure.Occurrence, failure.Reason)
+            | [] ->
+                let refreshedPool =
+                    { expectedPool with
+                        Edges =
+                            expectedPool.Edges
+                            |> List.filter (fun edge -> match edge.Role with EdgeRole.LiteralStorageHistory _ -> false | _ -> true) }
+                let established, diagnostics = storage deferrals refreshedPool
+                match diagnostics with
+                | [] -> Result.Ok established
+                | first :: _ -> Result.Error (first.RelatedNodes |> List.tryHead, first.Message)
 
 let private byteRanges (graph: SemanticGraph) =
     // The two producers can share a target. Renew each producer's exact row,

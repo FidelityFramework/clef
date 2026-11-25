@@ -384,6 +384,7 @@ type IntrinsicWriteCases() =
                   "    let _ = Sys.write 1 s.Bytes s.Length"
                   "    ()"
                   "let apply (action: unit -> unit) = action ()"
+                  "let later () = \"7\""
                   consumer
                   "[<EntryPoint>]"
                   "let main _ = consume " + actuals
@@ -406,13 +407,22 @@ type IntrinsicWriteCases() =
         let prepared = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare graph
                        |> Result.defaultWith (fun failures -> failwithf "Witness preparation refused: %A" failures)
         let dispatch = prepared.Codata.Value.ProofDispatch.Value
+        let sentinelBody =
+            if demanded then
+                let storage = graph.StaticStringPool.Value
+                let ordinal, entry =
+                    storage.Entries |> List.indexed |> List.filter (fun (_, item) -> item.Content = "7") |> Assert.Single
+                ObligationBody.MaterializedNulSentinel(ordinal, 1, ordinal, entry.Length, storage.Bytes[entry.Offset + entry.Length])
+            else ObligationBody.OmittedNulSentinel
         let expected =
             [ "storage_7", "storage-reservation", ObligationBody.StorageReservation(1, 2)
               "view_7", "view-containment", ObligationBody.ViewContainment(1, 1, 2)
-              "sentinel_7", "terminator-sentinel", ObligationBody.NulSentinel 0 ]
+              "sentinel_7", "terminator-sentinel", sentinelBody ]
         let claims = dispatch.Required |> List.filter (fun (_, info) ->
             incident |> List.exists (fun (observed, _) -> observed.Id = info.Id))
         Assert.Equal<(string * string * ObligationBody) list>(expected, claims |> List.map (fun (_, info) -> info.Id, info.Kind, info.Body))
+        let query = dispatch.Query |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        Assert.Equal(demanded, query.Contains("(declare-const sentinel_7 Bool)"))
         let portableId (NodeId value) = Fidelity.PSG.NodeId value
         let published = prepared.Codata.Value.WitnessPublishedRows.Value
         for target, info in claims do
@@ -429,6 +439,471 @@ type IntrinsicWriteCases() =
                 match graph.Nodes[id].Metadata.TryFind ObligationMetadata.Anchors with
                 | Some(MetadataValue.StringList anchors) -> Assert.Equal(1, anchors |> List.filter ((=) info.Id) |> List.length)
                 | _ -> failwith "A current literal participant has no proof anchor inventory."
+
+        // Introduce the next checked source occurrence at the NodeProofs wave boundary.
+        let next = graph.Nodes.Values |> Seq.filter (fun node ->
+            not node.IsReachable && node.Kind = SemanticKind.Literal(NativeLiteral.String "7")) |> Assert.Single
+        let extend = Clef.Compiler.Nanopass.NodeProofs.tryExtend
+        let settle = Clef.Compiler.Nanopass.NodeProofs.settleSentinels
+        let ok result = result |> Result.defaultWith (fun failure -> failwithf "%A" failure)
+        let target, _ = claims |> List.find (fun (_, info) -> info.Kind = "terminator-sentinel")
+        let body (current: SemanticGraph) =
+            match current.Nodes[target].Kind with SemanticKind.Obligation info -> info.Body | _ -> failwith "Missing sentinel"
+        Assert.Equal(sentinelBody, body (extend graph participants |> ok))
+        let introduced = { graph with Nodes = graph.Nodes.Add(next.Id, {next with IsReachable = true}) }
+        let corrupt = { introduced with LiteralStorage = introduced.LiteralStorage.Remove first.Id }
+        match extend corrupt [next.Id] with
+        | Error failure ->
+            Assert.Equal(Some target, failure.Occurrence)
+            Assert.Equal(Set.singleton first.Id, failure.Participants)
+            Assert.Equal("Literal sentinel settlement: The literal has no current materialized or established omission row.", failure.Reason)
+        | Ok _ -> failwith "A settled claim without its previous storage row admitted a new participant."
+        let widened = extend introduced [next.Id] |> ok
+        match body widened with
+        | ObligationBody.Pending _ -> ()
+        | stale -> failwithf "The additional literal kept a settled sentinel: %A" stale
+        let ordered = next.Id :: participants
+        let incidence claim (current: SemanticGraph) =
+            current.Edges |> List.indexed |> List.filter (fun (_, edge) -> edge.Target = claim) |> Assert.Single
+        for claim, original in claims do
+            let priorSlot, _ = incidence claim graph
+            let currentSlot, row = incidence claim widened
+            Assert.Equal(priorSlot, currentSlot)
+            Assert.Equal(EdgeClass.Obligation, row.Class)
+            Assert.Equal(EdgeRole.Constrains, row.Role)
+            Assert.Equal(0, row.Ordinal)
+            Assert.Equal<NodeId list>(ordered, row.Sources)
+            match widened.Nodes[claim].Kind with
+            | SemanticKind.Obligation info ->
+                Assert.Equal(original.Id, info.Id)
+                if claim <> target then Assert.Equal(original.Body, info.Body)
+            | _ -> failwith "A resident literal claim lost its birth."
+        let placed, layoutDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.settle widened
+        Assert.Empty layoutDiagnostics
+        let established, premiseDiagnostics = Clef.Compiler.Nanopass.PremiseEstablishment.normalize placed
+        Assert.Empty premiseDiagnostics
+        // PremiseEstablishment owns sentinel settlement directly; re-running settleSentinels is idempotent.
+        let checkSettled (current: SemanticGraph) =
+            match body current with
+            | ObligationBody.MaterializedNulSentinel(ordinal, offset, observedOrdinal, observedOffset, value) ->
+                let pool = current.StaticStringPool.Value
+                let entry = pool.Entries[observedOrdinal]
+                Assert.Contains(next.Id, entry.NodeIds)
+                Assert.Equal(ordinal, observedOrdinal)
+                Assert.Equal(1, offset)
+                Assert.Equal(entry.Length, observedOffset)
+                Assert.Equal(pool.Bytes[entry.Offset + observedOffset], value)
+            | other -> failwithf "The now reached source occurrence has no materialized sentinel: %A" other
+        checkSettled established
+        let renewed = settle established |> ok
+        Assert.Equal(body established, body renewed)
+
+    [<Theory>]
+    [<InlineData(true)>]
+    [<InlineData(false)>]
+    member _.``Sentinel settlement retains an independently nominated entry and byte offset`` (changeEntry: bool) =
+        let source = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+[<EntryPoint>]
+let main _ =
+    write "é"
+    write "other"
+    0
+"""
+        let graph, _ = IntrinsicWriteFixture.graphAndProjectionOfSource source
+        let occurrence = IntrinsicWriteFixture.occurrences graph "é" |> Assert.Single
+        let pool = graph.StaticStringPool.Value
+        let placed text = pool.Entries |> List.indexed |> List.filter (fun (_, entry) -> entry.Content = text) |> Assert.Single
+        let ordinal, entry = placed "é"
+        let otherOrdinal, _ = placed "other"
+        Assert.Equal(2, entry.Length)
+        let observed = pool.Bytes[entry.Offset + entry.Length]
+        Assert.Equal(0uy, observed)
+        let claim kind =
+            graph.Edges |> List.choose (fun edge ->
+                if edge.Role <> EdgeRole.Constrains || edge.Sources <> [occurrence] then None
+                else
+                    match graph.Nodes[edge.Target].Kind with
+                    | SemanticKind.Obligation info when info.Kind = kind -> Some(edge.Target, info)
+                    | _ -> None) |> Assert.Single
+        let sentinel, original = claim "terminator-sentinel"
+        let view, viewInfo = claim "view-containment"
+        let originalBody = ObligationBody.MaterializedNulSentinel(ordinal, 2, ordinal, 2, observed)
+        Assert.Equal(originalBody, original.Body)
+        let nominatedEntry, nominatedOffset, changed =
+            if changeEntry then
+                otherOrdinal, 2, { graph with LiteralStorage = graph.LiteralStorage.Add(occurrence, LiteralStorage.Materialized otherOrdinal) }
+            else
+                match viewInfo.Body with
+                | ObligationBody.ViewContainment (length, offset, size) ->
+                    let wrong = { viewInfo with Body = ObligationBody.ViewContainment(length, offset + 1, size) }
+                    let node = { graph.Nodes[view] with Kind = SemanticKind.Obligation wrong }
+                    ordinal, offset + 1, { graph with Nodes = graph.Nodes.Add(view, node) }
+                | other -> failwithf "Expected the current view claim, got %A" other
+        let settled = Clef.Compiler.Nanopass.NodeProofs.settleSentinels changed |> Result.defaultWith (fun failure -> failwithf "%A" failure)
+        match settled.Nodes[sentinel].Kind with
+        | SemanticKind.Obligation current ->
+            Assert.Equal(ObligationBody.MaterializedNulSentinel(nominatedEntry, nominatedOffset, ordinal, 2, observed), current.Body)
+            match Clef.Compiler.Nanopass.ObligationDischarge.discharge [current] with
+            | Error reason -> Assert.Equal(sprintf "Obligation '%s' (%s) was not discharged: solver returned 'sat'" current.Id current.Source, reason)
+            | Ok _ -> failwith "Changing the nominated address left the sentinel refutation valid."
+        | _ -> failwith "The sentinel claim lost its identity during settlement."
+
+    [<Fact>]
+    member _.``Design-time sentinel discharge refuses constant clauses via relevance, reflexive clauses via non-vacuity, and legacy NulSentinel`` () =
+        let source = """module SentinelGuardFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+[<EntryPoint>]
+let main _ =
+    write "é"
+    0
+"""
+        let graph, _ = IntrinsicWriteFixture.graphAndProjectionOfSource source
+        let occurrence = IntrinsicWriteFixture.occurrences graph "é" |> Assert.Single
+        let sentinelNode, current =
+            graph.Edges |> List.choose (fun edge ->
+                if edge.Role <> EdgeRole.Constrains || edge.Sources <> [occurrence] then None
+                else
+                    match graph.Nodes[edge.Target].Kind with
+                    | SemanticKind.Obligation info when info.Kind = "terminator-sentinel" -> Some(edge.Target, info)
+                    | _ -> None) |> Assert.Single
+        let observation =
+            match current.Body with
+            | ObligationBody.MaterializedNulSentinel (entry, offset, obsEntry, obsOffset, obsByte) ->
+                entry, offset, obsEntry, obsOffset, obsByte
+            | other -> failwithf "Expected materialized sentinel, got %A" other
+        let budget : Clef.Compiler.Nanopass.ObligationDischarge.DesignTimeBudget =
+            { PerQuery = System.TimeSpan.FromSeconds 10.0; Total = System.TimeSpan.FromSeconds 30.0 }
+        let entryVar = current.Id + "_entry"
+        let offsetVar = current.Id + "_offset"
+        let byteVar = current.Id + "_byte"
+        let decls, premises, clauses = Fidelity.PSG.ObligationBody.sentinelTerms current.Id observation
+
+        // Positive control: actual materialized sentinel discharges cleanly at design time.
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [current] with
+        | Error reason -> failwithf "Honest materialized sentinel failed discharge: %s" reason
+        | Ok receipt ->
+            Assert.Equal(3, receipt.NonVacuity.Length)
+            Assert.All(receipt.NonVacuity, fun r -> Assert.Equal("sat", r.Verdict))
+            Assert.Equal("sat", (Assert.Single receipt.Premises).Verdict)
+            Assert.Equal("unsat", (Assert.Single receipt.Evidence).Verdict)
+        let okReceipt = Clef.Compiler.Nanopass.ObligationDischarge.designTimeReceipts budget [current] |> Assert.Single
+        Assert.Equal(Clef.Compiler.Nanopass.ObligationDischarge.DesignTimeVerdict.Proved, okReceipt.Verdict)
+        Assert.Equal<string list>([ entryVar; offsetVar; byteVar ], okReceipt.Participants)
+        Assert.Empty okReceipt.IgnoredParticipants
+
+        // Negative control 1 (reflexive b = b): retains participant variable, caught by SAT(not C_2) clause guard.
+        let reflexiveClause = sprintf "(= %s %s)" byteVar byteVar
+        let reflexiveLines =
+            decls @ premises @ [
+                sprintf "(assert (= %s (and %s %s %s)))" current.Id clauses[0] clauses[1] reflexiveClause
+                sprintf "(assert (not %s))" current.Id ]
+        let overrideWith lines (ob: ObligationInfo) = if ob.Id = current.Id then Some lines else None
+        let expectedReflexive =
+            sprintf "obligation %s (%s) clause 2 is valid without premises: %s" current.Id current.Kind reflexiveClause
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithOverrides (fun _ -> None) (overrideWith reflexiveLines) [current] with
+        | Ok _ -> failwith "Reflexive sentinel clause was accepted."
+        | Error reason -> Assert.Equal(expectedReflexive, reason)
+        let reflexiveReceipt =
+            Clef.Compiler.Nanopass.ObligationDischarge.designTimeReceiptsWithOverrides budget (fun _ -> None) (overrideWith reflexiveLines) [current]
+            |> Assert.Single
+        Assert.Equal(Clef.Compiler.Nanopass.ObligationDischarge.DesignTimeVerdict.ValidWithoutPremises(2, reflexiveClause), reflexiveReceipt.Verdict)
+        Assert.Equal(Some expectedReflexive, reflexiveReceipt.Reason)
+        Assert.Empty reflexiveReceipt.IgnoredParticipants
+
+        // Negative control 2 (constant #x00 = #x00): drops byte variable, caught by participant-relevance guard.
+        let constantLines =
+            decls @ premises @ [
+                sprintf "(assert (= %s (and %s %s (= #x00 #x00))))" current.Id clauses[0] clauses[1]
+                sprintf "(assert (not %s))" current.Id ]
+        let expectedConstant =
+            sprintf "obligation %s (%s) conclusion ignores participant variables: %s" current.Id current.Kind byteVar
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithOverrides (fun _ -> None) (overrideWith constantLines) [current] with
+        | Ok _ -> failwith "Constant #x00 = #x00 sentinel clause was accepted."
+        | Error reason -> Assert.Equal(expectedConstant, reason)
+        let constantReceipt =
+            Clef.Compiler.Nanopass.ObligationDischarge.designTimeReceiptsWithOverrides budget (fun _ -> None) (overrideWith constantLines) [current]
+            |> Assert.Single
+        Assert.Equal(Clef.Compiler.Nanopass.ObligationDischarge.DesignTimeVerdict.IgnoresParticipants [ byteVar ], constantReceipt.Verdict)
+        Assert.Equal(Some expectedConstant, constantReceipt.Reason)
+        Assert.Equal<string list>([ byteVar ], constantReceipt.IgnoredParticipants)
+
+        // Negative control 3 (dropped coordinate clauses): single-clause byte-only conclusion misses entry & offset variables.
+        let byteOnlyLines =
+            decls @ premises @ [
+                sprintf "(assert (= %s %s))" current.Id clauses[2]
+                sprintf "(assert (not %s))" current.Id ]
+        let expectedDropped =
+            sprintf "obligation %s (%s) conclusion ignores participant variables: %s, %s" current.Id current.Kind entryVar offsetVar
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithOverrides (fun _ -> None) (overrideWith byteOnlyLines) [current] with
+        | Ok _ -> failwith "Byte-only sentinel conclusion missing entry/offset coordinates was accepted."
+        | Error reason -> Assert.Equal(expectedDropped, reason)
+
+        // Negative control 3b (weakened disjunction): retains all participant variables and passes SAT(not C_i),
+        // caught by shared Fidelity.PSG.ObligationBody.parseSentinelSmtBlock MatchesExpected = false.
+        let weakenedLines =
+            decls @ premises @ [
+                sprintf "(assert (= %s (and %s %s (or (= %s #x00) (= %s #x01)))))" current.Id clauses[0] clauses[1] byteVar byteVar
+                sprintf "(assert (not %s))" current.Id ]
+        match Clef.Compiler.Nanopass.ObligationDischarge.dischargeWithOverrides (fun _ -> None) (overrideWith weakenedLines) [current] with
+        | Ok _ -> failwith "Weakened sentinel disjunction was accepted."
+        | Error reason -> Assert.Contains("conclusion differs from the checked storage coordinates or NUL predicate", reason)
+
+        // Negative control 4 (A-7): legacy ObligationBody.NulSentinel is refused at discharge, receipts, trySmtLib, and publication.
+        let legacy = { current with Body = ObligationBody.NulSentinel 0 }
+        let legacyReason = "Legacy NulSentinel claim lacks checked storage entry, offset, and observed byte."
+        match Clef.Compiler.Nanopass.ObligationDischarge.discharge [legacy] with
+        | Ok _ -> failwith "Legacy NulSentinel was discharged."
+        | Error reason -> Assert.Contains(legacyReason, reason)
+        let legacyReceipt = Clef.Compiler.Nanopass.ObligationDischarge.designTimeReceipts budget [legacy] |> Assert.Single
+        Assert.Equal(Clef.Compiler.Nanopass.ObligationDischarge.DesignTimeVerdict.Pending [ legacyReason ], legacyReceipt.Verdict)
+        match Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib [legacy] with
+        | Ok _ -> failwith "Legacy NulSentinel produced an SMT query."
+        | Error unavailable -> Assert.Equal<string list>([ legacyReason ], (Assert.Single unavailable).MissingPremises)
+        Assert.Equal(Error legacyReason, Clef.Compiler.Baker.Ingredients.PublishedFactRows.tryMapObligationInfo legacy)
+
+        // Withdrawn / orphaned sentinel cleanup: unreachable literal never retains a stale MaterializedNulSentinel.
+        let orphanedGraph =
+            { graph with Nodes = graph.Nodes.Add(occurrence, { graph.Nodes[occurrence] with IsReachable = false }) }
+        let cleaned =
+            Clef.Compiler.Nanopass.NodeProofs.settleSentinels orphanedGraph
+            |> Result.defaultWith (fun f -> failwithf "Orphaned sentinel cleanup failed: %A" f)
+        match cleaned.Nodes[sentinelNode].Kind with
+        | SemanticKind.Obligation { Body = ObligationBody.Pending _ } -> ()
+        | other -> failwithf "Orphaned sentinel retained a non-Pending body: %A" other
+
+        // Target-free editor check (Platform = None) succeeds with zero CCS8403 sentinel settlement errors.
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "Parse failed: %A" errors
+        let targetFree = Clef.Compiler.NativeService.checkParsedInputsWithPlatform [ parse source "target-free.clef" ] None
+        Assert.DoesNotContain(targetFree.Diagnostics, fun d -> d.Code = "CCS8403" && d.Message.Contains("Literal sentinel"))
+        let targetFreeSentinels =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.obligations targetFree.Graph
+            |> List.filter (fun (_, info) -> info.Kind = "terminator-sentinel")
+        Assert.NotEmpty targetFreeSentinels
+        for _, info in targetFreeSentinels do
+            Assert.True((match info.Body with ObligationBody.Pending _ -> true | _ -> false), sprintf "Target-free sentinel should stay Pending, got %A" info.Body)
+
+    [<Fact>]
+    member _.``Selective rebuild settles string sentinels with cold parity across widening, withdrawal, omission, materialization, and pool-ordinal shifts`` () =
+        let checkSource text =
+            let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.factoryAuthority text
+            let errors = result.Diagnostics |> List.filter (fun d -> d.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error)
+            Assert.Empty errors
+            result.Graph
+        let sentinelSummary (graph: SemanticGraph) =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.obligations graph
+            |> List.choose (fun (_, info) -> if info.Kind = "terminator-sentinel" then Some (info.Id, info.Body) else None)
+            |> List.sortBy fst
+        let obligationSummary (graph: SemanticGraph) =
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.obligations graph
+            |> List.map (fun (_, info) -> info.Id, info.Kind, info.Logic, info.Body)
+            |> List.sortBy (fun (id, _, _, _) -> id)
+        let literalOrigin (graph: SemanticGraph) (id: NodeId) =
+            match graph.Nodes.TryFind id with
+            | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String text) } as node) ->
+                text, node.Range.File, node.Range.Start.Line, node.Range.Start.Column
+            | other -> failwithf "Expected string literal node %A, got %A" id other
+        let poolSummary (graph: SemanticGraph) =
+            graph.StaticStringPool
+            |> Option.map (fun pool ->
+                pool.Symbol, pool.Bytes, pool.Alignment, pool.Size, pool.UsedSize,
+                pool.SpaceName, pool.Capacity, pool.SpaceAlignment, pool.Granularity,
+                pool.Entries |> List.map (fun entry ->
+                    entry.Content, entry.Offset, entry.Length, entry.StorageLength,
+                    entry.NodeIds |> List.map (literalOrigin graph)))
+        let storageSummary (graph: SemanticGraph) =
+            graph.LiteralStorage
+            |> Map.toList
+            |> List.map (fun (id, row) ->
+                let disposition =
+                    match row with
+                    | LiteralStorage.Materialized ordinal -> Choice1Of2 ordinal
+                    | LiteralStorage.NotMaterialized (StoragePremise.Established omissions) -> Choice2Of2 (true, omissions.Length)
+                    | LiteralStorage.NotMaterialized (StoragePremise.Pending omissions) -> Choice2Of2 (false, omissions.Length)
+                literalOrigin graph id, disposition)
+            |> List.sortBy fst
+        let historySummary (graph: SemanticGraph) =
+            graph.Edges
+            |> List.choose (fun edge ->
+                match edge.Role with
+                | EdgeRole.LiteralStorageHistory history -> Some (literalOrigin graph edge.Target, history.Early.Length)
+                | _ -> None)
+            |> List.sort
+        let assertPublishableAndValid (graph: SemanticGraph) =
+            let prepared =
+                Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare graph
+                |> Result.defaultWith (fun failures -> failwithf "Witness preparation refused: %A" failures)
+            let revision =
+                Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish prepared
+                |> Result.defaultWith (fun failures -> failwithf "Publication refused: %A" failures)
+            let violations = Fidelity.PSG.Integrity.check revision
+            Assert.True(violations.IsEmpty, Fidelity.PSG.Integrity.describe violations)
+            revision
+        let assertColdWarmParity (cold: SemanticGraph) (warm: SemanticGraph) =
+            Assert.True(obligationSummary cold = obligationSummary warm, sprintf "Obligation inventory diverged:\nCold: %A\nWarm: %A" (obligationSummary cold) (obligationSummary warm))
+            let coldSmt = Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib (Clef.Compiler.Nanopass.ObligationDischarge.ofGraph cold)
+            let warmSmt = Clef.Compiler.Nanopass.ObligationDischarge.trySmtLib (Clef.Compiler.Nanopass.ObligationDischarge.ofGraph warm)
+            Assert.Equal(coldSmt, warmSmt)
+            Assert.Equal(poolSummary cold, poolSummary warm)
+            Assert.True(storageSummary cold = storageSummary warm, sprintf "LiteralStorage diverged:\nCold: %A\nWarm: %A" (storageSummary cold) (storageSummary warm))
+            Assert.True(historySummary cold = historySummary warm, sprintf "LiteralStorageHistory diverged:\nCold: %A\nWarm: %A" (historySummary cold) (historySummary warm))
+            assertPublishableAndValid warm |> ignore
+        let withStaleSentinel (anchorId: string) (staleBody: ObligationBody) (graph: SemanticGraph) =
+            let staleNodes =
+                graph.Nodes |> Map.map (fun _ node ->
+                    match node.Kind with
+                    | SemanticKind.Obligation info when info.Id = anchorId ->
+                        { node with Kind = SemanticKind.Obligation { info with Body = staleBody } }
+                    | _ -> node)
+            { graph with Nodes = staleNodes }
+        let rebuild baseline candidate =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.Rebuild.rebuildSelective baseline candidate with
+            | Ok (rebuilt, _, _) -> rebuilt
+            | Error failure -> failwithf "Selective rebuild refused: %A" failure
+
+        let header = """module SentinelRebuildParity
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+"""
+        // 1. Pool-ordinal shift: inserting "alpha" before "beta" shifts "beta" from ordinal 0 to ordinal 1.
+        // Candidate carries genuinely stale StaticStringPool, LiteralStorage, and sentinel_beta from prior revision.
+        let baseShiftBody = """let emitBeta () =
+    write "beta"
+    ()
+[<EntryPoint>]
+let main _ =
+    emitBeta ()
+    0
+"""
+        let coldShiftBody = """let emitAlpha () =
+    write "alpha"
+    ()
+let emitBeta () =
+    write "beta"
+    ()
+[<EntryPoint>]
+let main _ =
+    emitAlpha ()
+    emitBeta ()
+    0
+"""
+        let baseShift = checkSource (header + baseShiftBody)
+        let coldShift = checkSource (header + coldShiftBody)
+        let betaShiftId = IntrinsicWriteFixture.literal coldShift "beta"
+        let staleShiftCandidate =
+            { (withStaleSentinel "sentinel_beta" (ObligationBody.MaterializedNulSentinel(0, 4, 0, 4, 0uy)) coldShift) with
+                StaticStringPool = baseShift.StaticStringPool
+                LiteralStorage = Map.ofList [ betaShiftId, LiteralStorage.Materialized 0 ] }
+        Assert.NotEqual(coldShift.StaticStringPool, staleShiftCandidate.StaticStringPool)
+        Assert.True(storageSummary coldShift <> storageSummary staleShiftCandidate)
+        let warmShift = rebuild baseShift staleShiftCandidate
+        Assert.Contains(("sentinel_beta", ObligationBody.MaterializedNulSentinel(1, 4, 1, 4, 0uy)), sentinelSummary warmShift)
+        assertColdWarmParity coldShift warmShift
+
+        // 2. Literal widening: newly reached occurrence of "7" (stale unset pool/storage + Pending sentinel) re-settles to match cold.
+        let baseWidenBody = """let extra () = "7"
+[<EntryPoint>]
+let main _ =
+    write "7"
+    0
+"""
+        let coldWidenBody = """let extra () = "7"
+[<EntryPoint>]
+let main _ =
+    write "7"
+    write (extra ())
+    0
+"""
+        let baseWiden = checkSource (header + baseWidenBody)
+        let coldWiden = checkSource (header + coldWidenBody)
+        let staleWidenCandidate =
+            { (withStaleSentinel "sentinel_7" (ObligationBody.Pending ["reset after widening"]) coldWiden) with
+                StaticStringPool = None
+                LiteralStorage = Map.empty }
+        Assert.NotEqual(coldWiden.StaticStringPool, staleWidenCandidate.StaticStringPool)
+        Assert.True(storageSummary coldWiden <> storageSummary staleWidenCandidate)
+        let warmWiden = rebuild baseWiden staleWidenCandidate
+        Assert.Contains(("sentinel_7", ObligationBody.MaterializedNulSentinel(0, 1, 0, 1, 0uy)), sentinelSummary warmWiden)
+        assertColdWarmParity coldWiden warmWiden
+
+        // 3. Literal withdrawal: removing "drop" shifts "keep" from ordinal 1 -> 0 with stale prior pool & LiteralStorage.
+        let baseWithdrawBody = """[<EntryPoint>]
+let main _ =
+    write "drop"
+    write "keep"
+    0
+"""
+        let coldWithdrawBody = """[<EntryPoint>]
+let main _ =
+    write "keep"
+    0
+"""
+        let baseWithdraw = checkSource (header + baseWithdrawBody)
+        let coldWithdraw = checkSource (header + coldWithdrawBody)
+        let keepId = IntrinsicWriteFixture.literal coldWithdraw "keep"
+        let staleWithdrawCandidate =
+            { (withStaleSentinel "sentinel_keep" (ObligationBody.MaterializedNulSentinel(1, 4, 1, 4, 0uy)) coldWithdraw) with
+                StaticStringPool = baseWithdraw.StaticStringPool
+                LiteralStorage = Map.ofList [ keepId, LiteralStorage.Materialized 1 ] }
+        Assert.NotEqual(coldWithdraw.StaticStringPool, staleWithdrawCandidate.StaticStringPool)
+        Assert.True(storageSummary coldWithdraw <> storageSummary staleWithdrawCandidate)
+        let warmWithdraw = rebuild baseWithdraw staleWithdrawCandidate
+        Assert.Equal<(string * ObligationBody) list>([ "sentinel_keep", ObligationBody.MaterializedNulSentinel(0, 4, 0, 4, 0uy) ], sentinelSummary warmWithdraw)
+        assertColdWarmParity coldWithdraw warmWithdraw
+
+        // 4. Materialized -> Omitted transition: removing demand on "msg" drops stale materialized pool/storage and settles OmittedNulSentinel.
+        let baseOmitBody = """let consume (s: string) =
+    write s
+    0
+[<EntryPoint>]
+let main _ =
+    consume "msg"
+"""
+        let coldOmitBody = """let consume (s: string) = 0
+[<EntryPoint>]
+let main _ =
+    consume "msg"
+"""
+        let baseOmit = checkSource (header + baseOmitBody)
+        let coldOmit = checkSource (header + coldOmitBody)
+        let msgOmitId = IntrinsicWriteFixture.literal coldOmit "msg"
+        let staleOmitCandidate =
+            { (withStaleSentinel "sentinel_msg" (ObligationBody.MaterializedNulSentinel(0, 3, 0, 3, 0uy)) coldOmit) with
+                StaticStringPool = baseOmit.StaticStringPool
+                LiteralStorage = Map.ofList [ msgOmitId, LiteralStorage.Materialized 0 ]
+                Edges = coldOmit.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.LiteralStorageHistory _ -> false | _ -> true) }
+        Assert.NotEqual(coldOmit.StaticStringPool, staleOmitCandidate.StaticStringPool)
+        Assert.True(storageSummary coldOmit <> storageSummary staleOmitCandidate)
+        let warmOmit = rebuild baseOmit staleOmitCandidate
+        Assert.Equal<(string * ObligationBody) list>([ "sentinel_msg", ObligationBody.OmittedNulSentinel ], sentinelSummary warmOmit)
+        assertColdWarmParity coldOmit warmOmit
+
+        // 5. Omitted -> Materialized transition: demanding "msg" cleans up stale LiteralStorageHistory and OmittedNulSentinel.
+        let msgMatId = IntrinsicWriteFixture.literal baseOmit "msg"
+        let staleHistoryEdge : Hyperedge =
+            { Class = EdgeClass.Provenance
+              Role = EdgeRole.LiteralStorageHistory { Literal = msgMatId; Early = [ { Site = msgMatId; Origin = OrdinaryOmissionOrigin.CallArgument 0; Actual = msgMatId } ] }
+              Ordinal = 0
+              Sources = [ msgMatId; msgMatId ]
+              Target = msgMatId }
+        let staleMatCandidate =
+            { (withStaleSentinel "sentinel_msg" ObligationBody.OmittedNulSentinel baseOmit) with
+                StaticStringPool = None
+                LiteralStorage = Map.empty
+                Edges = staleHistoryEdge :: baseOmit.Edges }
+        Assert.NotEqual(baseOmit.StaticStringPool, staleMatCandidate.StaticStringPool)
+        Assert.True(historySummary baseOmit <> historySummary staleMatCandidate)
+        let warmMat = rebuild coldOmit staleMatCandidate
+        Assert.Equal<(string * ObligationBody) list>([ "sentinel_msg", ObligationBody.MaterializedNulSentinel(0, 3, 0, 3, 0uy) ], sentinelSummary warmMat)
+        assertColdWarmParity baseOmit warmMat
 
     [<Theory>]
     [<InlineData("literal")>]

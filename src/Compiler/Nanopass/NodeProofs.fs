@@ -12,7 +12,7 @@
 /// the reached work set after constant branch exclusion. The pass creates
 /// the storage, view and sentinel proofs of the reachable string literals among
 /// them: one triple for each text, with every reachable node of that text a
-/// participant. Every term of those statements is a fact of the literal's text.
+/// participant. The sentinel acquires its byte only after storage settles.
 ///
 /// Pure: `create` returns a new graph.
 module Clef.Compiler.Nanopass.NodeProofs
@@ -88,6 +88,7 @@ let private roleCandidate (info: ObligationInfo) =
     | _, ObligationBody.StorageReservation _ -> info.Id.StartsWith "storage_"
     | _, ObligationBody.ViewContainment _ -> info.Id.StartsWith "view_"
     | _, ObligationBody.NulSentinel _ -> info.Id.StartsWith "sentinel_"
+    | _, (ObligationBody.MaterializedNulSentinel _ | ObligationBody.OmittedNulSentinel) -> info.Id.StartsWith "sentinel_"
     | _ -> false
 
 /// Read the incidence consumed by publication. Use linked literal content to identify
@@ -142,9 +143,42 @@ let private residents (graph: SemanticGraph) (texts: Set<string>) =
             | _ -> failure "A literal claim must have exactly one incoming Obligation/Constrains row at ordinal zero."
     claims |> collect read Map.empty
 
+/// Read the current storage supporting an already born sentinel. Reuse the pool indexes across a wave.
+let private sentinelDisposition (graph: SemanticGraph) =
+    let pool = graph.StaticStringPool
+    let entries = pool |> Option.map (fun storage -> Array.ofList storage.Entries) |> Option.defaultValue [||]
+    let placements = entries |> Array.indexed |> Array.groupBy (fun (_, entry) -> entry.Content) |> Map.ofArray
+    let bytes = pool |> Option.map (fun storage -> Array.ofList storage.Bytes) |> Option.defaultValue [||]
+    let readDisposition claim text sourceIds (view: ObligationInfo) =
+        let fail reason = refuse claim sourceIds ("Literal sentinel settlement: " + reason)
+        let row held occurrence =
+            match graph.LiteralStorage.TryFind occurrence with
+            | Some (LiteralStorage.Materialized ordinal) -> Result.Ok ((occurrence, ordinal) :: held)
+            | Some (LiteralStorage.NotMaterialized (StoragePremise.Established (_ :: _))) -> Result.Ok held
+            | _ -> refuse claim [occurrence] "Literal sentinel settlement: The literal has no current materialized or established omission row."
+        sourceIds |> collect row [] |> Result.bind (function
+            | [] when not (placements.ContainsKey text) -> Result.Ok ObligationBody.OmittedNulSentinel
+            | [] -> fail "An omitted text still has an entry in the static string pool."
+            | (_, ordinal) :: _ as materialized ->
+                match placements.TryFind text, view.Body with
+                | Some [| (observedOrdinal, entry) |], ObligationBody.ViewContainment (_, offset, _) ->
+                    let held = materialized |> List.map fst |> Set.ofList
+                    if entry.NodeIds.Length <> held.Count || Set.ofList entry.NodeIds <> held ||
+                       (materialized |> List.exists (snd >> (<>) ordinal)) then
+                        fail "The pool entry does not list exactly the materialized occurrences of this text."
+                    elif entry.Offset < 0 || entry.Offset > bytes.Length ||
+                         entry.Length < 0 || entry.Length >= entry.StorageLength ||
+                         entry.Length >= bytes.Length - entry.Offset then
+                        fail "The terminator offset is outside its checked pool entry."
+                    else
+                        let observed = bytes[entry.Offset + entry.Length]
+                        Result.Ok (ObligationBody.MaterializedNulSentinel(ordinal, offset, observedOrdinal, entry.Length, observed))
+                | _ -> fail "A materialized literal requires one checked pool entry and its current view claim.")
+    readDisposition
+
 /// Validate a complete resident triple before editing any membership. Claim identity,
 /// Required order, and incidence positions belong to the original graph.
-let private widen (graph: SemanticGraph) text (added: SemanticNode list) (rows: (SemanticNode * ObligationInfo * Hyperedge * SemanticNode) list) =
+let private widen readSentinel (graph: SemanticGraph) text (added: SemanticNode list) (rows: (SemanticNode * ObligationInfo * Hyperedge * SemanticNode) list) =
     let fail message = refuse added.Head.Id (List.map (fun (n: SemanticNode) -> n.Id) added) ("Literal proof incidence: " + message)
     let role kind = rows |> List.tryFind (fun (_, info, _, _) -> info.Kind = kind)
     match rows.Length, role "storage-reservation", role "view-containment", role "terminator-sentinel" with
@@ -155,18 +189,31 @@ let private widen (graph: SemanticGraph) text (added: SemanticNode list) (rows: 
             let facts = Recipes.literalClaimFacts (storage.Id.Substring(8)) text (fmtRange head.Range)
             let valid ((node: SemanticNode), info, (edge: Hyperedge), _) expected =
                 info = expected && node.Range = head.Range && edge.Sources = first.Sources
-            if not (List.forall2 valid old facts) then fail "The three literal roles, old source, facts, or ordered participant lists disagree."
-            else
-                let oldParticipants = first.Sources |> List.choose graph.Nodes.TryFind
-                let orderBy = sourceOrder graph
-                let current = (oldParticipants @ added) |> List.distinctBy _.Id |> List.sortBy (fun n -> orderBy n, n.Id)
-                let ids = current |> List.map _.Id
-                if ids = first.Sources then Result.Ok []
+            let claim, info, edge, _ = t
+            let _, previousView, _, _ = v
+            let priorFacts =
+                match info.Body with
+                | ObligationBody.MaterializedNulSentinel _ | ObligationBody.OmittedNulSentinel ->
+                    readSentinel claim.Id text edge.Sources previousView |> Result.map (fun body ->
+                        facts |> List.map (fun fact ->
+                            if fact.Kind = "terminator-sentinel" then { fact with Body = body } else fact))
+                | _ -> Result.Ok facts
+            priorFacts |> Result.bind (fun expected ->
+                if not (List.forall2 valid old expected) then fail "The three literal roles, old source, facts, or ordered participant lists disagree."
                 else
-                    Result.Ok (old |> List.map (fun ((node: SemanticNode), info, (edge: Hyperedge), _) ->
-                        let first = current.Head
-                        let claim = { node with Range = first.Range; Kind = SemanticKind.Obligation { info with Source = fmtRange first.Range } }
-                        claim, { edge with Sources = ids }))
+                    let oldParticipants = first.Sources |> List.choose graph.Nodes.TryFind
+                    let orderBy = sourceOrder graph
+                    let current = (oldParticipants @ added) |> List.distinctBy _.Id |> List.sortBy (fun n -> orderBy n, n.Id)
+                    let ids = current |> List.map _.Id
+                    if ids = first.Sources then Result.Ok []
+                    else
+                        match current with
+                        | [] -> Result.Ok []
+                        | lead :: _ ->
+                            // Widen the existing births. Changed incidence must settle its sentinel again.
+                            Result.Ok (List.map2 (fun ((node: SemanticNode), _, (edge: Hyperedge), _) fact ->
+                                let claim = { node with Range = lead.Range; Kind = SemanticKind.Obligation { fact with Source = fmtRange lead.Range } }
+                                claim, { edge with Sources = ids }) old facts))
     | _ -> fail "A literal text must have exactly one storage, view, and sentinel claim."
 
 /// Add newly reachable participants to their existing literal claims; fresh texts retain the birth path.
@@ -176,10 +223,11 @@ let tryExtend (graph: SemanticGraph) (newNodes: NodeId seq) =
     | [] -> Result.Ok graph
     | (_, first :: _) :: _ ->
         let texts = wave |> List.map fst |> Set.ofList
+        let readSentinel = sentinelDisposition graph
         residents graph texts |> Result.bind (fun owners ->
             let plan (edits, fresh) (text, participants: SemanticNode list) =
                 match owners.TryFind text with
-                | Some held -> widen graph text participants held |> Result.map (fun changed -> changed @ edits, fresh)
+                | Some held -> widen readSentinel graph text participants held |> Result.map (fun changed -> changed @ edits, fresh)
                 | None -> Result.Ok (edits, participants :: fresh)
             wave |> collect plan ([], []) |> Result.bind (fun (edits, fresh) ->
                 let revised =
@@ -197,3 +245,50 @@ let tryExtend (graph: SemanticGraph) (newNodes: NodeId seq) =
                     if List.isEmpty fresh then current
                     else fresh |> List.rev |> List.concat |> List.map _.Id |> create current)))
     | _ -> Result.Ok graph
+
+/// Complete the existing sentinel claims from checked storage. Retain the
+/// anchor, claim identity and ordered literal sources in every disposition,
+/// and never leave a stale materialized or omitted body on an orphaned claim.
+let settleSentinels (graph: SemanticGraph) =
+    let groups = literalTexts graph (graph.Nodes.Values |> Seq.toList)
+    let texts = groups |> List.map fst |> Set.ofList
+    let readDisposition = sentinelDisposition graph
+    let isSentinelClaim (info: ObligationInfo) =
+        info.Kind = "terminator-sentinel"
+        || (match info.Body with
+            | ObligationBody.MaterializedNulSentinel _
+            | ObligationBody.OmittedNulSentinel -> true
+            | _ -> false)
+    residents graph texts |> Result.bind (fun owners ->
+        let settle (settledIds, changed) (text, participants: SemanticNode list) =
+            let sources = participants |> List.map _.Id
+            let claims = owners.TryFind text |> Option.defaultValue []
+            let role kind = claims |> List.filter (fun (_, info, _, _) -> info.Kind = kind)
+            match role "terminator-sentinel", role "view-containment" with
+            | [(node, info, edge, _)], [(_, view, viewEdge, _)] when edge.Sources = sources && viewEdge.Sources = sources ->
+                readDisposition node.Id text sources view |> Result.map (fun body ->
+                    let settledIds = Set.add node.Id settledIds
+                    if info.Body = body then settledIds, changed
+                    else settledIds, (node.Id, {node with Kind = SemanticKind.Obligation {info with Body = body}}) :: changed)
+            | _ ->
+                let site =
+                    match participants with
+                    | first :: _ -> first.Id
+                    | [] -> NodeId 0
+                refuse site sources "Literal sentinel settlement: The text does not have one claim with its exact ordered reachable occurrences."
+        groups |> collect settle (Set.empty, []) |> Result.map (fun (settledIds, changed) ->
+            let withdrawn =
+                SemanticGraph.obligations graph
+                |> List.choose (fun (node, info) ->
+                    if settledIds.Contains node.Id || not (isSentinelClaim info) then None
+                    else
+                        match info.Body with
+                        | ObligationBody.Pending _ -> None
+                        | _ ->
+                            let reset = ObligationBody.Pending ["The literal occurrences for this sentinel are no longer reachable."]
+                            Some (node.Id, { node with Kind = SemanticKind.Obligation { info with Body = reset } }))
+            match changed @ withdrawn with
+            | [] -> graph
+            | changes ->
+                let nodes = changes |> List.fold (fun held (id, node) -> Map.add id node held) graph.Nodes
+                {graph with Nodes = nodes} |> SemanticGraph.invalidateWitness))

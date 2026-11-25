@@ -699,6 +699,7 @@ let internal rebuildPairPlans (pair: CheckedRebuildPair) =
 type internal ScopedSettlementFailure =
     | RecipeRefused of NodeId * string
     | MissingCallableSettlement
+    | SentinelSettlementRefused of NodeId option * string
 
 type internal ScopedRebuildPair =
     private
@@ -720,21 +721,35 @@ let internal settleRebuildScopes (pair: CheckedRebuildPair) scopes =
     match refusal with
     | Some failure -> Result.Error failure
     | None ->
-        let receiving =
-            if recipes.Recipes.IsEmpty then pair.Candidate
-            else Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes pair.Candidate
-        let before = pair.Candidate.Codata.Value
-        let after = receiving.Codata.Value
-        if (not before.CallableContracts.IsEmpty && after.CallableContracts.IsEmpty)
-           || (not before.CallableAggregateSlots.IsEmpty && after.CallableAggregateSlots.IsEmpty) then
-            Result.Error ScopedSettlementFailure.MissingCallableSettlement
-        else
-            let relations =
-                if recipes.Recipes.IsEmpty then pair.RelationAlignment
-                else alignRelations pair.Baseline receiving pair.BaselinePlan pair.CandidatePlan pair.Alignment
-            let alignment = relations |> Map.fold (fun acc old current -> Map.add old current acc) pair.Alignment
-            Result.Ok ({ Baseline = pair.Baseline; Receiving = receiving
-                         Alignment = alignment; RelationAlignment = relations }, recipes)
+        let refolded = not recipes.Recipes.IsEmpty
+        let folded =
+            if not refolded then Result.Ok pair.Candidate
+            else
+                let receiving = Clef.Compiler.Nanopass.BakerSaturation.foldIn recipes pair.Candidate
+                let newNodes =
+                    receiving.Nodes.Keys
+                    |> Seq.filter (pair.Candidate.Nodes.ContainsKey >> not)
+                    |> Seq.toList
+                if newNodes.IsEmpty then Result.Ok receiving
+                else
+                    match Clef.Compiler.Nanopass.NodeProofs.tryExtend receiving newNodes with
+                    | Result.Ok extended -> Result.Ok extended
+                    | Result.Error failure ->
+                        Result.Error (ScopedSettlementFailure.SentinelSettlementRefused(failure.Occurrence, failure.Reason))
+        folded
+        |> Result.bind (fun settled ->
+            let before = pair.Candidate.Codata.Value
+            let after = settled.Codata.Value
+            if (not before.CallableContracts.IsEmpty && after.CallableContracts.IsEmpty)
+               || (not before.CallableAggregateSlots.IsEmpty && after.CallableAggregateSlots.IsEmpty) then
+                Result.Error ScopedSettlementFailure.MissingCallableSettlement
+            else
+                let relations =
+                    if not refolded then pair.RelationAlignment
+                    else alignRelations pair.Baseline settled pair.BaselinePlan pair.CandidatePlan pair.Alignment
+                let alignment = relations |> Map.fold (fun acc old current -> Map.add old current acc) pair.Alignment
+                Result.Ok ({ Baseline = pair.Baseline; Receiving = settled
+                             Alignment = alignment; RelationAlignment = relations }, recipes))
 
 let internal scopedRebuildInputs (pair: ScopedRebuildPair) =
     pair.Baseline, pair.Receiving, pair.Alignment, pair.RelationAlignment

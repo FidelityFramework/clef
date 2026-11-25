@@ -48,7 +48,11 @@ let materialize (graph: SemanticGraph) : Result<ProofDispatchPlan, WitnessProjec
           Reason = "Proof dispatch rendering failed: " + reason }
     try
         let admitted = admittedPending graph required
-        let solverRequired = required |> List.filter (fun (id, _) -> not (admitted.Contains id))
+        let solverRequired =
+            required |> List.filter (fun (id, info) ->
+                match info.Body with
+                | ObligationBody.OmittedNulSentinel -> false
+                | _ -> not (admitted.Contains id))
         let stalePlans = required |> List.choose (fun ((id, info) as claim) ->
             match info.Body with
             | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ ->

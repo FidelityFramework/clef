@@ -165,59 +165,197 @@ let rec private remapValue (remap: NodeId -> NodeId) (ty: Type) (value: objnull)
 let private remapTyped<'T> (remap: NodeId -> NodeId) (value: 'T) : 'T =
     remapValue remap typeof<'T> (box value) |> unbox<'T>
 
+let private normalizeContiguousRuns (isMatch: Participant -> bool) (renumber: bool) (participants: Participant list) : Participant list =
+    let flushRun (runRev: Participant list) (acc: Participant list) =
+        let sorted =
+            runRev
+            |> List.rev
+            |> List.sortBy (fun p -> p.Node, p.Group, p.Ordinal)
+        let normalized =
+            if renumber then sorted |> List.mapi (fun i p -> { p with Ordinal = i })
+            else sorted
+        List.rev normalized @ acc
+    let rec loop (runRev: Participant list) (acc: Participant list) (remaining: Participant list) =
+        match remaining with
+        | [] ->
+            let finalAcc = if runRev.IsEmpty then acc else flushRun runRev acc
+            List.rev finalAcc
+        | head :: tail when isMatch head ->
+            loop (head :: runRev) acc tail
+        | head :: tail ->
+            let nextAcc = if runRev.IsEmpty then acc else flushRun runRev acc
+            loop [] (head :: nextAcc) tail
+    loop [] [] participants
+
+let private normalizeRuntimeParticipants (runtime: MemoryRegionRuntime) : MemoryRegionRuntime =
+    let ordered =
+        runtime.Participants
+        |> normalizeContiguousRuns (fun p -> p.Role = ParticipantRole.RegionRuntimeDescriptor) true
+        |> normalizeContiguousRuns (fun p -> p.Role = ParticipantRole.RegionRuntimeAcquire) true
+        |> normalizeContiguousRuns (fun p -> p.Role = ParticipantRole.RegionRuntimeRelease) true
+    { runtime with Participants = ordered }
+
+let private normalizeMemoryOperation (operation: MemoryWitnessOperation) : MemoryWitnessOperation =
+    match operation with
+    | MemoryWitnessOperation.Region witness ->
+        let participants =
+            witness.Participants
+            |> normalizeContiguousRuns (fun p -> p.Role = ParticipantRole.RegionDeclaration) false
+        let runtime = witness.Runtime |> Option.map normalizeRuntimeParticipants
+        MemoryWitnessOperation.Region { witness with Participants = participants; Runtime = runtime }
+    | _ -> operation
+
+let private normalizeEdge (edge: Hyperedge) : Hyperedge =
+    match edge.Role with
+    | EdgeRole.BoundaryDomain d ->
+        { edge with
+            Role =
+                EdgeRole.BoundaryDomain
+                    { d with
+                        Imports = List.sort d.Imports
+                        Entries = List.sort d.Entries
+                        Calls = List.sort d.Calls } }
+    | EdgeRole.MemoryDomain d ->
+        let operations = d.Operations |> List.map (fun (site, op) -> site, normalizeMemoryOperation op)
+        { edge with Role = EdgeRole.MemoryDomain { d with Operations = operations } }
+    | EdgeRole.MemoryOperation op ->
+        { edge with Role = EdgeRole.MemoryOperation (normalizeMemoryOperation op) }
+    | _ -> edge
+
 let private remapEdges remap (edges: Hyperedge list) =
     let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
-    let domainRows (edge: Hyperedge) =
+    let unorderedKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, List.sort edge.Sources, edge.Target
+    let callsBySite (rows: Hyperedge list) =
+        rows
+        |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCall call -> Some (call.Site, call) | _ -> None)
+        |> Map.ofList
+    let companionRows (calls: Map<NodeId, BoundaryCall>) (edge: Hyperedge) =
         let target = edge.Target
         match edge.Role with
-        | EdgeRole.BoundaryDomain d -> Some (Boundaries.domainRow target d, Boundaries.domainRewrite target d)
-        | EdgeRole.NumericDomain d -> Some (NumericValues.domainRow target d, NumericValues.domainRewrite target d)
-        | EdgeRole.MemoryDomain d -> Some (MemoryValues.domainRow target d, MemoryValues.domainRewrite target d)
-        | EdgeRole.SpatialModuleDomain d -> Some (SpatialValues.domainRow target d, SpatialValues.domainRewrite target d)
-        | _ -> None
-    let mapped = remapTyped<Hyperedge list> remap edges
-    let domains =
+        | EdgeRole.BoundaryDomain d ->
+            [ Boundaries.domainRow target d; Boundaries.domainRewrite target d ]
+            @ (d.IntrinsicDeclarations |> List.map (fun (site, imp) -> StringBytes.abiRow site imp))
+            @ (d.IntrinsicImports |> List.map StringBytes.importRow)
+            @ (d.IntrinsicCalls |> List.collect StringBytes.callRows)
+            @ (d.IntrinsicProofs |> List.collect StringBytes.proofRows)
+        | EdgeRole.BoundaryImport import -> [ Boundaries.importRow import ]
+        | EdgeRole.BoundaryResourceDeclaration row -> [ Boundaries.row (EdgeRole.BoundaryResourceDeclaration row) 0 (Set.toList row.Participants) row.Identity ]
+        | EdgeRole.BoundaryWritableBufferDeclaration row -> [ Boundaries.row (EdgeRole.BoundaryWritableBufferDeclaration row) 0 (Set.toList row.Participants) row.Identity ]
+        | EdgeRole.BoundaryWritableBufferUse row -> [ Boundaries.row (EdgeRole.BoundaryWritableBufferUse row) 0 (Set.toList row.Participants) row.Call ]
+        | EdgeRole.BoundaryBufferAbsence row -> [ Boundaries.row (EdgeRole.BoundaryBufferAbsence row) 0 (row.DeclarationFacts |> Map.keys |> Seq.toList) row.Quote ]
+        | EdgeRole.BoundaryResourceAccess row -> [ Boundaries.row (EdgeRole.BoundaryResourceAccess row) 0 (Set.toList row.Participants) row.Site ]
+        | EdgeRole.BoundaryEntry entry -> [ Boundaries.row (EdgeRole.BoundaryEntry entry) 0 (Set.toList entry.Participants) entry.Formation ]
+        | EdgeRole.BoundaryCallbackInvocation invocation -> [ Boundaries.row (EdgeRole.BoundaryCallbackInvocation invocation) 0 (Set.toList invocation.Participants) invocation.Identity ]
+        | EdgeRole.BoundaryCallbackAbsence row -> [ Boundaries.row (EdgeRole.BoundaryCallbackAbsence row) 0 (row.DeclarationFacts |> Map.keys |> Seq.toList) row.Quote ]
+        | EdgeRole.BoundaryClosedEntry entry -> [ Boundaries.row (EdgeRole.BoundaryClosedEntry entry) 0 (Set.toList entry.Participants) entry.Formation ]
+        | EdgeRole.BoundaryCall call -> Boundaries.callRow call :: Boundaries.operandRows call
+        | EdgeRole.BoundaryCoverage coverage ->
+            match calls.TryFind coverage.Site with
+            | Some call -> Boundaries.coverageRows call coverage (Boundaries.coverageOutcome coverage)
+            | None -> []
+        | EdgeRole.NumericDomain d -> [ NumericValues.domainRow target d; NumericValues.domainRewrite target d ]
+        | EdgeRole.MemoryDomain d ->
+            let operations = Map.ofList d.Operations
+            [ MemoryValues.domainRow target d; MemoryValues.domainRewrite target d ]
+            @ (d.Operations |> List.map (MemoryValues.operationRow operations))
+            @ (d.Proofs |> List.collect MemoryValues.proofRows)
+            @ (d.ArrayCopies |> List.map MemoryValues.copyRow)
+            @ (d.AllocationConstructions |> List.map MemoryValues.allocationConstructionRow)
+            @ (d.CopyConstructions |> List.map MemoryValues.copyConstructionRow)
+        | EdgeRole.SpatialModuleDomain d -> [ SpatialValues.domainRow target d; SpatialValues.domainRewrite target d ]
+        | _ -> []
+    let mapped = remapTyped<Hyperedge list> remap edges |> List.map normalizeEdge
+    let origCalls = callsBySite edges
+    let currCalls = callsBySite mapped
+    let expectedByPair =
         (Map.empty, edges, mapped)
-        |||> List.fold2 (fun domains original current ->
-            match domainRows original with
-            | Some (row, rewrite) when key row = key original ->
-                match domainRows current with
-                | Some (nextRow, nextRewrite) ->
-                    Map.change original.Target (function
-                        | None -> Some (Some (row, rewrite, nextRow, nextRewrite))
-                        | Some _ -> Some None) domains
-                | None -> domains
-            | _ -> domains)
-    let reorder (current: Hyperedge) (expected: Hyperedge) =
-        if current.Class = expected.Class && current.Role = expected.Role &&
-           current.Ordinal = expected.Ordinal && current.Target = expected.Target &&
-           List.sort current.Sources = List.sort expected.Sources then
-            { current with Sources = expected.Sources }
-        else current
+        |||> List.fold2 (fun acc original current ->
+            let origRows = companionRows origCalls original
+            let currRows = companionRows currCalls current
+            if origRows.IsEmpty || origRows.Length <> currRows.Length then acc
+            else
+                (acc, origRows, currRows)
+                |||> List.fold2 (fun state origExpected currExpected ->
+                    let pairKey = key origExpected, unorderedKey currExpected
+                    Map.change pairKey (function
+                        | None -> Some (Some currExpected)
+                        | Some _ -> Some None) state))
     (edges, mapped)
     ||> List.map2 (fun original current ->
-        match Map.tryFind original.Target domains with
-        | Some (Some (row, _, next, _)) when key original = key row -> reorder current next
-        | Some (Some (_, rewrite, _, next)) when key original = key rewrite -> reorder current next
+        match Map.tryFind (key original, unorderedKey current) expectedByPair with
+        | Some (Some expected) when current.Sources <> expected.Sources ->
+            { current with Sources = expected.Sources }
         | _ -> current)
 
-let rec private remapGraph (remap: NodeId -> NodeId) (graph: SemanticGraph) : SemanticGraph =
-    { graph with
-        Nodes = remapTyped<Map<NodeId, SemanticNode>> remap graph.Nodes
-        DeclarationRoots = remapTyped<(NodeId * DeclRoot) list> remap graph.DeclarationRoots
-        Modules = remapTyped<Map<ModulePath, NodeId list>> remap graph.Modules
-        Types = lazy (remapTyped<Map<string, NodeId>> remap graph.Types.Value)
-        ModuleClassifications = lazy (remapTyped<Map<NodeId, ModuleClassification>> remap graph.ModuleClassifications.Value)
-        StaticStringPool = remapTyped<StaticStringPool option> remap graph.StaticStringPool
-        LiteralStorage = remapTyped<Map<NodeId, LiteralStorage>> remap graph.LiteralStorage
-        Escaping = lazy (remapTyped<Map<NodeId, string>> remap graph.Escaping.Value)
-        Codata = lazy (remapTyped<Codata> remap graph.Codata.Value)
-        Edges = remapEdges remap graph.Edges
-        WitnessProvenance =
-            graph.WitnessProvenance
-            |> Option.map (fun p -> { PreparedRoots = remapGraph remap p.PreparedRoots })
-        SequenceRangeProvenance = remapTyped<SequenceRangeAuthority option> remap graph.SequenceRangeProvenance
-        RangeContextFacts = remapTyped<RangeContextFacts option> remap graph.RangeContextFacts }
+let rec private remapGraph (remap: NodeId -> NodeId) (graph: SemanticGraph) : Result<SemanticGraph, NodeId * string> =
+    let provenanceResult =
+        match graph.WitnessProvenance with
+        | None -> Result.Ok None
+        | Some p ->
+            remapGraph remap p.PreparedRoots
+            |> Result.map (fun roots -> Some { PreparedRoots = roots })
+    provenanceResult
+    |> Result.bind (fun provenance ->
+        let remappedCodata =
+            lazy
+                let codata = remapTyped<Codata> remap graph.Codata.Value
+                match codata.WitnessEmission with
+                | None -> codata
+                | Some emission ->
+                    let operations = emission.Memory.Operations |> Map.map (fun _ -> normalizeMemoryOperation)
+                    { codata with WitnessEmission = Some { emission with Memory = { emission.Memory with Operations = operations } } }
+        let remapped =
+            { graph with
+                Nodes = remapTyped<Map<NodeId, SemanticNode>> remap graph.Nodes
+                DeclarationRoots = remapTyped<(NodeId * DeclRoot) list> remap graph.DeclarationRoots
+                Modules = remapTyped<Map<ModulePath, NodeId list>> remap graph.Modules
+                Types = lazy (remapTyped<Map<string, NodeId>> remap graph.Types.Value)
+                ModuleClassifications = lazy (remapTyped<Map<NodeId, ModuleClassification>> remap graph.ModuleClassifications.Value)
+                StaticStringPool = remapTyped<StaticStringPool option> remap graph.StaticStringPool
+                LiteralStorage = remapTyped<Map<NodeId, LiteralStorage>> remap graph.LiteralStorage
+                Escaping = lazy (remapTyped<Map<NodeId, string>> remap graph.Escaping.Value)
+                Codata = remappedCodata
+                Edges = remapEdges remap graph.Edges
+                WitnessProvenance = provenance
+                SequenceRangeProvenance = remapTyped<SequenceRangeAuthority option> remap graph.SequenceRangeProvenance
+                RangeContextFacts = remapTyped<RangeContextFacts option> remap graph.RangeContextFacts }
+        let boundaryOriginTarget =
+            remapped.Edges |> List.tryPick (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDomain { StringOriginRelations = Some _ } -> Some edge.Target
+                | _ -> None)
+        match boundaryOriginTarget with
+        | None -> Result.Ok remapped
+        | Some target ->
+            match StringOrigins.relations remapped with
+            | Result.Error reason -> Result.Error (target, "SSAAssignment: " + reason)
+            | Result.Ok fresh ->
+                let reorderedEnrichedTargets =
+                    remapped.Edges
+                    |> List.collect (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.BoundaryDomain d -> edge.Target :: (d.IntrinsicProofs |> List.map _.Obligation)
+                        | EdgeRole.BoundaryCoverage c -> [ c.Obligation ]
+                        | EdgeRole.MemoryDomain d -> edge.Target :: (d.Proofs |> List.map _.Obligation)
+                        | EdgeRole.NumericDomain _ | EdgeRole.SpatialModuleDomain _ ->
+                            [ edge.Target ]
+                        | _ -> [])
+                    |> Set.ofList
+                let canonicalRelation (row: StringOriginRelation) =
+                    let sources =
+                        if row.Flavor = StringOriginRelationKind.Named "EnrichedWith" && reorderedEnrichedTargets.Contains row.Target then
+                            List.sort row.Sources
+                        else row.Sources
+                    row.Recorded, row.Class, row.Flavor, row.Ordinal, row.Target, sources
+                let sortedFresh = fresh |> List.map canonicalRelation |> List.sort
+                let edges =
+                    remapped.Edges |> List.map (fun edge ->
+                        match edge.Role with
+                        | EdgeRole.BoundaryDomain ({ StringOriginRelations = Some relations } as domain)
+                            when relations <> fresh && (relations |> List.map canonicalRelation |> List.sort) = sortedFresh ->
+                            { edge with Role = EdgeRole.BoundaryDomain { domain with StringOriginRelations = Some fresh } }
+                        | _ -> edge)
+                Result.Ok { remapped with Edges = edges })
 
 let [<Literal>] Family = 512
 
@@ -399,15 +537,17 @@ let private reconcileAndAssignCore
               NodeRemap = nodeRemap
               RetainedNodes = retainedAssigned
               ReassignedNodes = reassigned }
-        let remappedGraph = remapGraph remapNodeId candidate
-        let codata = remappedGraph.Codata.Value
-        match Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.validateTypedIdentities
-                  remappedGraph.Nodes codata.CallableContracts codata.CallableAggregateSlots with
-        | Result.Error failures -> Result.Error(ReconciliationFailure.InvalidReturnedIdentities failures)
-        | Result.Ok () ->
-            let reconciledGraph =
-                { remappedGraph with Codata = lazy { codata with SSAAssignment = Some plan } }
-            Result.Ok(reconciledGraph, plan)
+        match remapGraph remapNodeId candidate with
+        | Result.Error failure -> Result.Error(ReconciliationFailure.InvalidReturnedIdentities [ failure ])
+        | Result.Ok remappedGraph ->
+            let codata = remappedGraph.Codata.Value
+            match Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.validateTypedIdentities
+                      remappedGraph.Nodes codata.CallableContracts codata.CallableAggregateSlots with
+            | Result.Error failures -> Result.Error(ReconciliationFailure.InvalidReturnedIdentities failures)
+            | Result.Ok () ->
+                let reconciledGraph =
+                    { remappedGraph with Codata = lazy { codata with SSAAssignment = Some plan } }
+                Result.Ok(reconciledGraph, plan)
 
 let private reconcileExistingPlan transportCallableRelations (baseline: SemanticGraph) alignment retainedCandidateNodes candidate =
     match baseline.Codata.Value.SSAAssignment with

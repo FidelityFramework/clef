@@ -249,6 +249,8 @@ let rebuildSelective baseline candidate =
                 | Result.Error ScopedSettlementFailure.MissingCallableSettlement ->
                     let reason = "Scoped Baker folding requires callable settlement before returning a graph."
                     Result.Error(RebuildFailure.InvalidReturnedGraph [SegmentationFailure.InvalidGraph(None, reason)])
+                | Result.Error (ScopedSettlementFailure.SentinelSettlementRefused(site, reason)) ->
+                    Result.Error(RebuildFailure.InvalidReturnedGraph [SegmentationFailure.InvalidGraph(site, reason)])
                 | Result.Ok (scoped, recipes) ->
                     let _, saturated, alignment, relations = scopedRebuildInputs scoped
                     let retained = retainedCandidateNodes alignment schedule saturated
@@ -274,4 +276,8 @@ let rebuildSelective baseline candidate =
                             |> List.map (fun (id, reason) -> SegmentationFailure.InvalidGraph(Some id, reason))
                         Result.Error(RebuildFailure.InvalidReturnedGraph invalid)
                     | Result.Ok (reconciled, _) ->
-                        Result.Ok(reconciled, { schedule with RelationAlignment = relations }, recipes))))
+                        match Clef.Compiler.Nanopass.PremiseEstablishment.settleRebuildSentinels (not recipes.Recipes.IsEmpty) reconciled with
+                        | Result.Ok settled ->
+                            Result.Ok(settled, { schedule with RelationAlignment = relations }, recipes)
+                        | Result.Error (site, reason) ->
+                            Result.Error(RebuildFailure.InvalidReturnedGraph [SegmentationFailure.InvalidGraph(site, reason)]))))

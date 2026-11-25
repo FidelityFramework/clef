@@ -1535,6 +1535,43 @@ let main _ =
             |> Seq.find (fun c -> c.Kind = Fidelity.PSG.RegionCopyKind.CopyTo)
         Assert.True(copyToRow.DestinationRegion.IsSome)
         Assert.Equal(32L, copyToRow.SourceByteExtent)
+        let copy =
+            match revision.Emission.Memory.Operations[copyToRow.Site] with
+            | Fidelity.PSG.MemoryWitnessOperation.Region operation -> operation
+            | _ -> failwith "Missing reached copyTo memory witness."
+        let destination = copy.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.RegionHandleOperand) |> Assert.Single
+        let sourcePort = copy.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.RegionCopySource) |> Assert.Single
+        Assert.Equal((copy.Operand, 1, copy.Site), (Some destination.Node, destination.Ordinal, destination.Group))
+        Assert.Equal((copy.Source, 0, copy.Site), (Some sourcePort.Node, sourcePort.Ordinal, sourcePort.Group))
+        let mutations =
+            [ "operand ordinal", (fun (p: Fidelity.PSG.Participant) -> if p = destination then { p with Ordinal = 0 } else p)
+              "operand group", (fun p -> if p = destination then { p with Group = destination.Node } else p)
+              "operand roles", (fun p -> if p = destination then { p with Role = sourcePort.Role }
+                                         elif p = sourcePort then { p with Role = destination.Role } else p)
+              "proof ordinals", (fun p -> if p.Role = Fidelity.PSG.ParticipantRole.RegionProof && p.Ordinal < 2 then { p with Ordinal = 1 - p.Ordinal } else p) ]
+        let nodeIds (entries: Fidelity.PSG.Participant list) = entries |> List.map _.Node |> List.sort
+        let refusals changed reason =
+            let memory = revision.Emission.Memory
+            let changedMemory = { memory with Operations = memory.Operations.Add(copy.Site, Fidelity.PSG.MemoryWitnessOperation.Region changed) }
+            let revised = { revision with Emission = { revision.Emission with Memory = changedMemory } }
+            Fidelity.PSG.Integrity.check revised |> List.filter (fun violation -> violation.Node = Some copy.Site && violation.Reason = reason)
+        let results = mutations |> List.map (fun (name, mutate) ->
+            let changed = List.map mutate copy.Participants
+            Assert.Equal<Fidelity.PSG.NodeId list>(nodeIds copy.Participants, nodeIds changed)
+            name, refusals { copy with Participants = changed } "Region participants differ from the reached source ports, ownership groups or ordered obligations." |> List.length)
+        Assert.Equal<(string * int) list>(mutations |> List.map (fun (name, _) -> name, 1), results)
+        let inventedCopy = { destination with Node = copy.Site; Role = Fidelity.PSG.ParticipantRole.RegionCopyOwner; Ordinal = 0; Group = copy.Site }
+        let forgedRows = copy.Participants |> List.collect (fun p ->
+            if p.Role = Fidelity.PSG.ParticipantRole.RegionStorageSpace then [p; inventedCopy] else [p])
+        Assert.Equal<Set<Fidelity.PSG.NodeId>>(Set.ofList (nodeIds copy.Participants), Set.ofList (nodeIds forgedRows))
+        Assert.Single(refusals { copy with CopyOwner = Some copy.Site; Participants = forgedRows } "Region memory operands differ from their exact source application.") |> ignore
+        let swappedClaims =
+            match copy.Obligations with layout :: capacity :: rest -> capacity :: layout :: rest | _ -> failwith "Missing the copy layout and capacity claims."
+        let coherentRoles =
+            copy.Participants |> List.map (fun p ->
+                if p.Role = Fidelity.PSG.ParticipantRole.RegionProof then { p with Node = swappedClaims[p.Ordinal] } else p)
+        Assert.Equal<Fidelity.PSG.NodeId list>(nodeIds copy.Participants, nodeIds coherentRoles)
+        Assert.Single(refusals { copy with Obligations = swappedClaims; Participants = coherentRoles } "Region storage lacks its exact ordered layout, capacity or source obligations.") |> ignore
         Assert.Equal("unsat", AsyncAndRegionFixture.solveObligation graph revision.CurrentClaims[copyToRow.EscapeDischargeObligation])
 
         let negSource = """
@@ -1574,3 +1611,614 @@ let main _ =
 """
         let overRes = AsyncAndRegionFixture.checkRaw "22_RegionEscape_over" overCopy
         Assert.Contains(overRes.Diagnostics, fun d -> d.Code = "CCS8405")
+
+    [<Fact>]
+    member _.``PSG #40 ReadOnlyArrayView typed participants reject same-ID role, ordinal, and group swaps``() =
+        let source = """
+module ReadOnlyViewParticipants
+
+[<EntryPoint>]
+let main _ =
+    let arr = [| 10; 20; 30 |]
+    let view = ReadOnlyView.ofArray arr
+    let v0 = view.[0]
+    if v0 = 10 then 0 else 1
+"""
+        let graph = AsyncAndRegionFixture.check "psg40_ro_view" source
+        let revision = AsyncAndRegionFixture.publish graph
+        AsyncAndRegionFixture.wellFormed revision
+        let view =
+            revision.Emission.Memory.Operations.Values
+            |> Seq.choose (function Fidelity.PSG.MemoryWitnessOperation.ReadOnlyArrayView row -> Some row | _ -> None)
+            |> Assert.Single
+        let siteP = view.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.Site) |> Assert.Single
+        let calleeP = view.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.ReadOnlyViewCallee) |> Assert.Single
+        let sourceP = view.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.ReadOnlyViewArraySource) |> Assert.Single
+        Assert.Equal(3, view.Participants.Length)
+        Assert.Equal((view.Site, 0, view.Site), (siteP.Node, siteP.Ordinal, siteP.Group))
+        Assert.Equal((0, view.Site), (calleeP.Ordinal, calleeP.Group))
+        Assert.Equal((view.Source, 0, view.Site), (sourceP.Node, sourceP.Ordinal, sourceP.Group))
+        let nodeIds (entries: Fidelity.PSG.Participant list) = entries |> List.map _.Node |> List.sort
+        let reason = "The read-only array view differs from its exact source operand or descriptor carriers."
+        let mutations =
+            [ "site/callee swap", (fun (p: Fidelity.PSG.Participant) ->
+                if p = siteP then { p with Node = calleeP.Node }
+                elif p = calleeP then { p with Node = siteP.Node } else p)
+              "callee/source role swap", (fun p ->
+                if p = calleeP then { p with Role = sourceP.Role }
+                elif p = sourceP then { p with Role = calleeP.Role } else p)
+              "source ordinal", (fun p -> if p = sourceP then { p with Ordinal = 1 } else p)
+              "source group", (fun p -> if p = sourceP then { p with Group = sourceP.Node } else p) ]
+        for name, mutate in mutations do
+            let changed = List.map mutate view.Participants
+            Assert.Equal<Fidelity.PSG.NodeId list>(nodeIds view.Participants, nodeIds changed)
+            let memory = revision.Emission.Memory
+            let changedMemory = { memory with Operations = memory.Operations.Add(view.Site, Fidelity.PSG.MemoryWitnessOperation.ReadOnlyArrayView { view with Participants = changed }) }
+            let revised = { revision with Emission = { revision.Emission with Memory = changedMemory } }
+            let hits = Fidelity.PSG.Integrity.check revised |> List.filter (fun v -> v.Node = Some view.Site && v.Reason = reason)
+            Assert.True(hits.Length = 1, sprintf "Mutation '%s' expected 1 refusal, got %d" name hits.Length)
+
+    [<Fact>]
+    member _.``PSG #40 MemoryRegionRuntime typed participants exclude synthetic BoundaryDomain and reject same-ID swaps``() =
+        let runtimeAuthority =
+            AsyncAndRegionFixture.authority
+                .Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+                .Replace(
+                    "let regionPages =",
+                    "let heap = { Name = \"heap\"; Kind = \"heap\"; Capacity = 1048576; Alignment = 16; Granularity = 1; Growth = \"up\"; Access = \"rw\"; Base = None }\nlet regionPages =")
+                .Replace("Spaces = [| rodata; stack; regionPages |]", "Spaces = [| rodata; stack; regionPages; heap |]")
+            + """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | CallerOwns | CalleeOwns | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type RegionMemoryDescriptor = { Space: string; EscapeSpace: string; Acquire: string; Release: string; Address: int; Protection: int; Flags: int; FileDescriptor: int; Offset: int; FailureValue: int; ReleaseSuccess: int; FailureAction: string }
+
+[<FidelityExtern("c", "mmap")>]
+let regionAcquire (addr: option<CHandle<unit>>) (len: int) (prot: int) (flags: int) (fd: int) (offset: int) : CHandle<unit> =
+    NativeDefault.zeroed ()
+
+let regionAcquireDescriptor: Expr<FunctionDescriptor> =
+    <@ { CName = "mmap"
+         Parameters =
+           [| { Name = "addr"; Type = Pointer 64; PassBy = Value }
+              { Name = "len"; Type = Integer (Unsigned, 64); PassBy = Value }
+              { Name = "prot"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "flags"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "fd"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "offset"; Type = Integer (Signed, 64); PassBy = Value } |]
+         ReturnType = Pointer 64
+         CallingConvention = CDecl
+         OwnershipTransfer = CallerOwns } @>
+
+[<FidelityExtern("c", "munmap")>]
+let regionRelease (addr: CHandle<unit>) (len: int) : int =
+    NativeDefault.zeroed ()
+
+let regionReleaseDescriptor: Expr<FunctionDescriptor> =
+    <@ { CName = "munmap"
+         Parameters =
+           [| { Name = "addr"; Type = Pointer 64; PassBy = Value }
+              { Name = "len"; Type = Integer (Unsigned, 64); PassBy = Value } |]
+         ReturnType = Integer (Signed, 32)
+         CallingConvention = CDecl
+         OwnershipTransfer = CalleeOwns } @>
+
+let regionMemory: Expr<RegionMemoryDescriptor> =
+    <@ { Space = "region"; EscapeSpace = "heap"
+         Acquire = "WriteAuthority.regionAcquire"; Release = "WriteAuthority.regionRelease"
+         Address = 0; Protection = 3; Flags = 34; FileDescriptor = -1; Offset = 0
+         FailureValue = -1; ReleaseSuccess = 0; FailureAction = "Abort" } @>
+"""
+        let program = """
+module RegionRuntimeParticipants
+
+[<EntryPoint>]
+let main _ =
+    let r = Region.create 4
+    let buf = Region.alloc<int> r 4
+    buf.[0] <- 42
+    let v = buf.[0]
+    Region.release r
+    if v = 42 then 0 else 1
+"""
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "Parse failed: %A" errors
+        let platform = { AsyncAndRegionFixture.platform with RuntimeModel = Some RuntimeModel.Libc }
+        let checkResult =
+            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                [ parse runtimeAuthority "write-authority.clef"; parse program "region-runtime.clef" ]
+                (Some platform)
+        DimensionalCases.noErrors checkResult
+        let graph = checkResult.Graph
+        let revision = AsyncAndRegionFixture.publish graph
+        AsyncAndRegionFixture.wellFormed revision
+
+        // Chief Architect ruling PSG #40#11578: synthetic BoundaryDomain anchor stays inside Clef, never in runtime.Participants.
+        let boundaryDomainAnchors =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDomain _ -> Some (AsyncAndRegionFixture.psgId edge.Target) | _ -> None)
+            |> Set.ofList
+        Assert.NotEmpty boundaryDomainAnchors
+
+        let regionOps =
+            revision.Emission.Memory.Operations.Values
+            |> Seq.choose (function Fidelity.PSG.MemoryWitnessOperation.Region row -> Some row | _ -> None)
+            |> Seq.toList
+        Assert.NotEmpty regionOps
+        let op = regionOps |> List.find (fun row -> row.Kind = Fidelity.PSG.MemoryRegionKind.Create)
+        let runtime =
+            match op.Runtime with
+            | Some rt -> rt
+            | None -> failwith "Expected settled MemoryRegionRuntime on Region.create."
+        let descriptorPs = runtime.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.RegionRuntimeDescriptor)
+        let acquirePs = runtime.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.RegionRuntimeAcquire)
+        let releasePs = runtime.Participants |> List.filter (fun p -> p.Role = Fidelity.PSG.ParticipantRole.RegionRuntimeRelease)
+        Assert.NotEmpty descriptorPs
+        Assert.NotEmpty acquirePs
+        Assert.NotEmpty releasePs
+        Assert.Equal(descriptorPs.Length + acquirePs.Length + releasePs.Length, runtime.Participants.Length)
+        Assert.All(descriptorPs, fun p -> Assert.Equal(runtime.Declaration, p.Group))
+        Assert.All(acquirePs, fun p -> Assert.Equal(runtime.Acquire, p.Group))
+        Assert.All(releasePs, fun p -> Assert.Equal(runtime.Release, p.Group))
+        Assert.Equal<int list>([0 .. descriptorPs.Length - 1], descriptorPs |> List.map _.Ordinal)
+        Assert.Equal<int list>([0 .. acquirePs.Length - 1], acquirePs |> List.map _.Ordinal)
+        Assert.Equal<int list>([0 .. releasePs.Length - 1], releasePs |> List.map _.Ordinal)
+        Assert.Contains(runtime.Declaration, descriptorPs |> List.map _.Node)
+        // Verify synthetic BoundaryDomain anchor never leaks into published runtime.Participants.
+        for anchor in boundaryDomainAnchors do
+            Assert.DoesNotContain(runtime.Participants, fun p -> p.Node = anchor || p.Group = anchor)
+
+        let nodeIds (entries: Fidelity.PSG.Participant list) = entries |> List.map _.Node |> List.sort
+        let checkTampered (changedRuntime: Fidelity.PSG.MemoryRegionRuntime) =
+            let changedOp = { op with Runtime = Some changedRuntime }
+            let memory = revision.Emission.Memory
+            let changedMemory = { memory with Operations = memory.Operations.Add(op.Site, Fidelity.PSG.MemoryWitnessOperation.Region changedOp) }
+            let revised = { revision with Emission = { revision.Emission with Memory = changedMemory } }
+            Fidelity.PSG.Integrity.check revised
+            |> List.filter (fun v -> v.Part.StartsWith("Emission.Memory.Operations.Region") && v.Node = Some op.Site)
+
+        // Same-ID-multiset mutations: role swap, ordinal swap, group swap, and coherent acquire/release swap.
+        let participantReason = "Region runtime participants differ from the immutable descriptor and bounded acquire or release imports."
+        let importReason = "Region runtime lost its exact generated import declarations."
+        let desc0 = descriptorPs.Head
+        let acq0 = acquirePs.Head
+        let rel0 = releasePs.Head
+        let mutations =
+            [ "descriptor/acquire role swap", participantReason,
+              { runtime with
+                  Participants =
+                      runtime.Participants |> List.map (fun p ->
+                          if p = desc0 then { p with Role = acq0.Role }
+                          elif p = acq0 then { p with Role = desc0.Role }
+                          else p) }
+              "acquire/release single-entry role swap", participantReason,
+              { runtime with
+                  Participants =
+                      runtime.Participants |> List.map (fun p ->
+                          if p = acq0 then { p with Role = rel0.Role }
+                          elif p = rel0 then { p with Role = acq0.Role }
+                          else p) }
+              "acquire ordinal swap", participantReason,
+              { runtime with
+                  Participants =
+                      runtime.Participants |> List.map (fun p ->
+                          if p.Role = Fidelity.PSG.ParticipantRole.RegionRuntimeAcquire && p.Ordinal < 2 then
+                              { p with Ordinal = 1 - p.Ordinal }
+                          else p) }
+              "descriptor group swap", participantReason,
+              { runtime with
+                  Participants =
+                      runtime.Participants |> List.map (fun p ->
+                          if p = desc0 then { p with Group = runtime.Acquire } else p) }
+              "acquire/release coherent swap", importReason,
+              { runtime with
+                  Acquire = runtime.Release
+                  Release = runtime.Acquire
+                  Participants =
+                      descriptorPs
+                      @ (releasePs |> List.map (fun p -> { p with Role = Fidelity.PSG.ParticipantRole.RegionRuntimeAcquire }))
+                      @ (acquirePs |> List.map (fun p -> { p with Role = Fidelity.PSG.ParticipantRole.RegionRuntimeRelease })) } ]
+        for name, expectedReason, mutated in mutations do
+            Assert.Equal<Fidelity.PSG.NodeId list>(nodeIds runtime.Participants, nodeIds mutated.Participants)
+            let hits = checkTampered mutated |> List.filter (fun v -> v.Reason = expectedReason)
+            Assert.True(not hits.IsEmpty, sprintf "Runtime mutation '%s' expected exact refusal '%s', got: %A" name expectedReason (checkTampered mutated |> List.map _.Reason))
+
+        // Withdrawal of a single descriptor participant must be refused with exact reason.
+        let withdrawn = { runtime with Participants = runtime.Participants |> List.filter ((<>) desc0) }
+        Assert.Contains(checkTampered withdrawn, fun v -> v.Reason = participantReason)
+
+    [<Fact>]
+    member _.``PSG #40 MemoryRegionRuntime and MemoryRegionWitness preserve canonical participants and memory rows under non-monotone SSA remap``() =
+        let runtimeAuthority =
+            AsyncAndRegionFixture.authority
+                .Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+                .Replace(
+                    "let regionPages =",
+                    "let heap = { Name = \"heap\"; Kind = \"heap\"; Capacity = 1048576; Alignment = 16; Granularity = 1; Growth = \"up\"; Access = \"rw\"; Base = None }\nlet regionPages =")
+                .Replace("Spaces = [| rodata; stack; regionPages |]", "Spaces = [| rodata; stack; regionPages; heap |]")
+            + """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | CallerOwns | CalleeOwns | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type RegionMemoryDescriptor = { Space: string; EscapeSpace: string; Acquire: string; Release: string; Address: int; Protection: int; Flags: int; FileDescriptor: int; Offset: int; FailureValue: int; ReleaseSuccess: int; FailureAction: string }
+
+[<FidelityExtern("c", "mmap")>]
+let regionAcquire (addr: option<CHandle<unit>>) (len: int) (prot: int) (flags: int) (fd: int) (offset: int) : CHandle<unit> =
+    NativeDefault.zeroed ()
+
+let regionAcquireDescriptor: Expr<FunctionDescriptor> =
+    <@ { CName = "mmap"
+         Parameters =
+           [| { Name = "addr"; Type = Pointer 64; PassBy = Value }
+              { Name = "len"; Type = Integer (Unsigned, 64); PassBy = Value }
+              { Name = "prot"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "flags"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "fd"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "offset"; Type = Integer (Signed, 64); PassBy = Value } |]
+         ReturnType = Pointer 64
+         CallingConvention = CDecl
+         OwnershipTransfer = CallerOwns } @>
+
+[<FidelityExtern("c", "munmap")>]
+let regionRelease (addr: CHandle<unit>) (len: int) : int =
+    NativeDefault.zeroed ()
+
+let regionReleaseDescriptor: Expr<FunctionDescriptor> =
+    <@ { CName = "munmap"
+         Parameters =
+           [| { Name = "addr"; Type = Pointer 64; PassBy = Value }
+              { Name = "len"; Type = Integer (Unsigned, 64); PassBy = Value } |]
+         ReturnType = Integer (Signed, 32)
+         CallingConvention = CDecl
+         OwnershipTransfer = CalleeOwns } @>
+
+let regionMemory: Expr<RegionMemoryDescriptor> =
+    <@ { Space = "region"; EscapeSpace = "heap"
+         Acquire = "WriteAuthority.regionAcquire"; Release = "WriteAuthority.regionRelease"
+         Address = 0; Protection = 3; Flags = 34; FileDescriptor = -1; Offset = 0
+         FailureValue = -1; ReleaseSuccess = 0; FailureAction = "Abort" } @>
+"""
+        let program = """
+module RegionRuntimeSsaRemap
+
+[<EntryPoint>]
+let main _ =
+    let r = Region.create 4
+    let buf = Region.alloc<int> r 4
+    buf.[0] <- 42
+    let v = buf.[0]
+    Region.release r
+    if v = 42 then 0 else 1
+"""
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "Parse failed: %A" errors
+        let platform = { AsyncAndRegionFixture.platform with RuntimeModel = Some RuntimeModel.Libc }
+        let checkResult =
+            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                [ parse runtimeAuthority "write-authority.clef"; parse program "region-runtime-remap.clef" ]
+                (Some platform)
+        DimensionalCases.noErrors checkResult
+        let graph = checkResult.Graph
+        let baselinePlan =
+            graph.Codata.Value.SSAAssignment
+            |> Option.defaultWith (fun () -> failwith "Expected baseline SSAAssignment plan.")
+        let memoryDomain =
+            graph.Edges
+            |> List.pick (fun edge -> match edge.Role with EdgeRole.MemoryDomain domain -> Some domain | _ -> None)
+        let createOp =
+            memoryDomain.Operations
+            |> List.pick (fun (_, operation) ->
+                match operation with
+                | MemoryWitnessOperation.Region row when row.Kind = MemoryRegionKind.Create -> Some row
+                | _ -> None)
+        let runtime =
+            createOp.Runtime
+            |> Option.defaultWith (fun () -> failwith "Expected MemoryRegionRuntime on Region.create.")
+        let descNodes = runtime.Participants |> List.choose (fun p -> if p.Role = ParticipantRole.RegionRuntimeDescriptor then Some p.Node else None)
+        let acqNodes = runtime.Participants |> List.choose (fun p -> if p.Role = ParticipantRole.RegionRuntimeAcquire then Some p.Node else None)
+        let relNodes = runtime.Participants |> List.choose (fun p -> if p.Role = ParticipantRole.RegionRuntimeRelease then Some p.Node else None)
+        let declNodes = createOp.Declarations |> Map.toList |> List.map fst
+        let proofParticipants =
+            memoryDomain.Proofs
+            |> List.pick (fun proof -> if proof.Participants.Count >= 2 then Some (Set.toList proof.Participants) else None)
+        Assert.True(descNodes.Length >= 2)
+        Assert.True(acqNodes.Length >= 2)
+        Assert.True(relNodes.Length >= 2)
+        Assert.True(declNodes.Length >= 2)
+
+        // Exclude the minimum NodeId from each sorted participant/declaration/proof set so those
+        // lowest-ID nodes jump above NodeHighWater while higher-ID peers stay retained, creating
+        // a provable non-monotone NodeId order inversion across every group.
+        let minDesc = List.min descNodes
+        let minAcq = List.min acqNodes
+        let minRel = List.min relNodes
+        let minDecl = List.min declNodes
+        let minProofP = List.min proofParticipants
+        let reassigned = Set.ofList [ minDesc; minAcq; minRel; minDecl; minProofP ]
+        let allNodes = graph.Nodes.Keys |> Set.ofSeq
+        let retained = Set.difference allNodes reassigned
+        let alignment = allNodes |> Seq.map (fun id -> id, id) |> Map.ofSeq
+
+        let reconciled, plan =
+            match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph alignment retained graph with
+            | Result.Ok result -> result
+            | Result.Error failure -> failwithf "Non-monotone SSA reconciliation refused: %A" failure
+
+        // Verify genuine order inversion occurred on all 5 groups.
+        for minId, groupNodes in
+            [ minDesc, descNodes; minAcq, acqNodes; minRel, relNodes; minDecl, declNodes; minProofP, proofParticipants ] do
+            let remappedMin = plan.NodeRemap[minId]
+            let retainedPeer = groupNodes |> List.find (fun id -> not (reassigned.Contains id))
+            let remappedPeer = plan.NodeRemap[retainedPeer]
+            Assert.True(NodeId.value remappedMin > baselinePlan.NodeHighWater)
+            Assert.Equal(retainedPeer, remappedPeer)
+            Assert.True(remappedMin > remappedPeer, sprintf "Expected order inversion %A > %A" remappedMin remappedPeer)
+
+        // Remapped graph must pass WitnessEmission.prepare (MemoryPublication + BoundaryEmission),
+        // RevisionPublication.publish, and Fidelity.PSG.Integrity.check with zero defects.
+        let prepared =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare reconciled with
+            | Ok graph -> graph
+            | Error failures -> failwithf "WitnessEmission.prepare refused (%d failures): %A" failures.Length failures
+        let revision =
+            match Publication.publish prepared with
+            | Ok rev -> rev
+            | Error failures -> failwithf "Publication refused (%d failures): %A" failures.Length failures
+        AsyncAndRegionFixture.wellFormed revision
+
+        let remappedSite = AsyncAndRegionFixture.psgId plan.NodeRemap[createOp.Site]
+        let remappedOp =
+            match revision.Emission.Memory.Operations.TryFind remappedSite with
+            | Some (Fidelity.PSG.MemoryWitnessOperation.Region row) -> row
+            | other -> failwithf "Expected remapped Region.create operation, got %A" other
+        let remappedRuntime =
+            remappedOp.Runtime
+            |> Option.defaultWith (fun () -> failwith "Expected remapped MemoryRegionRuntime.")
+        let assertSortedReindexed role originalMin originalGroup =
+            let entries = remappedRuntime.Participants |> List.filter (fun p -> p.Role = role)
+            let nodes = entries |> List.map _.Node
+            let remappedMin = AsyncAndRegionFixture.psgId plan.NodeRemap[originalMin]
+            let retainedPeer = originalGroup |> List.find (fun id -> not (reassigned.Contains id)) |> fun id -> AsyncAndRegionFixture.psgId plan.NodeRemap[id]
+            Assert.Equal<Fidelity.PSG.NodeId list>(List.sort nodes, nodes)
+            Assert.Equal<int list>([0 .. entries.Length - 1], entries |> List.map _.Ordinal)
+            Assert.True(List.findIndex ((=) remappedMin) nodes > List.findIndex ((=) retainedPeer) nodes)
+        assertSortedReindexed Fidelity.PSG.ParticipantRole.RegionRuntimeDescriptor minDesc descNodes
+        assertSortedReindexed Fidelity.PSG.ParticipantRole.RegionRuntimeAcquire minAcq acqNodes
+        assertSortedReindexed Fidelity.PSG.ParticipantRole.RegionRuntimeRelease minRel relNodes
+
+        let remappedDecls =
+            remappedOp.Participants
+            |> List.choose (fun p -> if p.Role = Fidelity.PSG.ParticipantRole.RegionDeclaration then Some p.Node else None)
+        let retainedDecl = declNodes |> List.find (fun id -> not (reassigned.Contains id)) |> fun id -> AsyncAndRegionFixture.psgId plan.NodeRemap[id]
+        Assert.Equal<Fidelity.PSG.NodeId list>(remappedOp.Declarations |> Map.toList |> List.map fst, remappedDecls)
+        Assert.True(List.findIndex ((=) (AsyncAndRegionFixture.psgId plan.NodeRemap[minDecl])) remappedDecls > List.findIndex ((=) retainedDecl) remappedDecls)
+
+        // Exact-reason negative control (Opus m4): SSAAssignment must propagate StringOrigins.relations
+        // failures instead of silently falling back to the stale remapped graph.
+        let corruptedGraph =
+            let edgesWithOriginSlot =
+                graph.Edges |> List.map (fun edge ->
+                    match edge.Role with
+                    | EdgeRole.BoundaryDomain domain ->
+                        { edge with Role = EdgeRole.BoundaryDomain { domain with StringOriginRelations = Some [] } }
+                    | _ -> edge)
+            let invalidRecordedEdge : Hyperedge =
+                { Class = EdgeClass.Reference
+                  Role = EdgeRole.StringByteRange(0I, 1I)
+                  Ordinal = 0
+                  Sources = [ createOp.Site ]
+                  Target = createOp.Site }
+            { graph with Edges = invalidRecordedEdge :: edgesWithOriginSlot }
+        match Clef.Compiler.Nanopass.SSAAssignment.reconcileAndAssign graph Map.empty Set.empty corruptedGraph with
+        | Result.Error (Clef.Compiler.Nanopass.SSAAssignment.ReconciliationFailure.InvalidReturnedIdentities [ _, reason ]) ->
+            Assert.Contains("SSAAssignment:", reason)
+            Assert.Contains("unsupported recorded incidence payload", reason)
+        | other -> failwithf "Expected SSAAssignment to refuse invalid StringOrigins relation payload, got %A" other
+
+    [<Fact>]
+    member _.``PSG #40 (22_RegionEscape): real publication admits arena-only Runtime=None and refuses coordinated all-row runtime withdrawal``() =
+        let escapeProgram = """
+module RegionEscapeSample
+
+let writeValue value =
+    if value >= 0 && value <= 25 then Console.write (Format.int value)
+    else Console.write "invalid"
+
+let processAndExtract (input: int array) =
+    let region = Region.create 4
+    let len = Array.length input
+    let temp = Region.alloc<int> region len
+    for i in 0..(len - 1) do
+        let value = input.[i]
+        if value >= 0 && value <= 100 then
+            temp.[i] <- value * value
+        else
+            temp.[i] <- 0
+    let result = Region.copyOut<int> temp len
+    result
+
+let copyBetweenRegions () =
+    let destination = Region.create 1
+    let source = Region.create 1
+    let buffer = Region.alloc<int> source 4
+    for i in 0..3 do
+        buffer.[i] <- 99
+    let copied = Region.copyTo<int> buffer destination 4
+    Region.release source
+    let result = copied.[0]
+    Region.release destination
+    result
+
+[<EntryPoint>]
+let main _ =
+    Console.writeln "=== Region Escape Test ==="
+    let input = [| 1; 2; 3; 4; 5 |]
+    Console.write "Input:"
+    for i in 0..4 do
+        Console.write " "
+        writeValue input.[i]
+    Console.writeln ""
+    let squared = processAndExtract input
+    Console.write "Squared:"
+    for i in 0..4 do
+        Console.write " "
+        writeValue squared.[i]
+    Console.writeln ""
+    if copyBetweenRegions () = 99 then 0 else 1
+"""
+        let baseAuthority spaceName =
+            AsyncAndRegionFixture.authority
+                .Replace("Runtime = \"freestanding\"", "Runtime = \"libc\"")
+                .Replace(
+                    "let regionPages =",
+                    "let heap = { Name = \"heap\"; Kind = \"heap\"; Capacity = 1048576; Alignment = 16; Granularity = 1; Growth = \"up\"; Access = \"rw\"; Base = None }\nlet regionPages =")
+                .Replace("Name = \"region\"; Kind = \"region\"", sprintf "Name = \"%s\"; Kind = \"region\"" spaceName)
+                .Replace("Spaces = [| rodata; stack; regionPages |]", "Spaces = [| rodata; stack; regionPages; heap |]")
+        let runtimeDecls = """
+type Signedness = Signed | Unsigned
+type TypeRef = Integer of Signedness * int | Bool | Pointer of int | Void
+type PassBy = Value | Reference | ReadOnlyReference
+type CallConv = | CDecl
+type Transfer = | CallerOwns | CalleeOwns | Borrowed | Undeclared
+type ParameterInfo = { Name: string; Type: TypeRef; PassBy: PassBy }
+type FunctionDescriptor = { CName: string; Parameters: ParameterInfo array; ReturnType: TypeRef; CallingConvention: CallConv; OwnershipTransfer: Transfer }
+type RegionMemoryDescriptor = { Space: string; EscapeSpace: string; Acquire: string; Release: string; Address: int; Protection: int; Flags: int; FileDescriptor: int; Offset: int; FailureValue: int; ReleaseSuccess: int; FailureAction: string }
+
+[<FidelityExtern("c", "mmap")>]
+let regionAcquire (addr: option<CHandle<unit>>) (len: int) (prot: int) (flags: int) (fd: int) (offset: int) : CHandle<unit> =
+    NativeDefault.zeroed ()
+
+let regionAcquireDescriptor: Expr<FunctionDescriptor> =
+    <@ { CName = "mmap"
+         Parameters =
+           [| { Name = "addr"; Type = Pointer 64; PassBy = Value }
+              { Name = "len"; Type = Integer (Unsigned, 64); PassBy = Value }
+              { Name = "prot"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "flags"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "fd"; Type = Integer (Signed, 32); PassBy = Value }
+              { Name = "offset"; Type = Integer (Signed, 64); PassBy = Value } |]
+         ReturnType = Pointer 64
+         CallingConvention = CDecl
+         OwnershipTransfer = CallerOwns } @>
+
+[<FidelityExtern("c", "munmap")>]
+let regionRelease (addr: CHandle<unit>) (len: int) : int =
+    NativeDefault.zeroed ()
+
+let regionReleaseDescriptor: Expr<FunctionDescriptor> =
+    <@ { CName = "munmap"
+         Parameters =
+           [| { Name = "addr"; Type = Pointer 64; PassBy = Value }
+              { Name = "len"; Type = Integer (Unsigned, 64); PassBy = Value } |]
+         ReturnType = Integer (Signed, 32)
+         CallingConvention = CDecl
+         OwnershipTransfer = CalleeOwns } @>
+
+let regionMemory: Expr<RegionMemoryDescriptor> =
+    <@ { Space = "region"; EscapeSpace = "heap"
+         Acquire = "WriteAuthority.regionAcquire"; Release = "WriteAuthority.regionRelease"
+         Address = 0; Protection = 3; Flags = 34; FileDescriptor = -1; Offset = 0
+         FailureValue = -1; ReleaseSuccess = 0; FailureAction = "Abort" } @>
+"""
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "Parse failed: %A" errors
+        let policyPlatform =
+            { AsyncAndRegionFixture.platform with
+                RuntimeModel = Some RuntimeModel.Libc
+                ProjectMemoryPolicy = Some ("RegionEscape.fidproj", System.String('0', 64), "Standard", true) }
+        let compileAndPublish authorityText fileTag =
+            let res =
+                Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                    [ parse authorityText "write-authority.clef"; parse escapeProgram (fileTag + ".clef") ]
+                    (Some policyPlatform)
+            DimensionalCases.noErrors res
+            AsyncAndRegionFixture.publish res.Graph
+        let regionRows (rev: Fidelity.PSG.Revision) =
+            rev.Emission.Memory.Operations.Values
+            |> Seq.choose (function Fidelity.PSG.MemoryWitnessOperation.Region row -> Some row | _ -> None)
+            |> Seq.toList
+
+        // 1. Real Positive Control (Absent Runtime — arena-only placement without runtime descriptor):
+        let arenaOnlyRev = compileAndPublish (baseAuthority "arena") "region-escape-arena-only"
+        let arenaOnlyRows = regionRows arenaOnlyRev
+        Assert.Equal(11, arenaOnlyRows.Length)
+        Assert.All(arenaOnlyRows, fun row -> Assert.True(row.Runtime.IsNone))
+        AsyncAndRegionFixture.wellFormed arenaOnlyRev
+
+        // 2. Real Positive Control (Absent Runtime — arena placement alongside unrelated "region" descriptor & imports):
+        let arenaWithUnrelatedRev = compileAndPublish (baseAuthority "arena" + runtimeDecls) "region-escape-arena-unrelated"
+        let arenaWithUnrelatedRows = regionRows arenaWithUnrelatedRev
+        Assert.Equal(11, arenaWithUnrelatedRows.Length)
+        Assert.All(arenaWithUnrelatedRows, fun row -> Assert.True(row.Runtime.IsNone))
+        AsyncAndRegionFixture.wellFormed arenaWithUnrelatedRev
+
+        // 3. Real Present Publication (all 11 rows carry Runtime = Some _ for Space = "region"):
+        let presentRev = compileAndPublish (baseAuthority "region" + runtimeDecls) "region-escape-present"
+        let presentRows = regionRows presentRev
+        Assert.Equal(11, presentRows.Length)
+        Assert.All(presentRows, fun row ->
+            match row.Runtime with
+            | Some rt -> Assert.Equal("region", rt.Contract.Space)
+            | None -> failwithf "Expected Runtime = Some on region op %A" row.Site)
+        AsyncAndRegionFixture.wellFormed presentRev
+
+        // 4. Real Negative Control (Coordinated All-Row Withdrawal on Real Published 22_RegionEscape):
+        // Withdraw Runtime <- None and strip all local RegionMemoryDescriptor facts + RegionDeclaration participants
+        // across ALL 11 region operations simultaneously, while leaving Boundary.Imports intact.
+        let reachableFactIds (facts: Map<Fidelity.PSG.NodeId, Fidelity.PSG.BoundaryDeclarationFact>) (roots: Fidelity.PSG.NodeId list) =
+            let rec walk seen pending =
+                match pending with
+                | [] -> seen
+                | id :: rest when Set.contains id seen -> walk seen rest
+                | id :: rest ->
+                    let next =
+                        match facts.TryFind id with
+                        | Some fact -> fact.References @ rest
+                        | None -> rest
+                    walk (Set.add id seen) next
+            walk Set.empty roots
+        let stripRowRuntime (row: Fidelity.PSG.MemoryRegionWitness) =
+            let owner = presentRev.Codata.RegionAllocations[row.Region]
+            let keptIds = reachableFactIds row.Declarations [ owner.SpacePlacement; row.Space ]
+            let strippedDecls = row.Declarations |> Map.filter (fun id _ -> keptIds.Contains id)
+            let strippedParticipants =
+                row.Participants |> List.filter (fun p ->
+                    p.Role <> Fidelity.PSG.ParticipantRole.RegionDeclaration || strippedDecls.ContainsKey p.Node)
+            { row with Runtime = None; Declarations = strippedDecls; Participants = strippedParticipants }
+        let strippedOps =
+            presentRev.Emission.Memory.Operations
+            |> Map.map (fun _ op ->
+                match op with
+                | Fidelity.PSG.MemoryWitnessOperation.Region row ->
+                    Fidelity.PSG.MemoryWitnessOperation.Region (stripRowRuntime row)
+                | other -> other)
+        let coordinatedWithdrawalRev =
+            { presentRev with
+                Emission =
+                    { presentRev.Emission with
+                        Memory = { presentRev.Emission.Memory with Operations = strippedOps } } }
+        let withdrawnRows = regionRows coordinatedWithdrawalRev
+        Assert.Equal(11, withdrawnRows.Length)
+        Assert.All(withdrawnRows, fun row ->
+            Assert.True(row.Runtime.IsNone)
+            Assert.DoesNotContain(row.Declarations.Values, fun f -> f.Form = "record" && List.contains "EscapeSpace" f.Text))
+        let withdrawalReason = "Region runtime was withdrawn while its allocation placement matches a declared region runtime."
+        let violations = Fidelity.PSG.Integrity.check coordinatedWithdrawalRev
+        let withdrawalHits = violations |> List.filter (fun v -> v.Reason = withdrawalReason)
+        Assert.Equal(11, withdrawalHits.Length)
+        for row in withdrawnRows do
+            Assert.Contains(withdrawalHits, fun v -> v.Node = Some row.Site && v.Reason = withdrawalReason)

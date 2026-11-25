@@ -835,3 +835,41 @@ let main _ = if toggle true then 0 else 1
         let firstPlan = boundaryGraph.Codata.Value.SSAAssignment.Value
         let secondPlan = second.Codata.Value.SSAAssignment.Value
         Assert.Equal<Map<NodeId, SSAId list>>(firstPlan.Assignments, secondPlan.Assignments)
+
+    [<Fact>]
+    member _.``HostTools emits cvc5 spawn and cache telemetry only when CLEF_PHASE_TIMING=1``() =
+        let previousTiming = Environment.GetEnvironmentVariable "CLEF_PHASE_TIMING"
+        let previousErr = Console.Error
+        let uniqueSolveQuery =
+            sprintf "; hosttools-telemetry-solve-%s\n(set-logic QF_LIA)\n(assert (= 1 1))\n(check-sat)\n(reset)" (Guid.NewGuid().ToString("N"))
+        let uniqueQuietQuery =
+            sprintf "; hosttools-telemetry-quiet-%s\n(set-logic QF_LIA)\n(assert (= 2 2))\n(check-sat)\n(reset)" (Guid.NewGuid().ToString("N"))
+        try
+            // Positive control 1: CLEF_PHASE_TIMING=1 emits kind=solve on first execution.
+            Environment.SetEnvironmentVariable("CLEF_PHASE_TIMING", "1")
+            use solveWriter = new System.IO.StringWriter()
+            Console.SetError(System.IO.TextWriter.Synchronized solveWriter)
+            Assert.Equal(Ok [ "sat" ], BatchHost.runSolver uniqueSolveQuery)
+            let solveErr = solveWriter.ToString()
+            Assert.Contains("[HostTools.cvc5] kind=solve binary=", solveErr)
+            Assert.Contains(" scopes=1 cache_entries=", solveErr)
+
+            // Positive control 2: repeat of same query under CLEF_PHASE_TIMING=1 emits kind=cache_hit.
+            use hitWriter = new System.IO.StringWriter()
+            Console.SetError(System.IO.TextWriter.Synchronized hitWriter)
+            Assert.Equal(Ok [ "sat" ], BatchHost.runSolver uniqueSolveQuery)
+            let hitErr = hitWriter.ToString()
+            Assert.Contains("[HostTools.cvc5] kind=cache_hit binary=", hitErr)
+            Assert.Contains(" cache_entries=", hitErr)
+            Assert.DoesNotContain("[HostTools.cvc5] kind=solve ", hitErr)
+
+            // Negative control: with CLEF_PHASE_TIMING unset, neither solve nor cache hit writes to stderr.
+            Environment.SetEnvironmentVariable("CLEF_PHASE_TIMING", null)
+            use quietWriter = new System.IO.StringWriter()
+            Console.SetError(System.IO.TextWriter.Synchronized quietWriter)
+            Assert.Equal(Ok [ "sat" ], BatchHost.runSolver uniqueQuietQuery)
+            Assert.Equal(Ok [ "sat" ], BatchHost.runSolver uniqueQuietQuery)
+            Assert.Equal("", quietWriter.ToString())
+        finally
+            Environment.SetEnvironmentVariable("CLEF_PHASE_TIMING", previousTiming)
+            Console.SetError previousErr

@@ -2679,7 +2679,7 @@ let private elaborateCore (retained: Ingredients.RetainedBoundaryNodes) (graph: 
                                             | None, None, Some region ->
                                                 let cap = bigint region.Length * bigint region.ElementBytes
                                                 Ok(ReadOnlyResidence.Region region, region.Site, cap,
-                                                   bigint region.ElementBytes, None, viewLenOpt, false, region.Participants)
+                                                   bigint region.ElementBytes, None, viewLenOpt, false, Clef.Compiler.Baker.Ingredients.MemoryValues.regionParticipants region)
                                             | None, None, None ->
                                                 Error "CCS8424: Foreign read-only buffer lacks static or memory-settled backing storage."
                                 do! require (elemBytes > 0I) "CCS8424: Foreign read-only buffer requires positive element byte width."

@@ -763,6 +763,8 @@ type ObligationBody =
     /// One dynamic snapshot count is shared by the write, complete copy and
     /// allocation. Exact source incidence is replayed separately from bounds.
     | SnapshotBorrowBound of count: NodeId * snapshot: NodeId * copy: NodeId * allocation: NodeId * minimum: bigint * maximum: bigint * elementBytes: bigint * allocationCapacity: bigint
+    | MaterializedNulSentinel of entryIndex: int * relativeOffset: int * observedEntryIndex: int * observedRelativeOffset: int * observedByte: byte
+    | OmittedNulSentinel
 
 /// The obligation record carried by an Obligation node.
 type ObligationInfo = {
@@ -1462,6 +1464,13 @@ type ParticipantRole =
     | BufferAbsenceQuote | BufferAbsenceFormal | BufferAbsenceCall | BufferAbsenceOperand
     | CountedEntryArrayDeclaration | CountedEntryArrayInvocation
     | RetainedCallbackOwner | RetainedCallbackRelease
+    /// Reached ReadOnlyView.ofArray intrinsic and its sole array operand, grouped by the application.
+    | ReadOnlyViewCallee | ReadOnlyViewArraySource
+    /// Region operation supports and source ports. A retirement count belongs to its original copy.
+    | RegionOwner | RegionAllocationSpace | RegionStorageSpace | RegionHandleOperand | RegionCopySource
+    | RegionElementCount | RegionRetiredValue | RegionCopyOwner | RegionDeclaration | RegionProof
+    /// Region runtime contract descriptor and qualified acquire/release imports (synthetic BoundaryDomain stays in Clef per PSG #40#11578).
+    | RegionRuntimeDescriptor | RegionRuntimeAcquire | RegionRuntimeRelease
 
 /// One occurrence in a relation: the node, its role, its ordinal within the role (an
 /// argument or parameter position; 0 for a role without positions) and its group. The
@@ -2263,7 +2272,7 @@ type MemoryRegionRuntime = {
     Acquire: NodeId
     Release: NodeId
     Contract: BAREWire.Descriptors.RegionMemoryDescriptor
-    Participants: Set<NodeId>
+    Participants: Participant list
 }
 
 /// Complete source-selected geometry of one region memory occurrence.
@@ -2276,14 +2285,14 @@ type MemoryRegionWitness = {
     Runtime: MemoryRegionRuntime option
     CopyOwner: NodeId option
     Declarations: Map<NodeId,BoundaryDeclarationFact>
-    Obligations: NodeId list; Participants: Set<NodeId>
+    Obligations: NodeId list; Participants: Participant list
 }
 
 /// Exact descriptor-only conversion; storage and element values are unchanged.
 type MemoryReadOnlyArrayViewWitness = {
     Site: NodeId; Source: NodeId
     SourceCarrier: ValueRepresentation; ResultCarrier: ValueRepresentation
-    Participants: Set<NodeId>
+    Participants: Participant list
 }
 
 [<RequireQualifiedAccess>]

@@ -219,7 +219,8 @@ let literalClaimFacts name content source : ObligationInfo list =
     let sentinelClaim =
         { Id = sprintf "sentinel_%s" name; Kind = "terminator-sentinel"; Logic = "QF_BV"
           Statement = sprintf "the final storage byte of %s is the 0x00 terminator" (describe content)
-          Source = source; Refs = [ "CWE-170" ]; Body = ObligationBody.NulSentinel 0 }
+          Source = source; Refs = [ "CWE-170" ]
+          Body = ObligationBody.Pending ["The current literal storage has not established a terminator byte or an omission."] }
     [storageClaim; viewClaim; sentinelClaim]
 
 /// One node-level triple per exact text, sourced by its ordered literal participants.

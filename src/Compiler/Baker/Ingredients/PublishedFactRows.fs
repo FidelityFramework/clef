@@ -2395,10 +2395,10 @@ and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.M
             Capacity=row.Capacity; Alignment=row.Alignment; Space=nodeId row.Space
             Runtime=row.Runtime |> Option.map(fun runtime ->
                 ({Declaration=nodeId runtime.Declaration;Acquire=nodeId runtime.Acquire;Release=nodeId runtime.Release
-                  Contract=runtime.Contract;Participants=Set.map nodeId runtime.Participants}:Fidelity.PSG.MemoryRegionRuntime))
+                  Contract=runtime.Contract;Participants=List.map mapParticipant runtime.Participants}:Fidelity.PSG.MemoryRegionRuntime))
             CopyOwner=Option.map nodeId row.CopyOwner
             Declarations=row.Declarations |> Map.toList |> List.map(fun (id,fact) -> nodeId id,mapBoundaryDeclarationFact fact) |> Map.ofList
-            Obligations=List.map nodeId row.Obligations; Participants=Set.map nodeId row.Participants }
+            Obligations=List.map nodeId row.Obligations; Participants=List.map mapParticipant row.Participants }
     | S.MemoryWitnessOperation.LocalScalar row ->
         Fidelity.PSG.MemoryWitnessOperation.LocalScalar {
             Site = nodeId row.Site; Initializer = nodeId row.Initializer; Element = mapSettledSlot row.Element
@@ -2422,7 +2422,7 @@ and mapMemoryWitnessOperation (value: S.MemoryWitnessOperation) : Fidelity.PSG.M
             Site = nodeId value.Site; Source = nodeId value.Source
             SourceCarrier = mapValueRepresentation value.SourceCarrier
             ResultCarrier = mapValueRepresentation value.ResultCarrier
-            Participants = Set.map nodeId value.Participants }
+            Participants = List.map mapParticipant value.Participants }
 
 and mapMemoryWitnessProjection (value: S.MemoryWitnessProjection) : Fidelity.PSG.MemoryWitnessProjection =
     ({
@@ -2798,6 +2798,9 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.ResourceConversion(a0) -> Fidelity.PSG.ObligationBody.ResourceConversion(mapResourceConversionModel a0)
     | S.ObligationBody.ResourceCleanup(a0) -> Fidelity.PSG.ObligationBody.ResourceCleanup(mapResourceCleanupModel a0)
     | S.ObligationBody.SnapshotBorrowBound(a0, a1, a2, a3, a4, a5, a6, a7) -> Fidelity.PSG.ObligationBody.SnapshotBorrowBound(nodeId a0, nodeId a1, nodeId a2, nodeId a3, a4, a5, a6, a7)
+    | S.ObligationBody.MaterializedNulSentinel(entry, offset, observedEntry, observedOffset, observedByte) ->
+        Fidelity.PSG.ObligationBody.MaterializedNulSentinel(entry, offset, observedEntry, observedOffset, observedByte)
+    | S.ObligationBody.OmittedNulSentinel -> Fidelity.PSG.ObligationBody.OmittedNulSentinel
 
 and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
     mapObligationInfoUsing mapObligationBody value
@@ -2805,6 +2808,7 @@ and mapObligationInfo (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
 and tryMapObligationInfo (value: S.ObligationInfo) : Result<Fidelity.PSG.ObligationInfo, string> =
     match value.Body with
     | S.ObligationBody.Pending reasons -> Error ("A pending obligation cannot be published: " + String.concat "; " reasons)
+    | S.ObligationBody.NulSentinel _ -> Error "Legacy NulSentinel claim lacks checked storage entry, offset, and observed byte."
     | _ -> Ok (mapObligationInfo value)
 
 and mapObligationInfoUsing (body: S.ObligationBody -> Fidelity.PSG.ObligationBody) (value: S.ObligationInfo) : Fidelity.PSG.ObligationInfo =
@@ -3013,6 +3017,21 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.CountedEntryArrayInvocation -> Fidelity.PSG.ParticipantRole.CountedEntryArrayInvocation
     | S.ParticipantRole.RetainedCallbackOwner -> Fidelity.PSG.ParticipantRole.RetainedCallbackOwner
     | S.ParticipantRole.RetainedCallbackRelease -> Fidelity.PSG.ParticipantRole.RetainedCallbackRelease
+    | S.ParticipantRole.ReadOnlyViewCallee -> Fidelity.PSG.ParticipantRole.ReadOnlyViewCallee
+    | S.ParticipantRole.ReadOnlyViewArraySource -> Fidelity.PSG.ParticipantRole.ReadOnlyViewArraySource
+    | S.ParticipantRole.RegionOwner -> Fidelity.PSG.ParticipantRole.RegionOwner
+    | S.ParticipantRole.RegionAllocationSpace -> Fidelity.PSG.ParticipantRole.RegionAllocationSpace
+    | S.ParticipantRole.RegionStorageSpace -> Fidelity.PSG.ParticipantRole.RegionStorageSpace
+    | S.ParticipantRole.RegionHandleOperand -> Fidelity.PSG.ParticipantRole.RegionHandleOperand
+    | S.ParticipantRole.RegionCopySource -> Fidelity.PSG.ParticipantRole.RegionCopySource
+    | S.ParticipantRole.RegionElementCount -> Fidelity.PSG.ParticipantRole.RegionElementCount
+    | S.ParticipantRole.RegionRetiredValue -> Fidelity.PSG.ParticipantRole.RegionRetiredValue
+    | S.ParticipantRole.RegionCopyOwner -> Fidelity.PSG.ParticipantRole.RegionCopyOwner
+    | S.ParticipantRole.RegionDeclaration -> Fidelity.PSG.ParticipantRole.RegionDeclaration
+    | S.ParticipantRole.RegionProof -> Fidelity.PSG.ParticipantRole.RegionProof
+    | S.ParticipantRole.RegionRuntimeDescriptor -> Fidelity.PSG.ParticipantRole.RegionRuntimeDescriptor
+    | S.ParticipantRole.RegionRuntimeAcquire -> Fidelity.PSG.ParticipantRole.RegionRuntimeAcquire
+    | S.ParticipantRole.RegionRuntimeRelease -> Fidelity.PSG.ParticipantRole.RegionRuntimeRelease
 
 and mapPattern (value: S.Pattern) : Fidelity.PSG.Pattern =
     match value with

@@ -60,8 +60,24 @@ let internal solverStartInfo (solver: string) (tempPath: string) : System.Diagno
     psi.UseShellExecute <- false
     psi
 
+let private isPhaseTimingEnabled () =
+    System.Environment.GetEnvironmentVariable "CLEF_PHASE_TIMING" = "1"
+
+let private countCheckSatScopes (text: string) =
+    let needle = "(check-sat)"
+    let nLen = needle.Length
+    let rec matchesAt start offset =
+        if offset = nLen then true
+        elif text[start + offset] = needle[offset] then matchesAt start (offset + 1)
+        else false
+    let rec loop i acc =
+        if i + nLen > text.Length then acc
+        elif matchesAt i 0 then loop (i + nLen) (acc + 1)
+        else loop (i + 1) acc
+    loop 0 0
+
 /// One cvc5 process over one query, optionally bounded by a wall-clock limit.
-let private executeAt (tempDir: string) (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
+let private executeAt (tempDir: string) (solver: string) (limit: System.TimeSpan option) (cacheEntries: int) (text: string) : SolverRun =
     let tempPath = Path.Combine(tempDir, sprintf "clef-proof-%s.smt2" (System.Guid.NewGuid().ToString("N")))
     try
         File.WriteAllText(tempPath, text + "\n")
@@ -69,7 +85,13 @@ let private executeAt (tempDir: string) (solver: string) (limit: System.TimeSpan
         use proc = new System.Diagnostics.Process(StartInfo = psi)
         let started =
             try
-                if proc.Start() then Ok () else Error "Failed to start cvc5 process"
+                if proc.Start() then
+                    if isPhaseTimingEnabled () then
+                        Console.Error.WriteLine(
+                            sprintf "[HostTools.cvc5] kind=solve binary=%s scopes=%d cache_entries=%d"
+                                solver (countCheckSatScopes text) cacheEntries)
+                    Ok ()
+                else Error "Failed to start cvc5 process"
             with
             | :? System.ComponentModel.Win32Exception as ex -> Error ex.Message
             | :? System.UnauthorizedAccessException as ex -> Error ex.Message
@@ -105,13 +127,13 @@ let private executeAt (tempDir: string) (solver: string) (limit: System.TimeSpan
     finally
         if File.Exists tempPath then File.Delete tempPath
 
-let private execute (solver: string) (limit: System.TimeSpan option) (text: string) : SolverRun =
+let private execute (solver: string) (limit: System.TimeSpan option) (cacheEntries: int) (text: string) : SolverRun =
     let tempDir =
         match System.Environment.GetEnvironmentVariable "CLEF_PROOF_TEMP_DIR" with
         | null | "" -> Path.GetTempPath()
         | value when System.String.IsNullOrWhiteSpace value -> Path.GetTempPath()
         | value -> value
-    executeAt tempDir solver limit text
+    executeAt tempDir solver limit cacheEntries text
 
 /// Completed answers only. A query cut off by a budget is never recorded.
 let private solverCache =
@@ -119,7 +141,12 @@ let private solverCache =
 
 let private tryCachedAnswer solver cacheAllowed query =
     match (if cacheAllowed then solverCache.TryGetValue((solver, query)) else (false, Unchecked.defaultof<_>)) with
-    | true, answer -> Some answer
+    | true, answer ->
+        if isPhaseTimingEnabled () then
+            Console.Error.WriteLine(
+                sprintf "[HostTools.cvc5] kind=cache_hit binary=%s cache_entries=%d"
+                    solver solverCache.Count)
+        Some answer
     | _ -> None
 
 let private rememberAnswer solver cacheAllowed query answer =
@@ -128,7 +155,7 @@ let private rememberAnswer solver cacheAllowed query answer =
     answer
 
 let private runUnbounded solver query =
-    match execute solver None query with
+    match execute solver None solverCache.Count query with
     | Answered answer -> answer
     | Unavailable reason -> Error reason
     | TimedOut -> Error "An unbounded cvc5 run cannot exceed a limit"
@@ -253,7 +280,7 @@ let internal budgetedSolver (perQuery: System.TimeSpan) (total: System.TimeSpan)
         else
             let solver, _ = solverExecutable ()
             let cutByTotal = remaining < perQuery
-            match execute solver (Some (if cutByTotal then remaining else perQuery)) query with
+            match execute solver (Some (if cutByTotal then remaining else perQuery)) solverCache.Count query with
             | Answered answer -> Returned (response answer)
             | Unavailable reason -> Returned { Answer = Error reason; SolverUnavailable = true }
             | TimedOut when cutByTotal ->

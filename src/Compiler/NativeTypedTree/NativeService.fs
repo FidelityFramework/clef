@@ -1600,8 +1600,10 @@ let private buildResult (phaseSink: (CheckPhaseEvent -> unit) option) (builder: 
     let obligationCompleteness =
         Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.completeness finalGraph
     let obligationInventory =
-        if obligationCompleteness.IsEmpty then Result.Ok(ObligationDischarge.ofGraph finalGraph)
-        else Result.Error(obligationCompleteness |> List.map _.Reason)
+        if obligationCompleteness.IsEmpty && storagePremiseDiagnostics.IsEmpty then
+            Result.Ok(ObligationDischarge.ofGraph finalGraph)
+        else
+            Result.Error((obligationCompleteness |> List.map _.Reason) @ (storagePremiseDiagnostics |> List.map _.Message))
     ObligationDischarge.emit obligationInventory
     completePhase CheckPhase.ObligationPublication (outcomeOf obligationInventory)
     tracePhase "obligations"

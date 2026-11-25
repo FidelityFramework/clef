@@ -636,7 +636,13 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
     let mutable unresolved = Map.empty
     let mutable required = Set.empty
     let excluded = Memory.excluded graph
-    let getPlatform () = Platform.resolve graph |> needed "A memory residence requires the selected source platform declaration."
+    let platformResolved = lazy (Platform.resolve graph |> needed "A memory residence requires the selected source platform declaration.")
+    let getPlatform () = platformResolved.Value
+    let regionMemoryContracts = lazy (Platform.readRegionMemory graph)
+    let boundaryImports = lazy (
+        graph.Edges
+        |> List.choose (function { Role = EdgeRole.BoundaryImport imported } -> Some imported | _ -> None)
+        |> List.distinctBy _.Identity)
     let regionOperation (node: SemanticNode) =
         match sourceIntrinsic graph node.Id [] with
         | Some(info, arguments) when info.FullName.StartsWith("Region.", System.StringComparison.Ordinal) ->
@@ -655,22 +661,36 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
         | _ -> return! Result.Error "Region storage requires a positive exact source allocation count."
     }
     let regionRuntime (owner:RegionAllocation) = result {
-        let! contracts=Platform.readRegionMemory graph
+        let! contracts=regionMemoryContracts.Value
         let! declared=getPlatform ()
         let! space=declared.Spaces |> List.tryFind(fun space -> space.Node=owner.SpacePlacement)
                    |> needed "The region storage space was withdrawn."
         match contracts |> List.filter(fun contract -> contract.Descriptor.Space=space.Name) with
         | [] -> return None
         | [contract] ->
-            let imports=graph.Edges |> List.choose(function {Role=EdgeRole.BoundaryImport imported} -> Some imported | _ -> None)
-                          |> List.distinctBy _.Identity
+            let imports=boundaryImports.Value
             let imported name =
                 imports |> List.filter(fun imported -> graph.Nodes.TryFind imported.Binding |> Option.bind (Platform.qualifiedExportName graph)=Some name)
                 |> function [imported] -> Ok imported | _ -> Result.Error("Region memory lacks its exact generated import: " + name)
             let! acquire=imported contract.Descriptor.Acquire
             let! release=imported contract.Descriptor.Release
-            return Some {Declaration=contract.Node;Acquire=acquire.Identity;Release=release.Identity;Contract=contract.Descriptor
-                         Participants=Set.unionMany[contract.Participants;acquire.Participants;release.Participants]}
+            let role group kind ordinal occurrence : Participant =
+                { Node = occurrence; Role = kind; Ordinal = ordinal; Group = group }
+            let ordered group kind (members: Set<NodeId>) =
+                members |> Set.toList |> List.sort |> List.mapi (role group kind)
+            let sourceImportSupport (imported: BoundaryImport) =
+                let source =
+                    Set.add imported.Scope
+                        (Set.union (Set.ofSeq imported.SourceTypes.Keys) (Set.ofSeq imported.DeclarationFacts.Keys))
+                Set.intersect imported.Participants source
+            let participants =
+                ordered contract.Node ParticipantRole.RegionRuntimeDescriptor contract.Participants
+                @ ordered acquire.Identity ParticipantRole.RegionRuntimeAcquire (sourceImportSupport acquire)
+                @ ordered release.Identity ParticipantRole.RegionRuntimeRelease (sourceImportSupport release)
+            let runtime : MemoryRegionRuntime =
+                { Declaration=contract.Node; Acquire=acquire.Identity; Release=release.Identity
+                  Contract=contract.Descriptor; Participants=participants }
+            return Some (contract.Binding, runtime)
         | _ -> return! Result.Error "Region memory has ambiguous runtime declarations."
     }
     let reservedBytes site = result {
@@ -729,19 +749,31 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                     result {
                         let name,arguments = regionOperation node |> Option.get
                         let facts=graph.Codata.Value
-                        let! kind,row,operand,source,count =
+                        let participant group role ordinal occurrence : Participant =
+                            { Node = occurrence; Role = role; Ordinal = ordinal; Group = group }
+                        let atSite = participant node.Id
+                        let! kind,row,operand,source,count,copyOwner,ports =
                             match name,arguments with
-                            | "Region.create",[_] -> regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Create,row,None,None,None)
-                            | "Region.alloc",[region;count] -> regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Allocate,row,Some region,None,Some count)
-                            | "Region.release",[region] -> regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Release,row,Some region,None,None)
+                            | "Region.create",[_] -> regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Create,row,None,None,None,None,[])
+                            | "Region.alloc",[region;count] ->
+                                let ports = [atSite ParticipantRole.RegionHandleOperand 0 region; atSite ParticipantRole.RegionElementCount 1 count]
+                                regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Allocate,row,Some region,None,Some count,None,ports)
+                            | "Region.release",[region] ->
+                                let ports = [atSite ParticipantRole.RegionHandleOperand 0 region]
+                                regionAt node.Id |> Result.map (fun row -> MemoryRegionKind.Release,row,Some region,None,None,None,ports)
                             | "Region.copyOut",[source;count] ->
+                                let ports = [atSite ParticipantRole.RegionCopySource 0 source; atSite ParticipantRole.RegionElementCount 1 count]
                                 facts.RegionCopyEndpoints.TryFind node.Id |> needed "copyOut lacks its source escape contract."
                                 |> Result.bind (fun copy -> facts.RegionAllocations.TryFind copy.SourceRegion |> needed "copyOut source region is absent.")
-                                |> Result.map (fun row -> MemoryRegionKind.CopyOut,row,None,Some source,Some count)
+                                |> Result.map (fun row -> MemoryRegionKind.CopyOut,row,None,Some source,Some count,Some node.Id,ports)
                             | "Region.copyTo",[source;region;count] ->
+                                let ports =
+                                    [ atSite ParticipantRole.RegionCopySource 0 source
+                                      atSite ParticipantRole.RegionHandleOperand 1 region
+                                      atSite ParticipantRole.RegionElementCount 2 count ]
                                 facts.RegionCopyEndpoints.TryFind node.Id |> needed "copyTo lacks its source escape contract."
                                 |> Result.bind (fun copy -> copy.DestinationRegion |> Option.bind facts.RegionAllocations.TryFind |> needed "copyTo destination region is absent.")
-                                |> Result.map (fun row -> MemoryRegionKind.CopyTo,row,Some region,Some source,Some count)
+                                |> Result.map (fun row -> MemoryRegionKind.CopyTo,row,Some region,Some source,Some count,None,ports)
                             | "Region.retireCopy",[value] ->
                                 result {
                                     let copies =
@@ -757,7 +789,8 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                                         match graph.Nodes.TryFind copy.Site |> Option.bind regionOperation with
                                         | Some("Region.copyOut",[_;count]) -> Ok count
                                         | _ -> Result.Error "Copy retirement lost its original copy count."
-                                    return MemoryRegionKind.RetireCopy,owner,Some value,None,Some count
+                                    let ports = [atSite ParticipantRole.RegionRetiredValue 0 value; participant copy.Site ParticipantRole.RegionElementCount 1 count]
+                                    return MemoryRegionKind.RetireCopy,owner,Some value,None,Some count,Some copy.Site,ports
                                 }
                             | _ -> Result.Error "Unsupported region memory occurrence."
                         let! slot,bytes,alignment,length =
@@ -782,7 +815,10 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                         do! demand (offset>=0L && offset+int64 length*int64 bytes<=capacity)
                                 "The source region reservation exceeds its settled capacity."
                         let copyClaims = facts.RegionCopyEndpoints.TryFind node.Id |> Option.map (fun copy -> [copy.EscapeDischargeObligation]) |> Option.defaultValue []
-                        let participants = Set.union (row.Participants |> List.map _.Node |> Set.ofList) (Set.ofList (node.Id::row.Region::row.SpacePlacement::(Option.toList operand @ Option.toList source @ Option.toList count)))
+                        let operands =
+                            [atSite ParticipantRole.Site 0 node.Id; atSite ParticipantRole.RegionOwner 0 row.Region
+                             atSite ParticipantRole.RegionAllocationSpace 0 row.SpacePlacement] @ row.Participants @ ports
+                        let participants = operands |> Seq.map _.Node |> Set.ofSeq
                         let finish = offset + int64 length * int64 bytes
                         // Include the preceding reserved bytes so this layout tiles
                         // the region prefix instead of claiming a gap at offset zero.
@@ -790,14 +826,11 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                         let! layout = proof (ObligationBody.ContinuationLayout(slots,int finish,alignment)) participants "region_layout"
                         let! capacityProof = proof (ObligationBody.CapacityFits(finish,capacity)) participants "region_capacity"
                         let obligations = layout::capacityProof::(row.Obligations @ copyClaims)
-                        let copyOwner=
-                            if kind=MemoryRegionKind.RetireCopy then
-                                facts.RegionCopyEndpoints.Values |> Seq.tryFind(fun copy -> copy.Returned |> Option.exists(fun life -> life.Retirements |> List.exists(fun (_,site) -> site=node.Id))) |> Option.map _.Site
-                            elif kind=MemoryRegionKind.CopyOut then Some node.Id else None
                         let lifetime=copyOwner |> Option.bind facts.RegionCopyEndpoints.TryFind |> Option.bind _.Returned
-                        let! runtime=regionRuntime row
+                        let! selectedRuntime=regionRuntime row
+                        let runtime=selectedRuntime |> Option.map snd
                         let space=match lifetime with Some life -> life.Space | None -> row.SpacePlacement
-                        let declarationRoots=row.SpacePlacement::space::(runtime |> Option.map _.Declaration |> Option.toList)
+                        let declarationRoots=row.SpacePlacement::space::(selectedRuntime |> Option.map fst |> Option.toList)
                         let! declarations=declarationRoots |> List.distinct |> List.fold(fun state root ->
                             state |> Result.bind(fun facts ->
                                 Clef.Compiler.Baker.Ingredients.Boundaries.declarationFacts graph root
@@ -816,13 +849,17 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                                 let! heapCapacity=proof (ObligationBody.CapacityFits(capacity,heap.Capacity)) support "region_copy_capacity"
                                 return heapCapacity::obligations
                               }
-                        let runtimeSupport=runtime |> Option.map _.Participants |> Option.defaultValue Set.empty
+                        let support =
+                            operands @ [atSite ParticipantRole.RegionStorageSpace 0 space]
+                            @ (copyOwner |> Option.map (atSite ParticipantRole.RegionCopyOwner 0) |> Option.toList)
+                            @ (declarations |> Map.toList |> List.map (fst >> atSite ParticipantRole.RegionDeclaration 0))
+                            @ (obligations |> List.mapi (atSite ParticipantRole.RegionProof))
                         return MemoryWitnessOperation.Region {
                             Site=node.Id; Region=row.Region; Kind=kind; Operand=operand; Source=source
                             Count=(if kind=MemoryRegionKind.RetireCopy then None else count)
                             Element=slot; ElementBytes=bytes; Length=length; Offset=offset; Capacity=capacity
                             Alignment=alignment; Space=space; Runtime=runtime;CopyOwner=copyOwner;Declarations=declarations;Obligations=obligations
-                            Participants=Set.unionMany[participants;Set.ofList obligations;runtimeSupport;Set.singleton space;Set.ofList(Option.toList copyOwner);declarations.Keys |> Set.ofSeq] }
+                            Participants=support }
                     }
                 | SemanticKind.Binding(_,true,_,_) ->
                     result {
@@ -1206,8 +1243,13 @@ let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection
                          | ValueRepresentation.Buffer(_, element), ValueRepresentation.Buffer(None, target) -> element = target
                          | _ -> false)
                         "ReadOnlyView.ofArray must preserve the source element representation."
-                let view = { Site = node.Id; Source = source; SourceCarrier = sourceCarrier; ResultCarrier = resultCarrier
-                             Participants = Set.ofList [node.Id; callee; source] }
+                let participant role occurrence : Participant =
+                    { Node = occurrence; Role = role; Ordinal = 0; Group = node.Id }
+                let view =
+                    { Site = node.Id; Source = source; SourceCarrier = sourceCarrier; ResultCarrier = resultCarrier
+                      Participants = [ participant ParticipantRole.Site node.Id
+                                       participant ParticipantRole.ReadOnlyViewCallee callee
+                                       participant ParticipantRole.ReadOnlyViewArraySource source ] }
                 operations <- (node.Id, MemoryWitnessOperation.ReadOnlyArrayView view) :: operations
                 required <- Set.add node.Id required
                 return Enrichment.empty

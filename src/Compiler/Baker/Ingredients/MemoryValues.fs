@@ -79,8 +79,13 @@ let emptySnapshotIds (row:MemoryEmptySnapshotWitness) = Set.ofList[row.Site;row.
 let snapshotStorageIds = function
     | MemoryCheckedSnapshotStorage.Allocated row -> row.Participants
     | MemoryCheckedSnapshotStorage.Empty row -> emptySnapshotIds row
+let regionParticipants (fact: MemoryRegionWitness) =
+    let own = fact.Participants |> Seq.map _.Node |> Set.ofSeq
+    match fact.Runtime with
+    | Some runtime -> Set.union own (runtime.Participants |> List.map _.Node |> Set.ofList)
+    | None -> own
 let participants operations = function
-    | MemoryWitnessOperation.Region fact -> fact.Participants
+    | MemoryWitnessOperation.Region fact -> regionParticipants fact
     | MemoryWitnessOperation.LocalScalar fact ->
         let residence = match fact.Residence with MemoryResidence.Stack(scope,space) -> [scope;space] | _ -> []
         Set.union fact.Reads (Set.ofList ([fact.Site;fact.Initializer;fact.Platform;fact.Layout;fact.Capacity] @ residence @ (fact.Writes |> List.collect (fun (site,value)->[site;value]))))
@@ -101,7 +106,7 @@ let participants operations = function
         Set.unionMany [fact.Uses;constructionIds fact.Construction;Set.ofList(fact.Site::fact.Owner::fact.Platform::fact.Layout::fact.Capacity::residence)]
     | MemoryWitnessOperation.CheckedResultRetirement fact -> Set.add fact.Site (Set.add fact.Value (constructionIds fact.Construction))
     | MemoryWitnessOperation.EmptySnapshot fact -> emptySnapshotIds fact
-    | MemoryWitnessOperation.ReadOnlyArrayView fact -> fact.Participants
+    | MemoryWitnessOperation.ReadOnlyArrayView fact -> fact.Participants |> Seq.map _.Node |> Set.ofSeq
 let operands = function
     | MemoryWitnessOperation.Region fact -> Option.toList fact.Operand @ Option.toList fact.Source @ Option.toList fact.Count
     | MemoryWitnessOperation.LocalScalar fact -> fact.Initializer :: (fact.Writes |> List.map snd)

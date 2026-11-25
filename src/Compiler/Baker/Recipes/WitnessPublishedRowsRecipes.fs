@@ -110,7 +110,7 @@ let project (graph: SemanticGraph) (scope: WitnessLiveScopePlan) (selected: Witn
         let pending = dispatch.Required |> List.filter (fun (_, info) ->
             match info.Body with ObligationBody.Pending _ | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ -> true | _ -> false)
         let unadmitted = pending |> List.filter (ProofDispatchRecipes.optionalEntryPending graph selected.Emission.Boundary >> not)
-        let current = pending.IsEmpty || ProofDispatchRecipes.matchesInventory graph dispatch
+        let current = ProofDispatchRecipes.matchesInventory graph dispatch
         let boundaryCurrent =
             if pending.IsEmpty then true else
             let authored = ProofDispatchRecipes.boundaryCalls graph

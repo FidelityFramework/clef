@@ -55,6 +55,11 @@ let private bufferAbsenceProjection (model: BufferAbsenceArgumentConversionModel
     Published.mapBufferAbsenceArgumentConversionModel model
     |> Fidelity.PSG.BufferAbsenceArgumentProof.project
 
+let private requiresSolver (obligation: ObligationInfo) =
+    match obligation.Body with
+    | ObligationBody.OmittedNulSentinel -> false
+    | _ -> true
+
 /// One obligation's scope: the anchor's definition, then its negation.
 let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     let refutableFalse = [ sprintf "(assert (= %s false))" id; sprintf "(assert (not %s))" id ]
@@ -379,9 +384,15 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     | ObligationBody.ViewContainment (view, len, storage) ->
         [ sprintf "(assert (= %s (and (= %d %d) (< %d %d))))" id view len view storage
           sprintf "(assert (not %s))" id ]
-    | ObligationBody.NulSentinel lastByte ->
-        [ sprintf "(assert (= %s (= #x%02x #x00)))" id lastByte
+    | ObligationBody.NulSentinel _ ->
+        refutableFalse
+    | ObligationBody.MaterializedNulSentinel (entry, offset, observedEntry, observedOffset, observedByte) ->
+        let declarations, premises, clauses = Fidelity.PSG.ObligationBody.sentinelTerms id (entry, offset, observedEntry, observedOffset, observedByte)
+        let conclusion = "(and " + String.concat " " clauses + ")"
+        declarations @ premises @ [
+          sprintf "(assert (= %s %s))" id conclusion
           sprintf "(assert (not %s))" id ]
+    | ObligationBody.OmittedNulSentinel -> []
     | ObligationBody.StaticStorageLayout (slots, used, allocated, alignment, capacity, spaceAlignment, granularity) ->
         let number (value: int) = integer (bigint value)
         let endpoint (offset: int, length: int, _) = bigint offset + bigint length
@@ -538,6 +549,7 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
 /// pass their separate satisfiability check before discharge is accepted.
 let private readySmtLib (obligations: ObligationInfo list) : string =
     obligations
+    |> List.filter requiresSolver
     |> List.map (fun ob ->
         String.concat "\n"
             ([ sprintf "; %s: %s" ob.Id ob.Statement
@@ -587,6 +599,8 @@ type DesignTimeVerdict =
     | IgnoresParticipants of variables: string list
     /// Source premises are unavailable; the blockers name what is missing.
     | Pending of blockers: string list
+    /// The source has an established omission for each literal occurrence.
+    | Inapplicable
     /// The configured solver could not be started.
     | SolverUnavailable
     /// The solver failed, gave an unexpected answer or exceeded the budget at this stage.
@@ -685,19 +699,46 @@ type private ConditionalLaw =
     | Foreign of Fidelity.PSG.ForeignResultCoverage.Projection
     | Resource of Fidelity.PSG.ResourceProof.Projection
     | SharedBuffer of BAREWire.Platform.Obligation
+    | LiteralSentinel of anchor: string * observation: (int * int * int * int * byte) * declarations: string list * premises: string list * clauses: string list * matchesExpected: bool
 
-let private conditionalLaw (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (ob: ObligationInfo) : Result<ConditionalLaw, string> option =
+let private legacyNulSentinelReason = "Legacy NulSentinel claim lacks checked storage entry, offset, and observed byte."
+
+let private conditionalLawWithSentinelOverride
+    (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option)
+    (overrideSentinelBody: ObligationInfo -> string list option)
+    (ob: ObligationInfo) : Result<ConditionalLaw, string> option =
     match ob.Body with
+    | ObligationBody.NulSentinel _ ->
+        Some (Error legacyNulSentinelReason)
     | ObligationBody.ForeignResultCoverage model when (overrideProjection ob).IsNone ->
         Some (foreignProjection model |> Result.map Foreign)
     | ObligationBody.SharedBufferPlacementObligation bareOb when (overrideProjection ob).IsNone ->
         Some (Ok (SharedBuffer bareOb))
+    | ObligationBody.MaterializedNulSentinel (entry, offset, observedEntry, observedOffset, observedByte) ->
+        if ob.Logic <> "QF_BV" then
+            Some (Error "A materialized literal sentinel requires the QF_BV fragment.")
+        else
+            let observation = entry, offset, observedEntry, observedOffset, observedByte
+            let emittedLines =
+                overrideSentinelBody ob
+                |> Option.defaultWith (fun () -> bodyToSmtLib ob.Id ob.Body)
+            let block =
+                String.concat "\n" (
+                    [ "(set-logic QF_BV)"; sprintf "(declare-const %s Bool)" ob.Id ]
+                    @ emittedLines
+                    @ [ "(check-sat)"; "(reset)" ])
+            let declarations, premises, _ = Fidelity.PSG.ObligationBody.sentinelTerms ob.Id observation
+            Some (
+                Fidelity.PSG.ObligationBody.parseSentinelSmtBlock ob.Id observation block
+                |> Result.map (fun parsed ->
+                    LiteralSentinel (ob.Id, observation, declarations, premises, parsed.Clauses, parsed.MatchesExpected)))
     | _ ->
         resourceProjectionWithOverride overrideProjection ob |> Option.map (Result.map Resource)
 
 let private participantsOf = function
     | Foreign p -> Fidelity.PSG.ForeignResultCoverage.participantVariables p
     | Resource p -> Fidelity.PSG.ResourceProof.participantVariables p
+    | LiteralSentinel (id, observation, _, _, _, _) -> Fidelity.PSG.ObligationBody.sentinelFields id observation |> List.map (fun (name, _, _, _) -> name)
     | SharedBuffer ob ->
         if ob.Form.Kind = BAREWire.Platform.FormKind.SharedBufferSpaceExtent then
             "space_cap" :: (
@@ -709,6 +750,8 @@ let private participantsOf = function
 let private ignoredOf = function
     | Foreign p -> Fidelity.PSG.ForeignResultCoverage.missingParticipantVariables p
     | Resource p -> Fidelity.PSG.ResourceProof.missingParticipantVariables p
+    | LiteralSentinel (id, observation, _, _, clauses, _) ->
+        Fidelity.PSG.ObligationBody.sentinelMissingVariables id observation clauses
     | SharedBuffer ob ->
         let id = if System.String.IsNullOrWhiteSpace ob.Id then "shared_buffer_ob" else ob.Id
         let full = BAREWire.Platform.Obligations.smtLib { ob with Id = id }
@@ -726,6 +769,17 @@ let private ignoredOf = function
 let private clausesOf (id: string) : ConditionalLaw -> Result<(int * string * string) list, string> = function
     | Foreign p -> Ok (Fidelity.PSG.ForeignResultCoverage.anchoredNonVacuityQueries id p)
     | Resource p -> Ok (Fidelity.PSG.ResourceProof.anchoredNonVacuityQueries id p)
+    | LiteralSentinel (_, _, declarations, _, clauses, _) ->
+        if clauses.IsEmpty then
+            Error $"Obligation '{id}' produced zero non-vacuity clauses."
+        else
+            Ok (clauses |> List.mapi (fun index clause ->
+                let query =
+                    String.concat "\n" (
+                        [ "(set-logic QF_BV)"; sprintf "(declare-const %s Bool)" id ]
+                        @ declarations
+                        @ [ sprintf "(assert (= %s %s))" id clause; sprintf "(assert (not %s))" id; "(check-sat)"; "(reset)" ])
+                index, clause, query))
     | SharedBuffer ob ->
         let defPrefix = $"(assert (= {id} "
         let queries = BAREWire.Platform.Obligations.smtLibClauseNonVacuity { ob with Id = id }
@@ -753,6 +807,12 @@ let private clausesOf (id: string) : ConditionalLaw -> Result<(int * string * st
 let private premiseQueriesOf (id: string) = function
     | Foreign p -> [ Fidelity.PSG.ForeignResultCoverage.anchoredPremisesQuery id p ]
     | Resource p -> Fidelity.PSG.ResourceProof.anchoredPremisesQueries id p
+    | LiteralSentinel (_, _, declarations, premises, _, _) ->
+        [ String.concat "\n" (
+              [ "(set-logic QF_BV)"; sprintf "(declare-const %s Bool)" id ]
+              @ declarations
+              @ premises
+              @ [ "(check-sat)"; "(reset)" ]) ]
     | SharedBuffer ob ->
         [ BAREWire.Platform.Obligations.smtLibPremises { ob with Id = id } ]
 
@@ -783,19 +843,24 @@ type private ReadinessPlan =
     | SettledReadiness of Readiness
     | AwaitingClauses of Readiness * ConditionalLaw * (int * string * string) list
 
-let private planReadiness overrideProjection (ob: ObligationInfo) : ReadinessPlan =
+let private planReadinessWithSentinelOverride overrideProjection overrideSentinelBody (ob: ObligationInfo) : ReadinessPlan =
     let open' = { Obligation = ob; Participants = []; Ignored = []; NonVacuity = []; PremiseQueries = []; Stop = None }
     match ob.Body with
     | ObligationBody.Pending reasons -> SettledReadiness (stopReadiness (Pending reasons) reasons open')
+    | ObligationBody.OmittedNulSentinel -> SettledReadiness open'
     | _ ->
-        match conditionalLaw overrideProjection ob with
+        match conditionalLawWithSentinelOverride overrideProjection overrideSentinelBody ob with
         | None -> SettledReadiness open'
         | Some (Error reason) -> SettledReadiness (stopReadiness (Pending [ reason ]) [ reason ] open')
         | Some (Ok law) ->
             let shaped = { open' with Participants = participantsOf law; Ignored = ignoredOf law }
-            match clausesOf ob.Id law with
-            | Error reason -> SettledReadiness (stopReadiness (Undecided "psg-nonvacuity") [ reason ] shaped)
-            | Ok rows -> AwaitingClauses (shaped, law, rows)
+            match law with
+            | LiteralSentinel _ when not shaped.Ignored.IsEmpty ->
+                SettledReadiness (stopReadiness (IgnoresParticipants shaped.Ignored) [ Reason.ignoresParticipants ob shaped.Ignored ] shaped)
+            | _ ->
+                match clausesOf ob.Id law with
+                | Error reason -> SettledReadiness (stopReadiness (Undecided "psg-nonvacuity") [ reason ] shaped)
+                | Ok rows -> AwaitingClauses (shaped, law, rows)
 
 let private settleReadiness solve = function
     | SettledReadiness ready -> ready
@@ -807,7 +872,13 @@ let private settleReadiness solve = function
             | [] when not ignored.IsEmpty ->
                 stopReadiness (IgnoresParticipants ignored) [ Reason.ignoresParticipants ob ignored ]
                     { shaped with NonVacuity = List.rev acc }
-            | [] -> { shaped with NonVacuity = List.rev acc; PremiseQueries = premiseQueriesOf ob.Id law }
+            | [] ->
+                match law with
+                | LiteralSentinel (_, _, _, _, _, false) ->
+                    let reason = sprintf "Materialized literal sentinel '%s' conclusion differs from the checked storage coordinates or NUL predicate." ob.Id
+                    stopReadiness (Pending [ reason ]) [ reason ] { shaped with NonVacuity = List.rev acc }
+                | _ ->
+                    { shaped with NonVacuity = List.rev acc; PremiseQueries = premiseQueriesOf ob.Id law }
             | (clauseIndex, clause, query as row) :: rest ->
                 match solve query with
                 | Error reason ->
@@ -825,16 +896,16 @@ let private batchAnswer answers query =
     Map.tryFind query answers
     |> Option.defaultValue (Error Clef.Compiler.Utilities.HostTools.omittedBatchQuery)
 
-let private readinessBatchPlan overrideProjection obligations =
-    let plans = obligations |> List.map (planReadiness overrideProjection)
+let private readinessBatchPlan overrideProjection overrideSentinelBody obligations =
+    let plans = obligations |> List.map (planReadinessWithSentinelOverride overrideProjection overrideSentinelBody)
     let queries =
         plans |> List.collect (function
             | SettledReadiness _ -> []
             | AwaitingClauses (_, _, rows) -> rows |> List.map (fun (_, _, query) -> query))
     plans, queries
 
-let private readinessBatchWith solveBatch overrideProjection obligations =
-    let plans, queries = readinessBatchPlan overrideProjection obligations
+let private readinessBatchWith solveBatch overrideProjection overrideSentinelBody obligations =
+    let plans, queries = readinessBatchPlan overrideProjection overrideSentinelBody obligations
     let answers = solveBatch queries
     plans |> List.map (settleReadiness (batchAnswer answers))
 
@@ -900,7 +971,7 @@ let conditionalPremisesWithOverride (overrideProjection: ObligationInfo -> Fidel
     let rec loop acc = function
         | [] -> Ok (List.rev acc)
         | (ob: ObligationInfo) :: rest ->
-            match conditionalLaw overrideProjection ob with
+            match conditionalLawWithSentinelOverride overrideProjection (fun _ -> None) ob with
             | None -> loop acc rest
             | Some (Ok law) -> loop (List.rev (premiseQueriesOf ob.Id law |> List.map (fun q -> ob, q)) @ acc) rest
             | Some (Error reason) ->
@@ -917,7 +988,7 @@ let conditionalNonVacuityWithOverride (overrideProjection: ObligationInfo -> Fid
     let rec loop acc = function
         | [] -> Ok (List.rev acc)
         | (ob: ObligationInfo) :: rest ->
-            match conditionalLaw overrideProjection ob with
+            match conditionalLawWithSentinelOverride overrideProjection (fun _ -> None) ob with
             | None -> loop acc rest
             | Some (Ok law) ->
                 let participants = participantsOf law
@@ -939,7 +1010,7 @@ let conditionalNonVacuity (obligations: ObligationInfo list) : Result<(Obligatio
     |> Result.map (List.map (fun (ob, _, _, _, _, query) -> ob, query))
 
 let unavailableWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : UnavailableObligation list =
-    readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch overrideProjection obligations |> unavailableOf
+    readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch overrideProjection (fun _ -> None) obligations |> unavailableOf
 
 let unavailable (obligations: ObligationInfo list) : UnavailableObligation list =
     unavailableWithOverride (fun _ -> None) obligations
@@ -948,18 +1019,24 @@ let unavailable (obligations: ObligationInfo list) : UnavailableObligation list 
 /// textual anchor. A successful sibling has no refusal row.
 let internal unavailableByOccurrence (obligations: (NodeId * ObligationInfo) list) =
     let occurrences, infos = List.unzip obligations
-    let ready = readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch (fun _ -> None) infos
+    let ready = readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch (fun _ -> None) (fun _ -> None) infos
     List.zip occurrences ready
     |> List.choose (fun (occurrence, item) -> unavailableItem item |> Option.map (fun refusal -> occurrence, refusal))
     |> Map.ofList
 
-let private readySmtLibWithOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : string =
+let private readySmtLibWithOverrides
+    (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option)
+    (overrideSentinelBody: ObligationInfo -> string list option)
+    (obligations: ObligationInfo list) : string =
     obligations
     |> List.map (fun ob ->
         let bodyLines =
-            match overrideProjection ob with
-            | Some projection -> Fidelity.PSG.ResourceProof.refutation ob.Id projection
-            | None -> bodyToSmtLib ob.Id ob.Body
+            match overrideSentinelBody ob with
+            | Some lines -> lines
+            | None ->
+                match overrideProjection ob with
+                | Some projection -> Fidelity.PSG.ResourceProof.refutation ob.Id projection
+                | None -> bodyToSmtLib ob.Id ob.Body
         String.concat
             "\n"
             ([ sprintf "; %s: %s" ob.Id ob.Statement
@@ -970,9 +1047,9 @@ let private readySmtLibWithOverride (overrideProjection: ObligationInfo -> Fidel
              @ [ "(check-sat)"; "(reset)" ]))
     |> String.concat "\n\n"
 
-let private evidenceReceipt overrideProjection (ob: ObligationInfo) verdict =
+let private evidenceReceipt overrideProjection overrideSentinelBody (ob: ObligationInfo) verdict =
     { Stage = "psg"; ObligationId = ob.Id; ClauseIndex = None; Clause = None; ParticipantVariables = []
-      Verdict = verdict; Query = readySmtLibWithOverride overrideProjection [ ob ] }
+      Verdict = verdict; Query = readySmtLibWithOverrides overrideProjection overrideSentinelBody [ ob ] }
 
 //=============================================================================
 // COMPILER RUN
@@ -980,8 +1057,12 @@ let private evidenceReceipt overrideProjection (ob: ObligationInfo) verdict =
 
 /// The compiler run: readiness of every obligation, then SAT(H) of every
 /// premise query, then one UNSAT(H and not C) query over the inventory.
-let dischargeWithProjectionOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
-    let readiness = readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch overrideProjection obligations
+let internal dischargeWithOverrides
+    (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option)
+    (overrideSentinelBody: ObligationInfo -> string list option)
+    (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
+    let obligations = List.filter requiresSolver obligations
+    let readiness = readinessBatchWith Clef.Compiler.Utilities.HostTools.runSolverBatch overrideProjection overrideSentinelBody obligations
     match readiness |> List.filter (fun r -> r.Stop.IsSome) with
     | unready when not unready.IsEmpty -> Error (unreadyReason unready)
     | _ ->
@@ -997,7 +1078,7 @@ let dischargeWithProjectionOverride (overrideProjection: ObligationInfo -> Fidel
         | Error reason -> Error reason
         | Ok premises ->
             let nonVacuity = readiness |> List.collect _.NonVacuity
-            match runSolver (readySmtLibWithOverride overrideProjection obligations) with
+            match runSolver (readySmtLibWithOverrides overrideProjection overrideSentinelBody obligations) with
             | Error reason -> Error reason
             | Ok verdicts when verdicts.Length <> obligations.Length ->
                 Error (Reason.verdictCount obligations.Length verdicts.Length)
@@ -1006,11 +1087,14 @@ let dischargeWithProjectionOverride (overrideProjection: ObligationInfo -> Fidel
                 match pairs |> List.tryFind (fun (_, verdict) -> verdict <> "unsat") with
                 | Some (ob, verdict) -> Error (Reason.notDischarged ob verdict)
                 | None ->
-                    let evidence = pairs |> List.map (fun (ob, verdict) -> evidenceReceipt overrideProjection ob verdict)
+                    let evidence = pairs |> List.map (fun (ob, verdict) -> evidenceReceipt overrideProjection overrideSentinelBody ob verdict)
                     Ok { Premises = premises; NonVacuity = nonVacuity; Evidence = evidence }
 
+let dischargeWithProjectionOverride (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
+    dischargeWithOverrides overrideProjection (fun _ -> None) obligations
+
 let discharge (obligations: ObligationInfo list) : Result<DischargeReceipt, string> =
-    dischargeWithProjectionOverride (fun _ -> None) obligations
+    dischargeWithOverrides (fun _ -> None) (fun _ -> None) obligations
 
 //=============================================================================
 // DESIGN-TIME RECEIPTS
@@ -1019,7 +1103,11 @@ let discharge (obligations: ObligationInfo list) : Result<DischargeReceipt, stri
 /// The editor's proof authority: one receipt per obligation, in inventory
 /// order, folded from the same stages as compiler discharge. Every stage shares
 /// the caller's host deadline and uses only the answers it actually consults.
-let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : ObligationReceipt list =
+let internal designTimeReceiptsWithOverrides
+    (budget: DesignTimeBudget)
+    (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option)
+    (overrideSentinelBody: ObligationInfo -> string list option)
+    (obligations: ObligationInfo list) : ObligationReceipt list =
     let solveBatch = Clef.Compiler.Utilities.HostTools.budgetedSolver budget.PerQuery budget.Total
     let receipt (r: Readiness) unavailable verdict reason premises evidence =
         let ob = r.Obligation
@@ -1028,7 +1116,7 @@ let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrid
           Premises = premises; NonVacuity = r.NonVacuity; Participants = r.Participants
           IgnoredParticipants = r.Ignored; Evidence = evidence }
 
-    let plans, clauseQueries = readinessBatchPlan overrideProjection obligations
+    let plans, clauseQueries = readinessBatchPlan overrideProjection overrideSentinelBody obligations
     let clauseAnswers = solveBatch clauseQueries
     let readiness =
         plans |> List.map (fun plan ->
@@ -1039,16 +1127,17 @@ let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrid
         |> solveBatch
     let checkedPremises =
         readiness |> List.map (fun (r, unavailable) ->
-            match r.Stop with
-            | Some (verdict, _) -> Error (receipt r unavailable verdict (Some (unreadyReason [ r ])) [] [])
-            | None ->
+            match r.Obligation.Body, r.Stop with
+            | ObligationBody.OmittedNulSentinel, _ -> Error (receipt r false Inapplicable None [] [])
+            | _, Some (verdict, _) -> Error (receipt r unavailable verdict (Some (unreadyReason [ r ])) [] [])
+            | _, None ->
                 let result, premiseUnavailable =
                     Clef.Compiler.Utilities.HostTools.withBudgetedAnswers premiseAnswers (fun solve -> premisesWith solve r)
                 match result with
                 | Error (verdict, reason, premises) ->
                     Error (receipt r premiseUnavailable verdict (Some reason) premises [])
                 | Ok premises ->
-                    Ok (r, premises, readySmtLibWithOverride overrideProjection [ r.Obligation ]))
+                    Ok (r, premises, readySmtLibWithOverrides overrideProjection overrideSentinelBody [ r.Obligation ]))
     let evidenceAnswers =
         checkedPremises
         |> List.choose (function Ok (_, _, query) -> Some query | Error _ -> None)
@@ -1062,14 +1151,17 @@ let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrid
             let verdict, reason, evidence =
                 match answer with
                 | Error reason -> Undecided "psg", Some reason, []
-                | Ok [ "unsat" ] -> Proved, None, [ evidenceReceipt overrideProjection ob "unsat" ]
-                | Ok [ "sat" ] -> Refuted, Some (Reason.notDischarged ob "sat"), [ evidenceReceipt overrideProjection ob "sat" ]
-                | Ok [ verdict ] -> Undecided "psg", Some (Reason.notDischarged ob verdict), [ evidenceReceipt overrideProjection ob verdict ]
+                | Ok [ "unsat" ] -> Proved, None, [ evidenceReceipt overrideProjection overrideSentinelBody ob "unsat" ]
+                | Ok [ "sat" ] -> Refuted, Some (Reason.notDischarged ob "sat"), [ evidenceReceipt overrideProjection overrideSentinelBody ob "sat" ]
+                | Ok [ verdict ] -> Undecided "psg", Some (Reason.notDischarged ob verdict), [ evidenceReceipt overrideProjection overrideSentinelBody ob verdict ]
                 | Ok verdicts -> Undecided "psg", Some (Reason.verdictCount 1 verdicts.Length), []
             receipt r unavailable verdict reason premises evidence)
 
+let designTimeReceiptsWithProjectionOverride (budget: DesignTimeBudget) (overrideProjection: ObligationInfo -> Fidelity.PSG.ResourceProof.Projection option) (obligations: ObligationInfo list) : ObligationReceipt list =
+    designTimeReceiptsWithOverrides budget overrideProjection (fun _ -> None) obligations
+
 let designTimeReceipts (budget: DesignTimeBudget) (obligations: ObligationInfo list) : ObligationReceipt list =
-    designTimeReceiptsWithProjectionOverride budget (fun _ -> None) obligations
+    designTimeReceiptsWithOverrides budget (fun _ -> None) (fun _ -> None) obligations
 
 let trySmtLib (obligations: ObligationInfo list) : Result<string, UnavailableObligation list> =
     match unavailable obligations with
@@ -1151,6 +1243,7 @@ let private ledgerJsonWithPending hasPending (obligations: ObligationInfo list) 
             | ObligationBody.ForeignResultCoverage _ | ObligationBody.ResourceConversion _ | ObligationBody.ResourceCleanup _
             | ObligationBody.SnapshotBorrowBound _ | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ | ObligationBody.BufferAbsenceArgumentConversion _
             | ObligationBody.SharedBufferPlacementObligation _ -> true
+            | ObligationBody.MaterializedNulSentinel _ | ObligationBody.OmittedNulSentinel | ObligationBody.NulSentinel _ -> true
             | _ -> false)
 
     let rows =
@@ -1178,6 +1271,8 @@ let private ledgerJsonWithPending hasPending (obligations: ObligationInfo list) 
                     let state, reasons =
                         match ob.Body with
                         | ObligationBody.Pending reasons -> "pending", reasons
+                        | ObligationBody.OmittedNulSentinel -> "inapplicable", []
+                        | ObligationBody.NulSentinel _ -> "pending", [ legacyNulSentinelReason ]
                         | ObligationBody.OptionalEntryArgumentConversion _ | ObligationBody.OptionalEntryAbsenceArgumentConversion _ | ObligationBody.BufferAbsenceArgumentConversion _ -> "target-pending", ["The finite source plan requires its exact per-call target artifact observation."]
                         | ObligationBody.ForeignResultCoverage model ->
                             match foreignProjection model with
