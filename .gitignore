@@ -41,3 +41,4 @@ deps/
 *.DotSettings.user
 *~
 *.bak
+tools/Clef.Analyzers/receipts/

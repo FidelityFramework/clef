@@ -5,7 +5,13 @@
     <_ClefCoreDotnet Condition="'$(_ClefCoreDotnet)' == ''">dotnet</_ClefCoreDotnet>
   </PropertyGroup>
 
-  <Target Name="CheckClefCoreNominals" BeforeTargets="CoreCompile">
+  <!-- Zone A nominal guard.  Skipped ONLY when BOTH DesignTimeBuild=true AND
+     SkipCompilerExecution=true (set together by Ionide.ProjInfo /
+     fsharp-analyzers design-time project cracking so the analyzer can inspect
+     the typed AST of a file the build would refuse).  Neither DesignTimeBuild
+     nor SkipCompilerExecution alone disables the guard. -->
+  <Target Name="CheckClefCoreNominals" BeforeTargets="CoreCompile"
+          Condition="'$(DesignTimeBuild)' != 'true' or '$(SkipCompilerExecution)' != 'true'">
     <PropertyGroup>
       <_ClefCoreInput>$(IntermediateOutputPath)ClefCore.compile.tsv</_ClefCoreInput>
     </PropertyGroup>

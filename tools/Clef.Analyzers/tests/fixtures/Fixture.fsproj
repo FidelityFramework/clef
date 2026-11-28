@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- The fixtures are deliberately hostile to the Zone A rules; warning 42
+         enables the active-branch inline-IL negative control fixture so
+         Clef.Analyzers exercises genuine compiling inline MSIL. -->
+    <NoWarn>$(NoWarn);42;3261</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="ZoneAClean.fs" />
+    <Compile Include="FaultCase.fs" />
+    <Compile Include="BclCase.fs" />
+    <Compile Include="ObjDeclCase.fs" />
+    <Compile Include="ThrowCase.fs" />
+    <Compile Include="BoxCase.fs" />
+    <Compile Include="AdmittedCarrier.fs" />
+    <Compile Include="HostProcessCase.fs" />
+    <Compile Include="HostToolsCase.fs" />
+    <Compile Include="LazyStateCase.fs" />
+    <Compile Include="ReflectionCase.fs" />
+    <Compile Include="NullIdentityCase.fs" />
+    <Compile Include="AliasResolutionCase.fs" />
+    <Compile Include="MutableCellCase.fs" />
+    <Compile Include="StringMemberCase.fs" />
+    <Compile Include="InlineIlCase.fs" />
+    <Compile Include="InlineIlFault.fs" />
+    <Compile Include="ExtendedInterpFault.fs" />
+    <Compile Include="SegmentationUnionCase.fs" />
+    <Compile Include="SegmentationEdgeUnionCase.fs" />
+    <Compile Include="SegmentationCleanCase.fs" />
+    <Compile Include="NativeTypedTree/NormalizeCase.fs" />
+    <Compile Include="RefCellCase.fs" />
+    <Compile Include="ConsoleOutputCase.fs" />
+    <Compile Include="ConsoleWriteCase.fs" />
+    <Compile Include="ConcurrentCase.fs" />
+    <Compile Include="WitnessEmissionCase.fs" />
+    <Compile Include="PublicationProjectCase.fs" />
+  </ItemGroup>
+</Project>

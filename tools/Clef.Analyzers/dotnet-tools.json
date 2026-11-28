@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "fsharp-analyzers": {
+      "version": "0.41.0",
+      "commands": [
+        "fsharp-analyzers"
+      ]
+    }
+  }
+}
