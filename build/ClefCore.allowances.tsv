@@ -44,10 +44,6 @@ NativeTypedTree/Expressions/Types.fs	failwith	2
 NativeTypedTree/Infrastructure/PhaseEmitter.fs	%A	1
 NativeTypedTree/NameResolution.fs	failwithf	1
 NativeTypedTree/NativeService.fs	%A	5
-NativeTypedTree/NativeService.fs	GetEnvironmentVariable	1
-NativeTypedTree/NativeService.fs	System.Console	1
-NativeTypedTree/NativeService.fs	System.Diagnostics.Stopwatch	1
-NativeTypedTree/NativeService.fs	System.Environment	1
 NativeTypedTree/NativeService.fs	failwith	1
 NativeTypedTree/NativeService.fs	invalidOp	1
 NativeTypedTree/NativeTypes.fs	%A	4

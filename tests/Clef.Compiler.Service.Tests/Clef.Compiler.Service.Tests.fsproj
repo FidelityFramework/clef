@@ -139,6 +139,7 @@
     <Compile Include="ProjectWorkspaceTests.fs" />
     <Compile Include="AsyncAndRegionCases.fs" />
     <Compile Include="BakerNanopassCruftContractCases.fs" />
+    <Compile Include="ObservationPortCases.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

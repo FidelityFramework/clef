@@ -394,9 +394,13 @@ let internal unionLayoutFailures (graph: SemanticGraph) (scope: WitnessLiveScope
                       Reason = message })))
     | _ -> []
 
+module Observation = Clef.Compiler.ObservationPort
+
 /// Complete source publication once. The graph returned here owns all current
 /// projected facts and eager indices; it is the graph handed to witnessing.
-let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFailure list> =
+/// Internal to the compiler driver so external host callers always enter through
+/// Zone B containment (`ProjectChecker.containObservationPort`).
+let internal prepareWithObservation (observations: Observation.ObservationPort option) (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFailure list> =
     match project graph with
     | Error failures -> Error failures
     | Ok projection ->
@@ -408,6 +412,8 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
           | Ok liveScope ->
             let preparedRows = PreparedRows.project graph
             let segmentation = WitnessSegmentation.project graph projection liveScope
+            Observation.emitOptional observations (fun () ->
+                Observation.CompilerObservation.ProjectionComputed (Observation.ProjectionOwner.WitnessSegmentation, Observation.witnessSegmentationRows segmentation))
             match LiveRows.project graph projection liveScope preparedRows segmentation with
             | Error failures -> Error failures
             | Ok liveRows ->
@@ -440,6 +446,11 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
                           Codata = materialized facts
                           WitnessProvenance = None }
                   Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
+
+/// Public entry point keeps its signature; observation runs with zero overhead
+/// when no host port is attached.
+let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFailure list> =
+    prepareWithObservation None graph
 
 /// The complete identity policy for prepared input roots. Keeping names next
 /// to typed accessors lets the maintenance test check this policy against the

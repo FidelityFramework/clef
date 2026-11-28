@@ -215,7 +215,7 @@ module ProjectChecker =
         Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None; SequenceRangeProvenance = None; RangeContextFacts = None
     }
 
-    let private checkPreparedWithIdentity identify phaseSink (prepared: PreparedProject) : ProjectCheckResult =
+    let private checkPreparedWithIdentity identify phaseSink observations (prepared: PreparedProject) : ProjectCheckResult =
         Clef.Compiler.CheckExecution.synchronized (fun () ->
             let projectMemoryPolicy =
                 prepared.Inputs
@@ -238,7 +238,7 @@ module ProjectChecker =
                     // Complete parsing is the observation boundary, independent
                     // of whether the subsequent semantic check succeeds.
                     let identities = identify |> Option.map (fun observe -> observe units)
-                    checkParsedInputsWithDeclarationsAndPhaseSink phaseSink (List.map snd units)
+                    checkParsedInputsWithDeclarationsAndPhaseSink phaseSink observations (List.map snd units)
                         (buildPlatformContext prepared.Options prepared.PlatformTarget prepared.PlatformSources projectMemoryPolicy)
                         (ownedApplicationSources prepared.Options)
                         (ownedLibrarySources prepared.Options) identities
@@ -248,23 +248,63 @@ module ProjectChecker =
               PlatformTarget = prepared.PlatformTarget; ParseErrors = errors })
 
     let internal checkPreparedWithDeclarations identify prepared =
-        checkPreparedWithIdentity (Some identify) None prepared
+        checkPreparedWithIdentity (Some identify) None None prepared
 
     /// Stateless checks open a fresh declaration epoch in the source checker.
-    let internal checkPrepared prepared = checkPreparedWithIdentity None None prepared
+    let internal checkPrepared prepared = checkPreparedWithIdentity None None None prepared
 
-    let private checkProjectWith phaseSink fidprojPath volatileContent =
-        prepare fidprojPath volatileContent |> Result.map (checkPreparedWithIdentity None phaseSink)
+    let private checkProjectWith phaseSink observations fidprojPath volatileContent =
+        prepare fidprojPath volatileContent |> Result.map (checkPreparedWithIdentity None phaseSink observations)
 
     /// Existing synchronous API uses the same immutable capture and process gate.
     let checkProjectWithVolatile fidprojPath volatileContent : Result<ProjectCheckResult, string> =
-        checkProjectWith None fidprojPath volatileContent
+        checkProjectWith None None fidprojPath volatileContent
 
     let checkProject fidprojPath = checkProjectWithVolatile fidprojPath Map.empty
 
     /// Observe the host phases reached during this synchronous project check.
     let checkProjectWithPhaseSink (emit: CheckPhaseEvent -> unit) (fidprojPath: string) : Result<ProjectCheckResult, string> =
-        checkProjectWith (Some emit) fidprojPath Map.empty
+        checkProjectWith (Some emit) None fidprojPath Map.empty
+
+    /// Zone B host-edge containment for caller-supplied observation ports so a
+    /// non-cancellation adapter exception is recorded at the host boundary (when
+    /// `onFailure` is supplied) and never unwinds into Zone A (`NativeService`,
+    /// `WitnessEmission`, or `Segmentation`). `OperationCanceledException` is
+    /// always reraised.
+    let containObservationPort (onFailure: (exn -> unit) option) (port: Clef.Compiler.ObservationPort.ObservationPort) : Clef.Compiler.ObservationPort.ObservationPort =
+        { Emit = fun observation ->
+            try port.Emit observation
+            with
+            | :? System.OperationCanceledException -> reraise ()
+            | ex ->
+                match onFailure with
+                | Some record ->
+                    try record ex
+                    with
+                    | :? System.OperationCanceledException -> reraise ()
+                    | _ -> ()
+                | None -> () }
+
+    /// Observe the driver's structured Zone A observations (phases, settled
+    /// projections and the root census) through a caller-supplied pure port,
+    /// recording any non-cancellation adapter failures through `onFailure`.
+    let checkProjectWithObservationPortAndFailures (onFailure: exn -> unit) (port: Clef.Compiler.ObservationPort.ObservationPort) (fidprojPath: string) : Result<ProjectCheckResult, string> =
+        checkProjectWith None (Some (containObservationPort (Some onFailure) port)) fidprojPath Map.empty
+
+    /// Observe the driver's structured Zone A observations through a caller-supplied
+    /// pure port (host adapter failures are contained silently; use
+    /// `checkProjectWithObservationPortAndFailures` to capture failure receipts).
+    let checkProjectWithObservationPort (port: Clef.Compiler.ObservationPort.ObservationPort) (fidprojPath: string) : Result<ProjectCheckResult, string> =
+        checkProjectWith None (Some (containObservationPort None port)) fidprojPath Map.empty
+
+    /// Both host edges at once: the legacy phase sink and the observation port,
+    /// recording any non-cancellation adapter failures through `onFailure`.
+    let internal checkProjectWithPhaseSinkAndObservationPortAndFailures (emit: CheckPhaseEvent -> unit) (onFailure: exn -> unit) (port: Clef.Compiler.ObservationPort.ObservationPort) (fidprojPath: string) : Result<ProjectCheckResult, string> =
+        checkProjectWith (Some emit) (Some (containObservationPort (Some onFailure) port)) fidprojPath Map.empty
+
+    /// Both host edges at once: the legacy phase sink and the observation port.
+    let internal checkProjectWithPhaseSinkAndObservationPort (emit: CheckPhaseEvent -> unit) (port: Clef.Compiler.ObservationPort.ObservationPort) (fidprojPath: string) : Result<ProjectCheckResult, string> =
+        checkProjectWith (Some emit) (Some (containObservationPort None port)) fidprojPath Map.empty
 
     /// Get diagnostics for a specific file from a checked project.
     let getDiagnosticsForFile (result: ProjectCheckResult) (filePath: string): SGDiag.Diagnostic list =

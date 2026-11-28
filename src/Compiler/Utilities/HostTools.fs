@@ -34,6 +34,147 @@ let findSolver pathVariable =
         File.Exists path && (not (OperatingSystem.IsLinux()) || LinuxHostTools.canExecute path))
 
 //=============================================================================
+// TOOL IDENTITY (#204)
+//=============================================================================
+
+/// What a solver binary *is*, as the tool manifest says. A host adapter that
+/// counts solver spawns keys on this identity rather than on a file name, so a
+/// renamed or symlinked solver is still the tool the manifest resolved.
+type ToolIdentity =
+    { Name: string
+      Executable: string
+      ManifestPath: string
+      Version: string option }
+
+/// One manifest line: name<TAB>executable[<TAB>version]. Blank lines, lines
+/// starting with '#', and rows with an empty name or executable carry no record.
+/// Relative executable paths resolve against the manifest's directory when known.
+let parseToolManifest (manifestPath: string) (lines: string list) : Map<string, ToolIdentity> =
+    let baseDir =
+        if String.IsNullOrWhiteSpace manifestPath then None
+        else
+            match Path.GetDirectoryName(Path.GetFullPath manifestPath) with
+            | null -> None
+            | dir when String.IsNullOrWhiteSpace dir -> None
+            | dir -> Some dir
+    let resolveExecutable (executable: string) =
+        if Path.IsPathRooted executable then Path.GetFullPath executable
+        else
+            match baseDir with
+            | Some dir -> Path.GetFullPath(Path.Combine(dir, executable))
+            | None -> Path.GetFullPath executable
+    let record name executable version =
+        let full = resolveExecutable executable
+        (full, { Name = name; Executable = full; ManifestPath = manifestPath; Version = version })
+    lines
+    |> List.choose (fun line ->
+        let line = line.Trim()
+        if line = "" || line.StartsWith "#" then None
+        else
+            match line.Split '\t' |> Array.map (fun part -> part.Trim()) with
+            | [| name; executable |] when not (String.IsNullOrWhiteSpace name) && not (String.IsNullOrWhiteSpace executable) ->
+                Some (record name executable None)
+            | parts when parts.Length > 1 && not (String.IsNullOrWhiteSpace parts[0]) && not (String.IsNullOrWhiteSpace parts[1]) ->
+                let versionText = String.Join(" ", parts |> Array.skip 2).Trim()
+                let version = if String.IsNullOrWhiteSpace versionText then None else Some versionText
+                Some (record parts[0] parts[1] version)
+            | _ -> None)
+    |> Map.ofList
+
+/// The manifest this host declares its tools in. Absent configuration means no
+/// manifest, never a guessed one.
+let toolManifestPath () =
+    match Environment.GetEnvironmentVariable "CLEF_TOOL_MANIFEST" with
+    | null | "" -> ""
+    | path -> path
+
+/// Fail-closed manifest reader returning distinct errors when the manifest
+/// path is unconfigured or does not exist on disk.
+let readToolManifestResult (path: string) : Result<Map<string, ToolIdentity>, string> =
+    if String.IsNullOrWhiteSpace path then
+        Error "CLEF_TOOL_MANIFEST is not configured."
+    elif not (File.Exists path) then
+        Error (sprintf "Tool manifest does not exist: %s" path)
+    else
+        Ok (parseToolManifest path (File.ReadAllLines path |> Array.toList))
+
+let readToolManifest (path: string) : Map<string, ToolIdentity> =
+    match readToolManifestResult path with
+    | Ok manifest -> manifest
+    | Error _ -> Map.empty
+
+let private fileDigest (path: string) : string option =
+    try Some (File.ReadAllBytes path |> System.Security.Cryptography.SHA256.HashData |> System.Convert.ToHexString)
+    with _ -> None
+
+let private isBareCommand (path: string) : bool =
+    not (Path.IsPathRooted path)
+    && not (path.Contains Path.DirectorySeparatorChar)
+    && not (path.Contains Path.AltDirectorySeparatorChar)
+
+let private resolveCommandOnPath (pathVariable: string | null) (command: string) : string option =
+    let envPath = match pathVariable with null -> "" | value -> value
+    envPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+    |> Array.filter (String.IsNullOrWhiteSpace >> not)
+    |> Array.map (fun dir -> Path.Combine(dir, command))
+    |> Array.tryFind (fun candidate ->
+        File.Exists candidate && (not (OperatingSystem.IsLinux()) || LinuxHostTools.canExecute candidate))
+
+let private resolveExecutablePath (path: string) : string option =
+    if String.IsNullOrWhiteSpace path then None
+    elif isBareCommand path then
+        resolveCommandOnPath (Environment.GetEnvironmentVariable "PATH") path
+        |> Option.map Path.GetFullPath
+    else
+        Some (Path.GetFullPath path)
+
+/// Resolve a spawned path (absolute, relative, or bare command on PATH) to the
+/// manifest record that owns it. An exact path match wins; otherwise the file's
+/// own bytes identify it, which is what makes a renamed or symlinked solver
+/// report the identity the manifest recorded.
+let resolveToolIdentity (manifest: Map<string, ToolIdentity>) (path: string) : ToolIdentity option =
+    match resolveExecutablePath path with
+    | None -> None
+    | Some full ->
+        match Map.tryFind full manifest with
+        | Some identity -> Some identity
+        | None ->
+            if not (File.Exists full) then None
+            else
+                let digest = fileDigest full
+                manifest
+                |> Map.toSeq
+                |> Seq.tryFind (fun (_, identity) ->
+                    match digest, fileDigest identity.Executable with
+                    | Some left, Some right -> left = right
+                    | _ -> false)
+                |> Option.map snd
+
+let private isSolverIdentity (identity: ToolIdentity) : bool =
+    String.Equals(identity.Name, "cvc5", StringComparison.OrdinalIgnoreCase)
+
+/// Does this spawned executable belong to the cvc5 solver named by a manifest the
+/// caller already resolved? A host adapter counts spawns through this, never
+/// through a file-name test; manifested non-solver tools (such as clang) return false.
+let isSolverSpawnWith (manifest: Map<string, ToolIdentity>) (path: string) : bool =
+    match resolveToolIdentity manifest path with
+    | Some identity -> isSolverIdentity identity
+    | None -> false
+
+/// Fail-closed solver spawn predicate using the host-configured tool manifest.
+/// Returns Error when CLEF_TOOL_MANIFEST is unset or unreadable rather than
+/// silently reporting false.
+let isSolverSpawnResult (path: string) : Result<bool, string> =
+    readToolManifestResult (toolManifestPath ())
+    |> Result.map (fun manifest -> isSolverSpawnWith manifest path)
+
+/// Convenience boolean projection for callers that already validated manifest presence.
+let isSolverSpawn (path: string) : bool =
+    match isSolverSpawnResult path with
+    | Ok matched -> matched
+    | Error _ -> false
+
+//=============================================================================
 // SOLVER TRANSPORT
 //=============================================================================
 
@@ -43,7 +184,9 @@ let findSolver pathVariable =
 let private solverExecutable () =
     match System.Environment.GetEnvironmentVariable "CLEF_CVC5" with
     | null | "" -> findSolver (System.Environment.GetEnvironmentVariable "PATH"), true
-    | path -> path, false
+    | path ->
+        let resolved = resolveExecutablePath path |> Option.defaultValue path
+        resolved, false
 
 type private SolverRun =
     | Answered of Result<string list, string>
@@ -302,3 +445,18 @@ let internal withBudgetedAnswers (answers: Map<string, BudgetedAnswer>) evaluate
             item.Answer
     let value = evaluate resolve
     value, unavailable
+
+/// The identity of the solver this run resolves, manifest first. Returns Error
+/// when no manifest is configured, the manifest cannot be read, or the resolved
+/// executable is not registered as a cvc5 solver in the manifest — never
+/// fabricating an unmanifested identity.
+let solverIdentity () : Result<ToolIdentity, string> =
+    let executable, _ = solverExecutable ()
+    readToolManifestResult (toolManifestPath ())
+    |> Result.bind (fun manifest ->
+        match resolveToolIdentity manifest executable with
+        | Some identity when isSolverIdentity identity -> Ok identity
+        | Some identity ->
+            Error (sprintf "Resolved executable '%s' is manifested as '%s', not cvc5." executable identity.Name)
+        | None ->
+            Error (sprintf "Resolved solver executable '%s' is not registered in tool manifest." executable))
